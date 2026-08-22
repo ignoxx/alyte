@@ -1,0 +1,61 @@
+{
+  "app": {
+    "name": "Alyte",
+    "tagline": "A calm place for your laboratory history"
+  },
+  "onboarding": {
+    "eyebrow": "PRIVATE BY DEFAULT",
+    "title": "Understand your measured history.",
+    "body": "Alyte keeps your records on this iPhone. Start locally, without an account or a network connection.",
+    "measuredTitle": "Measured stays measured",
+    "measuredBody": "Imported values keep their source and can be reviewed before they shape a trend.",
+    "continue": "Enter Alyte"
+  },
+  "navigation": {
+    "home": "Home",
+    "labs": "Labs",
+    "snap": "Snap",
+    "log": "Log",
+    "settings": "Settings"
+  },
+  "home": {
+    "title": "Today",
+    "emptyTitle": "Your local history starts here",
+    "emptyBody": "Import a lab report or log an intake event when you are ready.",
+    "importAction": "Import your first lab report",
+    "logAction": "Log something"
+  },
+  "labs": {
+    "title": "Labs",
+    "emptyTitle": "No lab reports yet",
+    "emptyBody": "Your imported reports and measured history will appear here.",
+    "action": "Import a report"
+  },
+  "log": {
+    "title": "Log",
+    "emptyTitle": "Nothing logged yet",
+    "emptyBody": "Record food, drinks, supplements, or medication locally.",
+    "action": "Log an intake event"
+  },
+  "settings": {
+    "title": "Settings",
+    "localMode": "Local mode",
+    "localModeBody": "No account is needed for your local records.",
+    "privacy": "Privacy and storage"
+  },
+  "snap": {
+    "title": "Snap",
+    "body": "Capture an intake image and save it locally before anything else happens.",
+    "placeholder": "Camera capture arrives in a later slice.",
+    "close": "Back"
+  },
+  "errors": {
+    "title": "Alyte needs a restart",
+    "body": "The local shell could not finish opening. Your local records are not changed.",
+    "restart": "Restart Alyte"
+  },
+  "accessibility": {
+    "snapAction": "Snap: capture an intake image",
+    "back": "Go back"
+  }
+}

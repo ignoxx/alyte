@@ -1,0 +1,40 @@
+{
+  "name": "alyte",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "npm@11.6.2",
+  "description": "Alyte local-first laboratory history and intake awareness app",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=11 <12"
+  },
+  "scripts": {
+    "dev": "concurrently --names mobile,api,packages --prefix-colors blue,green,magenta --kill-others-on-fail \"npm run dev --workspace=@alyte/mobile\" \"npm run dev --workspace=@alyte/api\" \"npm run watch:packages\"",
+    "watch:packages": "concurrently --names domain,contracts,catalogue,fixtures --prefix-colors yellow,cyan,green,magenta \"npm run watch --workspace=@alyte/domain\" \"npm run watch --workspace=@alyte/contracts\" \"npm run watch --workspace=@alyte/catalogue\" \"npm run watch --workspace=@alyte/fixtures\"",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:boundaries": "node --test scripts/boundaries.test.mjs",
+    "test:showcase": "tsx --test scripts/showcase.test.ts",
+    "contract:check": "npm run contract:check --workspace=@alyte/contracts",
+    "ios:config:check": "node scripts/check-expo-config.mjs",
+    "ci": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run test:boundaries && npm run test:showcase && npm run contract:check && npm run ios:config:check"
+  },
+  "devDependencies": {
+    "@types/node": "26.2.0",
+    "@types/react": "19.2.18",
+    "@typescript-eslint/eslint-plugin": "8.67.0",
+    "@typescript-eslint/parser": "8.67.0",
+    "concurrently": "10.0.5",
+    "eslint": "9.39.5",
+    "prettier": "3.9.6",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3"
+  }
+}
