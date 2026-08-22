@@ -220,8 +220,10 @@ const pdfInspection: PdfInspection = {
 class FakePdf implements PdfInspector {
   locked = false;
   passwordAttempts: string[] = [];
+  inspectedPaths: string[] = [];
   previewCalls = 0;
-  async inspect(_path: string): Promise<PdfInspection> {
+  async inspect(path: string): Promise<PdfInspection> {
+    this.inspectedPaths.push(path);
     return this.locked
       ? { ...pdfInspection, encrypted: true, locked: true, pageCount: 0, pages: [] }
       : pdfInspection;
@@ -548,6 +550,62 @@ describe('protected Lab Report import lifecycle', () => {
     await service.deleteReport(report.id);
     assert.equal(files.files.has(files.currentPath), false);
     assert.equal((await repository.getReport(report.id))?.importState, 'deleted');
+  });
+
+  test('resolves a portable relocated report path before PDF inspection and Vision extraction', async () => {
+    const repository = createRepository();
+    const files = new RelocatingFiles();
+    files.files.set(files.currentPath, { hash: 'relocated-hash', size: 42 });
+    const pdf = new FakePdf();
+    const nativePaths: string[] = [];
+    const ocr: VisionOCR = {
+      async recognize(path): Promise<VisionOCRResult> {
+        nativePaths.push(path);
+        return {
+          contractVersion: 'alyte.vision.ocr.v1',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'relocated-row',
+              text: 'LDL-C 3.8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.4, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        };
+      },
+    };
+    const report = await repository.createReport({
+      id: 'lab-report-relocated-extraction',
+      sourceType: 'pdf',
+      originalFilename: 'relocated-extraction.pdf',
+      mimeType: 'application/pdf',
+      byteSize: 42,
+      sourceHash: 'relocated-hash',
+      originalPath: files.legacyPath,
+      importState: 'imported',
+      pageCount: 1,
+      importedAt: '2026-08-22T10:00:00.000Z',
+    });
+    const service = createService(repository, files, pdf, ocr);
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.equal(
+      (await service.getReport(report.id))?.originalPath,
+      'protected://original-reports/relocated.pdf',
+    );
+    assert.deepEqual(pdf.inspectedPaths, [files.currentPath]);
+    assert.deepEqual(nativePaths, [files.currentPath]);
+    assert.equal(draft.rows[0]?.sourceValueString, '3.8');
+    assert.equal(
+      await repository.getExtractionDraftForReport(report.id).then((value) => value !== null),
+      true,
+    );
   });
 
   test('password preview uses an ephemeral unlock session and reports unavailable sources honestly', async () => {

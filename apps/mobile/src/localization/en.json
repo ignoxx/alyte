@@ -136,6 +136,7 @@
     "reportLinkedRecords": "Linked Lab Records: {count}",
     "extractionTitle": "Review local extraction",
     "extractionStart": "Run local OCR and review",
+    "extractionStartError": "Local OCR could not open this protected source. Check the report source and try again; no Extraction Draft was created.",
     "extractionAlreadyConfirmed": "Local extraction is already confirmed for this report. The existing Lab Records remain available below.",
     "extractionIntro": "Alyte extracted source-shaped rows on this iPhone. Review every row before confirming Lab Records; original labels, values, and locations remain preserved.",
     "extractionSourceNotice": "OCR and deterministic parsing run locally. No account or network is needed.",

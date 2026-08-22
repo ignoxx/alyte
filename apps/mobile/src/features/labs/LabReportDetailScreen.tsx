@@ -49,6 +49,7 @@ export function LabReportDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
+  const [extractionError, setExtractionError] = useState(false);
   const [preview, setPreview] = useState<LabReportPreview | null>(null);
   const [previewError, setPreviewError] = useState(false);
 
@@ -116,11 +117,12 @@ export function LabReportDetailScreen() {
     if (report === null) return;
     setBusy(true);
     setError(false);
+    setExtractionError(false);
     try {
       const draft = await reports.startExtraction(report.id, promptPassword());
       navigation.navigate('ExtractionDraft', { reportId: report.id, draftId: draft.id });
     } catch {
-      setError(true);
+      setExtractionError(true);
     } finally {
       setBusy(false);
     }
@@ -209,11 +211,16 @@ export function LabReportDetailScreen() {
         <>
           <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
           {report.labRecordIds.length === 0 ? (
-            <AppButton
-              disabled={busy}
-              label={t('labs.extractionStart')}
-              onPress={() => void extractLocally()}
-            />
+            <>
+              <AppButton
+                disabled={busy}
+                label={t('labs.extractionStart')}
+                onPress={() => void extractLocally()}
+              />
+              {extractionError && (
+                <AppText style={styles.errorText}>{t('labs.extractionStartError')}</AppText>
+              )}
+            </>
           ) : (
             <AppText style={styles.body}>{t('labs.extractionAlreadyConfirmed')}</AppText>
           )}

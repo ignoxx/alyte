@@ -1115,9 +1115,12 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const integrity = await verifySource(id);
       if (integrity !== 'verified')
         throw new Error('Original Report integrity could not be verified');
+      // Database paths are portable container-independent URIs. Resolve and validate ownership
+      // once at the adapter boundary before passing the current absolute path to PDFKit/Vision.
+      const sourcePath = await nativePath(report.originalPath);
       let password: string | null = null;
       if (report.sourceType === 'pdf') {
-        const inspection = await pdfInspector.inspect(report.originalPath);
+        const inspection = await pdfInspector.inspect(sourcePath);
         if (inspection.locked) {
           const request = passwordRequest ?? options.passwordRequest;
           if (request === undefined) {
@@ -1139,7 +1142,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         const pages = report.pages.length > 0 ? report.pages : [{ pageIndex: 0, rotation: 0 }];
         for (const page of pages) {
           results.push(
-            await visionOCR.recognize(report.originalPath, page.pageIndex, page.rotation, password),
+            await visionOCR.recognize(sourcePath, page.pageIndex, page.rotation, password),
           );
         }
         const dateContext = dateContextFromOCR(results);
