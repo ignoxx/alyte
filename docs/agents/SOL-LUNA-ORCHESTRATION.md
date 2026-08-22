@@ -6,12 +6,14 @@ isolation, review, and integration; product behavior remains authoritative in th
 ## Roles
 
 **Sol is the manager and integrator.** Sol selects the dependency frontier, identifies collision
-risk, creates worktrees, writes the complete assignment prompt, reviews results, integrates commits,
-runs cross-ticket verification, and updates ticket status.
+risk, creates worktrees, writes the complete assignment prompt, owns the one post-implementation
+review, turns accepted findings into a remediation brief, integrates commits, runs cross-ticket
+verification, and updates ticket status. Sol does not implement ticket code.
 
 **Luna is the implementer.** Every implementation assignment uses model `gpt-5.6-luna` with
 reasoning effort `xhigh`. Luna receives one ticket sized for a fresh context, works only in the
-assigned branch and worktree, invokes Matt Pocock's `implement` skill, and returns a reviewed commit.
+assigned branch and worktree, invokes Matt Pocock's `implement` skill, and returns an implementation
+commit for Sol's review. Luna also owns every remediation code change Sol requests.
 
 Project-wide architecture, dependency scheduling, shared-interface ownership, and integration stay
 with Sol.
@@ -81,9 +83,8 @@ surfaces, and required reading. It tells Luna to:
 4. preserve unrelated work and remain inside the ticket boundary;
 5. run typechecking and risk-focused tests throughout, then the complete existing suite once at the
    end; running it does not require expanding coverage beyond the ticket's worthwhile risks;
-6. invoke the code-review skill against the ticket's base commit and address valid findings;
-7. commit the complete result to the assigned branch; and
-8. report the commit hash, tests run, acceptance criteria satisfied, residual risks, and any shared
+6. commit the complete implementation to the assigned branch; and
+7. report the commit hash, tests run, acceptance criteria satisfied, residual risks, and any shared
    contract or migration introduced.
 
 Luna stops and reports when a missing product decision would alter the spec, a required shared
@@ -94,12 +95,21 @@ surface belongs to another active agent, or real health data would be required.
 For each returned branch, Sol:
 
 1. confirms the commit is based on the recorded base and contains only the assigned slice;
-2. reviews the diff against the ticket, spec, glossary, ADRs, privacy boundary, and owned lane;
-3. reruns focused tests and integration checks affected by already-merged tickets;
-4. integrates one branch at a time and resolves no semantic conflict without rechecking both tickets;
-5. runs combined typechecking and relevant tests after each integration;
-6. marks the ticket complete only when every acceptance criterion is demonstrated; and
-7. removes the worktree only after the commit is integrated and recoverable.
+2. invokes Matt Pocock's `code-review` skill exactly once against the recorded base and assigned
+   GitHub issue; the skill's internal Standards and Spec reviewers together count as that one pass;
+3. filters the findings against the ticket boundary and sends Luna one consolidated, high-level
+   remediation brief containing every accepted change, rather than prescribing line edits;
+4. has Luna implement and commit the accepted remediation, then checks only that the named findings
+   are resolved and the affected tests pass—Sol does not run a second review skill pass or edit code;
+5. reruns focused tests and integration checks affected by already-merged tickets;
+6. integrates one branch at a time and resolves no semantic conflict without rechecking both tickets;
+7. runs combined typechecking and relevant tests after each integration;
+8. marks the ticket complete only when every acceptance criterion is demonstrated; and
+9. removes the worktree only after the commit is integrated and recoverable.
+
+One review is enough. A remediation check verifies the accepted findings and green tests; it does
+not reopen broad review. A fundamental spec conflict or missing product decision returns to the
+maintainer instead of becoming an implementation guess.
 
 A merge conflict is evidence that ownership or sequencing was wrong. Sol resolves the underlying
 contract deliberately and adjusts later dispatches instead of mechanically accepting one side.
