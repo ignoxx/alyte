@@ -28,15 +28,16 @@ export function AppText({
 }: AppTextProps) {
   const { fontScale } = useWindowDimensions();
   const baseStyle = typography[variant];
-  const scaledLineHeight =
-    allowFontScaling && typeof baseStyle.lineHeight === 'number'
-      ? { lineHeight: baseStyle.lineHeight * fontScale }
-      : undefined;
+  // At the default size, keep the app's deliberate type rhythm. Once Dynamic Type is active,
+  // clear the explicit line box so the native text renderer can size each line around its scaled
+  // glyphs instead of clipping them or applying a second, oversized font-scale multiplier.
+  const dynamicTypeStyle =
+    allowFontScaling && fontScale > 1 ? { lineHeight: undefined } : undefined;
 
   return (
     <Text
       allowFontScaling={allowFontScaling}
-      style={[baseStyle, scaledLineHeight, styles.text, style]}
+      style={[baseStyle, dynamicTypeStyle, styles.text, style]}
       {...props}
     />
   );
