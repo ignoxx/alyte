@@ -1,6 +1,11 @@
 import { createContext, useContext } from 'react';
 import { loadShowcaseSnapshot, type ShowcaseSnapshot } from '@alyte/fixtures';
-import type { AlyteRuntime, RuntimeVariant, ServiceClock } from '@alyte/domain';
+import {
+  formatIntakeLocalDate,
+  type AlyteRuntime,
+  type RuntimeVariant,
+  type ServiceClock,
+} from '@alyte/domain';
 import { createLabsService, type LabsService } from '../features/labs/service';
 import { createLabReportsService, type LabReportsService } from '../features/labs/report-service';
 import { openProtectedLabDatabase, type LabRepository } from '../features/labs/persistence';
@@ -39,6 +44,16 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
 
   const clock = { now: () => new Date() };
 
+  const intake = createIntakeService({
+    repositoryFactory: intakeRepositoryFactory,
+    clock,
+    mediaStore: createProtectedIntakeMediaStore(),
+  });
+
+  if (showcase !== null) {
+    void seedShowcaseIntake(intake, showcase, clock);
+  }
+
   return {
     runtime: {
       variant,
@@ -48,12 +63,37 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     showcase,
     labs: createLabsService({ repositoryFactory }),
     reports: createLabReportsService({ repositoryFactory }),
-    intake: createIntakeService({
-      repositoryFactory: intakeRepositoryFactory,
-      clock,
-      mediaStore: createProtectedIntakeMediaStore(),
-    }),
+    intake,
   };
+}
+
+async function seedShowcaseIntake(
+  intake: IntakeService,
+  showcase: ShowcaseSnapshot,
+  clock: ServiceClock,
+): Promise<void> {
+  try {
+    if ((await intake.listEvents()).length > 0) return;
+    const now = clock.now();
+    for (const [index, fixture] of showcase.intakeEvents.entries()) {
+      const occurredAt = new Date(now.getTime() - (index + 1) * 45 * 60 * 1000);
+      await intake.createEvent({
+        eventType: fixture.eventType,
+        occurredAt: occurredAt.toISOString(),
+        localDate: formatIntakeLocalDate(occurredAt),
+        origin: 'manual',
+        provenance: 'user-entered',
+        components: [
+          {
+            name: fixture.name,
+            amount: { kind: 'unknown', reason: 'not-provided' },
+          },
+        ],
+      });
+    }
+  } catch {
+    // Showcase seeding is an optional development aid; local mode stays usable if it is unavailable.
+  }
 }
 
 export const ServicesContext = createContext<AlyteServices | null>(null);

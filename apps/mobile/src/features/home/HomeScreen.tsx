@@ -8,10 +8,11 @@ import type { HomeStackParamList } from '../../navigation/types';
 import { dispatchHomeQuickActionFromStack } from '../../navigation/parent-tab';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppSurface, EmptyState, AppText } from '../../ui/primitives';
+import { AppButton, AppSurface, AppText } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { IntakeEventCard } from '../intake/IntakeEventCard';
 import type { IntakeCloudJob } from '../intake/outbox';
+import { groupIntakeTimeline } from './home-model';
 
 type HomeNavigation = NativeStackNavigationProp<HomeStackParamList, 'HomeRoot'>;
 
@@ -96,92 +97,114 @@ export function HomeScreen() {
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
-        <View style={styles.titleRow}>
-          <AppButton
-            label={t('home.logAction')}
-            onPress={() =>
-              dispatchHomeQuickActionFromStack(navigation, {
-                kind: 'log-intake',
-              })
-            }
-          />
-        </View>
         {loading && <AppText style={styles.muted}>{t('home.loading')}</AppText>}
         {error && <AppText style={styles.error}>{t('home.error')}</AppText>}
         {!loading && !error && events.length === 0 && (
-          <EmptyState
-            title={t('home.emptyTitle')}
-            body={t('home.emptyBody')}
-            action={
-              <View style={styles.actions}>
-                <AppButton
-                  label={t('home.importAction')}
-                  tone="secondary"
-                  onPress={() =>
-                    dispatchHomeQuickActionFromStack(navigation, {
-                      kind: 'import-report',
-                    })
-                  }
-                />
-                <AppButton
-                  label={t('home.logAction')}
-                  onPress={() =>
-                    dispatchHomeQuickActionFromStack(navigation, {
-                      kind: 'log-intake',
-                    })
-                  }
-                />
-              </View>
-            }
-          />
-        )}
-        {!loading && !error && events.length > 0 && (
-          <AppSurface tone="soft" style={styles.summary}>
-            <AppText variant="heading">{t('home.todaySummary')}</AppText>
-            <AppText style={styles.muted}>
-              {t('home.todayCount').replace('{count}', String(events.length))}
-            </AppText>
-          </AppSurface>
-        )}
-        {!loading &&
-          !error &&
-          events.map((event) => (
-            <IntakeEventCard
-              event={event}
-              key={event.id}
-              cloudJob={cloudJobs.find((job) => job.eventId === event.id) ?? null}
-              onDelete={() => deleteEvent(event)}
-              onEdit={() =>
+          <View style={styles.emptyState}>
+            <AppText variant="title">{t('home.emptyTitle')}</AppText>
+            <AppText style={styles.muted}>{t('home.emptyBody')}</AppText>
+            <AppButton
+              label={t('home.importAction')}
+              onPress={() =>
                 dispatchHomeQuickActionFromStack(navigation, {
-                  kind: 'edit-intake',
-                  eventId: event.id,
+                  kind: 'import-report',
                 })
               }
-              onLogAgain={() =>
-                void intake
-                  .logAgain(event.id)
-                  .then(() => load())
-                  .catch(() => setError(true))
-              }
-              onRemoveImage={() => removeImage(event)}
-              onCancelAnalysis={() => cancelAnalysis(event)}
-              onToggleInclusion={() =>
-                void intake
-                  .setAnalysisInclusion(event.id, event.analysisInclusion === 'excluded')
-                  .then(() => load())
-                  .catch(() => setError(true))
-              }
             />
-          ))}
+            <View style={styles.secondaryActions}>
+              <AppButton
+                label={t('home.snapAction')}
+                tone="secondary"
+                onPress={() =>
+                  dispatchHomeQuickActionFromStack(navigation, {
+                    kind: 'snap',
+                  })
+                }
+              />
+              <AppButton
+                label={t('home.logAction')}
+                tone="quiet"
+                onPress={() =>
+                  dispatchHomeQuickActionFromStack(navigation, {
+                    kind: 'log-intake',
+                  })
+                }
+              />
+            </View>
+          </View>
+        )}
+        {!loading && !error && events.length > 0 && (
+          <View style={styles.timeline}>
+            <View style={styles.summary}>
+              <View>
+                <AppText variant="title">{t('home.todaySummary')}</AppText>
+                <AppText style={styles.muted}>
+                  {t('home.todayCount').replace('{count}', String(events.length))}
+                </AppText>
+              </View>
+              <AppButton
+                label={t('home.logAction')}
+                tone="quiet"
+                onPress={() =>
+                  dispatchHomeQuickActionFromStack(navigation, {
+                    kind: 'log-intake',
+                  })
+                }
+              />
+            </View>
+            {groupIntakeTimeline(events).map((group) => (
+              <View key={group.localDate} style={styles.group}>
+                <AppText variant="label" style={styles.groupLabel}>
+                  {group.localDate === today ? t('home.todayGroup') : group.localDate}
+                </AppText>
+                <AppSurface style={styles.timelineSurface}>
+                  {group.events.map((event) => (
+                    <IntakeEventCard
+                      compact
+                      event={event}
+                      key={event.id}
+                      cloudJob={cloudJobs.find((job) => job.eventId === event.id) ?? null}
+                      onDelete={() => deleteEvent(event)}
+                      onEdit={() =>
+                        dispatchHomeQuickActionFromStack(navigation, {
+                          kind: 'edit-intake',
+                          eventId: event.id,
+                        })
+                      }
+                      onLogAgain={() =>
+                        void intake
+                          .logAgain(event.id)
+                          .then(() => load())
+                          .catch(() => setError(true))
+                      }
+                      onRemoveImage={() => removeImage(event)}
+                      onCancelAnalysis={() => cancelAnalysis(event)}
+                      onToggleInclusion={() =>
+                        void intake
+                          .setAnalysisInclusion(event.id, event.analysisInclusion === 'excluded')
+                          .then(() => load())
+                          .catch(() => setError(true))
+                      }
+                    />
+                  ))}
+                </AppSurface>
+              </View>
+            ))}
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleRow: { gap: spacing.sm, marginBottom: spacing.md },
-  actions: { gap: spacing.sm, marginTop: spacing.sm },
-  summary: { gap: spacing.xs, marginBottom: spacing.md },
+  emptyState: { gap: spacing.md, paddingTop: spacing.lg },
+  secondaryActions: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
+  timeline: { gap: spacing.md, paddingTop: spacing.sm },
+  summary: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
+  group: { gap: spacing.xs },
+  groupLabel: { color: colors.mutedInk, textTransform: 'uppercase' },
+  timelineSurface: { overflow: 'hidden', padding: 0 },
   muted: { color: colors.mutedInk },
   error: { color: colors.danger },
 });

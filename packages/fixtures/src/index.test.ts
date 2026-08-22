@@ -9,6 +9,10 @@ describe('showcase boundary', () => {
 
     assert.deepEqual(first, second);
     assert.equal(first?.label, 'Synthetic showcase data');
+    assert.deepEqual(
+      first?.intakeEvents.map((event) => event.name),
+      ['Synthetic breakfast', 'Synthetic drink'],
+    );
   });
 
   it('cannot be enabled in production', () => {

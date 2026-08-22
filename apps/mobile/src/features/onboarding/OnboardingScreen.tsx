@@ -1,6 +1,6 @@
-import { StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
+import { AppButton, AppSurface, AppText, GroupedRow, StatusPill } from '../../ui/primitives';
 import { colors, screenStyles, spacing, typography } from '../../theme';
 import { t } from '../../localization';
 
@@ -11,29 +11,36 @@ type OnboardingScreenProps = {
 export function OnboardingScreen({ onComplete }: OnboardingScreenProps) {
   return (
     <SafeAreaView style={screenStyles.safe}>
-      <View style={styles.content}>
+      <ScrollView contentContainerStyle={styles.content}>
         <StatusPill>{t('onboarding.eyebrow')}</StatusPill>
         <AppText variant="display" style={styles.title}>
           {t('onboarding.title')}
         </AppText>
         <AppText style={styles.body}>{t('onboarding.body')}</AppText>
-        <AppSurface style={styles.card}>
-          <AppText variant="heading">{t('onboarding.measuredTitle')}</AppText>
-          <AppText style={styles.cardBody}>{t('onboarding.measuredBody')}</AppText>
+        <AppSurface style={styles.list}>
+          <GroupedRow>
+            <AppText variant="heading">{t('onboarding.localTitle')}</AppText>
+            <AppText style={styles.cardBody}>{t('onboarding.localBody')}</AppText>
+          </GroupedRow>
+          <GroupedRow>
+            <AppText variant="heading">{t('onboarding.cloudTitle')}</AppText>
+            <AppText style={styles.cardBody}>{t('onboarding.cloudBody')}</AppText>
+          </GroupedRow>
+          <GroupedRow>
+            <AppText variant="heading">{t('onboarding.measuredTitle')}</AppText>
+            <AppText style={styles.cardBody}>{t('onboarding.measuredBody')}</AppText>
+          </GroupedRow>
         </AppSurface>
-      </View>
-      <View style={styles.footer}>
         <AppButton label={t('onboarding.continue')} onPress={onComplete} />
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { flex: 1, gap: spacing.lg, padding: spacing.xl },
-  title: { color: colors.ink, maxWidth: 360, marginTop: spacing.xl },
+  content: { flexGrow: 1, gap: spacing.md, justifyContent: 'center', padding: spacing.xl },
+  title: { color: colors.ink, maxWidth: 360, marginTop: spacing.md },
   body: { color: colors.mutedInk, ...typography.body, maxWidth: 420 },
-  card: { gap: spacing.sm, marginTop: spacing.lg },
+  list: { gap: 0, marginTop: spacing.md, padding: spacing.md },
   cardBody: { color: colors.mutedInk },
-  footer: { padding: spacing.xl, paddingBottom: spacing.xxl },
 });

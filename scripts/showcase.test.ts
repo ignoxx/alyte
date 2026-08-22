@@ -7,6 +7,10 @@ test('showcase output is deterministic synthetic data', () => {
   const second = loadShowcaseSnapshot('preview', true);
   assert.deepEqual(first, second);
   assert.deepEqual(first?.records, ['Synthetic lab report', 'Synthetic intake event']);
+  assert.deepEqual(
+    first?.intakeEvents.map((event) => event.name),
+    ['Synthetic breakfast', 'Synthetic drink'],
+  );
 });
 
 test('showcase mode cannot be requested by production', () => {

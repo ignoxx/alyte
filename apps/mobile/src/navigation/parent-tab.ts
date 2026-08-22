@@ -1,5 +1,6 @@
 import type { NavigationProp, ParamListBase } from '@react-navigation/native';
-import type { MainTabParamList } from './types';
+import type { MainTabParamList, RootStackParamList } from './types';
+import { snapActionDestination } from './registry-model';
 
 export type FeatureStackNavigation = NavigationProp<ParamListBase>;
 export type ParentTabNavigation = NavigationProp<MainTabParamList>;
@@ -7,6 +8,7 @@ export type ParentTabNavigation = NavigationProp<MainTabParamList>;
 export type HomeQuickAction =
   | { readonly kind: 'import-report' }
   | { readonly kind: 'log-intake' }
+  | { readonly kind: 'snap' }
   | { readonly kind: 'edit-intake'; readonly eventId: string };
 
 /** Resolve the native tab navigator that owns a feature stack screen. */
@@ -30,6 +32,14 @@ export function dispatchHomeQuickAction(
     case 'log-intake':
       navigation.navigate('Log');
       return;
+    case 'snap': {
+      const root = navigation.getParent<NavigationProp<RootStackParamList>>();
+      if (root === undefined) {
+        throw new Error('Home Snap action requires the root navigator');
+      }
+      root.navigate(snapActionDestination.captureRoute);
+      return;
+    }
     case 'edit-intake':
       navigation.navigate('Log', {
         screen: 'IntakeEntry',

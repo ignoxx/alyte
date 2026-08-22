@@ -45,6 +45,7 @@ export type StatusTone =
   | 'neutral'
   | 'measured'
   | 'userEntered'
+  | 'userCorrected'
   | 'extracted'
   | 'estimated'
   | 'evidenceBacked'
@@ -59,6 +60,7 @@ export const statusColors: Record<
   neutral: { fill: systemColor('tertiarySystemFill', '#E7EEEB'), ink: colors.mutedInk },
   measured: { fill: systemColor('systemBlue', '#286B66'), ink: colors.onAccent },
   userEntered: { fill: systemColor('systemPurple', '#8064A2'), ink: colors.onAccent },
+  userCorrected: { fill: systemColor('systemIndigo', '#5B5FC7'), ink: colors.onAccent },
   extracted: { fill: systemColor('systemGray', '#7B8787'), ink: colors.onAccent },
   estimated: { fill: systemColor('systemOrange', '#B7791F'), ink: colors.onAccent },
   evidenceBacked: { fill: systemColor('systemGreen', '#217A5B'), ink: colors.onAccent },

@@ -4,6 +4,10 @@ export interface ShowcaseSnapshot {
   readonly fixtureId: 'showcase.synthetic.v1';
   readonly label: 'Synthetic showcase data';
   readonly records: readonly ['Synthetic lab report', 'Synthetic intake event'];
+  readonly intakeEvents: readonly [
+    { readonly eventType: 'food'; readonly name: 'Synthetic breakfast' },
+    { readonly eventType: 'drink'; readonly name: 'Synthetic drink' },
+  ];
 }
 
 const SYNTHETIC_RECORDS = Object.freeze([
@@ -15,6 +19,10 @@ const SYNTHETIC_SNAPSHOT: ShowcaseSnapshot = Object.freeze({
   fixtureId: 'showcase.synthetic.v1',
   label: 'Synthetic showcase data',
   records: SYNTHETIC_RECORDS,
+  intakeEvents: Object.freeze([
+    { eventType: 'food', name: 'Synthetic breakfast' },
+    { eventType: 'drink', name: 'Synthetic drink' },
+  ] as const),
 });
 
 export function loadShowcaseSnapshot(
