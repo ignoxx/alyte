@@ -3,7 +3,14 @@ import tsParser from '@typescript-eslint/parser';
 
 export default [
   {
-    ignores: ['node_modules/**', '.expo/**', 'ios/**', 'android/**', 'package-lock.json'],
+    ignores: [
+      'node_modules/**',
+      '.expo/**',
+      'ios/**',
+      'android/**',
+      '**/dist/**',
+      'package-lock.json',
+    ],
   },
   {
     files: ['**/*.{ts,tsx,mts,cts}'],
