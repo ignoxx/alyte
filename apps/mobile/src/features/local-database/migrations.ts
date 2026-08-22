@@ -1,6 +1,19 @@
-export type Migration = { readonly version: number; readonly sql: string };
+export type MigrationDatabase = {
+  execAsync(source: string): Promise<void>;
+  getAllAsync<T>(source: string, ...params: readonly unknown[]): Promise<readonly T[]>;
+};
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export type Migration = {
+  readonly version: number;
+  readonly sql: string;
+  /**
+   * A migration can inspect the existing shape before executing its forward changes.
+   * This is needed for SQLite additions that have to bridge an amended, already-applied schema.
+   */
+  readonly apply?: (database: MigrationDatabase) => Promise<void>;
+};
+
+export const CURRENT_SCHEMA_VERSION = 6;
 
 /** The single forward-only schema history shared by the local feature repositories. */
 export const LOCAL_MIGRATIONS: readonly Migration[] = [
@@ -231,5 +244,71 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS intake_capture_recovery_event_id_idx
         ON intake_capture_recovery(event_id);
     `,
+  },
+  {
+    version: 6,
+    sql: `
+      CREATE TABLE IF NOT EXISTS intake_capture_recovery (
+        capture_id TEXT PRIMARY KEY NOT NULL,
+        event_id TEXT,
+        media_path TEXT NOT NULL,
+        media_hash TEXT,
+        media_size INTEGER,
+        media_protection_json TEXT,
+        event_json TEXT NOT NULL,
+        cloud_mode TEXT NOT NULL CHECK (cloud_mode IN ('local-only', 'consented-cloud')),
+        consent_policy_version TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('capturing', 'staged', 'committed', 'failed')),
+        failure_category TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS intake_capture_recovery_state_idx
+        ON intake_capture_recovery(state, updated_at ASC);
+      CREATE INDEX IF NOT EXISTS intake_capture_recovery_event_id_idx
+        ON intake_capture_recovery(event_id);
+
+      ALTER TABLE intake_events ADD COLUMN source_media_hash TEXT;
+      ALTER TABLE intake_events ADD COLUMN source_media_size INTEGER;
+      ALTER TABLE intake_events ADD COLUMN source_media_protection_json TEXT;
+    `,
+    apply: async (database) => {
+      await database.execAsync(`
+        CREATE TABLE IF NOT EXISTS intake_capture_recovery (
+          capture_id TEXT PRIMARY KEY NOT NULL,
+          event_id TEXT,
+          media_path TEXT NOT NULL,
+          media_hash TEXT,
+          media_size INTEGER,
+          media_protection_json TEXT,
+          event_json TEXT NOT NULL,
+          cloud_mode TEXT NOT NULL CHECK (cloud_mode IN ('local-only', 'consented-cloud')),
+          consent_policy_version TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('capturing', 'staged', 'committed', 'failed')),
+          failure_category TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS intake_capture_recovery_state_idx
+          ON intake_capture_recovery(state, updated_at ASC);
+        CREATE INDEX IF NOT EXISTS intake_capture_recovery_event_id_idx
+          ON intake_capture_recovery(event_id);
+      `);
+      const columns = await database.getAllAsync<{ name: string }>(
+        'PRAGMA table_info(intake_events);',
+      );
+      const existingColumns = new Set(columns.map((column) => column.name));
+      const additions = [
+        ['source_media_hash', 'TEXT'],
+        ['source_media_size', 'INTEGER'],
+        ['source_media_protection_json', 'TEXT'],
+      ] as const;
+      for (const [name, type] of additions) {
+        if (!existingColumns.has(name)) {
+          await database.execAsync(`ALTER TABLE intake_events ADD COLUMN ${name} ${type};`);
+        }
+      }
+    },
   },
 ];
