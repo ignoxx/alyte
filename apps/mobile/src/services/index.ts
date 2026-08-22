@@ -1,11 +1,13 @@
 import { createContext, useContext } from 'react';
 import { loadShowcaseSnapshot, type ShowcaseSnapshot } from '@alyte/fixtures';
 import type { AlyteRuntime, RuntimeVariant, ServiceClock } from '@alyte/domain';
+import { createLabsService, type LabsService } from '../features/labs/service';
 
 export interface AlyteServices {
   readonly runtime: AlyteRuntime;
   readonly clock: ServiceClock;
   readonly showcase: ShowcaseSnapshot | null;
+  readonly labs: LabsService;
 }
 
 export function runtimeVariant(): RuntimeVariant {
@@ -24,6 +26,7 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     },
     clock: { now: () => new Date() },
     showcase,
+    labs: createLabsService(),
   };
 }
 

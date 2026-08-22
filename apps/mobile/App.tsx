@@ -8,7 +8,7 @@ import { ErrorBoundary } from './src/ui/ErrorBoundary';
 
 export default function App() {
   const [onboardingComplete, setOnboardingComplete] = useState(false);
-  const services = createServices();
+  const [services] = useState(() => createServices());
 
   return (
     <SafeAreaProvider>

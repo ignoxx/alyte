@@ -18,3 +18,5 @@ export interface AlyteRuntime {
   readonly variant: RuntimeVariant;
   readonly cloudEnvironment: 'none' | 'production';
 }
+
+export * from './labs';
