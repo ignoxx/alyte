@@ -3,6 +3,16 @@ import PDFKit
 import XCTest
 
 final class AlytePDFModuleTests: XCTestCase {
+  func testPreviewBridgeContractIsAnArrayOfPageUris() {
+    let pages: AlytePDFPreviewResult = [
+      "data:image/png;base64,synthetic-page-1",
+      "data:image/png;base64,synthetic-page-2",
+    ]
+
+    XCTAssertEqual(pages.count, 2)
+    XCTAssertTrue(pages.allSatisfy { $0.hasPrefix("data:image/png;base64,") })
+  }
+
   func testSyntheticPasswordPdfRejectsWrongPasswordAndAcceptsCorrectPassword() throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("alyte-pdf-\(UUID().uuidString)", isDirectory: true)

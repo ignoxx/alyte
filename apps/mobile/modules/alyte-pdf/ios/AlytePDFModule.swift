@@ -3,6 +3,8 @@ import Foundation
 import PDFKit
 import UIKit
 
+typealias AlytePDFPreviewResult = [String]
+
 public final class AlytePDFModule: Module {
   private var sessions: [String: PDFDocument] = [:]
   private let lock = NSLock()
@@ -37,7 +39,7 @@ public final class AlytePDFModule: Module {
       self.lock.unlock()
     }
 
-    AsyncFunction("renderPreview") { (path: String) throws -> String in
+    AsyncFunction("renderPreview") { (path: String) throws -> AlytePDFPreviewResult in
       let documentURL = URL(fileURLWithPath: Self.filePath(from: path))
       guard let document = PDFDocument(url: documentURL) else {
         throw Self.error("The selected file is not a readable PDF", code: 10)
@@ -45,7 +47,7 @@ public final class AlytePDFModule: Module {
       return try Self.preview(for: document)
     }
 
-    AsyncFunction("renderPreviewSession") { (sessionID: String) throws -> String in
+    AsyncFunction("renderPreviewSession") { (sessionID: String) throws -> AlytePDFPreviewResult in
       self.lock.lock()
       let document = self.sessions[sessionID]
       self.lock.unlock()
@@ -56,7 +58,7 @@ public final class AlytePDFModule: Module {
     }
   }
 
-  private static func preview(for document: PDFDocument) throws -> [String] {
+  private static func preview(for document: PDFDocument) throws -> AlytePDFPreviewResult {
     guard !document.isLocked, document.pageCount > 0 else {
       throw error("The PDF is locked or has no readable pages", code: 13)
     }
