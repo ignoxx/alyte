@@ -16,3 +16,26 @@ test('production service composition cannot expose showcase fixtures', () => {
     }
   }
 });
+
+test('the native build variant is honored when Expo public env is absent', () => {
+  const originalPublicVariant = process.env.EXPO_PUBLIC_APP_VARIANT;
+  const originalVariant = process.env.APP_VARIANT;
+  delete process.env.EXPO_PUBLIC_APP_VARIANT;
+  process.env.APP_VARIANT = 'production';
+
+  try {
+    assert.equal(createServices().runtime.variant, 'production');
+    assert.equal(createServices().showcase, null);
+  } finally {
+    if (originalPublicVariant === undefined) {
+      delete process.env.EXPO_PUBLIC_APP_VARIANT;
+    } else {
+      process.env.EXPO_PUBLIC_APP_VARIANT = originalPublicVariant;
+    }
+    if (originalVariant === undefined) {
+      delete process.env.APP_VARIANT;
+    } else {
+      process.env.APP_VARIANT = originalVariant;
+    }
+  }
+});

@@ -9,7 +9,7 @@ export interface AlyteServices {
 }
 
 export function runtimeVariant(): RuntimeVariant {
-  const value = process.env.EXPO_PUBLIC_APP_VARIANT;
+  const value = process.env.EXPO_PUBLIC_APP_VARIANT ?? process.env.APP_VARIANT;
   return value === 'preview' || value === 'production' ? value : 'development';
 }
 
