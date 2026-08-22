@@ -35,6 +35,10 @@ module.exports = ({ config }) => {
       supportsTablet: false,
       infoPlist: {
         ...config.ios?.infoPlist,
+        NSCameraUsageDescription:
+          'Alyte uses the camera to save an Intake Image on this iPhone when you tap Snap.',
+        NSPhotoLibraryUsageDescription:
+          'Alyte uses Photos only when you choose an existing image for an Intake Event.',
         ITSAppUsesNonExemptEncryption: false,
       },
     },

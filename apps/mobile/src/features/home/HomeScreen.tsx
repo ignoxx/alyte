@@ -10,6 +10,7 @@ import { t } from '../../localization';
 import { AppButton, AppSurface, EmptyState, AppText } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { IntakeEventCard } from '../intake/IntakeEventCard';
+import type { IntakeCloudJob } from '../intake/outbox';
 
 type HomeScreenProps = BottomTabScreenProps<MainTabParamList, 'Home'>;
 
@@ -18,13 +19,19 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
   const isFocused = useIsFocused();
   const today = formatIntakeLocalDate(clock.now());
   const [events, setEvents] = useState<readonly IntakeEvent[]>([]);
+  const [cloudJobs, setCloudJobs] = useState<readonly IntakeCloudJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setEvents(await intake.listEventsForDay(today));
+      const [nextEvents, nextJobs] = await Promise.all([
+        intake.listEventsForDay(today),
+        intake.resumeCloudJobs(),
+      ]);
+      setEvents(nextEvents);
+      setCloudJobs(nextJobs);
       setError(false);
     } catch {
       setError(true);
@@ -63,6 +70,21 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
         onPress: () =>
           void intake
             .removeIntakeImage(event.id)
+            .then(() => load())
+            .catch(() => setError(true)),
+      },
+    ]);
+  }
+
+  function cancelAnalysis(event: IntakeEvent) {
+    Alert.alert(t('home.cancelAnalysis'), t('snap.cloudQueued'), [
+      { text: t('intake.cancel'), style: 'cancel' },
+      {
+        text: t('home.cancelAnalysis'),
+        style: 'destructive',
+        onPress: () =>
+          void intake
+            .cancelCloudAnalysis(event.id)
             .then(() => load())
             .catch(() => setError(true)),
       },
@@ -108,6 +130,7 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
             <IntakeEventCard
               event={event}
               key={event.id}
+              cloudJob={cloudJobs.find((job) => job.eventId === event.id) ?? null}
               onDelete={() => deleteEvent(event)}
               onEdit={() => navigation.navigate('Log')}
               onLogAgain={() =>
@@ -117,6 +140,7 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
                   .catch(() => setError(true))
               }
               onRemoveImage={() => removeImage(event)}
+              onCancelAnalysis={() => cancelAnalysis(event)}
               onToggleInclusion={() =>
                 void intake
                   .setAnalysisInclusion(event.id, event.analysisInclusion === 'excluded')

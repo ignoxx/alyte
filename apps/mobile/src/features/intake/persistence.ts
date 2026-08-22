@@ -20,6 +20,13 @@ import {
   type SqliteDatabase,
 } from '../local-database/persistence';
 import { nativeDatabaseProtection, type DatabaseProtection } from '../local-database/protection';
+import {
+  INTAKE_CLOUD_CONSENT_POLICY_VERSION,
+  type IntakeCapturePreferences,
+  type IntakeCloudJob,
+  type IntakeCloudJobState,
+  type IntakeCloudMode,
+} from './outbox';
 
 export const INTAKE_DATABASE_NAME = 'alyte-local.sqlite';
 export type { SqliteDatabase } from '../local-database/persistence';
@@ -49,11 +56,36 @@ type IntakeComponentRow = {
   review_state: unknown;
 };
 
+type CloudJobRow = {
+  id: unknown;
+  event_id: unknown;
+  operation: unknown;
+  media_path: unknown;
+  state: unknown;
+  consent_policy_version: unknown;
+  failure_category: unknown;
+  created_at: unknown;
+  updated_at: unknown;
+  submitted_at: unknown;
+  cancelled_at: unknown;
+};
+
 const eventTypes = ['food', 'drink', 'supplement', 'medication', 'other'] as const;
 const origins = ['manual', 'snap', 'cloud-recognized'] as const;
 const provenances = ['user-entered', 'extracted', 'estimated', 'user-corrected'] as const;
 const reviewStates = ['confirmed', 'needs-review'] as const;
 const inclusions = ['included', 'excluded'] as const;
+const cloudJobStates = [
+  'queued',
+  'uploading',
+  'submitted',
+  'processing',
+  'ready',
+  'applied',
+  'failed',
+  'expired',
+  'cancelled',
+] as const;
 
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.length === 0)
@@ -169,6 +201,25 @@ function decodeComponent(row: IntakeComponentRow): IntakeComponent {
   };
 }
 
+function decodeCloudJob(row: CloudJobRow): IntakeCloudJob {
+  return {
+    id: requiredString(row.id, 'cloud job id'),
+    eventId: requiredString(row.event_id, 'cloud job event id'),
+    operation: enumValue(row.operation, ['intake-image'] as const, 'cloud job operation'),
+    mediaPath: requiredString(row.media_path, 'cloud job media path'),
+    state: enumValue(row.state, cloudJobStates, 'cloud job state') as IntakeCloudJobState,
+    consentPolicyVersion: requiredString(
+      row.consent_policy_version,
+      'cloud job consent policy version',
+    ),
+    failureCategory: nullableString(row.failure_category, 'cloud job failure category'),
+    createdAt: requiredString(row.created_at, 'cloud job created timestamp'),
+    updatedAt: requiredString(row.updated_at, 'cloud job updated timestamp'),
+    submittedAt: nullableString(row.submitted_at, 'cloud job submitted timestamp'),
+    cancelledAt: nullableString(row.cancelled_at, 'cloud job cancelled timestamp'),
+  };
+}
+
 function normalizeTimestamp(value: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) throw new Error('Intake event timestamp must be valid');
@@ -213,11 +264,26 @@ export type IntakeRepository = {
   listEventsForDay(localDate: string): Promise<readonly IntakeEvent[]>;
   getEvent(id: string): Promise<IntakeEvent | null>;
   createEvent(input: CreateIntakeEventInput): Promise<IntakeEvent>;
+  createSnap(input: {
+    readonly event: CreateIntakeEventInput;
+    readonly cloudMode: IntakeCloudMode;
+    readonly mediaPath: string;
+    readonly consentPolicyVersion?: string;
+  }): Promise<{ readonly event: IntakeEvent; readonly cloudJob: IntakeCloudJob | null }>;
   updateEvent(id: string, input: UpdateIntakeEventInput): Promise<IntakeEvent>;
   logAgain(id: string, occurredAt?: string): Promise<IntakeEvent>;
   undoLogAgain(id: string): Promise<void>;
   setAnalysisInclusion(id: string, inclusion: AnalysisInclusion): Promise<IntakeEvent>;
   clearIntakeImage(id: string): Promise<IntakeEvent>;
+  listCloudJobs(): Promise<readonly IntakeCloudJob[]>;
+  getCloudJob(id: string): Promise<IntakeCloudJob | null>;
+  getCloudJobForEvent(eventId: string): Promise<IntakeCloudJob | null>;
+  cancelCloudJob(id: string): Promise<IntakeCloudJob | null>;
+  resumeCloudJobs(): Promise<readonly IntakeCloudJob[]>;
+  getCapturePreferences(): Promise<IntakeCapturePreferences>;
+  setCapturePreferences(
+    input: Partial<IntakeCapturePreferences>,
+  ): Promise<IntakeCapturePreferences>;
   deleteEvent(
     id: string,
   ): Promise<{ readonly deleted: boolean; readonly sourceMediaPath: string | null }>;
@@ -271,6 +337,28 @@ export function createIntakeRepository(
     const row = rows[0];
     if (row === undefined) return null;
     return { ...decodeEvent(row), components: await componentsFor(id) };
+  }
+
+  async function readCloudJob(id: string): Promise<IntakeCloudJob | null> {
+    const rows = await database.getAllAsync<CloudJobRow>(
+      `SELECT id, event_id, operation, media_path, state, consent_policy_version,
+        failure_category, created_at, updated_at, submitted_at, cancelled_at
+       FROM cloud_jobs WHERE id = ?;`,
+      id,
+    );
+    const row = rows[0];
+    return row === undefined ? null : decodeCloudJob(row);
+  }
+
+  async function readCloudJobForEvent(eventId: string): Promise<IntakeCloudJob | null> {
+    const rows = await database.getAllAsync<CloudJobRow>(
+      `SELECT id, event_id, operation, media_path, state, consent_policy_version,
+        failure_category, created_at, updated_at, submitted_at, cancelled_at
+       FROM cloud_jobs WHERE event_id = ? ORDER BY created_at DESC LIMIT 1;`,
+      eventId,
+    );
+    const row = rows[0];
+    return row === undefined ? null : decodeCloudJob(row);
   }
 
   async function persist(
@@ -379,6 +467,104 @@ export function createIntakeRepository(
   async function createEvent(input: CreateIntakeEventInput): Promise<IntakeEvent> {
     await initialize();
     return persist(input, 'created', false);
+  }
+
+  async function createSnap(input: {
+    readonly event: CreateIntakeEventInput;
+    readonly cloudMode: IntakeCloudMode;
+    readonly mediaPath: string;
+    readonly consentPolicyVersion?: string;
+  }): Promise<{ readonly event: IntakeEvent; readonly cloudJob: IntakeCloudJob | null }> {
+    await initialize();
+    if (input.event.components.length === 0)
+      throw new Error('A Snap needs at least one Intake Component');
+    const id = input.event.id ?? makeId('intake-event');
+    const occurredAt = normalizeTimestamp(input.event.occurredAt ?? now());
+    const localDate = localDateForTimestamp(input.event.localDate, occurredAt);
+    assertIntakeLocalDate(localDate);
+    const createdAt = now();
+    const provenance = input.event.provenance ?? 'user-entered';
+    const reviewState = input.event.reviewState ?? 'needs-review';
+    const components = input.event.components.map((component) => ({
+      id: component.id ?? makeId('intake-component'),
+      snapshot: normalizeSnapshot(component),
+      provenance: component.provenance ?? provenance,
+      reviewState: component.reviewState ?? reviewState,
+    }));
+    const cloudJobId = makeId('cloud-job');
+    let existing = false;
+
+    await withWrite(async () => {
+      const alreadySaved = await readEvent(id);
+      if (alreadySaved !== null) {
+        existing = true;
+        return;
+      }
+      await database.runAsync(
+        `INSERT INTO intake_events (id, event_type, occurred_at, local_date, origin, provenance,
+          review_state, analysis_inclusion, notes, source_media_path, copied_from_event_id,
+          log_again_undoable, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        id,
+        input.event.eventType,
+        occurredAt,
+        localDate,
+        'snap',
+        provenance,
+        reviewState,
+        input.event.analysisInclusion ?? 'included',
+        input.event.notes ?? null,
+        input.mediaPath,
+        input.event.copiedFromEventId ?? null,
+        0,
+        createdAt,
+        createdAt,
+      );
+      for (const component of components) {
+        await database.runAsync(
+          `INSERT INTO intake_components (id, event_id, canonical_id, original_name, original_amount_json,
+            current_name, current_amount_json, provenance, review_state, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          component.id,
+          id,
+          component.snapshot.canonicalId,
+          component.snapshot.name,
+          snapshotJson(component.snapshot),
+          component.snapshot.name,
+          snapshotJson(component.snapshot),
+          component.provenance,
+          component.reviewState,
+          createdAt,
+          createdAt,
+        );
+      }
+      if (input.cloudMode === 'consented-cloud') {
+        await database.runAsync(
+          `INSERT INTO cloud_jobs (id, event_id, operation, media_path, state,
+            consent_policy_version, failure_category, created_at, updated_at, submitted_at, cancelled_at)
+           VALUES (?, ?, 'intake-image', ?, 'queued', ?, NULL, ?, ?, NULL, NULL);`,
+          cloudJobId,
+          id,
+          input.mediaPath,
+          input.consentPolicyVersion ?? INTAKE_CLOUD_CONSENT_POLICY_VERSION,
+          createdAt,
+          createdAt,
+        );
+      }
+    });
+
+    const event = await readEvent(id);
+    if (event === null) throw new Error('Snap Intake Event could not be read back');
+    const cloudJob = await readCloudJobForEvent(id);
+    if (!existing) {
+      emit({
+        kind: 'created',
+        eventId: id,
+        occurredAt: event.occurredAt,
+        invalidatesInsights: false,
+      });
+    }
+    return { event, cloudJob };
   }
 
   async function updateEvent(id: string, input: UpdateIntakeEventInput): Promise<IntakeEvent> {
@@ -576,6 +762,14 @@ export function createIntakeRepository(
         id,
       );
       if (result.changes !== 1) throw new Error('Intake Event was not found');
+      await database.runAsync(
+        `UPDATE cloud_jobs SET state = 'cancelled', failure_category = 'image-removed',
+          cancelled_at = ?, updated_at = ?
+         WHERE event_id = ? AND state = 'queued';`,
+        now(),
+        now(),
+        id,
+      );
     });
     const event = await readEvent(id);
     if (event === null) throw new Error('Intake Event could not be read back after image removal');
@@ -586,6 +780,93 @@ export function createIntakeRepository(
       invalidatesInsights: false,
     });
     return event;
+  }
+
+  async function listCloudJobs(): Promise<readonly IntakeCloudJob[]> {
+    await initialize();
+    const rows = await database.getAllAsync<CloudJobRow>(
+      `SELECT id, event_id, operation, media_path, state, consent_policy_version,
+        failure_category, created_at, updated_at, submitted_at, cancelled_at
+       FROM cloud_jobs ORDER BY created_at DESC;`,
+    );
+    return rows.map(decodeCloudJob);
+  }
+
+  async function getCloudJob(id: string): Promise<IntakeCloudJob | null> {
+    await initialize();
+    return readCloudJob(id);
+  }
+
+  async function getCloudJobForEvent(eventId: string): Promise<IntakeCloudJob | null> {
+    await initialize();
+    return readCloudJobForEvent(eventId);
+  }
+
+  async function cancelCloudJob(id: string): Promise<IntakeCloudJob | null> {
+    await initialize();
+    await withWrite(async () => {
+      await database.runAsync(
+        `UPDATE cloud_jobs SET state = 'cancelled', failure_category = 'cancelled-by-user',
+          cancelled_at = ?, updated_at = ?
+         WHERE id = ? AND state = 'queued';`,
+        now(),
+        now(),
+        id,
+      );
+    });
+    return readCloudJob(id);
+  }
+
+  /**
+   * The transport seam intentionally does not submit work yet. A foreground/network callback can
+   * call this method safely; queued work remains durable until a future cloud transport owns it.
+   */
+  async function resumeCloudJobs(): Promise<readonly IntakeCloudJob[]> {
+    return listCloudJobs();
+  }
+
+  async function getCapturePreferences(): Promise<IntakeCapturePreferences> {
+    await initialize();
+    const rows = await database.getAllAsync<{ key: string; value: string }>(
+      'SELECT key, value FROM app_preferences WHERE key IN (?, ?);',
+      'intake.cloud-mode',
+      'intake.cloud-disclosure-acknowledged',
+    );
+    const values = new Map(rows.map((row) => [row.key, row.value]));
+    const cloudMode: IntakeCloudMode =
+      values.get('intake.cloud-mode') === 'consented-cloud' ? 'consented-cloud' : 'local-only';
+    return {
+      cloudMode,
+      disclosureAcknowledged: values.get('intake.cloud-disclosure-acknowledged') === 'true',
+    };
+  }
+
+  async function setCapturePreferences(
+    input: Partial<IntakeCapturePreferences>,
+  ): Promise<IntakeCapturePreferences> {
+    await initialize();
+    await withWrite(async () => {
+      const timestamp = now();
+      if (input.cloudMode !== undefined) {
+        await database.runAsync(
+          `INSERT INTO app_preferences (key, value, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`,
+          'intake.cloud-mode',
+          input.cloudMode,
+          timestamp,
+        );
+      }
+      if (input.disclosureAcknowledged !== undefined) {
+        await database.runAsync(
+          `INSERT INTO app_preferences (key, value, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`,
+          'intake.cloud-disclosure-acknowledged',
+          input.disclosureAcknowledged ? 'true' : 'false',
+          timestamp,
+        );
+      }
+    });
+    return getCapturePreferences();
   }
 
   async function deleteEvent(
@@ -624,11 +905,19 @@ export function createIntakeRepository(
     listEventsForDay,
     getEvent,
     createEvent,
+    createSnap,
     updateEvent,
     logAgain,
     undoLogAgain,
     setAnalysisInclusion,
     clearIntakeImage,
+    listCloudJobs,
+    getCloudJob,
+    getCloudJobForEvent,
+    cancelCloudJob,
+    resumeCloudJobs,
+    getCapturePreferences,
+    setCapturePreferences,
     deleteEvent,
     subscribe,
   };

@@ -1,6 +1,6 @@
 export type Migration = { readonly version: number; readonly sql: string };
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 /** The single forward-only schema history shared by the local feature repositories. */
 export const LOCAL_MIGRATIONS: readonly Migration[] = [
@@ -173,6 +173,39 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
         ON intake_events(local_date, occurred_at DESC);
       CREATE INDEX IF NOT EXISTS intake_components_event_id_idx
         ON intake_components(event_id, created_at ASC);
+    `,
+  },
+  {
+    version: 5,
+    sql: `
+      CREATE TABLE IF NOT EXISTS cloud_jobs (
+        id TEXT PRIMARY KEY NOT NULL,
+        event_id TEXT NOT NULL REFERENCES intake_events(id) ON DELETE CASCADE,
+        operation TEXT NOT NULL CHECK (operation IN ('intake-image')),
+        media_path TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN (
+          'queued', 'uploading', 'submitted', 'processing', 'ready', 'applied',
+          'failed', 'expired', 'cancelled'
+        )),
+        consent_policy_version TEXT NOT NULL,
+        failure_category TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        submitted_at TEXT,
+        cancelled_at TEXT,
+        UNIQUE(event_id, operation)
+      );
+
+      CREATE INDEX IF NOT EXISTS cloud_jobs_state_idx
+        ON cloud_jobs(state, updated_at ASC);
+      CREATE INDEX IF NOT EXISTS cloud_jobs_event_id_idx
+        ON cloud_jobs(event_id);
+
+      CREATE TABLE IF NOT EXISTS app_preferences (
+        key TEXT PRIMARY KEY NOT NULL,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `,
   },
 ];

@@ -8,8 +8,15 @@ import type {
   UpdateIntakeEventInput,
 } from '@alyte/domain';
 import { openProtectedIntakeDatabase, type IntakeRepository } from './persistence';
+import type { IntakeMediaSource } from './media-store';
+import { type IntakeCapturePreferences, type IntakeCloudJob, type IntakeCloudMode } from './outbox';
 
 export type IntakeMediaStore = {
+  readonly save?: (
+    source: IntakeMediaSource,
+    captureId: string,
+  ) => Promise<{ readonly path: string; readonly byteSize: number | null }>;
+  readonly list?: () => Promise<readonly string[]>;
   remove(path: string): Promise<void>;
   verifyRemoved(path: string): Promise<boolean>;
 };
@@ -19,11 +26,25 @@ export type IntakeService = {
   listEventsForDay(localDate: string): Promise<readonly IntakeEvent[]>;
   getEvent(id: string): Promise<IntakeEvent | null>;
   createEvent(input: CreateIntakeEventInput): Promise<IntakeEvent>;
+  captureSnap(input: {
+    readonly source: IntakeMediaSource;
+    readonly event: CreateIntakeEventInput;
+    readonly cloudMode?: IntakeCloudMode;
+    readonly captureId?: string;
+  }): Promise<{ readonly event: IntakeEvent; readonly cloudJob: IntakeCloudJob | null }>;
   updateEvent(id: string, input: UpdateIntakeEventInput): Promise<IntakeEvent>;
   logAgain(id: string, occurredAt?: string): Promise<IntakeEvent>;
   undoLogAgain(id: string): Promise<void>;
   setAnalysisInclusion(id: string, included: boolean): Promise<IntakeEvent>;
   removeIntakeImage(id: string): Promise<IntakeEvent>;
+  listCloudJobs(): Promise<readonly IntakeCloudJob[]>;
+  getCloudJobForEvent(eventId: string): Promise<IntakeCloudJob | null>;
+  cancelCloudAnalysis(eventId: string): Promise<IntakeCloudJob | null>;
+  resumeCloudJobs(): Promise<readonly IntakeCloudJob[]>;
+  getCapturePreferences(): Promise<IntakeCapturePreferences>;
+  setCapturePreferences(
+    input: Partial<IntakeCapturePreferences>,
+  ): Promise<IntakeCapturePreferences>;
   deleteEvent(id: string): Promise<void>;
   subscribe(listener: IntakeChangeListener): () => void;
 };
@@ -36,12 +57,34 @@ export type IntakeServiceOptions = {
 
 export function createIntakeService(options: IntakeServiceOptions = {}): IntakeService {
   let repositoryPromise: Promise<IntakeRepository> | null = null;
+  let mediaReconciled = false;
+  const captureInFlight = new Map<
+    string,
+    Promise<{ readonly event: IntakeEvent; readonly cloudJob: IntakeCloudJob | null }>
+  >();
   const repositoryFactory = options.repositoryFactory ?? (() => openProtectedIntakeDatabase());
   const clock = options.clock ?? { now: () => new Date() };
 
   async function repository(): Promise<IntakeRepository> {
     repositoryPromise ??= repositoryFactory();
-    return repositoryPromise;
+    const repo = await repositoryPromise;
+    if (!mediaReconciled && options.mediaStore?.list !== undefined) {
+      const [events, paths] = await Promise.all([repo.listEvents(), options.mediaStore.list()]);
+      const referenced = new Set(
+        events
+          .map((event) => event.sourceMediaPath)
+          .filter((path): path is string => path !== null),
+      );
+      for (const path of paths) {
+        if (referenced.has(path)) continue;
+        await options.mediaStore.remove(path);
+        if (!(await options.mediaStore.verifyRemoved(path))) {
+          throw new Error('An interrupted Intake Image could not be recovered safely');
+        }
+      }
+      mediaReconciled = true;
+    }
+    return repo;
   }
 
   return {
@@ -56,6 +99,67 @@ export function createIntakeService(options: IntakeServiceOptions = {}): IntakeS
     },
     async createEvent(input) {
       return (await repository()).createEvent(input);
+    },
+    async captureSnap(input) {
+      const captureId =
+        input.captureId ?? `snap-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const existingWork = captureInFlight.get(captureId);
+      if (existingWork !== undefined) return existingWork;
+      const work = (async () => {
+        const repo = await repository();
+        const existing = await repo.getEvent(input.event.id ?? captureId);
+        if (existing !== null) {
+          return { event: existing, cloudJob: await repo.getCloudJobForEvent(existing.id) };
+        }
+        const cloudMode = input.cloudMode ?? (await repo.getCapturePreferences()).cloudMode;
+        if (cloudMode === 'consented-cloud') {
+          const preferences = await repo.getCapturePreferences();
+          if (!preferences.disclosureAcknowledged) {
+            throw new Error('Cloud Intake Image disclosure must be acknowledged first');
+          }
+        }
+        const mediaStore = options.mediaStore;
+        if (mediaStore?.save === undefined) {
+          throw new Error('Intake media storage is unavailable');
+        }
+        const eventInput = { ...input.event, id: input.event.id ?? captureId };
+        const stored = await mediaStore.save(input.source, captureId);
+        let result: { readonly event: IntakeEvent; readonly cloudJob: IntakeCloudJob | null };
+        try {
+          result = await repo.createSnap({
+            event: eventInput,
+            cloudMode,
+            mediaPath: stored.path,
+          });
+        } catch (error) {
+          const duplicate = await repo.getEvent(eventInput.id as string);
+          if (duplicate !== null) {
+            return { event: duplicate, cloudJob: await repo.getCloudJobForEvent(duplicate.id) };
+          }
+          await mediaStore.remove(stored.path);
+          if (!(await mediaStore.verifyRemoved(stored.path))) {
+            throw new Error('The captured Intake Image could not be recovered after save failure', {
+              cause: error,
+            });
+          }
+          throw error;
+        }
+        // A relaunch or duplicate callback may find the event already committed with another
+        // protected path. Never retain a second unreferenced image in that case.
+        if (result.event.sourceMediaPath !== stored.path) {
+          await mediaStore.remove(stored.path);
+          if (!(await mediaStore.verifyRemoved(stored.path))) {
+            throw new Error('The duplicate Intake Image could not be cleaned up');
+          }
+        }
+        return result;
+      })();
+      captureInFlight.set(captureId, work);
+      try {
+        return await work;
+      } finally {
+        captureInFlight.delete(captureId);
+      }
     },
     async updateEvent(id, input) {
       return (await repository()).updateEvent(id, input);
@@ -83,6 +187,26 @@ export function createIntakeService(options: IntakeServiceOptions = {}): IntakeS
         }
       }
       return repo.clearIntakeImage(id);
+    },
+    async listCloudJobs() {
+      return (await repository()).listCloudJobs();
+    },
+    async getCloudJobForEvent(eventId) {
+      return (await repository()).getCloudJobForEvent(eventId);
+    },
+    async cancelCloudAnalysis(eventId) {
+      const repo = await repository();
+      const job = await repo.getCloudJobForEvent(eventId);
+      return job === null ? null : repo.cancelCloudJob(job.id);
+    },
+    async resumeCloudJobs() {
+      return (await repository()).resumeCloudJobs();
+    },
+    async getCapturePreferences() {
+      return (await repository()).getCapturePreferences();
+    },
+    async setCapturePreferences(input) {
+      return (await repository()).setCapturePreferences(input);
     },
     async deleteEvent(id) {
       const repo = await repository();

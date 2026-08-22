@@ -353,3 +353,229 @@ test('remove Intake Image clears only the reference after verified media cleanup
   assert.equal((await repository.getEvent(event.id))?.eventType, 'medication');
   await repository.close();
 });
+
+test('Snap commits protected media reference, pending event, and consented outbox job across relaunch', async () => {
+  const databasePath = temporaryDatabase();
+  const first = createRepository(databasePath);
+  const result = await first.repository.createSnap({
+    event: {
+      id: 'snap-event-durable',
+      eventType: 'other',
+      occurredAt: '2026-08-22T14:00:00.000Z',
+      localDate: '2026-08-22',
+      origin: 'snap',
+      reviewState: 'needs-review',
+      components: [
+        {
+          name: 'Captured intake',
+          amount: { kind: 'unknown', reason: 'not-confirmed' },
+          reviewState: 'needs-review',
+        },
+      ],
+    },
+    cloudMode: 'consented-cloud',
+    mediaPath: 'file:///sandbox/alyte-protected/intake-media/snap-event-durable.jpg',
+  });
+  assert.equal(result.event.sourceMediaPath?.includes('/intake-media/'), true);
+  assert.equal(result.event.components[0]?.amount.kind, 'unknown');
+  assert.equal(result.cloudJob?.state, 'queued');
+  assert.equal(result.cloudJob?.consentPolicyVersion, 'intake-image-disclosure-v1');
+  await first.repository.close();
+
+  const reopened = createRepository(databasePath);
+  const event = await reopened.repository.getEvent('snap-event-durable');
+  const jobs = await reopened.repository.listCloudJobs();
+  assert.equal(event?.sourceMediaPath, result.event.sourceMediaPath);
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0]?.eventId, 'snap-event-durable');
+  assert.equal(jobs[0]?.state, 'queued');
+  await reopened.repository.close();
+});
+
+test('local-only Snap has no cloud job and cancellation is limited to queued work', async () => {
+  const { repository } = createRepository(temporaryDatabase());
+  assert.deepEqual(await repository.getCapturePreferences(), {
+    cloudMode: 'local-only',
+    disclosureAcknowledged: false,
+  });
+  assert.deepEqual(
+    await repository.setCapturePreferences({
+      cloudMode: 'consented-cloud',
+      disclosureAcknowledged: true,
+    }),
+    { cloudMode: 'consented-cloud', disclosureAcknowledged: true },
+  );
+  const local = await repository.createSnap({
+    event: {
+      id: 'snap-event-local',
+      eventType: 'supplement',
+      occurredAt: '2026-08-22T15:00:00.000Z',
+      components: [{ name: 'Package', amount: { kind: 'unknown', reason: 'not-confirmed' } }],
+    },
+    cloudMode: 'local-only',
+    mediaPath: 'file:///sandbox/alyte-protected/intake-media/snap-event-local.jpg',
+  });
+  assert.equal(local.cloudJob, null);
+  assert.equal((await repository.listCloudJobs()).length, 0);
+
+  const cloud = await repository.createSnap({
+    event: {
+      id: 'snap-event-cancellable',
+      eventType: 'food',
+      occurredAt: '2026-08-22T15:01:00.000Z',
+      components: [{ name: 'Lunch', amount: { kind: 'unknown', reason: 'not-confirmed' } }],
+    },
+    cloudMode: 'consented-cloud',
+    mediaPath: 'file:///sandbox/alyte-protected/intake-media/snap-event-cancellable.jpg',
+  });
+  const cancelled = await repository.cancelCloudJob(cloud.cloudJob?.id ?? 'missing');
+  assert.equal(cancelled?.state, 'cancelled');
+  assert.equal(cancelled?.failureCategory, 'cancelled-by-user');
+  assert.equal((await repository.resumeCloudJobs())[0]?.state, 'cancelled');
+  await repository.close();
+});
+
+test('Snap image removal retains event and cancels an unsubmitted cloud job', async () => {
+  const { repository } = createRepository(temporaryDatabase());
+  const result = await repository.createSnap({
+    event: {
+      id: 'snap-event-remove-image',
+      eventType: 'other',
+      occurredAt: '2026-08-22T16:00:00.000Z',
+      components: [{ name: 'Package', amount: { kind: 'unknown', reason: 'not-confirmed' } }],
+    },
+    cloudMode: 'consented-cloud',
+    mediaPath: 'file:///sandbox/alyte-protected/intake-media/snap-event-remove-image.jpg',
+  });
+  const cleared = await repository.clearIntakeImage(result.event.id);
+  assert.equal(cleared.sourceMediaPath, null);
+  assert.equal((await repository.getCloudJobForEvent(result.event.id))?.state, 'cancelled');
+  assert.equal((await repository.getEvent(result.event.id))?.components[0]?.amount.kind, 'unknown');
+  await repository.close();
+});
+
+test('Snap service coalesces duplicate callbacks and removes media when the transaction fails', async () => {
+  const { repository } = createRepository(temporaryDatabase());
+  const media = new Set<string>();
+  let saves = 0;
+  const mediaStore: IntakeMediaStore = {
+    async save(_source, captureId) {
+      saves += 1;
+      const path = `protected://intake-media/${captureId}.jpg`;
+      media.add(path);
+      return { path, byteSize: 10 };
+    },
+    async remove(path) {
+      media.delete(path);
+    },
+    async verifyRemoved(path) {
+      return !media.has(path);
+    },
+  };
+  const service = createIntakeService({ repositoryFactory: async () => repository, mediaStore });
+  const input = {
+    captureId: 'snap-callback-once',
+    source: { uri: 'file:///synthetic/photo.jpg' },
+    cloudMode: 'local-only' as const,
+    event: {
+      id: 'snap-callback-once',
+      eventType: 'other' as const,
+      occurredAt: '2026-08-22T17:00:00.000Z',
+      localDate: '2026-08-22',
+      components: [
+        {
+          name: 'Captured intake',
+          amount: { kind: 'unknown' as const, reason: 'not-confirmed' as const },
+        },
+      ],
+    },
+  };
+  const [first, second] = await Promise.all([
+    service.captureSnap(input),
+    service.captureSnap(input),
+  ]);
+  assert.equal(first.event.id, second.event.id);
+  assert.equal(saves, 1);
+  assert.equal((await repository.listEvents()).length, 1);
+
+  const failingService = createIntakeService({
+    repositoryFactory: async () => ({
+      ...repository,
+      async createSnap() {
+        throw new Error('synthetic transaction failure');
+      },
+    }),
+    mediaStore,
+  });
+  await assert.rejects(
+    failingService.captureSnap({
+      ...input,
+      captureId: 'snap-transaction-fails',
+      event: { ...input.event, id: 'snap-transaction-fails' },
+    }),
+    /transaction failure/,
+  );
+  assert.equal(media.has('protected://intake-media/snap-transaction-fails.jpg'), false);
+  await repository.close();
+});
+
+test('camera storage failure leaves no Intake Event or cloud outbox row', async () => {
+  const { repository } = createRepository(temporaryDatabase());
+  const service = createIntakeService({
+    repositoryFactory: async () => repository,
+    mediaStore: {
+      async save() {
+        throw new Error('protected storage unavailable');
+      },
+      async remove() {},
+      async verifyRemoved() {
+        return true;
+      },
+    },
+  });
+  await assert.rejects(
+    service.captureSnap({
+      captureId: 'snap-storage-fails',
+      source: { uri: 'file:///synthetic/photo.jpg' },
+      event: {
+        id: 'snap-storage-fails',
+        eventType: 'food',
+        occurredAt: '2026-08-22T18:00:00.000Z',
+        components: [{ name: 'Food', amount: { kind: 'unknown', reason: 'not-confirmed' } }],
+      },
+    }),
+    /storage unavailable/,
+  );
+  assert.equal(await repository.getEvent('snap-storage-fails'), null);
+  assert.equal((await repository.listCloudJobs()).length, 0);
+  await repository.close();
+});
+
+test('service relaunch reconciliation removes an unreferenced protected capture but keeps event media', async () => {
+  const { repository } = createRepository(temporaryDatabase());
+  const referencedPath = 'protected://intake-media/referenced.jpg';
+  const orphanPath = 'protected://intake-media/orphan.jpg';
+  await repository.createEvent({
+    id: 'snap-referenced',
+    eventType: 'food',
+    occurredAt: '2026-08-22T19:00:00.000Z',
+    components: [{ name: 'Dinner', amount: { kind: 'unknown', reason: 'not-confirmed' } }],
+    sourceMediaPath: referencedPath,
+  });
+  const files = new Set([referencedPath, orphanPath]);
+  const mediaStore: IntakeMediaStore = {
+    async list() {
+      return [...files];
+    },
+    async remove(path) {
+      files.delete(path);
+    },
+    async verifyRemoved(path) {
+      return !files.has(path);
+    },
+  };
+  const service = createIntakeService({ repositoryFactory: async () => repository, mediaStore });
+  await service.listEvents();
+  assert.deepEqual([...files], [referencedPath]);
+  await repository.close();
+});
