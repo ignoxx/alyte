@@ -11,6 +11,9 @@ final class AlytePDFSanitizationTests: XCTestCase {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let source = try syntheticSourceDocument(in: directory)
+    let sourceAnnotations = source.page(at: 0)?.annotations ?? []
+    XCTAssertTrue(sourceAnnotations.contains { $0.type == "FileAttachment" })
+    XCTAssertTrue(sourceAnnotations.contains { $0.type == "Square" })
     let output = directory.appendingPathComponent("derivative.pdf")
     let recipe: [String: Any] = ["pages": [
       ["pageIndex": 1, "selected": true, "crop": ["x": 0.1, "y": 0.1, "width": 0.8, "height": 0.7], "rotation": 270, "redactions": [["rect": ["x": 0.2, "y": 0.2, "width": 0.25, "height": 0.1]]]],
@@ -22,11 +25,25 @@ final class AlytePDFSanitizationTests: XCTestCase {
     XCTAssertEqual(verification["sourceContentRemoved"] as? Bool, true)
     let derivative = try XCTUnwrap(PDFDocument(url: output))
     XCTAssertEqual(derivative.pageCount, 2)
-    XCTAssertGreaterThan(derivative.page(at: 0)?.bounds(for: .mediaBox).width ?? 0, 0)
-    XCTAssertGreaterThan(derivative.page(at: 1)?.bounds(for: .mediaBox).width ?? 0, 0)
+    let firstBounds = try XCTUnwrap(derivative.page(at: 0)?.bounds(for: .mediaBox))
+    let secondBounds = try XCTUnwrap(derivative.page(at: 1)?.bounds(for: .mediaBox))
+    // Page 1 was selected first: its .8x.7 crop rotated 270° has a 1.17 aspect ratio. Page 0
+    // follows it with a .9x.9 crop rotated 90° and has a 1.33 aspect ratio.
+    XCTAssertEqual(firstBounds.width / firstBounds.height, 7.0 / 6.0, accuracy: 0.03)
+    XCTAssertEqual(secondBounds.width / secondBounds.height, 4.0 / 3.0, accuracy: 0.03)
+    XCTAssertGreaterThan(secondBounds.width / secondBounds.height, firstBounds.width / firstBounds.height)
+    XCTAssertTrue(derivative.page(at: 0)?.annotations.isEmpty ?? false)
+    XCTAssertTrue(derivative.page(at: 1)?.annotations.isEmpty ?? false)
+    let sameRecipeOutput = directory.appendingPathComponent("derivative-scale-independent.pdf")
+    _ = try AlytePDFSanitizationTestSupport.render(document: source, destinationURL: sameRecipeOutput, recipe: recipe)
+    let sameRecipe = try XCTUnwrap(PDFDocument(url: sameRecipeOutput))
+    let sameFirstBounds = try XCTUnwrap(sameRecipe.page(at: 0)?.bounds(for: .mediaBox))
+    XCTAssertEqual(sameFirstBounds.width, firstBounds.width, accuracy: 0.01)
+    XCTAssertEqual(sameFirstBounds.height, firstBounds.height, accuracy: 0.01)
     let verificationAfterReload = try AlytePDFSanitizationTestSupport.verify(url: output, forbiddenStrings: ["SYNTHETIC-SOURCE-METADATA", "SYNTHETIC-HIDDEN-TEXT"])
     XCTAssertEqual(verificationAfterReload["selectableText"] as? Bool, false)
     XCTAssertEqual(verificationAfterReload["annotations"] as? Bool, false)
+    XCTAssertEqual(verificationAfterReload["attachments"] as? Bool, false)
     XCTAssertEqual(verificationAfterReload["metadata"] as? Bool, false)
     XCTAssertEqual(verificationAfterReload["reloadChecked"] as? Bool, true)
   }
@@ -59,7 +76,19 @@ final class AlytePDFSanitizationTests: XCTestCase {
       _ = firstPage
     }
     source.documentAttributes = [.titleAttribute: "SYNTHETIC-SOURCE-METADATA"]
-    source.page(at: 0)?.addAnnotation(PDFAnnotation(bounds: CGRect(x: 20, y: 20, width: 80, height: 24), forType: .freeText, withProperties: nil))
+    let firstPage = try XCTUnwrap(source.page(at: 0))
+    firstPage.addAnnotation(PDFAnnotation(bounds: CGRect(x: 20, y: 20, width: 80, height: 24), forType: .freeText, withProperties: nil))
+    firstPage.addAnnotation(PDFAnnotation(bounds: CGRect(x: 120, y: 20, width: 80, height: 24), forType: .square, withProperties: nil))
+    let fileSpec: [String: Any] = [
+      "Type": "Filespec",
+      "F": "synthetic-attachment.txt",
+      "EF": ["F": Data("synthetic attachment".utf8)],
+    ]
+    firstPage.addAnnotation(PDFAnnotation(
+      bounds: CGRect(x: 220, y: 20, width: 80, height: 24),
+      forType: "FileAttachment",
+      withProperties: ["FS": fileSpec]
+    ))
     return source
   }
 }

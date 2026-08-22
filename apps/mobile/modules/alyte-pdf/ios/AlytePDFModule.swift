@@ -210,7 +210,7 @@ private func byteMarkers(_ data: Data) -> (text: Bool, annotations: Bool, attach
   return (
     source.contains("/ActualText") || source.contains("/ToUnicode"),
     source.contains("/Annots"),
-    source.contains("/EmbeddedFile") || source.contains("/Filespec"),
+    source.contains("/EmbeddedFile") || source.contains("/Filespec") || source.contains("/FileAttachment"),
     // PDFKit may add a generated /Info dictionary. XMP /Metadata is not emitted by the
     // image-only writer and is therefore still a meaningful failure marker.
     source.contains("/Metadata")
