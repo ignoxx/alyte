@@ -227,7 +227,7 @@ private func sourceEvidence(_ document: PDFDocument) -> AlyteSourceEvidence {
   let text = (0..<document.pageCount).compactMap { index in
     document.page(at: index)?.string
   }.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-  let metadata = (document.documentAttributes ?? [:]).compactMap { entry in
+  let metadata: [String] = (document.documentAttributes ?? [:]).compactMap { entry -> String? in
     let key = String(describing: entry.key)
     guard !["CreationDate", "ModDate", "Producer", "Creator", "Trapped"].contains(key) else { return nil }
     let value = entry.value
@@ -264,7 +264,7 @@ private func verifySanitizedData(
   let sourceStrings = (evidence?.text ?? []) + (evidence?.metadata ?? []) + forbiddenStrings
   let sourceValueSurvived = sourceStrings.contains { needle in
     let utf16Bytes = needle.utf16.flatMap { [UInt8($0 & 0xff), UInt8($0 >> 8)] }
-    data.range(of: Data(needle.utf8)) != nil ||
+    return data.range(of: Data(needle.utf8)) != nil ||
       data.range(of: Data(utf16Bytes)) != nil ||
       document.string?.localizedCaseInsensitiveContains(needle) == true
   }
@@ -325,6 +325,35 @@ private func sensitiveVisionRegions(_ document: PDFDocument) throws -> [[String:
     }
   }
   return result
+}
+
+private func sanitizePDF(document: PDFDocument, destinationPath: String, recipe: [String: Any]) throws -> [String: Any] {
+  let pages = try recipePages(recipe)
+  let destinationURL = URL(fileURLWithPath: alytePDFFilePath(destinationPath))
+  try FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+  try? FileManager.default.removeItem(at: destinationURL)
+  let outputDocument = PDFDocument()
+  var outputCount = 0
+  for pageRecipe in pages {
+    guard let pageIndex = pageRecipe["pageIndex"] as? Int,
+          pageIndex >= 0, pageIndex < document.pageCount,
+          let page = document.page(at: pageIndex) else { throw AlytePDFError.malformedRecipe }
+    let crop = try pageRecipe["crop"] == nil || pageRecipe["crop"] is NSNull ? nil : normalizedRect(pageRecipe["crop"])
+    let rotation = pageRecipe["rotation"] as? Int ?? 0
+    guard [0, 90, 180, 270].contains(rotation) else { throw AlytePDFError.malformedRecipe }
+    let redactions = pageRecipe["redactions"] as? [[String: Any]] ?? []
+    let image = try renderImage(page: page, crop: crop, rotation: rotation, redactions: redactions)
+    guard let outputPage = PDFPage(image: image) else { throw AlytePDFError.renderFailed }
+    outputDocument.insert(outputPage, at: outputCount)
+    outputCount += 1
+  }
+  guard outputCount > 0 else { throw AlytePDFError.noSelectedPages }
+  // Never copy source document attributes, page objects, or source PDF data into the derivative.
+  outputDocument.documentAttributes = [:]
+  guard outputDocument.write(to: destinationURL) else { throw AlytePDFError.renderFailed }
+  let evidence = sourceEvidence(document)
+  let verification = try verifySanitizedData(Data(contentsOf: destinationURL), evidence: evidence)
+  return ["destinationPath": destinationPath, "pageCount": outputCount, "verification": verification]
 }
 
 public final class AlytePDFModule: Module {
@@ -403,32 +432,7 @@ public final class AlytePDFModule: Module {
   }
 
   fileprivate func sanitize(document: PDFDocument, destinationPath: String, recipe: [String: Any]) throws -> [String: Any] {
-    let pages = try recipePages(recipe)
-    let destinationURL = URL(fileURLWithPath: alytePDFFilePath(destinationPath))
-    try FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try? FileManager.default.removeItem(at: destinationURL)
-    let outputDocument = PDFDocument()
-    var outputCount = 0
-    for pageRecipe in pages {
-      guard let pageIndex = pageRecipe["pageIndex"] as? Int,
-            pageIndex >= 0, pageIndex < document.pageCount,
-            let page = document.page(at: pageIndex) else { throw AlytePDFError.malformedRecipe }
-      let crop = try pageRecipe["crop"] == nil || pageRecipe["crop"] is NSNull ? nil : normalizedRect(pageRecipe["crop"])
-      let rotation = pageRecipe["rotation"] as? Int ?? 0
-      guard [0, 90, 180, 270].contains(rotation) else { throw AlytePDFError.malformedRecipe }
-      let redactions = pageRecipe["redactions"] as? [[String: Any]] ?? []
-      let image = try renderImage(page: page, crop: crop, rotation: rotation, redactions: redactions)
-      guard let outputPage = PDFPage(image: image) else { throw AlytePDFError.renderFailed }
-      outputDocument.insert(outputPage, at: outputCount)
-      outputCount += 1
-    }
-    guard outputCount > 0 else { throw AlytePDFError.noSelectedPages }
-    // Never copy source document attributes, page objects, or source PDF data into the derivative.
-    outputDocument.documentAttributes = [:]
-    guard outputDocument.write(to: destinationURL) else { throw AlytePDFError.renderFailed }
-    let evidence = sourceEvidence(document)
-    let verification = try verifySanitizedData(Data(contentsOf: destinationURL), evidence: evidence)
-    return ["destinationPath": destinationPath, "pageCount": outputCount, "verification": verification]
+    try sanitizePDF(document: document, destinationPath: destinationPath, recipe: recipe)
   }
 
   private func renderPreview(_ document: PDFDocument) throws -> AlytePDFPreviewResult {
@@ -449,8 +453,7 @@ public final class AlytePDFModule: Module {
 /// adversarial rather than a nominal page-count parse.
 public enum AlytePDFSanitizationTestSupport {
   public static func render(document: PDFDocument, destinationURL: URL, recipe: [String: Any]) throws -> [String: Any] {
-    let module = AlytePDFModule()
-    return try module.sanitize(document: document, destinationPath: destinationURL.path, recipe: recipe)
+    return try sanitizePDF(document: document, destinationPath: destinationURL.path, recipe: recipe)
   }
 
   public static func verify(url: URL, forbiddenStrings: [String] = []) throws -> [String: Any] {
