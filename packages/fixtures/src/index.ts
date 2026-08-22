@@ -6,10 +6,15 @@ export interface ShowcaseSnapshot {
   readonly records: readonly ['Synthetic lab report', 'Synthetic intake event'];
 }
 
+const SYNTHETIC_RECORDS = Object.freeze([
+  'Synthetic lab report',
+  'Synthetic intake event',
+] as const);
+
 const SYNTHETIC_SNAPSHOT: ShowcaseSnapshot = Object.freeze({
   fixtureId: 'showcase.synthetic.v1',
   label: 'Synthetic showcase data',
-  records: ['Synthetic lab report', 'Synthetic intake event'] as const,
+  records: SYNTHETIC_RECORDS,
 });
 
 export function loadShowcaseSnapshot(
