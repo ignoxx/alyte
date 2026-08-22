@@ -5,6 +5,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
   type ColorValue,
   type PressableProps,
@@ -25,10 +26,17 @@ export function AppText({
   allowFontScaling = true,
   ...props
 }: AppTextProps) {
+  const { fontScale } = useWindowDimensions();
+  const baseStyle = typography[variant];
+  const scaledLineHeight =
+    allowFontScaling && typeof baseStyle.lineHeight === 'number'
+      ? { lineHeight: baseStyle.lineHeight * fontScale }
+      : undefined;
+
   return (
     <Text
       allowFontScaling={allowFontScaling}
-      style={[typography[variant], styles.text, style]}
+      style={[baseStyle, scaledLineHeight, styles.text, style]}
       {...props}
     />
   );
