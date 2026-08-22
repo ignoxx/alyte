@@ -122,6 +122,10 @@ export type SanitizedReportVerification = {
   readonly removableRedactions: boolean;
   /** The artifact was reopened and structurally checked after writing. */
   readonly reloadChecked: boolean;
+  /** Native verification compared final bytes with source-only evidence before release. */
+  readonly sourceAwareChecked: boolean;
+  readonly sourceContentRemoved: boolean;
+  readonly verificationVersion: string;
 };
 
 export type CreateSanitizedReportInput = {

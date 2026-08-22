@@ -142,10 +142,21 @@ function decodeSanitizedReportRow(row: SanitizedReportRow): SanitizedReport {
   if (recipe.reportId !== requiredString(row.report_id, 'Sanitized Report report id')) {
     throw new Error('Sanitized Report recipe and report ids do not match');
   }
-  const verification = jsonObject<SanitizedReportVerification>(
+  const rawVerification = jsonObject<SanitizedReportVerification>(
     row.verification_json,
     'sanitized verification',
   );
+  const verification =
+    rawVerification === null
+      ? null
+      : {
+          ...rawVerification,
+          // Rows written before source-aware verification are intentionally not reusable as verified
+          // derivatives; the service will require a fresh native render before downstream use.
+          sourceAwareChecked: rawVerification.sourceAwareChecked === true,
+          sourceContentRemoved: rawVerification.sourceContentRemoved === true,
+          verificationVersion: rawVerification.verificationVersion ?? 'legacy-structural-only',
+        };
   return {
     id: requiredString(row.id, 'Sanitized Report id'),
     reportId: recipe.reportId,

@@ -217,7 +217,38 @@ private func byteMarkers(_ data: Data) -> (text: Bool, annotations: Bool, attach
   )
 }
 
-private func verifySanitizedData(_ data: Data, forbiddenStrings: [String] = []) throws -> [String: Any] {
+private struct AlyteSourceEvidence {
+  let text: [String]
+  let metadata: [String]
+  let annotationCount: Int
+}
+
+private func sourceEvidence(_ document: PDFDocument) -> AlyteSourceEvidence {
+  let text = (0..<document.pageCount).compactMap { index in
+    document.page(at: index)?.string
+  }.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+  let metadata = (document.documentAttributes ?? [:]).compactMap { entry in
+    let key = String(describing: entry.key)
+    guard !["CreationDate", "ModDate", "Producer", "Creator", "Trapped"].contains(key) else { return nil }
+    let value = entry.value
+    let string = String(describing: value)
+    return string.isEmpty ? nil : string
+  }
+  let annotationCount = (0..<document.pageCount).reduce(0) { count, index in
+    count + (document.page(at: index)?.annotations.count ?? 0)
+  }
+  return AlyteSourceEvidence(text: text, metadata: metadata, annotationCount: annotationCount)
+}
+
+private func permittedGeneratedMetadataKey(_ key: String) -> Bool {
+  ["CreationDate", "ModDate", "Producer", "Creator", "Title", "Subject", "Author", "Keywords", "Trapped"].contains(key)
+}
+
+private func verifySanitizedData(
+  _ data: Data,
+  forbiddenStrings: [String] = [],
+  evidence: AlyteSourceEvidence? = nil
+) throws -> [String: Any] {
   guard let document = PDFDocument(data: data), document.pageCount > 0 else { throw AlytePDFError.verificationFailed }
   let markers = byteMarkers(data)
   let seededContent = forbiddenStrings.contains { needle in
@@ -227,9 +258,19 @@ private func verifySanitizedData(_ data: Data, forbiddenStrings: [String] = []) 
   let selectableText = seededContent || document.string?.isEmpty == false || markers.text
   let annotations = (0..<document.pageCount).contains { document.page(at: $0)?.annotations.isEmpty == false } || markers.annotations
   let attachments = markers.attachments
-  let metadata = !stringMetadata(document).isEmpty || markers.metadata
+  let metadata = stringMetadata(document).contains { key, _ in !permittedGeneratedMetadataKey(key) } || markers.metadata
   let removableRedactions = annotations
   let reloadChecked = PDFDocument(data: data)?.pageCount == document.pageCount
+  let sourceStrings = (evidence?.text ?? []) + (evidence?.metadata ?? []) + forbiddenStrings
+  let sourceValueSurvived = sourceStrings.contains { needle in
+    let utf16Bytes = needle.utf16.flatMap { [UInt8($0 & 0xff), UInt8($0 >> 8)] }
+    data.range(of: Data(needle.utf8)) != nil ||
+      data.range(of: Data(utf16Bytes)) != nil ||
+      document.string?.localizedCaseInsensitiveContains(needle) == true
+  }
+  let sourceObjectsRemoved = (evidence?.annotationCount ?? 0) == 0 || !annotations
+  let sourceContentRemoved = evidence != nil && !sourceValueSurvived && sourceObjectsRemoved && !attachments && !metadata
+  let sourceAwareChecked = evidence != nil && sourceContentRemoved
   let failureReasons = [
     selectableText ? "selectable-source-text" : nil,
     annotations ? "annotations" : nil,
@@ -237,6 +278,7 @@ private func verifySanitizedData(_ data: Data, forbiddenStrings: [String] = []) 
     metadata ? "metadata" : nil,
     removableRedactions ? "removable-redaction-objects" : nil,
     reloadChecked ? nil : "reload-failed",
+    evidence != nil && !sourceContentRemoved ? "source-content-recovery-detected" : nil,
   ].compactMap { $0 }
   return [
     "verified": failureReasons.isEmpty && reloadChecked,
@@ -246,6 +288,9 @@ private func verifySanitizedData(_ data: Data, forbiddenStrings: [String] = []) 
     "metadata": metadata,
     "removableRedactions": removableRedactions,
     "reloadChecked": reloadChecked,
+    "sourceAwareChecked": sourceAwareChecked,
+    "sourceContentRemoved": sourceContentRemoved,
+    "verificationVersion": "source-aware-v1",
     "failureReasons": failureReasons,
   ]
 }
@@ -381,7 +426,9 @@ public final class AlytePDFModule: Module {
     // Never copy source document attributes, page objects, or source PDF data into the derivative.
     outputDocument.documentAttributes = [:]
     guard outputDocument.write(to: destinationURL) else { throw AlytePDFError.renderFailed }
-    return ["destinationPath": destinationPath, "pageCount": outputCount]
+    let evidence = sourceEvidence(document)
+    let verification = try verifySanitizedData(Data(contentsOf: destinationURL), evidence: evidence)
+    return ["destinationPath": destinationPath, "pageCount": outputCount, "verification": verification]
   }
 
   private func renderPreview(_ document: PDFDocument) throws -> AlytePDFPreviewResult {

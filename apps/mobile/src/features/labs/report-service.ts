@@ -179,10 +179,29 @@ function verificationForSanitizedReport(
     metadata: verification.metadata,
     removableRedactions: verification.removableRedactions,
     reloadChecked: verification.reloadChecked,
+    sourceAwareChecked: verification.sourceAwareChecked,
+    sourceContentRemoved: verification.sourceContentRemoved,
+    verificationVersion: verification.verificationVersion,
   };
 }
 
 function verificationPassed(verification: PdfSanitizedVerification): boolean {
+  return (
+    verification.verified &&
+    !verification.selectableText &&
+    !verification.annotations &&
+    !verification.attachments &&
+    !verification.metadata &&
+    !verification.removableRedactions &&
+    verification.reloadChecked &&
+    verification.sourceAwareChecked &&
+    verification.sourceContentRemoved &&
+    verification.verificationVersion === 'source-aware-v1' &&
+    verification.failureReasons.length === 0
+  );
+}
+
+function structuralVerificationPassed(verification: PdfSanitizedVerification): boolean {
   return (
     verification.verified &&
     !verification.selectableText &&
@@ -303,6 +322,11 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     try {
       const sanitized = await reportRepository.getSanitizedReport(report.id);
       if (sanitized?.artifactPath !== null && sanitized?.artifactPath !== undefined) {
+        await reportRepository.updateSanitizedReport(sanitized.id, {
+          verificationState: 'failed',
+          failureReason: 'sanitized-delete-pending',
+          deletedAt: now(),
+        });
         await fileService.remove(sanitized.artifactPath);
         if (await fileService.exists(sanitized.artifactPath)) {
           throw new Error('Sanitized Report remained after deletion');
@@ -684,6 +708,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const current = await repo.getSanitizedReport(id);
       if (
         current?.verificationState === 'verified' &&
+        current.verification?.sourceAwareChecked === true &&
         current.recipeHash === recipeHash &&
         current.artifactPath !== null &&
         current.artifactHash !== null &&
@@ -719,9 +744,26 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       });
       try {
         const session = sanitizationSessions.get(id);
-        if (session?.sanitize !== undefined) await session.sanitize(destination, recipe);
-        else await pdfInspector.sanitize(sourcePath, destination, recipe);
-        const verification = await pdfInspector.verifySanitized(destination);
+        const rendered =
+          session?.sanitize !== undefined
+            ? await session.sanitize(destination, recipe)
+            : await pdfInspector.sanitize(sourcePath, destination, recipe);
+        const structural = await pdfInspector.verifySanitized(destination);
+        const verification =
+          rendered.verification === undefined
+            ? structural
+            : {
+                ...structural,
+                sourceAwareChecked: rendered.verification.sourceAwareChecked,
+                sourceContentRemoved: rendered.verification.sourceContentRemoved,
+                verificationVersion: rendered.verification.verificationVersion,
+                failureReasons: [
+                  ...new Set([
+                    ...structural.failureReasons,
+                    ...rendered.verification.failureReasons,
+                  ]),
+                ],
+              };
         if (!verificationPassed(verification)) {
           await fileService.remove(destination);
           return repo.updateSanitizedReport(pending.id, {
@@ -775,7 +817,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       derivative === null ||
       derivative.verificationState !== 'verified' ||
       derivative.artifactPath === null ||
-      derivative.artifactHash === null
+      derivative.artifactHash === null ||
+      derivative.verification?.sourceAwareChecked !== true
     ) {
       throw new LabReportSanitizationError(id, 'This Sanitized Report is not verified');
     }
@@ -812,7 +855,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       );
     }
     const verification = await pdfInspector.verifySanitized(derivative.artifactPath);
-    if (!verificationPassed(verification)) {
+    if (!structuralVerificationPassed(verification)) {
       await fileService.remove(derivative.artifactPath);
       await (
         await repository()
@@ -845,6 +888,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const derivative = await repo.getSanitizedReport(id);
       if (derivative === null) return;
       if (derivative.artifactPath !== null) {
+        // Phase one is durable: once this succeeds the row can never claim a verified artifact
+        // while phase two removes bytes. A crash or DB failure after removal is reconciled on
+        // relaunch from this failed cleanup state.
+        await repo.updateSanitizedReport(derivative.id, {
+          verificationState: 'failed',
+          failureReason: 'sanitized-delete-pending',
+          deletedAt: now(),
+        });
         try {
           await fileService.remove(derivative.artifactPath);
           if (await fileService.exists(derivative.artifactPath)) {
@@ -854,6 +905,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           await repo.updateSanitizedReport(derivative.id, {
             verificationState: 'failed',
             failureReason: 'sanitized-delete-pending',
+            deletedAt: now(),
           });
           throw new LabReportSanitizationError(id, 'The Sanitized Report could not be deleted', {
             cause: error,

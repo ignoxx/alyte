@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Image, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import {
+  Image,
+  PanResponder,
+  ScrollView,
+  StyleSheet,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
@@ -139,6 +146,119 @@ export function SanitizedReportEditorScreen() {
     }
   }
 
+  function updateRegionFromGesture(
+    pageIndex: number,
+    region: RedactionRegion,
+    dx: number,
+    dy: number,
+    resize: boolean,
+  ) {
+    setRecipe((current) => {
+      if (current === null) return current;
+      const currentRegion = current.pages
+        .find((candidate) => candidate.pageIndex === pageIndex)
+        ?.redactions.find((candidate) => candidate.id === region.id);
+      if (currentRegion === undefined) return current;
+      const base = currentRegion.rect;
+      const nextWidth = resize ? Math.max(0.02, Math.min(1 - base.x, base.width + dx)) : base.width;
+      const nextHeight = resize
+        ? Math.max(0.02, Math.min(1 - base.y, base.height + dy))
+        : base.height;
+      try {
+        setPreview(null);
+        return updateRedaction(current, pageIndex, region.id, {
+          x: resize ? region.rect.x : Math.max(0, Math.min(1 - nextWidth, base.x + dx)),
+          y: resize ? region.rect.y : Math.max(0, Math.min(1 - nextHeight, base.y + dy)),
+          width: nextWidth,
+          height: nextHeight,
+        });
+      } catch {
+        return current;
+      }
+    });
+  }
+
+  function regionResponder(pageIndex: number, region: RedactionRegion, resize: boolean) {
+    let previousX = 0;
+    let previousY = 0;
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        previousX = 0;
+        previousY = 0;
+      },
+      onPanResponderMove: (_event, gesture) => {
+        const x = gesture.dx / previewWidth;
+        const y = gesture.dy / previewHeight;
+        updateRegionFromGesture(pageIndex, region, x - previousX, y - previousY, resize);
+        previousX = x;
+        previousY = y;
+      },
+    });
+  }
+
+  function adjustCrop(pageIndex: number, page: SanitizationRecipe['pages'][number], delta: number) {
+    const crop = page.crop;
+    try {
+      setPage(
+        updateSanitizationPage(recipe as SanitizationRecipe, pageIndex, {
+          crop:
+            crop === null
+              ? { x: 0.05, y: 0.05, width: 0.9, height: 0.9 }
+              : {
+                  x: Math.max(0, Math.min(1 - crop.width, crop.x - delta)),
+                  y: Math.max(0, Math.min(1 - crop.height, crop.y - delta)),
+                  width: Math.max(0.2, Math.min(1, crop.width + delta * 2)),
+                  height: Math.max(0.2, Math.min(1, crop.height + delta * 2)),
+                },
+        }),
+      );
+    } catch {
+      setError(t('labs.sanitizedEditorEditError'));
+    }
+  }
+
+  function cropResponder(pageIndex: number) {
+    let previousX = 0;
+    let previousY = 0;
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        previousX = 0;
+        previousY = 0;
+      },
+      onPanResponderMove: (_event, gesture) => {
+        const dx = gesture.dx / previewWidth - previousX;
+        const dy = gesture.dy / previewHeight - previousY;
+        previousX += dx;
+        previousY += dy;
+        try {
+          setRecipe((current) => {
+            if (current === null) return current;
+            setPreview(null);
+            const crop = current.pages.find((candidate) => candidate.pageIndex === pageIndex)
+              ?.crop ?? {
+              x: 0,
+              y: 0,
+              width: 1,
+              height: 1,
+            };
+            return updateSanitizationPage(current, pageIndex, {
+              crop: {
+                x: crop.x,
+                y: crop.y,
+                width: Math.max(0.2, Math.min(1 - crop.x, crop.width + dx)),
+                height: Math.max(0.2, Math.min(1 - crop.y, crop.height + dy)),
+              },
+            });
+          });
+        } catch {
+          setError(t('labs.sanitizedEditorEditError'));
+        }
+      },
+    });
+  }
+
   function movePage(pageIndex: number, direction: -1 | 1) {
     if (recipe === null) return;
     const order = recipe.pages.map((page) => page.pageIndex);
@@ -221,7 +341,7 @@ export function SanitizedReportEditorScreen() {
                     '{page}',
                     String(page.pageIndex + 1),
                   )}
-                  resizeMode="contain"
+                  resizeMode="stretch"
                   source={{ uri: state.pagePreviewUris[page.pageIndex] }}
                   style={styles.sourceImage}
                 />
@@ -240,8 +360,39 @@ export function SanitizedReportEditorScreen() {
                       height: region.rect.height * previewHeight,
                     },
                   ]}
-                />
+                  {...regionResponder(page.pageIndex, region, false).panHandlers}
+                >
+                  <View
+                    accessibilityLabel={t('labs.sanitizedEditorResize')}
+                    style={styles.resizeHandle}
+                    {...regionResponder(page.pageIndex, region, true).panHandlers}
+                  />
+                </View>
               ))}
+              <View
+                accessibilityLabel={t('labs.sanitizedEditorCropBounds')}
+                pointerEvents="none"
+                style={[
+                  styles.cropOverlay,
+                  {
+                    left: (page.crop?.x ?? 0) * previewWidth,
+                    top: (page.crop?.y ?? 0) * previewHeight,
+                    width: (page.crop?.width ?? 1) * previewWidth,
+                    height: (page.crop?.height ?? 1) * previewHeight,
+                  },
+                ]}
+              />
+              <View
+                accessibilityLabel={t('labs.sanitizedEditorResizeCrop')}
+                style={[
+                  styles.cropHandle,
+                  {
+                    left: ((page.crop?.x ?? 0) + (page.crop?.width ?? 1)) * previewWidth - 16,
+                    top: ((page.crop?.y ?? 0) + (page.crop?.height ?? 1)) * previewHeight - 16,
+                  },
+                ]}
+                {...cropResponder(page.pageIndex).panHandlers}
+              />
             </View>
             <View style={styles.actions}>
               <AppButton
@@ -284,14 +435,14 @@ export function SanitizedReportEditorScreen() {
               />
               <AppButton
                 label={t('labs.sanitizedEditorCrop')}
-                onPress={() =>
-                  setPage(
-                    updateSanitizationPage(recipe, page.pageIndex, {
-                      crop: { x: 0.05, y: 0.05, width: 0.9, height: 0.9 },
-                    }),
-                  )
-                }
+                onPress={() => adjustCrop(page.pageIndex, page, page.crop === null ? 0.05 : 0.02)}
                 tone="secondary"
+              />
+              <AppButton
+                label={t('labs.sanitizedEditorCropExpand')}
+                accessibilityLabel={t('labs.sanitizedEditorCropExpand')}
+                onPress={() => adjustCrop(page.pageIndex, page, -0.02)}
+                tone="quiet"
               />
               <AppButton
                 label={t('labs.sanitizedEditorAdd')}
@@ -421,6 +572,16 @@ const styles = StyleSheet.create({
   sourcePreview: { backgroundColor: colors.surface, overflow: 'hidden', position: 'relative' },
   sourceImage: { height: '100%', width: '100%' },
   overlay: { borderColor: colors.ink, borderWidth: 1, opacity: 0.55, position: 'absolute' },
+  resizeHandle: {
+    backgroundColor: colors.ink,
+    bottom: -5,
+    height: 12,
+    position: 'absolute',
+    right: -5,
+    width: 12,
+  },
+  cropOverlay: { borderColor: colors.accent, borderWidth: 2, position: 'absolute' },
+  cropHandle: { backgroundColor: colors.accent, height: 16, position: 'absolute', width: 16 },
   previewPages: { flexGrow: 1, gap: spacing.md, paddingVertical: spacing.md },
   redactionRow: {
     borderTopColor: colors.border,

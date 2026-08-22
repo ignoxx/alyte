@@ -29,12 +29,16 @@ export type PdfSanitizedVerification = {
   readonly metadata: boolean;
   readonly removableRedactions: boolean;
   readonly reloadChecked: boolean;
+  readonly sourceAwareChecked: boolean;
+  readonly sourceContentRemoved: boolean;
+  readonly verificationVersion: string;
   readonly failureReasons: readonly string[];
 };
 
 export type PdfSanitizationResult = {
   readonly destinationPath: string;
   readonly pageCount: number;
+  readonly verification?: PdfSanitizedVerification;
 };
 
 export interface PdfInspector {

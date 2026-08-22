@@ -208,6 +208,9 @@ const verifiedSanitized: PdfSanitizedVerification = {
   metadata: false,
   removableRedactions: false,
   reloadChecked: true,
+  sourceAwareChecked: true,
+  sourceContentRemoved: true,
+  verificationVersion: 'source-aware-v1',
   failureReasons: [],
 };
 
@@ -219,13 +222,17 @@ class SanitizingPdf extends FakePdf {
   async sanitize(
     _sourcePath: string,
     destinationPath: string,
-  ): Promise<{ destinationPath: string; pageCount: number }> {
+  ): Promise<{
+    destinationPath: string;
+    pageCount: number;
+    verification: PdfSanitizedVerification;
+  }> {
     this.sanitizedPaths.push(destinationPath);
     this.files?.files.set(destinationPath, {
       hash: `artifact-${this.sanitizedPaths.length}`,
       size: 128,
     });
-    return { destinationPath, pageCount: 2 };
+    return { destinationPath, pageCount: 2, verification: this.verification };
   }
 
   async verifySanitized(_path: string): Promise<PdfSanitizedVerification> {
@@ -598,5 +605,49 @@ describe('protected Lab Report import lifecycle', () => {
     const failed = await repository.getSanitizedReport(imported.id);
     assert.equal(failed?.verificationState, 'failed');
     assert.equal(await files.exists(saved.artifactPath!), false);
+  });
+
+  test('derivative deletion records pending cleanup before a file failure', async () => {
+    const repository = createRepository();
+    const files = new FailingDeleteFiles();
+    const pdf = new SanitizingPdf();
+    pdf.files = files;
+    const service = createService(repository, files, pdf);
+    const imported = (await service.importPdf(source('sanitize-delete-file-failure')))!.report;
+    const saved = await service.saveSanitizedReport(
+      imported.id,
+      (await service.openSanitizationEditor(imported.id)).recipe,
+    );
+    files.failRemoval = true;
+    await assert.rejects(service.deleteSanitizedReport(imported.id), /could not be deleted/);
+    const pending = await repository.getSanitizedReport(imported.id);
+    assert.equal(pending?.verificationState, 'failed');
+    assert.equal(pending?.failureReason, 'sanitized-delete-pending');
+    assert.equal(await files.exists(saved.artifactPath!), true);
+  });
+
+  test('relaunch reconciles a row when the database fails after derivative removal', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new SanitizingPdf();
+    pdf.files = files;
+    const service = createService(repository, files, pdf);
+    const imported = (await service.importPdf(source('sanitize-delete-db-failure')))!.report;
+    const saved = await service.saveSanitizedReport(
+      imported.id,
+      (await service.openSanitizationEditor(imported.id)).recipe,
+    );
+    const deleteRow = repository.deleteSanitizedReport;
+    repository.deleteSanitizedReport = async () => {
+      throw new Error('synthetic database failure after file removal');
+    };
+    await assert.rejects(service.deleteSanitizedReport(imported.id), /database failure/);
+    assert.equal(await files.exists(saved.artifactPath!), false);
+    const pending = await repository.getSanitizedReport(imported.id);
+    assert.equal(pending?.verificationState, 'failed');
+    assert.equal(pending?.failureReason, 'sanitized-delete-pending');
+    repository.deleteSanitizedReport = deleteRow;
+    const relaunched = createService(repository, files, pdf);
+    assert.equal(await relaunched.getSanitizedReport(imported.id), null);
   });
 });
