@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
 import { ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -37,6 +37,11 @@ export function IntakeEntryScreen() {
   const { intake, clock } = useServices();
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
   const eventId = route.params?.eventId;
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title: eventId === undefined ? t('intake.newTitle') : t('intake.editTitle'),
+    });
+  }, [eventId, navigation]);
   const [event, setEvent] = useState<IntakeEvent | null>(null);
   const [eventType, setEventType] = useState<IntakeEventType>('food');
   const [name, setName] = useState('');
@@ -150,9 +155,6 @@ export function IntakeEntryScreen() {
 
   return (
     <SafeAreaViewWithScroll>
-      <AppText variant="title">
-        {event === null ? t('intake.newTitle') : t('intake.editTitle')}
-      </AppText>
       <AppText style={styles.intro}>{t('intake.formIntro')}</AppText>
       <AppSurface style={styles.section}>
         <AppText variant="label">{t('intake.typeLabel')}</AppText>
@@ -232,7 +234,7 @@ export function IntakeEntryScreen() {
 
 function SafeAreaViewWithScroll({ children }: { readonly children: ReactNode }) {
   return (
-    <SafeAreaView style={screenStyles.safe}>
+    <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
         {children}
       </ScrollView>

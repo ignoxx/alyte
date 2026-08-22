@@ -92,10 +92,9 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
   }
 
   return (
-    <SafeAreaView style={screenStyles.safe}>
+    <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
         <View style={styles.titleRow}>
-          <AppText variant="title">{t('home.title')}</AppText>
           <AppButton label={t('home.logAction')} onPress={() => navigation.navigate('Log')} />
         </View>
         {loading && <AppText style={styles.muted}>{t('home.loading')}</AppText>}

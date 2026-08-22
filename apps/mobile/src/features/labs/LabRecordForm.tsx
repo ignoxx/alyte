@@ -200,9 +200,6 @@ export function LabRecordForm({ service, initialRecord, onSaved, onCancel }: Lab
 
   return (
     <SafeForm>
-      <AppText variant="title">
-        {editing ? t('labs.recordEditTitle') : t('labs.recordCreateTitle')}
-      </AppText>
       {!editing && <AppText style={styles.intro}>{t('labs.recordIntro')}</AppText>}
       <AppSurface style={styles.section}>
         <AppText variant="label">{t('labs.recordDateLabel')}</AppText>

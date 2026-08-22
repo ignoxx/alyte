@@ -1,19 +1,22 @@
-import { NavigationContainer } from '@react-navigation/native';
+import { DarkTheme, DefaultTheme, NavigationContainer, type Theme } from '@react-navigation/native';
 import {
-  createBottomTabNavigator,
-  type BottomTabBarButtonProps,
-} from '@react-navigation/bottom-tabs';
+  createNativeBottomTabNavigator,
+  type NativeBottomTabScreenProps,
+} from '@react-navigation/bottom-tabs/unstable';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { Pressable, StyleSheet, View } from 'react-native';
+import type { ComponentType } from 'react';
+import { useColorScheme } from 'react-native';
 import type { AlyteServices } from '../services';
 import { t } from '../localization';
-import { colors, spacing } from '../theme';
+import { colors, typography } from '../theme';
 import { createNavigationRegistry } from './registry';
 import type { FeatureTarget, NavigationFeature } from './registry-model';
+import { featureStackRootName, snapActionDestination } from './registry-model';
 import type { MainTabParamList, RootStackParamList } from './types';
+import { SnapScreen } from '../features/intake/SnapScreen';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
-const MainTabs = createBottomTabNavigator<MainTabParamList>();
+const MainTabs = createNativeBottomTabNavigator<MainTabParamList>();
 const FeatureStack = createNativeStackNavigator<Record<string, object | undefined>>();
 
 type RootNavigatorProps = {
@@ -21,20 +24,41 @@ type RootNavigatorProps = {
   extensions?: readonly NavigationFeature[] | undefined;
 };
 
-function SnapTabButton({ accessibilityLabel, onPress, onLongPress }: BottomTabBarButtonProps) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel ?? t('accessibility.snapAction')}
-      onPress={onPress}
-      onLongPress={onLongPress}
-      style={({ pressed }) => [styles.snapButton, pressed && styles.pressed]}
-    >
-      <View style={styles.snapCircle}>
-        <View style={styles.snapDot} />
-      </View>
-    </Pressable>
-  );
+type MainTabNavigatorProps = RootNavigatorProps & {
+  readonly onSnap: () => void;
+};
+
+const stackScreenOptions = {
+  contentStyle: { backgroundColor: colors.canvas },
+  headerBackButtonDisplayMode: 'minimal' as const,
+  headerShadowVisible: false,
+  // native-stack's headerStyle typing predates RN's opaque semantic color type; UIKit accepts it
+  // at runtime and resolves it against the current appearance.
+  headerStyle: { backgroundColor: colors.canvas as string },
+  headerTintColor: colors.accent,
+  headerTitleStyle: typography.label,
+  headerTitleAlign: 'left' as const,
+};
+
+function navigationTheme(dark: boolean): Theme {
+  const base = dark ? DarkTheme : DefaultTheme;
+  return {
+    ...base,
+    dark,
+    colors: {
+      ...base.colors,
+      background: colors.canvas as string,
+      border: colors.border as string,
+      card: colors.surface as string,
+      notification: colors.danger as string,
+      primary: colors.accent,
+      text: colors.ink as string,
+    },
+  };
+}
+
+function SnapActionPlaceholder() {
+  return null;
 }
 
 function FeatureStackNavigator({
@@ -44,10 +68,14 @@ function FeatureStackNavigator({
   root: NavigationFeature;
   extensions: readonly NavigationFeature[];
 }) {
+  // The tab route and its stack root intentionally have different names. This keeps nested
+  // navigation actions unambiguous (e.g. the Labs tab contains the LabsRoot screen).
+  const stackRootName = featureStackRootName(root.name);
+
   return (
-    <FeatureStack.Navigator>
+    <FeatureStack.Navigator screenOptions={stackScreenOptions}>
       <FeatureStack.Screen
-        name={root.name}
+        name={stackRootName}
         component={root.component}
         options={{ title: t(root.titleKey) }}
       />
@@ -70,21 +98,42 @@ function stackExtensions(
   return extensions.filter((feature) => feature.target === target);
 }
 
-function MainTabNavigator({ services: _services, extensions = [] }: RootNavigatorProps) {
+function MainTabNavigator({ services: _services, extensions = [], onSnap }: MainTabNavigatorProps) {
   const registry = createNavigationRegistry(extensions);
+  const tabIcon = (
+    name:
+      | 'house'
+      | 'house.fill'
+      | 'testtube.2'
+      | 'camera'
+      | 'camera.fill'
+      | 'list.bullet'
+      | 'gearshape'
+      | 'gearshape.fill',
+  ) => ({ type: 'sfSymbol' as const, name });
 
   return (
     <MainTabs.Navigator
       initialRouteName="Home"
       screenOptions={{
-        headerShown: false,
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.mutedInk,
-        tabBarLabelStyle: styles.tabLabel,
-        tabBarStyle: styles.tabBar,
+        tabBarLabelStyle: { fontSize: 12, fontWeight: '600' },
+        // UIKit owns height, insets, materials, and transitions. `none` keeps the bar present while
+        // scrolling until content-inset behavior is proven on every supported device.
+        tabBarMinimizeBehavior: 'none',
+        tabBarControllerMode: 'tabBar',
+        tabBarBlurEffect: 'systemMaterial',
+        overrideScrollViewContentInsetAdjustmentBehavior: true,
       }}
     >
-      <MainTabs.Screen name="Home" options={{ tabBarLabel: t(registry.home.titleKey) }}>
+      <MainTabs.Screen
+        name="Home"
+        options={{
+          tabBarIcon: ({ focused }) => tabIcon(focused ? 'house.fill' : 'house'),
+          tabBarLabel: t(registry.home.titleKey),
+        }}
+      >
         {() => (
           <FeatureStackNavigator
             root={registry.home}
@@ -92,7 +141,13 @@ function MainTabNavigator({ services: _services, extensions = [] }: RootNavigato
           />
         )}
       </MainTabs.Screen>
-      <MainTabs.Screen name="Labs" options={{ tabBarLabel: t(registry.labs.titleKey) }}>
+      <MainTabs.Screen
+        name="Labs"
+        options={{
+          tabBarIcon: () => tabIcon('testtube.2'),
+          tabBarLabel: t(registry.labs.titleKey),
+        }}
+      >
         {() => (
           <FeatureStackNavigator
             root={registry.labs}
@@ -102,15 +157,32 @@ function MainTabNavigator({ services: _services, extensions = [] }: RootNavigato
       </MainTabs.Screen>
       <MainTabs.Screen
         name="SnapAction"
-        component={registry.snap.component}
+        component={
+          SnapActionPlaceholder as ComponentType<
+            NativeBottomTabScreenProps<MainTabParamList, 'SnapAction'>
+          >
+        }
+        listeners={({ navigation }) => ({
+          tabPress: () => {
+            // Snap is an action, not a fifth content destination. Return to Home underneath the
+            // full-screen capture route so completing or cancelling always lands on the day view.
+            navigation.navigate(snapActionDestination.returnTab);
+            onSnap();
+          },
+        })}
         options={{
+          tabBarIcon: ({ focused }) => tabIcon(focused ? 'camera.fill' : 'camera'),
           tabBarLabel: t(registry.snap.titleKey),
-          tabBarButton: (props) => (
-            <SnapTabButton {...props} accessibilityLabel={t('accessibility.snapAction')} />
-          ),
+          tabBarSelectionEnabled: false,
         }}
       />
-      <MainTabs.Screen name="Log" options={{ tabBarLabel: t(registry.log.titleKey) }}>
+      <MainTabs.Screen
+        name="Log"
+        options={{
+          tabBarIcon: () => tabIcon('list.bullet'),
+          tabBarLabel: t(registry.log.titleKey),
+        }}
+      >
         {() => (
           <FeatureStackNavigator
             root={registry.log}
@@ -118,7 +190,13 @@ function MainTabNavigator({ services: _services, extensions = [] }: RootNavigato
           />
         )}
       </MainTabs.Screen>
-      <MainTabs.Screen name="Settings" options={{ tabBarLabel: t(registry.settings.titleKey) }}>
+      <MainTabs.Screen
+        name="Settings"
+        options={{
+          tabBarIcon: ({ focused }) => tabIcon(focused ? 'gearshape.fill' : 'gearshape'),
+          tabBarLabel: t(registry.settings.titleKey),
+        }}
+      >
         {() => (
           <FeatureStackNavigator
             root={registry.settings}
@@ -131,38 +209,27 @@ function MainTabNavigator({ services: _services, extensions = [] }: RootNavigato
 }
 
 export function RootNavigator({ services, extensions }: RootNavigatorProps) {
+  const colorScheme = useColorScheme();
+  const dark = colorScheme === 'dark';
+
   return (
-    <NavigationContainer>
+    <NavigationContainer theme={navigationTheme(dark)}>
       <RootStack.Navigator screenOptions={{ headerShown: false }}>
         <RootStack.Screen name="MainTabs">
-          {() => <MainTabNavigator services={services} extensions={extensions} />}
+          {({ navigation }) => (
+            <MainTabNavigator
+              extensions={extensions}
+              onSnap={() => navigation.navigate(snapActionDestination.captureRoute)}
+              services={services}
+            />
+          )}
         </RootStack.Screen>
+        <RootStack.Screen
+          name="SnapCapture"
+          component={SnapScreen}
+          options={{ presentation: 'fullScreenModal', headerShown: false }}
+        />
       </RootStack.Navigator>
     </NavigationContainer>
   );
 }
-
-const styles = StyleSheet.create({
-  tabBar: {
-    backgroundColor: colors.surface,
-    borderTopColor: colors.border,
-    height: 78,
-    paddingBottom: spacing.sm,
-    paddingTop: spacing.xs,
-  },
-  tabLabel: { fontSize: 12, fontWeight: '600' },
-  snapButton: { alignItems: 'center', flex: 1, justifyContent: 'center' },
-  snapCircle: {
-    alignItems: 'center',
-    backgroundColor: colors.accent,
-    borderColor: colors.surface,
-    borderRadius: 32,
-    borderWidth: 4,
-    height: 58,
-    justifyContent: 'center',
-    marginTop: -22,
-    width: 58,
-  },
-  snapDot: { backgroundColor: colors.warm, borderRadius: 8, height: 16, width: 16 },
-  pressed: { opacity: 0.78 },
-});

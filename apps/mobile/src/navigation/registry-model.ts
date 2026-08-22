@@ -21,6 +21,17 @@ export type NavigationRegistry = CoreNavigationFeatures & {
   readonly extensions: readonly NavigationFeature[];
 };
 
+/** Root-level destinations used by the native action tab. Kept pure so navigation behavior is
+ * testable without mounting UIKit-backed navigators. */
+export const snapActionDestination = {
+  captureRoute: 'SnapCapture',
+  returnTab: 'Home',
+} as const;
+
+export function featureStackRootName(tabName: string): string {
+  return `${tabName}Root`;
+}
+
 export function registerNavigationFeatures(
   coreFeatures: CoreNavigationFeatures,
   extensions: readonly NavigationFeature[] = [],

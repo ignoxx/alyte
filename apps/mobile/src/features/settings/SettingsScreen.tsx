@@ -3,20 +3,21 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { MainTabParamList } from '../../navigation/types';
 import { t } from '../../localization';
-import { AppSurface, AppText, StatusPill } from '../../ui/primitives';
-import { screenStyles, spacing } from '../../theme';
+import { AppSurface, AppText, GroupedRow, StatusPill } from '../../ui/primitives';
+import { colors, screenStyles, spacing } from '../../theme';
 
 type SettingsScreenProps = BottomTabScreenProps<MainTabParamList, 'Settings'>;
 
 export function SettingsScreen(_props: SettingsScreenProps) {
   return (
-    <SafeAreaView style={screenStyles.safe}>
+    <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
-        <AppText variant="title">{t('settings.title')}</AppText>
         <AppSurface style={styles.card}>
-          <StatusPill>{t('settings.localMode')}</StatusPill>
-          <AppText variant="heading">{t('settings.privacy')}</AppText>
-          <AppText style={styles.body}>{t('settings.localModeBody')}</AppText>
+          <GroupedRow icon="settings">
+            <StatusPill>{t('settings.localMode')}</StatusPill>
+            <AppText variant="heading">{t('settings.privacy')}</AppText>
+            <AppText style={styles.body}>{t('settings.localModeBody')}</AppText>
+          </GroupedRow>
         </AppSurface>
       </ScrollView>
     </SafeAreaView>
@@ -25,5 +26,5 @@ export function SettingsScreen(_props: SettingsScreenProps) {
 
 const styles = StyleSheet.create({
   card: { gap: spacing.sm },
-  body: { color: '#617171' },
+  body: { color: colors.mutedInk },
 });

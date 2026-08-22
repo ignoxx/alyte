@@ -1,35 +1,70 @@
-import { StyleSheet } from 'react-native';
+import { Platform, PlatformColor, StyleSheet, type ColorValue } from 'react-native';
+
+/**
+ * Semantic system colors keep ordinary React Native surfaces in sync with UIKit's light and dark
+ * appearances. The explicit fallback is used by non-iOS targets and older platform versions.
+ */
+function systemColor(name: string, fallback: string): ColorValue {
+  return Platform.OS === 'ios' ? PlatformColor(name) : fallback;
+}
 
 export const colors = {
-  ink: '#1E2A2A',
-  mutedInk: '#617171',
-  canvas: '#F7F9F6',
-  surface: '#FFFFFF',
-  border: '#D7E2DE',
+  ink: systemColor('label', '#1E2A2A'),
+  mutedInk: systemColor('secondaryLabel', '#617171'),
+  canvas: systemColor('systemGroupedBackground', '#F7F9F6'),
+  surface: systemColor('secondarySystemGroupedBackground', '#FFFFFF'),
+  elevatedSurface: systemColor('systemBackground', '#FFFFFF'),
+  onAccent: '#FFFFFF',
+  border: systemColor('separator', '#D7E2DE'),
   accent: '#286B66',
   accentPressed: '#1F5652',
-  accentSoft: '#DDEDE8',
+  accentSoft: systemColor('tertiarySystemFill', '#DDEDE8'),
   warm: '#E9B872',
-  danger: '#A14E4E',
+  danger: systemColor('systemRed', '#A14E4E'),
 } as const;
 
 export const spacing = {
-  xs: 6,
-  sm: 10,
-  md: 16,
-  lg: 24,
-  xl: 32,
-  xxl: 48,
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 20,
+  xl: 28,
+  xxl: 40,
 } as const;
 
 export const typography = StyleSheet.create({
-  display: { fontSize: 32, lineHeight: 40, fontWeight: '700' },
-  title: { fontSize: 26, lineHeight: 34, fontWeight: '700' },
-  heading: { fontSize: 20, lineHeight: 28, fontWeight: '700' },
-  body: { fontSize: 17, lineHeight: 25 },
+  display: { fontSize: 30, lineHeight: 36, fontWeight: '700' },
+  title: { fontSize: 24, lineHeight: 30, fontWeight: '700' },
+  heading: { fontSize: 18, lineHeight: 24, fontWeight: '700' },
+  body: { fontSize: 16, lineHeight: 23 },
   label: { fontSize: 14, lineHeight: 20, fontWeight: '600', letterSpacing: 0.4 },
   caption: { fontSize: 13, lineHeight: 18 },
 });
+
+export type StatusTone =
+  | 'neutral'
+  | 'measured'
+  | 'userEntered'
+  | 'extracted'
+  | 'estimated'
+  | 'evidenceBacked'
+  | 'reviewNeeded'
+  | 'excluded';
+
+/** Semantic provenance/status colors. Labels remain the source of truth; color only reinforces them. */
+export const statusColors: Record<
+  StatusTone,
+  { readonly fill: ColorValue; readonly ink: ColorValue }
+> = {
+  neutral: { fill: systemColor('tertiarySystemFill', '#E7EEEB'), ink: colors.mutedInk },
+  measured: { fill: systemColor('systemBlue', '#286B66'), ink: colors.onAccent },
+  userEntered: { fill: systemColor('systemPurple', '#8064A2'), ink: colors.onAccent },
+  extracted: { fill: systemColor('systemGray', '#7B8787'), ink: colors.onAccent },
+  estimated: { fill: systemColor('systemOrange', '#B7791F'), ink: colors.onAccent },
+  evidenceBacked: { fill: systemColor('systemGreen', '#217A5B'), ink: colors.onAccent },
+  reviewNeeded: { fill: systemColor('systemYellow', '#A86B00'), ink: '#231A00' },
+  excluded: { fill: systemColor('systemGray2', '#A0AAAA'), ink: colors.onAccent },
+};
 
 export const screenStyles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },

@@ -66,8 +66,12 @@ export function IntakeEventCard({
             {intakeEventTypeLabel(event.eventType)} · {time}
           </AppText>
         </View>
-        {event.analysisInclusion === 'excluded' && <StatusPill>{t('intake.excluded')}</StatusPill>}
-        {event.reviewState === 'needs-review' && <StatusPill>{t('intake.checkThis')}</StatusPill>}
+        {event.analysisInclusion === 'excluded' && (
+          <StatusPill tone="excluded">{t('intake.excluded')}</StatusPill>
+        )}
+        {event.reviewState === 'needs-review' && (
+          <StatusPill tone="reviewNeeded">{t('intake.checkThis')}</StatusPill>
+        )}
       </View>
       <View style={styles.components}>
         {event.components.map((component) => (

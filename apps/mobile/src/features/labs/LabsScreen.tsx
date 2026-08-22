@@ -69,10 +69,9 @@ export function LabsScreen() {
   }, [isFocused, loadRecords]);
 
   return (
-    <SafeAreaView style={screenStyles.safe}>
+    <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
         <View style={styles.titleRow}>
-          <AppText variant="title">{t('labs.title')}</AppText>
           <AppButton
             label={t('labs.manualAction')}
             onPress={() => navigation.navigate('LabRecordForm')}

@@ -151,18 +151,12 @@ export function LabReportDetailScreen() {
     <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
       <View style={styles.header}>
         <AppButton
-          label={t('labs.recordCancel')}
-          onPress={() => navigation.goBack()}
-          tone="quiet"
-        />
-        <AppButton
           disabled={busy || report.importState === 'deleted'}
           label={t('labs.reportDelete')}
           onPress={confirmDelete}
           tone="secondary"
         />
       </View>
-      <AppText variant="title">{t('labs.reportTitle')}</AppText>
       <AppText variant="heading">{report.originalFilename}</AppText>
       <StatusPill>{stateLabel(report.importState)}</StatusPill>
       <AppSurface style={styles.meta}>

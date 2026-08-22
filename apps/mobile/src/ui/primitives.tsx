@@ -4,11 +4,12 @@ import {
   StyleSheet,
   Text,
   View,
+  type ColorValue,
   type PressableProps,
   type TextProps,
   type ViewProps,
 } from 'react-native';
-import { colors, spacing, typography } from '../theme';
+import { colors, spacing, statusColors, typography, type StatusTone } from '../theme';
 
 type AppTextProps = TextProps & {
   variant?: keyof typeof typography;
@@ -75,12 +76,68 @@ export function AppButton({
   );
 }
 
-export function StatusPill({ children }: PropsWithChildren) {
+export function StatusPill({
+  children,
+  tone = 'neutral',
+}: PropsWithChildren<{ readonly tone?: StatusTone }>) {
+  const status = statusColors[tone];
   return (
-    <View accessibilityRole="text" style={styles.pill}>
-      <AppText variant="caption" style={styles.pillText}>
+    <View accessibilityRole="text" style={[styles.pill, { backgroundColor: status.fill }]}>
+      <AppText variant="caption" style={[styles.pillText, { color: status.ink }]}>
         {children}
       </AppText>
+    </View>
+  );
+}
+
+export type AppIconName = 'home' | 'labs' | 'snap' | 'log' | 'settings' | 'chevronRight';
+
+const iconGlyphs: Record<AppIconName, string> = {
+  home: '⌂',
+  labs: '⚗',
+  snap: '◉',
+  log: '≡',
+  settings: '⚙',
+  chevronRight: '›',
+};
+
+/** Small cross-platform icon seam for inline controls; navigation uses native SF Symbols directly. */
+export function AppIcon({
+  name,
+  size = 20,
+  color = colors.mutedInk,
+  accessibilityLabel,
+}: {
+  readonly name: AppIconName;
+  readonly size?: number;
+  readonly color?: ColorValue;
+  readonly accessibilityLabel?: string;
+}) {
+  return (
+    <Text
+      accessible={accessibilityLabel !== undefined}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="image"
+      style={{ color, fontSize: size, lineHeight: size + 4, textAlign: 'center', width: size + 8 }}
+    >
+      {iconGlyphs[name]}
+    </Text>
+  );
+}
+
+export function GroupedRow({
+  children,
+  icon,
+  trailing,
+}: PropsWithChildren<{
+  readonly icon?: AppIconName;
+  readonly trailing?: ReactNode;
+}>) {
+  return (
+    <View style={styles.groupedRow}>
+      {icon !== undefined && <AppIcon name={icon} />}
+      <View style={styles.groupedRowBody}>{children}</View>
+      {trailing}
     </View>
   );
 }
@@ -114,7 +171,7 @@ const styles = StyleSheet.create({
   button: {
     alignItems: 'center',
     borderRadius: 14,
-    minHeight: 52,
+    minHeight: 48,
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
   },
@@ -122,16 +179,25 @@ const styles = StyleSheet.create({
   secondaryButton: { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1 },
   quietButton: { minHeight: 44, paddingHorizontal: spacing.sm },
   pressedButton: { opacity: 0.78 },
-  primaryLabel: { color: colors.surface },
+  primaryLabel: { color: colors.onAccent },
   secondaryLabel: { color: colors.accent },
   emptyState: { gap: spacing.sm },
   emptyBody: { color: colors.mutedInk },
   pill: {
     alignSelf: 'flex-start',
-    backgroundColor: colors.accentSoft,
     borderRadius: 99,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
-  pillText: { color: colors.accent },
+  pillText: { fontWeight: '600' },
+  groupedRow: {
+    alignItems: 'center',
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: 56,
+    paddingVertical: spacing.sm,
+  },
+  groupedRowBody: { flex: 1, gap: spacing.xs },
 });

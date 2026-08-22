@@ -50,7 +50,6 @@ export function LabRecordDetailRoute() {
   }
   return (
     <LabRecordDetail
-      onBack={() => navigation.goBack()}
       onChanged={setRecord}
       onDeleted={() => navigation.goBack()}
       onEditRecord={() => navigation.navigate('LabRecordForm', { recordId: record.id })}

@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { registerNavigationFeatures, type CoreNavigationFeatures } from './registry-model';
+import {
+  featureStackRootName,
+  registerNavigationFeatures,
+  snapActionDestination,
+  type CoreNavigationFeatures,
+} from './registry-model';
 
 const coreFeatures: CoreNavigationFeatures = {
   home: { name: 'Home', target: 'home', component: () => null, titleKey: 'navigation.home' },
@@ -48,4 +53,10 @@ test('core route names cannot be replaced by an extension', () => {
   ]);
 
   assert.deepEqual(registry.extensions, []);
+});
+
+test('native stack roots do not shadow tab routes and Snap returns to Home', () => {
+  assert.equal(featureStackRootName('Labs'), 'LabsRoot');
+  assert.equal(featureStackRootName('Log'), 'LogRoot');
+  assert.deepEqual(snapActionDestination, { captureRoute: 'SnapCapture', returnTab: 'Home' });
 });

@@ -79,7 +79,6 @@ export function LabReportImportScreen() {
 
   return (
     <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
-      <AppText variant="title">{t('labs.reportImportTitle')}</AppText>
       <AppText style={styles.intro}>{t('labs.reportImportBody')}</AppText>
       <AppSurface style={styles.actions}>
         <AppButton

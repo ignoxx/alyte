@@ -11,14 +11,13 @@ import {
   type SpecimenType,
 } from '@alyte/domain';
 import { t } from '../../localization';
-import { colors, screenStyles, spacing } from '../../theme';
+import { colors, screenStyles, spacing, type StatusTone } from '../../theme';
 import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import type { LabsService } from './service';
 
 type LabRecordDetailProps = {
   readonly record: LabRecord;
   readonly service: LabsService;
-  readonly onBack: () => void;
   readonly onEditRecord: () => void;
   readonly onChanged: (record: LabRecord) => void;
   readonly onDeleted: () => void;
@@ -80,6 +79,10 @@ function provenanceLabel(value: Measurement['provenance']): string {
   );
 }
 
+function provenanceTone(value: Measurement['provenance']): StatusTone {
+  return value === 'extracted' ? 'extracted' : 'userEntered';
+}
+
 function displayValue(measurement: Measurement, locale: string): string {
   const value = measurement.current.value;
   if (value.kind === 'numeric') return formatLocaleDecimal(value.value, locale);
@@ -118,7 +121,6 @@ function valueFrom(draft: MeasurementDraft): MeasurementValue | null {
 export function LabRecordDetail({
   record,
   service,
-  onBack,
   onEditRecord,
   onChanged,
   onDeleted,
@@ -197,12 +199,6 @@ export function LabRecordDetail({
   return (
     <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
       <View style={styles.header}>
-        <AppButton
-          accessibilityLabel={t('accessibility.back')}
-          label={t('labs.recordCancel')}
-          onPress={onBack}
-          tone="quiet"
-        />
         <View style={styles.headerActions}>
           <AppButton
             disabled={busy}
@@ -218,7 +214,6 @@ export function LabRecordDetail({
           />
         </View>
       </View>
-      <AppText variant="title">{t('labs.recordTitle')}</AppText>
       <AppText style={styles.date}>{dateLabel}</AppText>
       <StatusPill>{specimenLabel(record.specimenType)}</StatusPill>
       {record.laboratoryName !== null && <AppText>{record.laboratoryName}</AppText>}
@@ -237,7 +232,15 @@ export function LabRecordDetail({
           <AppText style={styles.source}>
             {t('labs.measurementOriginal').replace('{value}', measurement.original.valueString)}
           </AppText>
-          <StatusPill>{provenanceLabel(measurement.provenance)}</StatusPill>
+          <StatusPill
+            tone={
+              measurement.reviewState === 'needs-review'
+                ? 'reviewNeeded'
+                : provenanceTone(measurement.provenance)
+            }
+          >
+            {provenanceLabel(measurement.provenance)}
+          </StatusPill>
           <AppText
             style={styles.meta}
           >{`${t('labs.measurementSpecimen')}: ${specimenLabel(measurement.specimenType)}`}</AppText>

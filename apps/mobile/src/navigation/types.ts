@@ -1,3 +1,5 @@
+import type { NavigatorScreenParams } from '@react-navigation/native';
+
 export type MainTabParamList = {
   Home: undefined;
   Labs: undefined;
@@ -21,5 +23,6 @@ export type LogStackParamList = {
 };
 
 export type RootStackParamList = {
-  MainTabs: undefined;
+  MainTabs: NavigatorScreenParams<MainTabParamList> | undefined;
+  SnapCapture: undefined;
 };

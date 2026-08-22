@@ -25,8 +25,8 @@ import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives'
 import { colors, screenStyles, spacing } from '../../theme';
 import type { SanitizationEditorState, SanitizedReportPreview } from './report-service';
 
-type Navigation = NativeStackNavigationProp<LabsStackParamList>;
 type EditorRoute = RouteProp<LabsStackParamList, 'SanitizedReportEditor'>;
+type EditorNavigation = NativeStackNavigationProp<LabsStackParamList, 'SanitizedReportEditor'>;
 
 function nextUserRegion(pageIndex: number): RedactionRegion {
   return {
@@ -38,7 +38,7 @@ function nextUserRegion(pageIndex: number): RedactionRegion {
 }
 
 export function SanitizedReportEditorScreen() {
-  const navigation = useNavigation<Navigation>();
+  const navigation = useNavigation<EditorNavigation>();
   const route = useRoute<EditorRoute>();
   const { reports } = useServices();
   const { width: windowWidth } = useWindowDimensions();
@@ -69,6 +69,12 @@ export function SanitizedReportEditorScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    return navigation.addListener('beforeRemove', () => {
+      void reports.closeSanitizationEditor(route.params.reportId);
+    });
+  }, [navigation, reports, route.params.reportId]);
 
   function setPage(recipeUpdate: SanitizationRecipe) {
     setRecipe(recipeUpdate);
@@ -303,17 +309,8 @@ export function SanitizedReportEditorScreen() {
   return (
     <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
       <View style={styles.header}>
-        <AppButton
-          label={t('labs.recordCancel')}
-          onPress={() => {
-            void reports.closeSanitizationEditor(route.params.reportId);
-            navigation.goBack();
-          }}
-          tone="quiet"
-        />
         <StatusPill>{t('labs.sanitizedEditorLocalOnly')}</StatusPill>
       </View>
-      <AppText variant="title">{t('labs.sanitizedEditorTitle')}</AppText>
       <AppText style={styles.body}>{t('labs.sanitizedEditorBody')}</AppText>
       <AppSurface tone="soft" style={styles.privacyCard}>
         <AppText variant="heading">{t('labs.sanitizedEditorExactTitle')}</AppText>

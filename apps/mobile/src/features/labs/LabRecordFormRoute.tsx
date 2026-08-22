@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { LabsStackParamList } from '../../navigation/types';
@@ -16,6 +16,11 @@ export function LabRecordFormRoute() {
   const route = useRoute<FormRoute>();
   const { labs } = useServices();
   const recordId = route.params?.recordId;
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title: recordId === undefined ? t('labs.recordCreateTitle') : t('labs.recordEditTitle'),
+    });
+  }, [navigation, recordId]);
   const [record, setRecord] = useState<LabRecord | null | undefined>(
     recordId === undefined ? null : undefined,
   );

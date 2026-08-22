@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useIsFocused } from '@react-navigation/native';
 import { formatIntakeLocalDate, type IntakeEventType } from '@alyte/domain';
-import type { MainTabParamList } from '../../navigation/types';
+import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppSurface, AppText } from '../../ui/primitives';
@@ -13,7 +13,7 @@ import { colors, screenStyles, spacing } from '../../theme';
 import { captureFromCamera, createCaptureAttemptId } from './camera-flow';
 import type { IntakeCloudMode } from './outbox';
 
-type SnapScreenProps = BottomTabScreenProps<MainTabParamList, 'SnapAction'>;
+type SnapScreenProps = NativeStackScreenProps<RootStackParamList, 'SnapCapture'>;
 
 const CAPTURE_EVENT_TYPE: IntakeEventType = 'other';
 
@@ -74,7 +74,7 @@ export function SnapScreen({ navigation }: SnapScreenProps) {
             ],
           },
         });
-        navigation.navigate('Home');
+        navigation.navigate('MainTabs', { screen: 'Home' });
       } catch {
         setError(true);
       } finally {
@@ -107,6 +107,7 @@ export function SnapScreen({ navigation }: SnapScreenProps) {
       }
       if (result.kind === 'cancelled') {
         captureAttempt.current.reset();
+        navigation.navigate('MainTabs', { screen: 'Home' });
         return;
       }
       setCameraDenied(false);
@@ -226,7 +227,7 @@ export function SnapScreen({ navigation }: SnapScreenProps) {
           disabled={busy}
           label={t('snap.manual')}
           tone="secondary"
-          onPress={() => navigation.navigate('Log')}
+          onPress={() => navigation.navigate('MainTabs', { screen: 'Log' })}
         />
         <AppButton
           disabled={busy}

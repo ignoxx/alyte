@@ -117,10 +117,9 @@ export function LogScreen() {
   }
 
   return (
-    <SafeAreaView style={screenStyles.safe}>
+    <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
         <View style={styles.titleRow}>
-          <AppText variant="title">{t('log.title')}</AppText>
           <AppButton label={t('log.action')} onPress={() => navigation.navigate('IntakeEntry')} />
         </View>
         <AppSurface tone="soft" style={styles.dayPicker}>
