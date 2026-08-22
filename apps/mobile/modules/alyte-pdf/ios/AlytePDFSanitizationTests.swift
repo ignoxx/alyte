@@ -61,6 +61,70 @@ final class AlytePDFSanitizationTests: XCTestCase {
     XCTAssertEqual(verification["sourceContentRemoved"] as? Bool, true)
   }
 
+  func testExpoBridgeFoundationContainersAndNumbersDecodeStrictly() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("alyte-sanitize-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = try syntheticSourceDocument(in: directory)
+    let output = directory.appendingPathComponent("bridge-derivative.pdf")
+
+    // Expo can bridge JavaScript objects as NSDictionary/NSArray and all JSON numbers as NSNumber.
+    // Keep both a selected and an excluded page so every recipe field crosses the native boundary.
+    let redaction = NSDictionary(dictionary: [
+      "rect": NSDictionary(dictionary: [
+        "x": NSNumber(value: 0.35),
+        "y": NSNumber(value: 0.4),
+        "width": NSNumber(value: 0.3),
+        "height": NSNumber(value: 0.08),
+      ]),
+    ])
+    let selectedPage = NSDictionary(dictionary: [
+      "pageIndex": NSNumber(value: 0),
+      "selected": NSNumber(value: true),
+      "crop": NSNull(),
+      "rotation": NSNumber(value: 0),
+      "redactions": NSArray(array: [redaction]),
+    ])
+    let excludedPage = NSDictionary(dictionary: [
+      "pageIndex": NSNumber(value: 1),
+      "selected": NSNumber(value: false),
+      "crop": NSNull(),
+      "rotation": NSNumber(value: 90),
+      "redactions": NSArray(),
+    ])
+    let recipe: [String: Any] = [
+      "schemaVersion": NSNumber(value: 1),
+      "pages": NSArray(array: [selectedPage, excludedPage]),
+    ]
+
+    let rendered = try AlytePDFSanitizationTestSupport.render(document: source, destinationURL: output, recipe: recipe)
+    XCTAssertEqual(rendered["pageCount"] as? Int, 1)
+    let verification = try XCTUnwrap(rendered["verification"] as? [String: Any])
+    XCTAssertEqual(verification["verified"] as? Bool, true)
+    XCTAssertEqual(verification["sourceAwareChecked"] as? Bool, true)
+    XCTAssertEqual(try XCTUnwrap(PDFDocument(url: output)).pageCount, 1)
+  }
+
+  func testExpoBridgeNumericFieldsRejectFractionalIntegers() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("alyte-sanitize-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = try syntheticSourceDocument(in: directory)
+    let output = directory.appendingPathComponent("invalid-bridge-derivative.pdf")
+    let recipe: [String: Any] = [
+      "pages": NSArray(array: [NSDictionary(dictionary: [
+        "pageIndex": NSNumber(value: 0.5),
+        "selected": NSNumber(value: true),
+        "crop": NSNull(),
+        "rotation": NSNumber(value: 0),
+        "redactions": NSArray(),
+      ])]),
+    ]
+
+    XCTAssertThrowsError(try AlytePDFSanitizationTestSupport.render(document: source, destinationURL: output, recipe: recipe))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
+  }
+
   private func syntheticSourceDocument(in directory: URL) throws -> PDFDocument {
     let sourceURL = directory.appendingPathComponent("source.pdf")
     UIGraphicsBeginPDFContextToFile(sourceURL.path, CGRect(x: 0, y: 0, width: 600, height: 800), nil)
@@ -75,7 +139,7 @@ final class AlytePDFSanitizationTests: XCTestCase {
       source.insert(secondPage, at: 1)
       _ = firstPage
     }
-    source.documentAttributes = [.titleAttribute: "SYNTHETIC-SOURCE-METADATA"]
+    source.documentAttributes = [PDFDocumentAttribute.titleAttribute: "SYNTHETIC-SOURCE-METADATA"]
     let firstPage = try XCTUnwrap(source.page(at: 0))
     firstPage.addAnnotation(PDFAnnotation(bounds: CGRect(x: 20, y: 20, width: 80, height: 24), forType: .freeText, withProperties: nil))
     firstPage.addAnnotation(PDFAnnotation(bounds: CGRect(x: 120, y: 20, width: 80, height: 24), forType: .square, withProperties: nil))
@@ -86,7 +150,7 @@ final class AlytePDFSanitizationTests: XCTestCase {
     ]
     firstPage.addAnnotation(PDFAnnotation(
       bounds: CGRect(x: 220, y: 20, width: 80, height: 24),
-      forType: "FileAttachment",
+      forType: PDFAnnotationSubtype(rawValue: "FileAttachment"),
       withProperties: ["FS": fileSpec]
     ))
     return source

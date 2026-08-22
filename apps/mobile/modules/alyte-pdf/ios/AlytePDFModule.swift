@@ -18,6 +18,59 @@ private struct AlyteNormalizedRect {
   let height: CGFloat
 }
 
+// Expo's object converter can provide Foundation containers and NSNumber values even when the
+// JavaScript value was an ordinary object, array, number, or boolean. Decode those representations
+// at this boundary instead of relying on concrete Swift casts that are not stable across bridge
+// versions. These helpers deliberately reject strings, booleans in numeric fields, fractional
+// integers, non-finite values, and non-string dictionary keys.
+private func bridgeDictionary(_ value: Any?) -> [String: Any]? {
+  if let dictionary = value as? [String: Any] {
+    return dictionary
+  }
+  guard let dictionary = value as? NSDictionary else { return nil }
+  var result: [String: Any] = [:]
+  for (key, value) in dictionary {
+    guard let stringKey = key as? String else { return nil }
+    result[stringKey] = value
+  }
+  return result
+}
+
+private func bridgeArray(_ value: Any?) -> [Any]? {
+  if let array = value as? [Any] {
+    return array
+  }
+  return (value as? NSArray)?.map { $0 }
+}
+
+private func bridgeNumber(_ value: Any?) -> NSNumber? {
+  guard let number = value as? NSNumber else { return nil }
+  guard CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+  return number
+}
+
+private func bridgeDouble(_ value: Any?) -> Double? {
+  guard let number = bridgeNumber(value) else { return nil }
+  let result = number.doubleValue
+  return result.isFinite ? result : nil
+}
+
+private func bridgeInteger(_ value: Any?) -> Int? {
+  guard let number = bridgeNumber(value) else { return nil }
+  let result = number.doubleValue
+  guard result.isFinite, result.rounded(.towardZero) == result,
+        result >= Double(Int.min), result <= Double(Int.max) else { return nil }
+  return Int(result)
+}
+
+private func bridgeBoolean(_ value: Any?) -> Bool? {
+  if let number = value as? NSNumber {
+    guard CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+    return number.boolValue
+  }
+  return value as? Bool
+}
+
 private enum AlytePDFError: LocalizedError {
   case unreadable
   case locked
@@ -39,11 +92,11 @@ private enum AlytePDFError: LocalizedError {
 }
 
 private func normalizedRect(_ value: Any?) throws -> AlyteNormalizedRect {
-  guard let dictionary = value as? [String: Any],
-        let x = dictionary["x"] as? Double,
-        let y = dictionary["y"] as? Double,
-        let width = dictionary["width"] as? Double,
-        let height = dictionary["height"] as? Double,
+  guard let dictionary = bridgeDictionary(value),
+        let x = bridgeDouble(dictionary["x"]),
+        let y = bridgeDouble(dictionary["y"]),
+        let width = bridgeDouble(dictionary["width"]),
+        let height = bridgeDouble(dictionary["height"]),
         x >= 0, y >= 0, width > 0, height > 0, x + width <= 1, y + height <= 1
   else { throw AlytePDFError.malformedRecipe }
   return AlyteNormalizedRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height))
@@ -98,14 +151,22 @@ private func imageRotated(_ image: UIImage, degrees: Int) -> UIImage {
 }
 
 private func recipePages(_ recipe: [String: Any]) throws -> [[String: Any]] {
-  guard let pages = recipe["pages"] as? [[String: Any]], !pages.isEmpty else {
+  guard let pageValues = bridgeArray(recipe["pages"]), !pageValues.isEmpty else {
     throw AlytePDFError.malformedRecipe
   }
-  let selected = pages.filter { ($0["selected"] as? Bool) == true }
+  let pages = try pageValues.map { pageValue -> [String: Any] in
+    guard let page = bridgeDictionary(pageValue),
+          bridgeInteger(page["pageIndex"]) != nil,
+          bridgeBoolean(page["selected"]) != nil else {
+      throw AlytePDFError.malformedRecipe
+    }
+    return page
+  }
+  let selected = pages.filter { bridgeBoolean($0["selected"]) == true }
   guard !selected.isEmpty else { throw AlytePDFError.noSelectedPages }
   var seen = Set<Int>()
   for page in selected {
-    guard let index = page["pageIndex"] as? Int, seen.insert(index).inserted else {
+    guard let index = bridgeInteger(page["pageIndex"]), seen.insert(index).inserted else {
       throw AlytePDFError.malformedRecipe
     }
   }
@@ -335,13 +396,30 @@ private func sanitizePDF(document: PDFDocument, destinationPath: String, recipe:
   let outputDocument = PDFDocument()
   var outputCount = 0
   for pageRecipe in pages {
-    guard let pageIndex = pageRecipe["pageIndex"] as? Int,
+    guard let pageIndex = bridgeInteger(pageRecipe["pageIndex"]),
           pageIndex >= 0, pageIndex < document.pageCount,
           let page = document.page(at: pageIndex) else { throw AlytePDFError.malformedRecipe }
     let crop = try pageRecipe["crop"] == nil || pageRecipe["crop"] is NSNull ? nil : normalizedRect(pageRecipe["crop"])
-    let rotation = pageRecipe["rotation"] as? Int ?? 0
+    let rotation: Int
+    if let rotationValue = pageRecipe["rotation"] {
+      guard let decodedRotation = bridgeInteger(rotationValue) else { throw AlytePDFError.malformedRecipe }
+      rotation = decodedRotation
+    } else {
+      rotation = 0
+    }
     guard [0, 90, 180, 270].contains(rotation) else { throw AlytePDFError.malformedRecipe }
-    let redactions = pageRecipe["redactions"] as? [[String: Any]] ?? []
+    let redactions: [[String: Any]]
+    if let redactionValue = pageRecipe["redactions"] {
+      guard let redactionValues = bridgeArray(redactionValue) else { throw AlytePDFError.malformedRecipe }
+      redactions = try redactionValues.map { redactionValue in
+        guard let redaction = bridgeDictionary(redactionValue), redaction["rect"] != nil else {
+          throw AlytePDFError.malformedRecipe
+        }
+        return redaction
+      }
+    } else {
+      redactions = []
+    }
     let image = try renderImage(page: page, crop: crop, rotation: rotation, redactions: redactions)
     guard let outputPage = PDFPage(image: image) else { throw AlytePDFError.renderFailed }
     outputDocument.insert(outputPage, at: outputCount)
