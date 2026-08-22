@@ -10,13 +10,57 @@ private enum AlyteVisionError: LocalizedError {
   case unreadable
   case invalidPage
   case imageUnavailable
+  case unsupportedOrientation
 
   var errorDescription: String? {
     switch self {
     case .unreadable: return "The local source could not be read for OCR"
     case .invalidPage: return "The requested OCR page is unavailable"
     case .imageUnavailable: return "The local source could not be rendered for OCR"
+    case .unsupportedOrientation: return "The source page has an unsupported orientation"
     }
+  }
+}
+
+/// Maps PDF coordinates (origin at the lower-left) into the UIKit image coordinates used by
+/// Vision (origin at the upper-left). The optional orientation rotates the resulting page
+/// clockwise in a deterministic right-angle step; OCR never guesses orientation from text.
+func alytePDFPageDrawingTransform(
+  pageBounds: CGRect,
+  scale: CGFloat,
+  orientation: Int,
+) throws -> (transform: CGAffineTransform, size: CGSize) {
+  let normalized = ((orientation % 360) + 360) % 360
+  guard normalized == 0 || normalized == 90 || normalized == 180 || normalized == 270 else {
+    throw AlyteVisionError.unsupportedOrientation
+  }
+  let width = pageBounds.width * scale
+  let height = pageBounds.height * scale
+  switch normalized {
+  case 0:
+    return (
+      CGAffineTransform(a: scale, b: 0, c: 0, d: -scale,
+                        tx: -pageBounds.minX * scale, ty: pageBounds.maxY * scale),
+      CGSize(width: width, height: height)
+    )
+  case 90:
+    return (
+      CGAffineTransform(a: 0, b: scale, c: scale, d: 0,
+                        tx: -pageBounds.minY * scale, ty: -pageBounds.minX * scale),
+      CGSize(width: height, height: width)
+    )
+  case 180:
+    return (
+      CGAffineTransform(a: -scale, b: 0, c: 0, d: scale,
+                        tx: pageBounds.maxX * scale, ty: -pageBounds.minY * scale),
+      CGSize(width: width, height: height)
+    )
+  default:
+    return (
+      CGAffineTransform(a: 0, b: -scale, c: -scale, d: 0,
+                        tx: pageBounds.maxY * scale, ty: pageBounds.maxX * scale),
+      CGSize(width: height, height: width)
+    )
   }
 }
 
@@ -25,7 +69,7 @@ private func localPath(_ value: String) -> String {
   return value
 }
 
-private func renderedImage(path: String, pageIndex: Int, password: String?) throws -> CGImage {
+private func renderedImage(path: String, pageIndex: Int, orientation: Int, password: String?) throws -> CGImage {
   let url = URL(fileURLWithPath: localPath(path))
   if url.pathExtension.lowercased() == "pdf" {
     guard let document = PDFDocument(url: url) else {
@@ -39,14 +83,21 @@ private func renderedImage(path: String, pageIndex: Int, password: String?) thro
     guard let page = document.page(at: pageIndex) else { throw AlyteVisionError.invalidPage }
     let bounds = page.bounds(for: .mediaBox)
     let scale: CGFloat = 2
-    let size = CGSize(width: max(1, bounds.width * scale), height: max(1, bounds.height * scale))
+    let drawing = try alytePDFPageDrawingTransform(
+      pageBounds: bounds,
+      scale: scale,
+      orientation: orientation
+    )
+    let size = CGSize(width: max(1, drawing.size.width), height: max(1, drawing.size.height))
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
     format.opaque = true
     let renderer = UIGraphicsImageRenderer(size: size, format: format)
     let image = renderer.image { context in
+      UIColor.white.setFill()
+      context.fill(CGRect(origin: .zero, size: size))
       context.cgContext.saveGState()
-      context.cgContext.scaleBy(x: scale, y: scale)
+      context.cgContext.concatenate(drawing.transform)
       page.draw(with: .mediaBox, to: context.cgContext)
       context.cgContext.restoreGState()
     }
@@ -65,7 +116,7 @@ public final class AlyteVisionModule: Module {
     Name("AlyteVision")
 
     AsyncFunction("recognize") { (path: String, pageIndex: Int, orientation: Int, password: String?) throws -> [String: Any] in
-      let image = try renderedImage(path: path, pageIndex: pageIndex, password: password)
+      let image = try renderedImage(path: path, pageIndex: pageIndex, orientation: orientation, password: password)
       let request = VNRecognizeTextRequest()
       request.recognitionLevel = .accurate
       request.usesLanguageCorrection = true
