@@ -5,16 +5,16 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./src/index.d.ts",
-      "import": "./src/index.js",
-      "default": "./src/index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "tsx --test src/**/*.test.ts",
     "contract:check": "tsx src/contract-check.ts",
-    "watch": "tsc -p tsconfig.json --watch --preserveWatchOutput"
+    "watch": "tsc -p tsconfig.build.json --watch --preserveWatchOutput"
   }
 }

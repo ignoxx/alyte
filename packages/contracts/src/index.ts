@@ -1,4 +1,4 @@
-export declare const CONTRACT_VERSION = '2026-08-01';
+export const CONTRACT_VERSION = '2026-08-01';
 
 export interface HealthResponse {
   readonly status: 'ok';

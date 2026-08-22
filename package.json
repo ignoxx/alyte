@@ -13,17 +13,18 @@
     "npm": ">=11 <12"
   },
   "scripts": {
-    "dev": "concurrently --names mobile,api,packages --prefix-colors blue,green,magenta --kill-others-on-fail \"npm run dev --workspace=@alyte/mobile\" \"npm run dev --workspace=@alyte/api\" \"npm run watch:packages\"",
+    "dev": "npm run build --workspace=@alyte/contracts && concurrently --names mobile,api,packages --prefix-colors blue,green,magenta --kill-others-on-fail \"npm run dev --workspace=@alyte/mobile\" \"npm run dev --workspace=@alyte/api\" \"npm run watch:packages\"",
     "watch:packages": "concurrently --names domain,contracts,catalogue,fixtures --prefix-colors yellow,cyan,green,magenta \"npm run watch --workspace=@alyte/domain\" \"npm run watch --workspace=@alyte/contracts\" \"npm run watch --workspace=@alyte/catalogue\" \"npm run watch --workspace=@alyte/fixtures\"",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run build --workspace=@alyte/contracts && npm run typecheck --workspaces --if-present",
     "build": "npm run build --workspace=@alyte/contracts && npm run build --workspace=@alyte/api",
-    "test": "npm run test --workspaces --if-present",
+    "test": "npm run build --workspace=@alyte/contracts && npm run test --workspaces --if-present && npm run test:contracts-build",
+    "test:contracts-build": "node --test scripts/contracts-build.test.mjs",
     "test:boundaries": "node --test scripts/boundaries.test.mjs",
     "test:showcase": "tsx --test scripts/showcase.test.ts",
-    "contract:check": "npm run contract:check --workspace=@alyte/contracts",
+    "contract:check": "npm run build --workspace=@alyte/contracts && npm run contract:check --workspace=@alyte/contracts",
     "ios:config:check": "node scripts/check-expo-config.mjs",
     "ci": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test && npm run test:boundaries && npm run test:showcase && npm run contract:check && npm run ios:config:check"
   },
