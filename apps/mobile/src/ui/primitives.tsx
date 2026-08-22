@@ -1,4 +1,5 @@
-import type { PropsWithChildren, ReactNode } from 'react';
+import { useContext, type PropsWithChildren, type ReactNode } from 'react';
+import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import {
   Pressable,
   ScrollView,
@@ -11,6 +12,7 @@ import {
   type TextProps,
   type ViewProps,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing, statusColors, typography, type StatusTone } from '../theme';
 
 type AppTextProps = TextProps & {
@@ -55,7 +57,18 @@ type ScreenScrollViewProps = Omit<
   | 'contentInsetAdjustmentBehavior'
 >;
 
-export function ScreenScrollView(props: ScreenScrollViewProps) {
+export function ScreenScrollView({
+  contentInset,
+  scrollIndicatorInsets,
+  ...props
+}: ScreenScrollViewProps) {
+  const tabBarHeight = useContext(BottomTabBarHeightContext);
+  const safeAreaInsets = useSafeAreaInsets();
+  // Native bottom tabs render outside the JS tree and currently do not provide the React
+  // Navigation height context. Their propagated bottom safe-area inset is the dynamic fallback;
+  // regular bottom tabs use their authoritative measured height instead.
+  const bottomInset = tabBarHeight ?? safeAreaInsets.bottom;
+
   return (
     <ScrollView
       {...props}
@@ -63,6 +76,14 @@ export function ScreenScrollView(props: ScreenScrollViewProps) {
       automaticallyAdjustKeyboardInsets
       automaticallyAdjustsScrollIndicatorInsets
       contentInsetAdjustmentBehavior="automatic"
+      contentInset={{
+        ...contentInset,
+        bottom: (contentInset?.bottom ?? 0) + bottomInset,
+      }}
+      scrollIndicatorInsets={{
+        ...scrollIndicatorInsets,
+        bottom: (scrollIndicatorInsets?.bottom ?? 0) + bottomInset,
+      }}
     />
   );
 }
