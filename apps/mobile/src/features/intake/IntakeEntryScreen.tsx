@@ -5,6 +5,9 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import {
   formatIntakeLocalDate,
+  formatIntakeLocalDateInput,
+  formatIntakeTimeInput,
+  parseIntakeDateTimeInput,
   parseLocaleDecimal,
   type IntakeAmount,
   type IntakeEvent,
@@ -15,6 +18,7 @@ import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppSurface, AppText } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
+import { intakeEventTypeLabel } from './ui';
 
 type Navigation = NativeStackNavigationProp<LogStackParamList>;
 type EntryRoute = RouteProp<LogStackParamList, 'IntakeEntry'>;
@@ -27,29 +31,11 @@ const eventTypes: readonly IntakeEventType[] = [
   'other',
 ];
 
-function eventTypeLabel(value: IntakeEventType): string {
-  return t(
-    value === 'food'
-      ? 'intake.typeFood'
-      : value === 'drink'
-        ? 'intake.typeDrink'
-        : value === 'supplement'
-          ? 'intake.typeSupplement'
-          : value === 'medication'
-            ? 'intake.typeMedication'
-            : 'intake.typeOther',
-  );
-}
-
-function localTime(value: string): string {
-  const date = new Date(value);
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-}
-
 export function IntakeEntryScreen() {
   const navigation = useNavigation<Navigation>();
   const route = useRoute<EntryRoute>();
   const { intake, clock } = useServices();
+  const locale = Intl.DateTimeFormat().resolvedOptions().locale;
   const eventId = route.params?.eventId;
   const [event, setEvent] = useState<IntakeEvent | null>(null);
   const [eventType, setEventType] = useState<IntakeEventType>('food');
@@ -57,8 +43,10 @@ export function IntakeEntryScreen() {
   const [amount, setAmount] = useState('');
   const [unit, setUnit] = useState('');
   const [amountUnknown, setAmountUnknown] = useState(true);
-  const [date, setDate] = useState(formatIntakeLocalDate(clock.now()));
-  const [time, setTime] = useState(localTime(clock.now().toISOString()));
+  const [date, setDate] = useState(
+    formatIntakeLocalDateInput(formatIntakeLocalDate(clock.now()), locale),
+  );
+  const [time, setTime] = useState(formatIntakeTimeInput(clock.now()));
   const [notes, setNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -83,8 +71,8 @@ export function IntakeEntryScreen() {
           setUnit('');
           setAmountUnknown(true);
         }
-        setDate(next.localDate);
-        setTime(localTime(next.occurredAt));
+        setDate(formatIntakeLocalDateInput(next.localDate, locale));
+        setTime(formatIntakeTimeInput(new Date(next.occurredAt)));
         setNotes(next.notes ?? '');
       })
       .catch(() => {
@@ -101,22 +89,22 @@ export function IntakeEntryScreen() {
       setError(t('intake.required'));
       return;
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) {
+    if (!amountUnknown && unit.trim().length === 0) {
+      setError(t('intake.unitRequired'));
+      return;
+    }
+    const parsed = parseIntakeDateTimeInput(date, time, locale);
+    if (parsed === null) {
       setError(t('intake.invalidDate'));
       return;
     }
-    const parsedDate = new Date(`${date}T${time}:00`);
-    if (Number.isNaN(parsedDate.getTime())) {
-      setError(t('intake.invalidDate'));
-      return;
-    }
-    const occurredAt = parsedDate.toISOString();
+    const occurredAt = parsed.occurredAt;
     const intakeAmount: IntakeAmount = amountUnknown
       ? { kind: 'unknown', reason: 'not-confirmed' }
       : {
           kind: 'known',
           value: parseLocaleDecimal(amount) as number,
-          unit: unit.trim() || 'serving',
+          unit: unit.trim(),
         };
     setSaving(true);
     try {
@@ -124,7 +112,7 @@ export function IntakeEntryScreen() {
         await intake.createEvent({
           eventType,
           occurredAt,
-          localDate: date,
+          localDate: parsed.localDate,
           origin: 'manual',
           components: [{ name: name.trim(), amount: intakeAmount }],
           notes: notes.trim() || null,
@@ -134,7 +122,7 @@ export function IntakeEntryScreen() {
         await intake.updateEvent(event.id, {
           eventType,
           occurredAt,
-          localDate: date,
+          localDate: parsed.localDate,
           notes: notes.trim() || null,
           components:
             event.components[0] === undefined
@@ -172,7 +160,7 @@ export function IntakeEntryScreen() {
           {eventTypes.map((type) => (
             <AppButton
               key={type}
-              label={eventTypeLabel(type)}
+              label={intakeEventTypeLabel(type)}
               tone={eventType === type ? 'primary' : 'secondary'}
               onPress={() => setEventType(type)}
             />
@@ -215,14 +203,14 @@ export function IntakeEntryScreen() {
         <TextInput
           accessibilityLabel={t('intake.dateLabel')}
           onChangeText={setDate}
-          placeholder="YYYY-MM-DD"
+          placeholder={t('intake.datePlaceholder')}
           style={styles.input}
           value={date}
         />
         <TextInput
           accessibilityLabel={t('intake.timeLabel')}
           onChangeText={setTime}
-          placeholder="HH:MM"
+          placeholder={t('intake.timePlaceholder')}
           style={styles.input}
           value={time}
         />

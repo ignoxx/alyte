@@ -87,7 +87,12 @@ export type UpdateIntakeEventInput = {
 };
 
 export type IntakeChangeKind =
-  'created' | 'updated' | 'analysis-inclusion-changed' | 'deleted' | 'logged-again';
+  | 'created'
+  | 'updated'
+  | 'analysis-inclusion-changed'
+  | 'image-removed'
+  | 'deleted'
+  | 'logged-again';
 
 export type IntakeChange = {
   readonly kind: IntakeChangeKind;
@@ -113,6 +118,77 @@ export function formatIntakeLocalDate(value: Date): string {
     throw new Error('Intake event date must be valid');
   }
   return `${String(value.getFullYear()).padStart(4, '0')}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+}
+
+export function parseIntakeLocalDateInput(input: string, locale?: string): string | null {
+  const parts = input
+    .trim()
+    .split(/[./-]/)
+    .map((part) => Number(part));
+  if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) return null;
+  let year: number;
+  let month: number;
+  let day: number;
+  if (String(parts[0]).length === 4) {
+    [year, month, day] = parts as [number, number, number];
+  } else {
+    const resolvedLocale = (locale ?? Intl.DateTimeFormat().resolvedOptions().locale).toLowerCase();
+    const monthFirst = resolvedLocale.startsWith('en-us') || resolvedLocale.startsWith('en-ca');
+    if (monthFirst) [month, day, year] = parts as [number, number, number];
+    else [day, month, year] = parts as [number, number, number];
+  }
+  if (year < 100) year += 2000;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (year < 1 || month < 1 || month > 12 || day < 1 || day > daysInMonth) return null;
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+export function formatIntakeLocalDateInput(localDate: string, locale?: string): string {
+  assertIntakeLocalDate(localDate);
+  const [year, month, day] = localDate.split('-').map(Number) as [number, number, number];
+  return new Intl.DateTimeFormat(locale, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+export function parseIntakeTimeInput(
+  input: string,
+): { readonly hours: number; readonly minutes: number } | null {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(input.trim());
+  if (match === null) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return null;
+  return { hours, minutes };
+}
+
+export function formatIntakeTimeInput(value: Date): string {
+  return `${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
+}
+
+export function parseIntakeDateTimeInput(
+  dateInput: string,
+  timeInput: string,
+  locale?: string,
+): { readonly localDate: string; readonly occurredAt: string } | null {
+  const localDate = parseIntakeLocalDateInput(dateInput, locale);
+  const time = parseIntakeTimeInput(timeInput);
+  if (localDate === null || time === null) return null;
+  const [year, month, day] = localDate.split('-').map(Number) as [number, number, number];
+  const value = new Date(year, month - 1, day, time.hours, time.minutes, 0, 0);
+  if (
+    value.getFullYear() !== year ||
+    value.getMonth() !== month - 1 ||
+    value.getDate() !== day ||
+    value.getHours() !== time.hours ||
+    value.getMinutes() !== time.minutes
+  ) {
+    return null;
+  }
+  return { localDate, occurredAt: value.toISOString() };
 }
 
 export function assertIntakeAmount(value: IntakeAmount): void {

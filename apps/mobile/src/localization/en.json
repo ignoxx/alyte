@@ -200,7 +200,9 @@
     "nextDay": "Next day",
     "today": "Today",
     "loading": "Opening the local timeline…",
-    "error": "The local timeline could not be loaded."
+    "error": "The local timeline could not be loaded.",
+    "loggedAgain": "Logged again",
+    "loggedAgainBody": "The copy was added for today. You can undo it or edit it now."
   },
   "settings": {
     "title": "Settings",
@@ -231,13 +233,16 @@
     "unitLabel": "Unit",
     "unitPlaceholder": "tablet, cup, serving…",
     "amountUnknown": "Amount or dose is unknown",
-    "dateLabel": "Local date (YYYY-MM-DD)",
-    "timeLabel": "Time (HH:MM)",
+    "dateLabel": "Local date (device format)",
+    "datePlaceholder": "Device date format or YYYY-MM-DD",
+    "timeLabel": "Time (24-hour HH:MM)",
+    "timePlaceholder": "For example, 09:30",
     "notesLabel": "Notes",
     "notesPlaceholder": "Optional",
     "save": "Save intake event",
     "cancel": "Cancel",
     "required": "Enter a name and a valid amount, or leave amount unknown.",
+    "unitRequired": "Add a unit for a known amount or dose, or leave it unknown.",
     "invalidDate": "Enter a valid local date and time.",
     "loadError": "This intake event could not be loaded.",
     "saveError": "The intake event could not be saved.",
@@ -249,8 +254,11 @@
     "exclude": "Exclude from analysis",
     "restore": "Include in analysis",
     "delete": "Delete",
+    "removeImage": "Remove Intake Image",
     "deleteTitle": "Delete intake event",
-    "deleteConfirm": "Delete this event and its components? This cannot be undone."
+    "deleteConfirm": "Delete this event and its components? This cannot be undone.",
+    "removeImageTitle": "Remove Intake Image",
+    "removeImageConfirm": "Remove the saved image but retain this Intake Event?"
   },
   "errors": {
     "title": "Alyte needs a restart",

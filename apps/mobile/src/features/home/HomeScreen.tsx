@@ -37,6 +37,8 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
     if (isFocused) void load();
   }, [isFocused, load]);
 
+  useEffect(() => intake.subscribe(() => void load()), [intake, load]);
+
   function deleteEvent(event: IntakeEvent) {
     Alert.alert(t('intake.deleteTitle'), t('intake.deleteConfirm'), [
       { text: t('intake.cancel'), style: 'cancel' },
@@ -46,6 +48,21 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
         onPress: () =>
           void intake
             .deleteEvent(event.id)
+            .then(() => load())
+            .catch(() => setError(true)),
+      },
+    ]);
+  }
+
+  function removeImage(event: IntakeEvent) {
+    Alert.alert(t('intake.removeImageTitle'), t('intake.removeImageConfirm'), [
+      { text: t('intake.cancel'), style: 'cancel' },
+      {
+        text: t('intake.removeImage'),
+        style: 'destructive',
+        onPress: () =>
+          void intake
+            .removeIntakeImage(event.id)
             .then(() => load())
             .catch(() => setError(true)),
       },
@@ -99,6 +116,7 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
                   .then(() => load())
                   .catch(() => setError(true))
               }
+              onRemoveImage={() => removeImage(event)}
               onToggleInclusion={() =>
                 void intake
                   .setAnalysisInclusion(event.id, event.analysisInclusion === 'excluded')

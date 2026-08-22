@@ -1,8 +1,9 @@
 import { StyleSheet, View } from 'react-native';
-import { formatIntakeAmount, type IntakeEvent, type IntakeEventType } from '@alyte/domain';
+import { formatIntakeAmount, type IntakeEvent } from '@alyte/domain';
 import { t } from '../../localization';
 import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import { colors, spacing } from '../../theme';
+import { intakeEventTypeLabel } from './ui';
 
 type IntakeEventCardProps = {
   readonly event: IntakeEvent;
@@ -11,21 +12,8 @@ type IntakeEventCardProps = {
   readonly onUndo?: (() => void) | undefined;
   readonly onToggleInclusion?: (() => void) | undefined;
   readonly onDelete?: (() => void) | undefined;
+  readonly onRemoveImage?: (() => void) | undefined;
 };
-
-function eventTypeLabel(eventType: IntakeEventType): string {
-  return t(
-    eventType === 'food'
-      ? 'intake.typeFood'
-      : eventType === 'drink'
-        ? 'intake.typeDrink'
-        : eventType === 'supplement'
-          ? 'intake.typeSupplement'
-          : eventType === 'medication'
-            ? 'intake.typeMedication'
-            : 'intake.typeOther',
-  );
-}
 
 export function IntakeEventCard({
   event,
@@ -34,6 +22,7 @@ export function IntakeEventCard({
   onUndo,
   onToggleInclusion,
   onDelete,
+  onRemoveImage,
 }: IntakeEventCardProps) {
   const time = new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(
     new Date(event.occurredAt),
@@ -46,7 +35,7 @@ export function IntakeEventCard({
             {event.components.map((component) => component.name).join(', ')}
           </AppText>
           <AppText style={styles.muted}>
-            {eventTypeLabel(event.eventType)} · {time}
+            {intakeEventTypeLabel(event.eventType)} · {time}
           </AppText>
         </View>
         {event.analysisInclusion === 'excluded' && <StatusPill>{t('intake.excluded')}</StatusPill>}
@@ -83,6 +72,9 @@ export function IntakeEventCard({
             )}
             {onDelete !== undefined && (
               <AppButton label={t('intake.delete')} tone="quiet" onPress={onDelete} />
+            )}
+            {onRemoveImage !== undefined && event.sourceMediaPath !== null && (
+              <AppButton label={t('intake.removeImage')} tone="quiet" onPress={onRemoveImage} />
             )}
           </>
         )}

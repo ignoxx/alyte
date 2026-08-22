@@ -27,6 +27,7 @@ export function LogScreen() {
   const [selectedDay, setSelectedDay] = useState(today);
   const [events, setEvents] = useState<readonly IntakeEvent[]>([]);
   const [lastLogAgainId, setLastLogAgainId] = useState<string | null>(null);
+  const [recentLogAgain, setRecentLogAgain] = useState<IntakeEvent | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
@@ -47,10 +48,27 @@ export function LogScreen() {
     if (isFocused) void load();
   }, [isFocused, load]);
 
+  useEffect(
+    () =>
+      intake.subscribe((change) => {
+        if (
+          recentLogAgain?.id === change.eventId &&
+          change.kind !== 'created' &&
+          change.kind !== 'logged-again'
+        ) {
+          setLastLogAgainId(null);
+          setRecentLogAgain(null);
+        }
+        void load();
+      }),
+    [intake, load, recentLogAgain?.id],
+  );
+
   async function logAgain(event: IntakeEvent) {
     try {
       const copy = await intake.logAgain(event.id);
       setLastLogAgainId(copy.id);
+      setRecentLogAgain(copy);
       if (copy.localDate === selectedDay) setEvents((current) => [copy, ...current]);
     } catch {
       setError(true);
@@ -61,6 +79,7 @@ export function LogScreen() {
     try {
       await intake.undoLogAgain(eventId);
       setLastLogAgainId(null);
+      setRecentLogAgain(null);
       await load();
     } catch {
       setError(true);
@@ -76,6 +95,21 @@ export function LogScreen() {
         onPress: () =>
           void intake
             .deleteEvent(event.id)
+            .then(() => load())
+            .catch(() => setError(true)),
+      },
+    ]);
+  }
+
+  function removeImage(event: IntakeEvent) {
+    Alert.alert(t('intake.removeImageTitle'), t('intake.removeImageConfirm'), [
+      { text: t('intake.cancel'), style: 'cancel' },
+      {
+        text: t('intake.removeImage'),
+        style: 'destructive',
+        onPress: () =>
+          void intake
+            .removeIntakeImage(event.id)
             .then(() => load())
             .catch(() => setError(true)),
       },
@@ -111,6 +145,24 @@ export function LogScreen() {
             />
           )}
         </AppSurface>
+        {recentLogAgain !== null && (
+          <AppSurface tone="soft" style={styles.success}>
+            <AppText variant="heading">{t('log.loggedAgain')}</AppText>
+            <AppText style={styles.muted}>{t('log.loggedAgainBody')}</AppText>
+            <View style={styles.successActions}>
+              <AppButton
+                label={t('intake.undo')}
+                tone="secondary"
+                onPress={() => void undoLogAgain(recentLogAgain.id)}
+              />
+              <AppButton
+                label={t('intake.edit')}
+                tone="quiet"
+                onPress={() => navigation.navigate('IntakeEntry', { eventId: recentLogAgain.id })}
+              />
+            </View>
+          </AppSurface>
+        )}
         {loading && <AppText style={styles.muted}>{t('log.loading')}</AppText>}
         {error && <AppText style={styles.error}>{t('log.error')}</AppText>}
         {!loading && !error && events.length === 0 && (
@@ -134,6 +186,7 @@ export function LogScreen() {
               onDelete={() => deleteEvent(event)}
               onEdit={() => navigation.navigate('IntakeEntry', { eventId: event.id })}
               onLogAgain={lastLogAgainId === event.id ? undefined : () => void logAgain(event)}
+              onRemoveImage={() => removeImage(event)}
               onToggleInclusion={() =>
                 void intake
                   .setAnalysisInclusion(event.id, event.analysisInclusion === 'excluded')
@@ -157,6 +210,8 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     marginBottom: spacing.md,
   },
+  success: { gap: spacing.xs, marginBottom: spacing.md },
+  successActions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   muted: { color: colors.mutedInk },
   error: { color: colors.danger, marginBottom: spacing.sm },
 });

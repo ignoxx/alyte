@@ -5,6 +5,8 @@ import { createLabsService, type LabsService } from '../features/labs/service';
 import { createLabReportsService, type LabReportsService } from '../features/labs/report-service';
 import { openProtectedLabDatabase, type LabRepository } from '../features/labs/persistence';
 import { createIntakeService, type IntakeService } from '../features/intake/service';
+import { openProtectedIntakeDatabase, type IntakeRepository } from '../features/intake/persistence';
+import { createProtectedIntakeMediaStore } from '../features/intake/media-store';
 
 export interface AlyteServices {
   readonly runtime: AlyteRuntime;
@@ -29,6 +31,11 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     repositoryPromise ??= openProtectedLabDatabase();
     return repositoryPromise;
   };
+  let intakeRepositoryPromise: Promise<IntakeRepository> | null = null;
+  const intakeRepositoryFactory = () => {
+    intakeRepositoryPromise ??= openProtectedIntakeDatabase();
+    return intakeRepositoryPromise;
+  };
 
   const clock = { now: () => new Date() };
 
@@ -41,7 +48,11 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     showcase,
     labs: createLabsService({ repositoryFactory }),
     reports: createLabReportsService({ repositoryFactory }),
-    intake: createIntakeService({ repositoryFactory, clock }),
+    intake: createIntakeService({
+      repositoryFactory: intakeRepositoryFactory,
+      clock,
+      mediaStore: createProtectedIntakeMediaStore(),
+    }),
   };
 }
 
