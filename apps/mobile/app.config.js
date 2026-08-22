@@ -41,6 +41,6 @@ module.exports = ({ config }) => {
       apiEnvironment: variant === 'production' ? 'production' : 'none',
       showcaseAllowed: variant !== 'production',
     },
-    plugins: ['expo-dev-client'],
+    plugins: variant === 'development' ? ['expo-dev-client'] : [],
   };
 };
