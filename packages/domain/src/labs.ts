@@ -23,6 +23,17 @@ export type MeasurementSnapshot = {
 export type MeasurementProvenance = 'user-entered' | 'extracted' | 'user-corrected';
 export type MeasurementReviewState = 'confirmed' | 'needs-review';
 
+export type MeasurementSourceLocation = {
+  readonly pageIndex: number;
+  readonly boundingBox: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly orientation: number;
+};
+
 export type MeasurementCorrection = {
   readonly id: string;
   readonly measurementId: string;
@@ -39,6 +50,7 @@ export type MeasurementCorrectionState = {
   readonly snapshot: MeasurementSnapshot;
   readonly reviewState: MeasurementReviewState;
   readonly provenance: MeasurementProvenance;
+  readonly source: MeasurementSourceLocation | null;
 };
 
 export type Measurement = {
@@ -50,6 +62,7 @@ export type Measurement = {
   readonly current: MeasurementSnapshot;
   readonly provenance: MeasurementProvenance;
   readonly reviewState: MeasurementReviewState;
+  readonly source: MeasurementSourceLocation | null;
   readonly corrections: readonly MeasurementCorrection[];
 };
 
@@ -77,6 +90,9 @@ export type CreateMeasurementInput = {
   readonly flag?: string | null;
   readonly provenance?: MeasurementProvenance;
   readonly reviewState?: MeasurementReviewState;
+  readonly source?: MeasurementSourceLocation | null;
+  /** Source-shaped value is immutable provenance; current fields remain separately normalized. */
+  readonly original?: MeasurementSnapshot;
 };
 
 export type CreateLabRecordInput = {
@@ -108,6 +124,7 @@ export type CorrectMeasurementInput = {
   readonly specimenType?: SpecimenType;
   readonly reviewState?: MeasurementReviewState;
   readonly reason?: string | null;
+  readonly source?: MeasurementSourceLocation | null;
 };
 
 export function assertLabDateState(date: LabDateState): void {

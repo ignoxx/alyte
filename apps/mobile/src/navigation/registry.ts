@@ -5,6 +5,7 @@ import { LabRecordDetailRoute } from '../features/labs/LabRecordDetailRoute';
 import { LabRecordFormRoute } from '../features/labs/LabRecordFormRoute';
 import { LabReportImportRoute } from '../features/labs/LabReportImportRoute';
 import { LabReportDetailRoute } from '../features/labs/LabReportDetailRoute';
+import { ExtractionDraftScreen } from '../features/labs/ExtractionDraftScreen';
 import { SanitizedReportEditorRoute } from '../features/labs/SanitizedReportEditorRoute';
 import { LogScreen } from '../features/intake/LogScreen';
 import { IntakeEntryScreen } from '../features/intake/IntakeEntryScreen';
@@ -49,6 +50,12 @@ const labsFeatures: readonly NavigationFeature[] = [
     target: 'labs',
     component: LabReportDetailRoute,
     titleKey: 'labs.reportTitle',
+  },
+  {
+    name: 'ExtractionDraft',
+    target: 'labs',
+    component: ExtractionDraftScreen,
+    titleKey: 'labs.extractionTitle',
   },
   {
     name: 'SanitizedReportEditor',

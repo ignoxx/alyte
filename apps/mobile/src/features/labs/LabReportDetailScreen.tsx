@@ -112,6 +112,20 @@ export function LabReportDetailScreen() {
     }
   }
 
+  async function extractLocally() {
+    if (report === null) return;
+    setBusy(true);
+    setError(false);
+    try {
+      const draft = await reports.startExtraction(report.id, promptPassword());
+      navigation.navigate('ExtractionDraft', { reportId: report.id, draftId: draft.id });
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function confirmDelete() {
     if (report === null) return;
     Alert.alert(t('labs.reportDelete'), t('labs.reportDeleteConfirm'), [
@@ -192,7 +206,14 @@ export function LabReportDetailScreen() {
         </AppSurface>
       )}
       {report.importState === 'imported' && (
-        <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
+        <>
+          <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
+          <AppButton
+            disabled={busy}
+            label={t('labs.extractionStart')}
+            onPress={() => void extractLocally()}
+          />
+        </>
       )}
       {(report.importState === 'failed' || report.importState === 'interrupted') && (
         <AppSurface tone="soft" style={styles.error}>

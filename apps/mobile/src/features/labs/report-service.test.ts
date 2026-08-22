@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { LabReportSourceIntegrity } from '@alyte/domain';
+import type { LabReportSourceIntegrity, VisionOCRResult } from '@alyte/domain';
 import { createLabRepository, type LabRepository, type SqliteDatabase } from './persistence';
 import {
   type LabSourceSelection,
@@ -15,6 +15,7 @@ import { createLabReportsService, type LabReportsService } from './report-servic
 import type { LabReportImportError } from './report-service';
 import type { PdfInspection, PdfInspectionSession, PdfInspector } from './pdf';
 import type { PdfSanitizedVerification } from './pdf';
+import type { VisionOCR } from './vision';
 import type { DatabaseProtection } from './protection';
 import { addRedaction } from '@alyte/domain';
 
@@ -256,11 +257,13 @@ function createService(
   repository: LabRepository,
   files: FakeFiles,
   pdf: PdfInspector = new FakePdf(),
+  visionOCR?: VisionOCR,
 ): LabReportsService {
   return createLabReportsService({
     repositoryFactory: async () => repository,
     fileService: files,
     pdfInspector: pdf,
+    ...(visionOCR === undefined ? {} : { visionOCR }),
     idGenerator: (() => {
       let count = 0;
       return (prefix: string) => `${prefix}-fixed-${++count}`;
@@ -269,6 +272,47 @@ function createService(
 }
 
 describe('protected Lab Report import lifecycle', () => {
+  test('local extraction creates an editable draft from untrusted OCR with source provenance', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const ocr: VisionOCR = {
+      async recognize(): Promise<VisionOCRResult> {
+        return {
+          contractVersion: 'alyte.vision.ocr.v1',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'ocr-row',
+              text: 'LDL-C 3,8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'de', internalConfidence: null },
+            },
+          ],
+        };
+      },
+    };
+    const service = createService(repository, files, new FakePdf(), ocr);
+    const report = (await service.importImages([source('extraction-image', 'image')]))[0]!.report;
+    const draft = await service.startExtraction(report.id);
+    assert.equal(draft.rows.length, 1);
+    assert.equal(draft.rows[0]?.source.pageIndex, 0);
+    assert.equal(draft.rows[0]?.sourceValueString, '3,8');
+    assert.equal(draft.rows[0]?.reviewState, 'needs-review');
+    assert.ok(draft.rows[0]?.reviewReasons.includes('missing-collection-date'));
+    const corrected = await service.updateExtractionRow(draft.rows[0]!.id, {
+      proposedLabel: 'LDL-C',
+      collectionDate: { kind: 'known', value: '2026-08-22' },
+    });
+    assert.equal(corrected.proposedBiomarkerId, 'biomarker.ldl_c');
+    const records = await service.confirmExtraction(draft.id);
+    assert.equal(records.length, 1);
+    assert.equal(records[0]?.measurements[0]?.original.valueString, '3,8');
+  });
+
   test('copies an image into protected storage, records page metadata, and survives relaunch', async () => {
     const databasePath = join(
       mkdtempSync(join(tmpdir(), 'alyte-reports-relaunch-')),

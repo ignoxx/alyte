@@ -447,11 +447,13 @@ describe('local schema forward migrations', () => {
     );
     assert.equal(versionRows[0]?.version, CURRENT_SCHEMA_VERSION);
     const requiredTables = await firstDatabase.getAllAsync<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('lab_reports', 'lab_records', 'measurements', 'intake_events', 'intake_components', 'cloud_jobs', 'app_preferences', 'intake_capture_recovery');",
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('lab_reports', 'lab_records', 'measurements', 'intake_events', 'intake_components', 'cloud_jobs', 'app_preferences', 'intake_capture_recovery', 'extraction_drafts', 'extraction_draft_rows');",
     );
     assert.deepEqual(requiredTables.map((table) => table.name).sort(), [
       'app_preferences',
       'cloud_jobs',
+      'extraction_draft_rows',
+      'extraction_drafts',
       'intake_capture_recovery',
       'intake_components',
       'intake_events',
@@ -459,6 +461,13 @@ describe('local schema forward migrations', () => {
       'lab_reports',
       'measurements',
     ]);
+    const measurementColumns = await firstDatabase.getAllAsync<{ name: string }>(
+      'PRAGMA table_info(measurements);',
+    );
+    assert.deepEqual(
+      measurementColumns.map((column) => column.name).filter((name) => name.startsWith('source_')),
+      ['source_page_index', 'source_bbox_json', 'source_orientation'],
+    );
     const columns = await firstDatabase.getAllAsync<{ name: string }>(
       'PRAGMA table_info(intake_events);',
     );

@@ -13,7 +13,18 @@ import {
   type MeasurementSnapshot,
   type MeasurementValue,
   type UpdateLabRecordInput,
+  type ExtractionDraft,
+  type ExtractionDraftRow,
+  type ExtractionDraftRowPatch,
 } from '@alyte/domain';
+import {
+  buildExtractionConfirmationPlan,
+  EXTRACTION_PARSER_VERSION,
+  VISION_OCR_CONTRACT_VERSION,
+  proposeBiomarkerId,
+  revalidateExtractionRow,
+} from '@alyte/domain';
+import type { ExtractionAliasEntry } from '@alyte/domain';
 import {
   createProtectedDatabaseBoundary,
   type SqliteDatabase,
@@ -58,6 +69,9 @@ type MeasurementRow = {
   current_unit: unknown;
   current_reference_interval: unknown;
   current_flag: unknown;
+  source_page_index: unknown;
+  source_bbox_json: unknown;
+  source_orientation: unknown;
   provenance: unknown;
   review_state: unknown;
   created_at: unknown;
@@ -72,6 +86,46 @@ type CorrectionRow = {
   previous_json: unknown;
   next_json: unknown;
   previous_provenance: unknown;
+};
+
+type ExtractionDraftRowDb = {
+  id: unknown;
+  draft_id: unknown;
+  row_order: unknown;
+  panel_label: unknown;
+  source_text: unknown;
+  source_label: unknown;
+  source_value_string: unknown;
+  source_unit: unknown;
+  source_reference_interval: unknown;
+  source_flag: unknown;
+  source_page_index: unknown;
+  source_bbox_json: unknown;
+  source_orientation: unknown;
+  proposed_label: unknown;
+  proposed_value_json: unknown;
+  proposed_unit: unknown;
+  proposed_reference_interval: unknown;
+  proposed_flag: unknown;
+  proposed_biomarker_id: unknown;
+  proposed_specimen_type: unknown;
+  collection_date: unknown;
+  date_state: unknown;
+  review_reasons_json: unknown;
+  review_state: unknown;
+};
+
+type ExtractionDraftDb = {
+  id: unknown;
+  report_id: unknown;
+  state: unknown;
+  ocr_contract_version: unknown;
+  parser_version: unknown;
+  collection_date: unknown;
+  date_state: unknown;
+  created_at: unknown;
+  updated_at: unknown;
+  confirmed_at: unknown;
 };
 
 function requiredString(value: unknown, field: string): string {
@@ -153,6 +207,35 @@ function snapshotFromUnknown(value: unknown): MeasurementSnapshot {
   return snapshot;
 }
 
+function sourceLocationFromUnknown(row: {
+  source_page_index: unknown;
+  source_bbox_json: unknown;
+  source_orientation: unknown;
+}): Measurement['source'] {
+  if (row.source_page_index === null || row.source_page_index === undefined) return null;
+  if (
+    typeof row.source_page_index !== 'number' ||
+    !Number.isInteger(row.source_page_index) ||
+    row.source_page_index < 0
+  )
+    throw new Error('Invalid measurement source page in local database');
+  const boxValue = parseJson(row.source_bbox_json, 'measurement source bounding box');
+  if (typeof boxValue !== 'object' || boxValue === null)
+    throw new Error('Invalid measurement source bounding box in local database');
+  const box = boxValue as Record<string, unknown>;
+  const boundingBox = {
+    x: Number(box.x),
+    y: Number(box.y),
+    width: Number(box.width),
+    height: Number(box.height),
+  };
+  if (Object.values(boundingBox).some((value) => !Number.isFinite(value)))
+    throw new Error('Invalid measurement source bounding box in local database');
+  if (typeof row.source_orientation !== 'number' || !Number.isInteger(row.source_orientation))
+    throw new Error('Invalid measurement source orientation in local database');
+  return { pageIndex: row.source_page_index, boundingBox, orientation: row.source_orientation };
+}
+
 function parseJson(value: unknown, field: string): unknown {
   const json = requiredString(value, field);
   try {
@@ -160,6 +243,111 @@ function parseJson(value: unknown, field: string): unknown {
   } catch (error) {
     throw new Error(`Invalid ${field} JSON in local database`, { cause: error });
   }
+}
+
+function draftDate(value: unknown, state: unknown): LabRecord['collectionDate'] {
+  const dateState = enumValue(state, ['known', 'missing'] as const, 'extraction date state');
+  const date = nullableString(value, 'extraction collection date');
+  if (dateState === 'missing') {
+    if (date !== null) throw new Error('Missing extraction date unexpectedly has a value');
+    return { kind: 'missing' };
+  }
+  if (date === null) throw new Error('Known extraction date is missing its value');
+  assertLabDateState({ kind: 'known', value: date });
+  return { kind: 'known', value: date };
+}
+
+function extractionRowFromDb(row: ExtractionDraftRowDb): ExtractionDraftRow {
+  const box = parseJson(row.source_bbox_json, 'extraction source bounding box');
+  if (typeof box !== 'object' || box === null)
+    throw new Error('Invalid extraction source bounding box');
+  const sourceBox = box as Record<string, unknown>;
+  const boundingBox = {
+    x: Number(sourceBox.x),
+    y: Number(sourceBox.y),
+    width: Number(sourceBox.width),
+    height: Number(sourceBox.height),
+  };
+  if (Object.values(boundingBox).some((value) => !Number.isFinite(value)))
+    throw new Error('Invalid extraction source bounding box');
+  const value = storedValue(parseJson(row.proposed_value_json, 'extraction proposed value'));
+  const reasons = parseJson(row.review_reasons_json, 'extraction review reasons');
+  if (!Array.isArray(reasons) || reasons.some((reason) => typeof reason !== 'string'))
+    throw new Error('Invalid extraction review reasons');
+  const pageIndex = row.source_page_index;
+  if (typeof pageIndex !== 'number' || !Number.isInteger(pageIndex) || pageIndex < 0)
+    throw new Error('Invalid extraction source page');
+  const orientation = row.source_orientation;
+  if (typeof orientation !== 'number' || !Number.isInteger(orientation))
+    throw new Error('Invalid extraction source orientation');
+  return {
+    id: requiredString(row.id, 'extraction row id'),
+    order: typeof row.row_order === 'number' ? row.row_order : Number(row.row_order),
+    panelLabel: nullableString(row.panel_label, 'extraction panel label'),
+    sourceText: requiredString(row.source_text, 'extraction source text'),
+    sourceLabel: requiredString(row.source_label, 'extraction source label'),
+    sourceValueString: requiredString(row.source_value_string, 'extraction source value'),
+    sourceUnit: nullableString(row.source_unit, 'extraction source unit'),
+    sourceReferenceInterval: nullableString(
+      row.source_reference_interval,
+      'extraction source reference interval',
+    ),
+    sourceFlag: nullableString(row.source_flag, 'extraction source flag'),
+    source: { pageIndex, boundingBox, orientation },
+    proposedLabel: requiredString(row.proposed_label, 'extraction proposed label'),
+    proposedValue: value,
+    proposedUnit: nullableString(row.proposed_unit, 'extraction proposed unit'),
+    proposedReferenceInterval: nullableString(
+      row.proposed_reference_interval,
+      'extraction proposed reference interval',
+    ),
+    proposedFlag: nullableString(row.proposed_flag, 'extraction proposed flag'),
+    proposedBiomarkerId:
+      row.proposed_biomarker_id === null || row.proposed_biomarker_id === undefined
+        ? null
+        : canonicalId(
+            requiredString(row.proposed_biomarker_id, 'extraction proposed biomarker id'),
+          ),
+    proposedSpecimenType: enumValue(
+      row.proposed_specimen_type,
+      specimenTypes,
+      'extraction proposed specimen type',
+    ),
+    collectionDate: draftDate(row.collection_date, row.date_state),
+    reviewReasons: reasons as ExtractionDraftRow['reviewReasons'],
+    reviewState: enumValue(
+      row.review_state,
+      ['ready', 'needs-review'] as const,
+      'extraction review state',
+    ),
+  };
+}
+
+function extractionDraftFromDb(
+  row: ExtractionDraftDb,
+  rows: readonly ExtractionDraftRow[],
+): ExtractionDraft {
+  const state = enumValue(
+    row.state,
+    ['draft', 'confirmed', 'failed'] as const,
+    'extraction draft state',
+  );
+  const ocr = requiredString(row.ocr_contract_version, 'OCR contract version');
+  const parser = requiredString(row.parser_version, 'extraction parser version');
+  if (ocr !== VISION_OCR_CONTRACT_VERSION || parser !== EXTRACTION_PARSER_VERSION)
+    throw new Error('Unsupported extraction draft version');
+  return {
+    id: requiredString(row.id, 'extraction draft id'),
+    reportId: requiredString(row.report_id, 'extraction report id'),
+    state,
+    ocrContractVersion: VISION_OCR_CONTRACT_VERSION,
+    parserVersion: EXTRACTION_PARSER_VERSION,
+    collectionDate: draftDate(row.collection_date, row.date_state),
+    rows,
+    createdAt: requiredString(row.created_at, 'extraction draft created timestamp'),
+    updatedAt: requiredString(row.updated_at, 'extraction draft updated timestamp'),
+    confirmedAt: nullableString(row.confirmed_at, 'extraction draft confirmed timestamp'),
+  };
 }
 
 const specimenTypes = ['blood', 'serum', 'plasma', 'urine', 'stool', 'saliva', 'unknown'] as const;
@@ -234,6 +422,7 @@ export function decodeMeasurementRow(row: MeasurementRow): Omit<Measurement, 'co
     },
     provenance: enumValue(row.provenance, provenances, 'measurement provenance'),
     reviewState: enumValue(row.review_state, reviewStates, 'measurement review state'),
+    source: sourceLocationFromUnknown(row),
   };
 }
 
@@ -251,12 +440,14 @@ function decodeCorrectionRow(
     specimenType: measurement.specimenType,
     reviewState: measurement.reviewState,
     provenance: previousProvenance,
+    source: measurement.source,
   });
   const next = correctionStateFromUnknown(parseJson(row.next_json, 'next correction'), {
     biomarkerId: measurement.biomarkerId,
     specimenType: measurement.specimenType,
     reviewState: measurement.reviewState,
     provenance: 'user-corrected',
+    source: measurement.source,
   });
   return {
     id: requiredString(row.id, 'measurement correction id'),
@@ -299,6 +490,12 @@ function correctionStateFromUnknown(
       candidate.provenance === undefined
         ? fallback.provenance
         : enumValue(candidate.provenance, provenances, 'correction provenance'),
+    source:
+      candidate.source === undefined
+        ? fallback.source
+        : candidate.source === null
+          ? null
+          : fallback.source,
   };
 }
 
@@ -345,6 +542,21 @@ export type LabRepository = {
   updateRecord(id: string, input: UpdateLabRecordInput): Promise<LabRecord>;
   correctMeasurement(id: string, input: CorrectMeasurementInput): Promise<Measurement>;
   deleteRecord(id: string): Promise<void>;
+  createExtractionDraft(input: {
+    readonly id?: string;
+    readonly reportId: string;
+    readonly collectionDate: LabRecord['collectionDate'];
+    readonly rows: readonly ExtractionDraftRow[];
+    readonly now?: string;
+  }): Promise<ExtractionDraft>;
+  getExtractionDraft(id: string): Promise<ExtractionDraft | null>;
+  getExtractionDraftForReport(reportId: string): Promise<ExtractionDraft | null>;
+  updateExtractionDraftRow(
+    id: string,
+    patch: ExtractionDraftRowPatch,
+    aliases: readonly ExtractionAliasEntry[],
+  ): Promise<ExtractionDraftRow>;
+  confirmExtractionDraft(id: string): Promise<readonly LabRecord[]>;
 } & LabReportRepository;
 
 export type LabRepositoryOptions = {
@@ -396,6 +608,7 @@ export function createLabRepository(
         original_label, original_value_string, original_value_json, original_unit,
         original_reference_interval, original_flag, current_label, current_value_string,
         current_value_json, current_unit, current_reference_interval, current_flag,
+        source_page_index, source_bbox_json, source_orientation,
         provenance, review_state, created_at, updated_at
        FROM measurements WHERE lab_record_id = ? ORDER BY created_at ASC;`,
       recordId,
@@ -454,6 +667,11 @@ export function createLabRepository(
       for (const measurementInput of input.measurements) {
         const measurementId = measurementInput.id ?? makeId('measurement');
         const snapshot = normalizeSnapshotInput(measurementInput);
+        const original = measurementInput.original ?? snapshot;
+        assertMeasurementValue(original.value);
+        if (original.label.trim().length === 0 || original.valueString.trim().length === 0) {
+          throw new Error('Original Measurement provenance is incomplete');
+        }
         const provenance = measurementInput.provenance ?? 'user-entered';
         const reviewState = measurementInput.reviewState ?? 'confirmed';
         await database.runAsync(
@@ -461,24 +679,30 @@ export function createLabRepository(
             id, lab_record_id, biomarker_id, specimen_type, original_label, original_value_string,
             original_value_json, original_unit, original_reference_interval, original_flag,
             current_label, current_value_string, current_value_json, current_unit,
-            current_reference_interval, current_flag, provenance, review_state, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+            current_reference_interval, current_flag, source_page_index, source_bbox_json,
+            source_orientation, provenance, review_state, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
           measurementId,
           recordId,
           measurementInput.biomarkerId ?? null,
           measurementInput.specimenType ?? input.specimenType ?? 'unknown',
+          original.label,
+          original.valueString,
+          snapshotToJson(original),
+          original.unit,
+          original.referenceInterval,
+          original.flag,
           snapshot.label,
           snapshot.valueString,
           snapshotToJson(snapshot),
           snapshot.unit,
           snapshot.referenceInterval,
           snapshot.flag,
-          snapshot.label,
-          snapshot.valueString,
-          snapshotToJson(snapshot),
-          snapshot.unit,
-          snapshot.referenceInterval,
-          snapshot.flag,
+          measurementInput.source?.pageIndex ?? null,
+          measurementInput.source === undefined || measurementInput.source === null
+            ? null
+            : JSON.stringify(measurementInput.source.boundingBox),
+          measurementInput.source?.orientation ?? null,
           provenance,
           reviewState,
           createdAt,
@@ -536,6 +760,7 @@ export function createLabRepository(
           original_label, original_value_string, original_value_json, original_unit,
           original_reference_interval, original_flag, current_label, current_value_string,
           current_value_json, current_unit, current_reference_interval, current_flag,
+          source_page_index, source_bbox_json, source_orientation,
           provenance, review_state, created_at, updated_at
          FROM measurements WHERE id = ?;`,
         id,
@@ -571,6 +796,7 @@ export function createLabRepository(
         snapshot: existing.current,
         reviewState: existing.reviewState,
         provenance: existing.provenance,
+        source: existing.source,
       };
       const nextState: MeasurementCorrectionState = {
         biomarkerId: nextBiomarkerId ?? null,
@@ -578,6 +804,7 @@ export function createLabRepository(
         snapshot: next,
         reviewState: nextReviewState,
         provenance: nextProvenance,
+        source: input.source === undefined ? existing.source : input.source,
       };
       const correctedAt = now();
       await database.runAsync(
@@ -595,7 +822,7 @@ export function createLabRepository(
       const result = await database.runAsync(
         `UPDATE measurements SET biomarker_id = ?, specimen_type = ?, current_label = ?, current_value_string = ?, current_value_json = ?,
           current_unit = ?, current_reference_interval = ?, current_flag = ?, provenance = ?, review_state = ?,
-          updated_at = ? WHERE id = ?;`,
+          source_page_index = ?, source_bbox_json = ?, source_orientation = ?, updated_at = ? WHERE id = ?;`,
         nextBiomarkerId,
         nextSpecimenType,
         next.label,
@@ -606,6 +833,19 @@ export function createLabRepository(
         next.flag,
         nextProvenance,
         nextReviewState,
+        input.source === undefined
+          ? (existing.source?.pageIndex ?? null)
+          : (input.source?.pageIndex ?? null),
+        input.source === undefined
+          ? existing.source === null
+            ? null
+            : JSON.stringify(existing.source.boundingBox)
+          : input.source === null
+            ? null
+            : JSON.stringify(input.source.boundingBox),
+        input.source === undefined
+          ? (existing.source?.orientation ?? null)
+          : (input.source?.orientation ?? null),
         correctedAt,
         id,
       );
@@ -658,6 +898,265 @@ export function createLabRepository(
     });
   }
 
+  const extractionDraftColumns = `id, report_id, state, ocr_contract_version, parser_version,
+    collection_date, date_state, created_at, updated_at, confirmed_at`;
+  const extractionRowColumns = `id, draft_id, row_order, panel_label, source_text, source_label,
+    source_value_string, source_unit, source_reference_interval, source_flag, source_page_index,
+    source_bbox_json, source_orientation, proposed_label, proposed_value_json, proposed_unit,
+    proposed_reference_interval, proposed_flag, proposed_biomarker_id, proposed_specimen_type,
+    collection_date, date_state, review_reasons_json, review_state`;
+
+  async function extractionRowsFor(draftId: string): Promise<readonly ExtractionDraftRow[]> {
+    const rows = await database.getAllAsync<ExtractionDraftRowDb>(
+      `SELECT ${extractionRowColumns} FROM extraction_draft_rows WHERE draft_id = ? ORDER BY row_order ASC;`,
+      draftId,
+    );
+    return rows.map(extractionRowFromDb);
+  }
+
+  async function getExtractionDraft(id: string): Promise<ExtractionDraft | null> {
+    await initialize();
+    const rows = await database.getAllAsync<ExtractionDraftDb>(
+      `SELECT ${extractionDraftColumns} FROM extraction_drafts WHERE id = ?;`,
+      id,
+    );
+    const row = rows[0];
+    return row === undefined ? null : extractionDraftFromDb(row, await extractionRowsFor(id));
+  }
+
+  async function getExtractionDraftForReport(reportId: string): Promise<ExtractionDraft | null> {
+    await initialize();
+    const rows = await database.getAllAsync<ExtractionDraftDb>(
+      `SELECT ${extractionDraftColumns} FROM extraction_drafts WHERE report_id = ?;`,
+      reportId,
+    );
+    const row = rows[0];
+    return row === undefined
+      ? null
+      : extractionDraftFromDb(
+          row,
+          await extractionRowsFor(requiredString(row.id, 'extraction draft id')),
+        );
+  }
+
+  async function createExtractionDraft(input: {
+    readonly id?: string;
+    readonly reportId: string;
+    readonly collectionDate: LabRecord['collectionDate'];
+    readonly rows: readonly ExtractionDraftRow[];
+    readonly now?: string;
+  }): Promise<ExtractionDraft> {
+    await initialize();
+    assertLabDateState(input.collectionDate);
+    if (input.rows.length === 0)
+      throw new Error('Extraction Draft must preserve at least one source row');
+    const draftId = input.id ?? makeId('extraction-draft');
+    const createdAt = input.now ?? now();
+    await withWrite(async () => {
+      await database.runAsync(
+        `INSERT INTO extraction_drafts (id, report_id, state, ocr_contract_version, parser_version,
+          collection_date, date_state, created_at, updated_at, confirmed_at)
+         VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, NULL);`,
+        draftId,
+        input.reportId,
+        VISION_OCR_CONTRACT_VERSION,
+        EXTRACTION_PARSER_VERSION,
+        input.collectionDate.kind === 'known' ? input.collectionDate.value : null,
+        input.collectionDate.kind,
+        createdAt,
+        createdAt,
+      );
+      for (const row of input.rows) {
+        await database.runAsync(
+          `INSERT INTO extraction_draft_rows (
+            id, draft_id, row_order, panel_label, source_text, source_label, source_value_string,
+            source_unit, source_reference_interval, source_flag, source_page_index, source_bbox_json,
+            source_orientation, proposed_label, proposed_value_json, proposed_unit,
+            proposed_reference_interval, proposed_flag, proposed_biomarker_id, proposed_specimen_type,
+            collection_date, date_state, review_reasons_json, review_state
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          row.id,
+          draftId,
+          row.order,
+          row.panelLabel,
+          row.sourceText,
+          row.sourceLabel,
+          row.sourceValueString,
+          row.sourceUnit,
+          row.sourceReferenceInterval,
+          row.sourceFlag,
+          row.source.pageIndex,
+          JSON.stringify(row.source.boundingBox),
+          row.source.orientation,
+          row.proposedLabel,
+          JSON.stringify(row.proposedValue),
+          row.proposedUnit,
+          row.proposedReferenceInterval,
+          row.proposedFlag,
+          row.proposedBiomarkerId,
+          row.proposedSpecimenType,
+          row.collectionDate.kind === 'known' ? row.collectionDate.value : null,
+          row.collectionDate.kind,
+          JSON.stringify(row.reviewReasons),
+          row.reviewState,
+        );
+      }
+    });
+    const created = await getExtractionDraft(draftId);
+    if (created === null) throw new Error('Extraction Draft could not be read back');
+    return created;
+  }
+
+  async function updateExtractionDraftRow(
+    id: string,
+    patch: ExtractionDraftRowPatch,
+    aliases: readonly ExtractionAliasEntry[],
+  ): Promise<ExtractionDraftRow> {
+    await initialize();
+    let updated: ExtractionDraftRow | null = null;
+    await withWrite(async () => {
+      const rows = await database.getAllAsync<ExtractionDraftRowDb>(
+        `SELECT ${extractionRowColumns} FROM extraction_draft_rows WHERE id = ?;`,
+        id,
+      );
+      const row = rows[0];
+      if (row === undefined) throw new Error('Extraction Draft row was not found');
+      const draftRows = await database.getAllAsync<{ state: unknown }>(
+        'SELECT state FROM extraction_drafts WHERE id = ?;',
+        row.draft_id,
+      );
+      if (draftRows[0]?.state !== 'draft') throw new Error('Only a draft can be edited');
+      const current = extractionRowFromDb(row);
+      const resolvedPatch =
+        patch.proposedLabel !== undefined && patch.proposedBiomarkerId === undefined
+          ? { ...patch, proposedBiomarkerId: proposeBiomarkerId(patch.proposedLabel, aliases) }
+          : patch;
+      updated = revalidateExtractionRow(current, resolvedPatch, aliases);
+      const next = updated;
+      await database.runAsync(
+        `UPDATE extraction_draft_rows SET source_label = ?, source_value_string = ?, source_unit = ?,
+          source_reference_interval = ?, source_flag = ?, proposed_label = ?, proposed_value_json = ?,
+          proposed_unit = ?, proposed_reference_interval = ?, proposed_flag = ?, proposed_biomarker_id = ?,
+          proposed_specimen_type = ?, collection_date = ?, date_state = ?, review_reasons_json = ?,
+          review_state = ? WHERE id = ?;`,
+        next.sourceLabel,
+        next.sourceValueString,
+        next.sourceUnit,
+        next.sourceReferenceInterval,
+        next.sourceFlag,
+        next.proposedLabel,
+        JSON.stringify(next.proposedValue),
+        next.proposedUnit,
+        next.proposedReferenceInterval,
+        next.proposedFlag,
+        next.proposedBiomarkerId,
+        next.proposedSpecimenType,
+        next.collectionDate.kind === 'known' ? next.collectionDate.value : null,
+        next.collectionDate.kind,
+        JSON.stringify(next.reviewReasons),
+        next.reviewState,
+        id,
+      );
+      await database.runAsync(
+        'UPDATE extraction_drafts SET updated_at = ? WHERE id = ?;',
+        now(),
+        row.draft_id,
+      );
+    });
+    if (updated === null) throw new Error('Extraction Draft row could not be updated');
+    return updated;
+  }
+
+  async function confirmExtractionDraft(id: string): Promise<readonly LabRecord[]> {
+    await initialize();
+    let recordIds: string[] = [];
+    await withWrite(async () => {
+      const draft = await getExtractionDraft(id);
+      if (draft === null) throw new Error('Extraction Draft was not found');
+      if (draft.state === 'confirmed') {
+        const existing = await database.getAllAsync<{ id: string }>(
+          'SELECT id FROM lab_records WHERE lab_report_id = ? ORDER BY created_at ASC;',
+          draft.reportId,
+        );
+        recordIds = existing.map((record) => record.id);
+        return;
+      }
+      if (draft.state !== 'draft') throw new Error('Extraction Draft cannot be confirmed');
+      const plan = buildExtractionConfirmationPlan(draft, {
+        record: (key) => makeId(`lab-record-${key.replace(/[^a-z0-9]+/gi, '-')}`),
+        measurement: (rowId) => makeId(`measurement-${rowId}`),
+      });
+      const createdAt = now();
+      for (const planned of plan.records) {
+        await database.runAsync(
+          `INSERT INTO lab_records (id, lab_report_id, collection_date, date_state, specimen_type, laboratory_name, notes, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'unknown', NULL, NULL, ?, ?);`,
+          planned.id,
+          draft.reportId,
+          planned.collectionDate.kind === 'known' ? planned.collectionDate.value : null,
+          planned.collectionDate.kind,
+          createdAt,
+          createdAt,
+        );
+        for (const measurement of planned.measurements) {
+          await database.runAsync(
+            `INSERT INTO measurements (
+              id, lab_record_id, biomarker_id, specimen_type, original_label, original_value_string,
+              original_value_json, original_unit, original_reference_interval, original_flag,
+              current_label, current_value_string, current_value_json, current_unit,
+              current_reference_interval, current_flag, source_page_index, source_bbox_json,
+              source_orientation, provenance, review_state, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'extracted', ?, ?, ?);`,
+            measurement.id,
+            planned.id,
+            measurement.biomarkerId,
+            planned.specimenType,
+            measurement.original.label,
+            measurement.original.valueString,
+            JSON.stringify(measurement.original),
+            measurement.original.unit,
+            measurement.original.referenceInterval,
+            measurement.original.flag,
+            measurement.label,
+            measurement.valueString,
+            JSON.stringify({
+              label: measurement.label,
+              value: measurement.value,
+              valueString: measurement.valueString,
+              unit: measurement.unit,
+              referenceInterval: measurement.referenceInterval,
+              flag: measurement.flag,
+            }),
+            measurement.unit,
+            measurement.referenceInterval,
+            measurement.flag,
+            measurement.source.pageIndex,
+            JSON.stringify(measurement.source.boundingBox),
+            measurement.source.orientation,
+            measurement.reviewState,
+            createdAt,
+            createdAt,
+          );
+        }
+        recordIds.push(planned.id);
+      }
+      await database.runAsync(
+        "UPDATE extraction_drafts SET state = 'confirmed', confirmed_at = ?, updated_at = ? WHERE id = ? AND state = 'draft';",
+        createdAt,
+        createdAt,
+        id,
+      );
+    });
+    const records = await Promise.all(
+      recordIds.map(async (recordId) => {
+        const record = await getRecord(recordId);
+        if (record === null) throw new Error('Confirmed Lab Record could not be read back');
+        return record;
+      }),
+    );
+    return records;
+  }
+
   const reportRepository = createLabReportRepository({
     database,
     initialize,
@@ -675,6 +1174,11 @@ export function createLabRepository(
     updateRecord,
     correctMeasurement,
     deleteRecord,
+    createExtractionDraft,
+    getExtractionDraft,
+    getExtractionDraftForReport,
+    updateExtractionDraftRow,
+    confirmExtractionDraft,
     ...reportRepository,
   };
 }

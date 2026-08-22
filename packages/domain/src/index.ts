@@ -23,3 +23,4 @@ export * from './labs';
 export * from './reports';
 export * from './sanitization';
 export * from './intake';
+export * from './extraction';

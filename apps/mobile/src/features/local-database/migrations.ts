@@ -19,7 +19,7 @@ type CallbackMigration = {
 
 export type Migration = SqlMigration | CallbackMigration;
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 const INTAKE_CAPTURE_RECOVERY_DDL = `
   CREATE TABLE IF NOT EXISTS intake_capture_recovery (
@@ -42,6 +42,53 @@ const INTAKE_CAPTURE_RECOVERY_DDL = `
     ON intake_capture_recovery(state, updated_at ASC);
   CREATE INDEX IF NOT EXISTS intake_capture_recovery_event_id_idx
     ON intake_capture_recovery(event_id);
+`;
+
+const EXTRACTION_DRAFT_DDL = `
+  CREATE TABLE IF NOT EXISTS extraction_drafts (
+    id TEXT PRIMARY KEY NOT NULL,
+    report_id TEXT NOT NULL REFERENCES lab_reports(id) ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK (state IN ('draft', 'confirmed', 'failed')),
+    ocr_contract_version TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
+    collection_date TEXT,
+    date_state TEXT NOT NULL CHECK (date_state IN ('known', 'missing')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    confirmed_at TEXT,
+    UNIQUE(report_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS extraction_draft_rows (
+    id TEXT PRIMARY KEY NOT NULL,
+    draft_id TEXT NOT NULL REFERENCES extraction_drafts(id) ON DELETE CASCADE,
+    row_order INTEGER NOT NULL,
+    panel_label TEXT,
+    source_text TEXT NOT NULL,
+    source_label TEXT NOT NULL,
+    source_value_string TEXT NOT NULL,
+    source_unit TEXT,
+    source_reference_interval TEXT,
+    source_flag TEXT,
+    source_page_index INTEGER NOT NULL,
+    source_bbox_json TEXT NOT NULL,
+    source_orientation INTEGER NOT NULL,
+    proposed_label TEXT NOT NULL,
+    proposed_value_json TEXT NOT NULL,
+    proposed_unit TEXT,
+    proposed_reference_interval TEXT,
+    proposed_flag TEXT,
+    proposed_biomarker_id TEXT,
+    proposed_specimen_type TEXT NOT NULL,
+    collection_date TEXT,
+    date_state TEXT NOT NULL CHECK (date_state IN ('known', 'missing')),
+    review_reasons_json TEXT NOT NULL,
+    review_state TEXT NOT NULL CHECK (review_state IN ('ready', 'needs-review')),
+    UNIQUE(draft_id, row_order)
+  );
+
+  CREATE INDEX IF NOT EXISTS extraction_drafts_report_id_idx ON extraction_drafts(report_id);
+  CREATE INDEX IF NOT EXISTS extraction_draft_rows_draft_id_idx ON extraction_draft_rows(draft_id, row_order);
 `;
 
 /** The single forward-only schema history shared by the local feature repositories. */
@@ -272,6 +319,28 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
         if (!existingColumns.has(name)) {
           await database.execAsync(`ALTER TABLE intake_events ADD COLUMN ${name} ${type};`);
         }
+      }
+    },
+  },
+  {
+    version: 7,
+    apply: async (database) => {
+      await database.execAsync(EXTRACTION_DRAFT_DDL);
+      const tables = await database.getAllAsync<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'measurements';",
+      );
+      if (tables.length === 0) return;
+      const columns = await database.getAllAsync<{ name: string }>(
+        'PRAGMA table_info(measurements);',
+      );
+      const existing = new Set(columns.map((column) => column.name));
+      for (const [name, type] of [
+        ['source_page_index', 'INTEGER'],
+        ['source_bbox_json', 'TEXT'],
+        ['source_orientation', 'INTEGER'],
+      ] as const) {
+        if (!existing.has(name))
+          await database.execAsync(`ALTER TABLE measurements ADD COLUMN ${name} ${type};`);
       }
     },
   },

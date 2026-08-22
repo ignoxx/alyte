@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { canonicalId } from '@alyte/domain';
+import { canonicalId, groupObservationsIntoRows, type ExtractionAliasEntry } from '@alyte/domain';
 import { CURRENT_SCHEMA_VERSION, createLabRepository, type SqliteDatabase } from './persistence';
 import { ProtectionError, type DatabaseProtection, type ProtectionOptions } from './protection';
 
@@ -90,6 +90,81 @@ function createRepository(databasePath = temporaryDatabase(), databaseProtection
 }
 
 describe('protected manual Lab Record persistence', () => {
+  test('Extraction Draft preserves source locations and confirms atomically/idempotently', async () => {
+    const { repository, database } = createRepository();
+    await repository.createReport({
+      id: 'report-extraction',
+      sourceType: 'image',
+      originalFilename: 'synthetic-en.png',
+      mimeType: 'image/png',
+      importState: 'imported',
+      originalPath: 'protected://original/synthetic-en.png',
+      sourceHash: 'synthetic-hash',
+      pageCount: 1,
+    });
+    const aliases: readonly ExtractionAliasEntry[] = [
+      {
+        id: 'biomarker.ldl_c',
+        aliases: ['LDL-C'],
+        specimens: ['blood', 'unknown'],
+        units: ['mmol/L'],
+      },
+    ];
+    const rows = groupObservationsIntoRows(
+      [
+        {
+          id: 'source-row-1',
+          text: 'LDL-C 3,8 mmol/L',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+      ],
+      { aliases, collectionDate: { kind: 'missing' }, specimenType: 'blood' },
+    );
+    const draft = await repository.createExtractionDraft({
+      id: 'draft-extraction',
+      reportId: 'report-extraction',
+      collectionDate: { kind: 'missing' },
+      rows,
+    });
+    assert.equal(draft.rows[0]?.source.pageIndex, 0);
+    const records = await repository.confirmExtractionDraft(draft.id);
+    assert.equal(records.length, 1);
+    assert.equal(records[0]?.collectionDate.kind, 'missing');
+    assert.equal(records[0]?.measurements[0]?.source?.boundingBox.x, 0.1);
+    assert.equal(records[0]?.measurements[0]?.original.valueString, '3,8');
+    assert.equal(records[0]?.measurements[0]?.current.valueString, '3.8');
+    const repeated = await repository.confirmExtractionDraft(draft.id);
+    assert.deepEqual(
+      repeated.map((record) => record.id),
+      records.map((record) => record.id),
+    );
+    assert.equal(
+      (
+        await database.getAllAsync(
+          'SELECT id FROM lab_records WHERE lab_report_id = ?',
+          'report-extraction',
+        )
+      ).length,
+      1,
+    );
+    assert.equal(
+      (
+        await database.getAllAsync(
+          'SELECT id FROM measurements WHERE lab_record_id = ?',
+          records[0]?.id,
+        )
+      ).length,
+      1,
+    );
+    const preservedDraft = await repository.getExtractionDraft(draft.id);
+    assert.equal(preservedDraft?.rows[0]?.sourceText, 'LDL-C 3,8 mmol/L');
+    await repository.close();
+  });
+
   test('migration and typed repository preserve every manual value kind', async () => {
     const { repository, database } = createRepository();
     const record = await repository.createRecord({

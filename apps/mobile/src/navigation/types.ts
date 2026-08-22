@@ -20,6 +20,7 @@ export type LabsStackParamList = {
   LabsRoot: undefined;
   LabReportImport: undefined;
   LabReportDetail: { readonly reportId: string };
+  ExtractionDraft: { readonly reportId: string; readonly draftId: string };
   SanitizedReportEditor: { readonly reportId: string };
   LabRecordForm: { readonly recordId?: string } | undefined;
   LabRecordDetail: { readonly recordId: string };

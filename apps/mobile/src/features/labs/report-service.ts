@@ -2,6 +2,8 @@ import {
   createSortableOpaqueId,
   createSanitizationRecipe,
   type LabReport,
+  type LabDateState,
+  type LabRecord,
   type LabReportSourceIntegrity,
   type SanitizationRecipe,
   type SanitizedReport,
@@ -10,6 +12,17 @@ import {
   normalizePageRotation,
   sanitizationRecipeHash,
 } from '@alyte/domain';
+import {
+  groupObservationsIntoRows,
+  parseLabDate,
+  type ExtractionAliasEntry,
+  type ExtractionDraft,
+  type ExtractionDraftRow,
+  type ExtractionDraftRowPatch,
+  type VisionOCRResult,
+  type SpecimenType,
+} from '@alyte/domain';
+import { comparableBiomarkers } from '@alyte/catalogue';
 import { openProtectedLabDatabase, type LabRepository } from './persistence';
 import {
   createProtectedReportFileService,
@@ -24,6 +37,7 @@ import {
   type PdfInspector,
   type PdfSanitizedVerification,
 } from './pdf';
+import { nativeVisionOCR, type VisionOCR } from './vision';
 
 export type PasswordRequest = (context: {
   readonly report: LabReport;
@@ -110,6 +124,10 @@ export type LabReportsService = {
   getSanitizedReport(id: string): Promise<SanitizedReport | null>;
   deleteSanitizedReport(id: string): Promise<void>;
   deleteReport(id: string): Promise<void>;
+  startExtraction(id: string, passwordRequest?: PasswordRequest): Promise<ExtractionDraft>;
+  getExtractionDraft(id: string): Promise<ExtractionDraft | null>;
+  updateExtractionRow(id: string, patch: ExtractionDraftRowPatch): Promise<ExtractionDraftRow>;
+  confirmExtraction(id: string): Promise<readonly LabRecord[]>;
 };
 
 export type LabReportsServiceOptions = {
@@ -120,6 +138,8 @@ export type LabReportsServiceOptions = {
   readonly now?: () => string;
   readonly idGenerator?: (prefix: string) => string;
   readonly passwordRequest?: PasswordRequest;
+  readonly visionOCR?: VisionOCR;
+  readonly extractionAliases?: readonly ExtractionAliasEntry[];
 };
 
 type ImportOutcome = { readonly report: LabReport; readonly duplicate: boolean };
@@ -223,6 +243,15 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   const fileService = options.fileService ?? createProtectedReportFileService();
   const picker = options.picker ?? createSystemLabSourcePicker();
   const pdfInspector = options.pdfInspector ?? nativePdfInspector;
+  const visionOCR = options.visionOCR ?? nativeVisionOCR;
+  const extractionAliases =
+    options.extractionAliases ??
+    comparableBiomarkers.map((entry) => ({
+      id: entry.id,
+      aliases: entry.aliases,
+      specimens: entry.specimens,
+      units: entry.units,
+    }));
   const now = options.now ?? isoNow;
   const makeId = options.idGenerator ?? ((prefix: string) => createSortableOpaqueId(prefix));
   const sanitizationSessions = new Map<string, Awaited<ReturnType<PdfInspector['unlock']>>>();
@@ -929,6 +958,128 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     });
   }
 
+  function collectionDateFromOCR(results: readonly VisionOCRResult[]): LabDateState {
+    const locales = [
+      Intl.DateTimeFormat().resolvedOptions().locale,
+      'de-DE',
+      'fr-FR',
+      'es-ES',
+      'it-IT',
+      'pt-PT',
+      'nl-NL',
+      'pl-PL',
+      'en-US',
+    ];
+    for (const result of results) {
+      for (const observation of result.observations) {
+        const candidates = observation.text.match(/\b\d{1,4}[./-]\d{1,2}[./-]\d{1,4}\b/g) ?? [];
+        for (const candidate of candidates) {
+          for (const locale of locales) {
+            const parsed = parseLabDate(candidate, locale);
+            if (parsed !== null) return parsed;
+          }
+        }
+      }
+    }
+    return { kind: 'missing' };
+  }
+
+  function specimenTypeFromOCR(results: readonly VisionOCRResult[]): SpecimenType {
+    const text = results
+      .flatMap((result) => result.observations.map((observation) => observation.text))
+      .join(' ')
+      .toLocaleLowerCase();
+    if (/\b(plasma|plasma)\b/u.test(text)) return 'plasma';
+    if (/\b(serum|sérum|serum)\b/u.test(text)) return 'serum';
+    if (/\b(urine|urin|orina|urina|urine)\b/u.test(text)) return 'urine';
+    if (/\b(blood|blut|sang|sangue|bloed|krew)\b/u.test(text)) return 'blood';
+    return 'unknown';
+  }
+
+  async function startExtraction(
+    id: string,
+    passwordRequest?: PasswordRequest,
+  ): Promise<ExtractionDraft> {
+    return serialized(async () => {
+      await ensureInitialized();
+      const repo = await repository();
+      const report = await repo.getReport(id);
+      if (report === null) throw new Error('Lab Report was not found');
+      if (report.importState !== 'imported' || report.originalPath === null) {
+        throw new Error('Only an imported Lab Report can be extracted');
+      }
+      if ((await repo.getExtractionDraftForReport(id))?.state === 'draft') {
+        return (await repo.getExtractionDraftForReport(id)) as ExtractionDraft;
+      }
+      const integrity = await verifySource(id);
+      if (integrity !== 'verified')
+        throw new Error('Original Report integrity could not be verified');
+      let password: string | null = null;
+      if (report.sourceType === 'pdf') {
+        const inspection = await pdfInspector.inspect(report.originalPath);
+        if (inspection.locked) {
+          const request = passwordRequest ?? options.passwordRequest;
+          if (request === undefined) {
+            throw new LabReportImportError(
+              report,
+              'wrong-password',
+              'A password is required to extract this PDF',
+            );
+          }
+          const entered = await request({ report, attempt: 1 });
+          if (entered === null || entered.length === 0) {
+            throw new LabReportImportError(report, 'cancelled', 'Password entry was cancelled');
+          }
+          password = entered;
+        }
+      }
+      try {
+        const results: VisionOCRResult[] = [];
+        const pages = report.pages.length > 0 ? report.pages : [{ pageIndex: 0, rotation: 0 }];
+        for (const page of pages) {
+          results.push(
+            await visionOCR.recognize(report.originalPath, page.pageIndex, page.rotation, password),
+          );
+        }
+        const date = collectionDateFromOCR(results);
+        const observations = results.flatMap((result) => result.observations);
+        const specimenType = specimenTypeFromOCR(results);
+        const rows = groupObservationsIntoRows(observations, {
+          locale: Intl.DateTimeFormat().resolvedOptions().locale,
+          collectionDate: date,
+          specimenType,
+          aliases: extractionAliases,
+        });
+        if (rows.length === 0) throw new Error('Local OCR found no reviewable source rows');
+        return repo.createExtractionDraft({ reportId: id, collectionDate: date, rows });
+      } finally {
+        // Keep the PDF password in memory only for the current OCR session. It is never passed to
+        // persistence, diagnostics, or a cloud operation.
+        password = null;
+      }
+    });
+  }
+
+  async function getExtractionDraft(id: string): Promise<ExtractionDraft | null> {
+    await ensureInitialized();
+    return (await repository()).getExtractionDraft(id);
+  }
+
+  async function updateExtractionRow(
+    id: string,
+    patch: ExtractionDraftRowPatch,
+  ): Promise<ExtractionDraftRow> {
+    await ensureInitialized();
+    return (await repository()).updateExtractionDraftRow(id, patch, extractionAliases);
+  }
+
+  async function confirmExtraction(id: string): Promise<readonly LabRecord[]> {
+    return serialized(async () => {
+      await ensureInitialized();
+      return (await repository()).confirmExtractionDraft(id);
+    });
+  }
+
   return {
     listReports,
     getReport,
@@ -945,5 +1096,9 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     getSanitizedReport,
     deleteSanitizedReport,
     deleteReport,
+    startExtraction,
+    getExtractionDraft,
+    updateExtractionRow,
+    confirmExtraction,
   };
 }
