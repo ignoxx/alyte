@@ -10,7 +10,7 @@ import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppSurface, AppText } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
-import { captureFromCamera } from './camera-flow';
+import { captureFromCamera, createCaptureAttemptId } from './camera-flow';
 import type { IntakeCloudMode } from './outbox';
 
 type SnapScreenProps = BottomTabScreenProps<MainTabParamList, 'SnapAction'>;
@@ -21,6 +21,7 @@ export function SnapScreen({ navigation }: SnapScreenProps) {
   const { intake, clock } = useServices();
   const isFocused = useIsFocused();
   const openedCamera = useRef(false);
+  const captureAttempt = useRef(createCaptureAttemptId());
   const [cameraDenied, setCameraDenied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -42,19 +43,18 @@ export function SnapScreen({ navigation }: SnapScreenProps) {
   }, [loadPreferences]);
 
   const saveAsset = useCallback(
-    async (asset: ImagePicker.ImagePickerAsset) => {
+    async (asset: ImagePicker.ImagePickerAsset, captureId: string) => {
       setError(false);
       setBusy(true);
       try {
-        const captureId = `snap-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const capturedAt = clock.now();
         await intake.captureSnap({
           captureId,
           source: {
             uri: asset.uri,
-            filename: asset.fileName,
-            mimeType: asset.mimeType,
-            byteSize: asset.fileSize,
+            ...(asset.fileName === undefined ? {} : { filename: asset.fileName }),
+            ...(asset.mimeType === undefined ? {} : { mimeType: asset.mimeType }),
+            ...(asset.fileSize === undefined ? {} : { byteSize: asset.fileSize }),
           },
           cloudMode,
           event: {
@@ -67,7 +67,7 @@ export function SnapScreen({ navigation }: SnapScreenProps) {
             reviewState: 'needs-review',
             components: [
               {
-                name: 'Captured intake',
+                name: t('snap.capturedIntake'),
                 amount: { kind: 'unknown', reason: 'not-confirmed' },
                 reviewState: 'needs-review',
               },
@@ -79,6 +79,7 @@ export function SnapScreen({ navigation }: SnapScreenProps) {
         setError(true);
       } finally {
         setBusy(false);
+        captureAttempt.current.reset();
       }
     },
     [clock, cloudMode, intake, navigation],
@@ -88,6 +89,7 @@ export function SnapScreen({ navigation }: SnapScreenProps) {
     if (busy) return;
     try {
       setError(false);
+      const captureId = captureAttempt.current.get();
       const result = await captureFromCamera(
         () => ImagePicker.requestCameraPermissionsAsync(),
         () =>
@@ -100,13 +102,18 @@ export function SnapScreen({ navigation }: SnapScreenProps) {
       );
       if (result.kind === 'permission-denied') {
         setCameraDenied(true);
+        captureAttempt.current.reset();
         return;
       }
-      if (result.kind === 'cancelled') return;
+      if (result.kind === 'cancelled') {
+        captureAttempt.current.reset();
+        return;
+      }
       setCameraDenied(false);
-      await saveAsset(result.asset);
+      await saveAsset(result.asset, captureId);
     } catch {
       setError(true);
+      captureAttempt.current.reset();
     }
   }, [busy, saveAsset]);
 
@@ -122,9 +129,13 @@ export function SnapScreen({ navigation }: SnapScreenProps) {
 
   async function choosePhoto() {
     if (busy) return;
+    const captureId = captureAttempt.current.get();
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) return;
+      if (!permission.granted) {
+        captureAttempt.current.reset();
+        return;
+      }
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsEditing: false,
@@ -133,9 +144,11 @@ export function SnapScreen({ navigation }: SnapScreenProps) {
         quality: 1,
       });
       const asset = result.canceled ? undefined : result.assets[0];
-      if (asset !== undefined) await saveAsset(asset);
+      if (asset !== undefined) await saveAsset(asset, captureId);
+      else captureAttempt.current.reset();
     } catch {
       setError(true);
+      captureAttempt.current.reset();
     }
   }
 

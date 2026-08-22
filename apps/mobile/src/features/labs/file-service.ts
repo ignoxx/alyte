@@ -13,6 +13,12 @@ export const PROTECTED_REPORT_DIRECTORIES = {
   exports: 'exports',
 } as const;
 
+export type ProtectedPathFacts = {
+  readonly status: 'verified';
+  readonly protectedPaths: readonly string[];
+  readonly backupExcluded: true;
+};
+
 export type LabSourceSelection = {
   readonly uri: string;
   readonly name: string;
@@ -27,6 +33,16 @@ export type ProtectedCopy = {
   readonly path: string;
   readonly sourceHash: string;
   readonly byteSize: number | null;
+  /** Native protection and backup exclusion were verified before the path was returned. */
+  readonly protection?: ProtectedPathFacts;
+};
+
+export type IntakeImageSource = {
+  readonly uri: string;
+  readonly name?: string | null;
+  readonly filename?: string | null;
+  readonly mimeType?: string | null;
+  readonly byteSize?: number | null;
 };
 
 export type ProtectedReportFileService = {
@@ -45,6 +61,11 @@ export type ProtectedReportFileService = {
   /** Destination and verification seams for newly rendered Sanitized Reports. */
   sanitizedDestination?(reportId: string, derivativeId: string): Promise<string>;
   protectArtifact?(path: string): Promise<ProtectedCopy>;
+  /** Intake media uses this same protected-file owner; methods remain optional for lab test fakes. */
+  intakeDestination?(captureId: string, source: IntakeImageSource): Promise<string>;
+  stageIntake?(source: IntakeImageSource, captureId: string): Promise<ProtectedCopy>;
+  inspectIntake?(path: string): Promise<ProtectedCopy | null>;
+  listIntake?(): Promise<readonly string[]>;
 };
 
 export type ProtectedReportFileServiceOptions = {
@@ -151,11 +172,20 @@ export function createProtectedReportFileService(
     fileSystem ??= await fileSystemPromise;
     try {
       await fileSystem.copyAsync({ from, to });
-      await protection.protectPath(to);
+      const protectionReport = await protection.protectPath(to);
       const sourceHash = await protection.hashFile(to);
       const fileInfo = await info(to);
       if (!fileInfo.exists) throw new Error('Protected source copy disappeared');
-      return { path: to, sourceHash, byteSize: fileInfo.size };
+      return {
+        path: to,
+        sourceHash,
+        byteSize: fileInfo.size,
+        protection: {
+          status: 'verified',
+          protectedPaths: protectionReport.protectedPaths,
+          backupExcluded: true,
+        },
+      };
     } catch (error) {
       await fileSystem.deleteAsync(to, { idempotent: true });
       throw error;
@@ -265,11 +295,86 @@ export function createProtectedReportFileService(
 
   async function protectArtifact(path: string): Promise<ProtectedCopy> {
     await initialize();
-    await protection.protectPath(path);
+    const protectionReport = await protection.protectPath(path);
     const sourceHash = await protection.hashFile(path);
     const fileInfo = await info(path);
     if (!fileInfo.exists) throw new Error('Sanitized Report artifact disappeared');
-    return { path, sourceHash, byteSize: fileInfo.size };
+    return {
+      path,
+      sourceHash,
+      byteSize: fileInfo.size,
+      protection: {
+        status: 'verified',
+        protectedPaths: protectionReport.protectedPaths,
+        backupExcluded: true,
+      },
+    };
+  }
+
+  function intakeExtension(source: IntakeImageSource): string {
+    const name = (source.name ?? source.filename)?.toLowerCase() ?? '';
+    return (
+      name.match(/\.[a-z0-9]{1,8}$/)?.[0] ??
+      (source.mimeType === 'image/png'
+        ? '.png'
+        : source.mimeType === 'image/webp'
+          ? '.webp'
+          : '.jpg')
+    );
+  }
+
+  function intakeFilename(captureId: string, source: IntakeImageSource): string {
+    return `${safeFilename(captureId, createSortableOpaqueId('snap'))}${intakeExtension(source)}`;
+  }
+
+  async function intakeDestination(captureId: string, source: IntakeImageSource): Promise<string> {
+    await initialize();
+    if (root === null) throw new Error('Protected report storage is not initialized');
+    return joinPath(
+      joinPath(root, PROTECTED_REPORT_DIRECTORIES.intake),
+      intakeFilename(captureId, source),
+    );
+  }
+
+  async function stageIntake(source: IntakeImageSource, captureId: string): Promise<ProtectedCopy> {
+    await initialize();
+    const destination = await intakeDestination(captureId, source);
+    const staged = await copyProtected(source.uri, destination);
+    if (
+      source.byteSize !== undefined &&
+      source.byteSize !== null &&
+      staged.byteSize !== source.byteSize
+    ) {
+      await remove(destination);
+      throw new Error('Protected Intake Image size changed during capture');
+    }
+    return staged;
+  }
+
+  async function inspectIntake(path: string): Promise<ProtectedCopy | null> {
+    await initialize();
+    if (!(await exists(path))) return null;
+    const fileInfo = await info(path);
+    const protectionReport = await protection.protectPath(path);
+    return {
+      path,
+      sourceHash: await protection.hashFile(path),
+      byteSize: fileInfo.size,
+      protection: {
+        status: 'verified',
+        protectedPaths: protectionReport.protectedPaths,
+        backupExcluded: true,
+      },
+    };
+  }
+
+  async function listIntake(): Promise<readonly string[]> {
+    await initialize();
+    if (root === null) throw new Error('Protected report storage is not initialized');
+    const directory = joinPath(root, PROTECTED_REPORT_DIRECTORIES.intake);
+    return (await fileSystem.readDirectoryAsync(directory)).map((name) =>
+      joinPath(directory, name),
+    );
   }
 
   return {
@@ -283,5 +388,9 @@ export function createProtectedReportFileService(
     cleanupTransientImports,
     sanitizedDestination,
     protectArtifact,
+    intakeDestination,
+    stageIntake,
+    inspectIntake,
+    listIntake,
   };
 }

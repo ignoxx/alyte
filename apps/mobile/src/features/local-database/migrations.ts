@@ -149,6 +149,9 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
         analysis_inclusion TEXT NOT NULL CHECK (analysis_inclusion IN ('included', 'excluded')),
         notes TEXT,
         source_media_path TEXT,
+        source_media_hash TEXT,
+        source_media_size INTEGER,
+        source_media_protection_json TEXT,
         copied_from_event_id TEXT REFERENCES intake_events(id) ON DELETE SET NULL,
         log_again_undoable INTEGER NOT NULL DEFAULT 0 CHECK (log_again_undoable IN (0, 1)),
         created_at TEXT NOT NULL,
@@ -206,6 +209,27 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
         value TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS intake_capture_recovery (
+        capture_id TEXT PRIMARY KEY NOT NULL,
+        event_id TEXT,
+        media_path TEXT NOT NULL,
+        media_hash TEXT,
+        media_size INTEGER,
+        media_protection_json TEXT,
+        event_json TEXT NOT NULL,
+        cloud_mode TEXT NOT NULL CHECK (cloud_mode IN ('local-only', 'consented-cloud')),
+        consent_policy_version TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('capturing', 'staged', 'committed', 'failed')),
+        failure_category TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS intake_capture_recovery_state_idx
+        ON intake_capture_recovery(state, updated_at ASC);
+      CREATE INDEX IF NOT EXISTS intake_capture_recovery_event_id_idx
+        ON intake_capture_recovery(event_id);
     `,
   },
 ];

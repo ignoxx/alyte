@@ -33,3 +33,22 @@ export type IntakeCapturePreferences = {
 };
 
 export type IntakeCloudStatus = IntakeCloudJobState | 'local';
+
+export type IntakeCaptureRecovery = {
+  readonly captureId: string;
+  readonly mediaPath: string;
+  readonly mediaHash: string | null;
+  readonly mediaSize: number | null;
+  readonly mediaProtection: {
+    readonly status: 'verified';
+    readonly protectedPaths: readonly string[];
+    readonly backupExcluded: true;
+  } | null;
+  readonly event: unknown;
+  readonly cloudMode: IntakeCloudMode;
+  readonly consentPolicyVersion: string;
+  readonly state: 'capturing' | 'staged' | 'committed' | 'failed';
+  readonly failureCategory: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};

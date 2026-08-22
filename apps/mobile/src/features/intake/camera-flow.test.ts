@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type * as ImagePicker from 'expo-image-picker';
-import { captureFromCamera } from './camera-flow';
+import { captureFromCamera, createCaptureAttemptId } from './camera-flow';
+
+test('one UI capture attempt keeps one identity across duplicate native callbacks', () => {
+  const attempt = createCaptureAttemptId(() => 'snap-stable');
+  assert.equal(attempt.get(), 'snap-stable');
+  assert.equal(attempt.get(), 'snap-stable');
+  attempt.reset();
+  assert.equal(attempt.get(), 'snap-stable');
+});
 
 test('camera flow reports permission denial without opening the picker', async () => {
   let launched = false;

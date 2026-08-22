@@ -13,6 +13,7 @@ import {
   type IntakeComponent,
   type IntakeComponentSnapshot,
   type IntakeEvent,
+  type IntakeMediaProtection,
   type UpdateIntakeEventInput,
 } from '@alyte/domain';
 import {
@@ -23,6 +24,7 @@ import { nativeDatabaseProtection, type DatabaseProtection } from '../local-data
 import {
   INTAKE_CLOUD_CONSENT_POLICY_VERSION,
   type IntakeCapturePreferences,
+  type IntakeCaptureRecovery,
   type IntakeCloudJob,
   type IntakeCloudJobState,
   type IntakeCloudMode,
@@ -42,6 +44,9 @@ type IntakeEventRow = {
   analysis_inclusion: unknown;
   notes: unknown;
   source_media_path: unknown;
+  source_media_hash: unknown;
+  source_media_size: unknown;
+  source_media_protection_json: unknown;
   copied_from_event_id: unknown;
   created_at: unknown;
   updated_at: unknown;
@@ -70,6 +75,22 @@ type CloudJobRow = {
   cancelled_at: unknown;
 };
 
+type CaptureRecoveryRow = {
+  capture_id: unknown;
+  event_id: unknown;
+  media_path: unknown;
+  media_hash: unknown;
+  media_size: unknown;
+  media_protection_json: unknown;
+  event_json: unknown;
+  cloud_mode: unknown;
+  consent_policy_version: unknown;
+  state: unknown;
+  failure_category: unknown;
+  created_at: unknown;
+  updated_at: unknown;
+};
+
 const eventTypes = ['food', 'drink', 'supplement', 'medication', 'other'] as const;
 const origins = ['manual', 'snap', 'cloud-recognized'] as const;
 const provenances = ['user-entered', 'extracted', 'estimated', 'user-corrected'] as const;
@@ -86,6 +107,7 @@ const cloudJobStates = [
   'expired',
   'cancelled',
 ] as const;
+const recoveryStates = ['capturing', 'staged', 'committed', 'failed'] as const;
 
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.length === 0)
@@ -112,6 +134,31 @@ function parseJson(value: unknown, field: string): unknown {
   } catch (error) {
     throw new Error(`Invalid ${field} JSON in local database`, { cause: error });
   }
+}
+
+function nullableInteger(value: unknown, field: string): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0)
+    throw new Error(`Invalid ${field} in local database`);
+  return value;
+}
+
+function protectionFromUnknown(value: unknown): IntakeMediaProtection | null {
+  if (value === null || value === undefined) return null;
+  const candidate = parseJson(value, 'Intake Image protection') as Record<string, unknown>;
+  if (
+    candidate.status !== 'verified' ||
+    candidate.backupExcluded !== true ||
+    !Array.isArray(candidate.protectedPaths) ||
+    candidate.protectedPaths.some((path) => typeof path !== 'string' || path.length === 0)
+  ) {
+    throw new Error('Invalid Intake Image protection in local database');
+  }
+  return {
+    status: 'verified',
+    backupExcluded: true,
+    protectedPaths: candidate.protectedPaths as string[],
+  };
 }
 
 function amountFromUnknown(value: unknown): IntakeAmount {
@@ -177,6 +224,9 @@ function decodeEvent(row: IntakeEventRow): Omit<IntakeEvent, 'components'> {
     analysisInclusion: enumValue(row.analysis_inclusion, inclusions, 'intake analysis inclusion'),
     notes: nullableString(row.notes, 'intake event notes'),
     sourceMediaPath: nullableString(row.source_media_path, 'intake source media path'),
+    sourceMediaHash: nullableString(row.source_media_hash, 'intake source media hash'),
+    sourceMediaSize: nullableInteger(row.source_media_size, 'intake source media size'),
+    sourceMediaProtection: protectionFromUnknown(row.source_media_protection_json),
     copiedFromEventId: nullableString(row.copied_from_event_id, 'intake copied event id'),
     createdAt: requiredString(row.created_at, 'intake event created timestamp'),
     updatedAt: requiredString(row.updated_at, 'intake event updated timestamp'),
@@ -217,6 +267,38 @@ function decodeCloudJob(row: CloudJobRow): IntakeCloudJob {
     updatedAt: requiredString(row.updated_at, 'cloud job updated timestamp'),
     submittedAt: nullableString(row.submitted_at, 'cloud job submitted timestamp'),
     cancelledAt: nullableString(row.cancelled_at, 'cloud job cancelled timestamp'),
+  };
+}
+
+function decodeRecovery(row: CaptureRecoveryRow): IntakeCaptureRecovery {
+  const eventJson = requiredString(row.event_json, 'capture recovery event');
+  let event: unknown;
+  try {
+    event = JSON.parse(eventJson) as unknown;
+  } catch (error) {
+    throw new Error('Invalid capture recovery event JSON in local database', { cause: error });
+  }
+  const cloudMode = enumValue(
+    row.cloud_mode,
+    ['local-only', 'consented-cloud'] as const,
+    'capture recovery cloud mode',
+  );
+  return {
+    captureId: requiredString(row.capture_id, 'capture recovery id'),
+    mediaPath: requiredString(row.media_path, 'capture recovery media path'),
+    mediaHash: nullableString(row.media_hash, 'capture recovery media hash'),
+    mediaSize: nullableInteger(row.media_size, 'capture recovery media size'),
+    mediaProtection: protectionFromUnknown(row.media_protection_json),
+    event,
+    cloudMode,
+    consentPolicyVersion: requiredString(
+      row.consent_policy_version,
+      'capture recovery consent policy',
+    ),
+    state: enumValue(row.state, recoveryStates, 'capture recovery state'),
+    failureCategory: nullableString(row.failure_category, 'capture recovery failure category'),
+    createdAt: requiredString(row.created_at, 'capture recovery created timestamp'),
+    updatedAt: requiredString(row.updated_at, 'capture recovery updated timestamp'),
   };
 }
 
@@ -268,8 +350,33 @@ export type IntakeRepository = {
     readonly event: CreateIntakeEventInput;
     readonly cloudMode: IntakeCloudMode;
     readonly mediaPath: string;
+    readonly mediaHash?: string | null;
+    readonly mediaSize?: number | null;
+    readonly mediaProtection?: IntakeMediaProtection | null;
     readonly consentPolicyVersion?: string;
   }): Promise<{ readonly event: IntakeEvent; readonly cloudJob: IntakeCloudJob | null }>;
+  beginSnapRecovery(input: {
+    readonly captureId: string;
+    readonly mediaPath: string;
+    readonly event: CreateIntakeEventInput;
+    readonly cloudMode: IntakeCloudMode;
+    readonly consentPolicyVersion?: string;
+  }): Promise<IntakeCaptureRecovery>;
+  stageSnapRecovery(input: {
+    readonly captureId: string;
+    readonly mediaHash: string;
+    readonly mediaSize: number | null;
+    readonly mediaProtection: IntakeMediaProtection;
+  }): Promise<IntakeCaptureRecovery>;
+  commitSnapRecovery(
+    captureId: string,
+  ): Promise<{ readonly event: IntakeEvent; readonly cloudJob: IntakeCloudJob | null }>;
+  listSnapRecoveries(): Promise<readonly IntakeCaptureRecovery[]>;
+  markSnapRecoveryFailed(
+    captureId: string,
+    failureCategory: string,
+  ): Promise<IntakeCaptureRecovery | null>;
+  finalizeSnapRecovery(captureId: string): Promise<void>;
   updateEvent(id: string, input: UpdateIntakeEventInput): Promise<IntakeEvent>;
   logAgain(id: string, occurredAt?: string): Promise<IntakeEvent>;
   undoLogAgain(id: string): Promise<void>;
@@ -279,6 +386,7 @@ export type IntakeRepository = {
   getCloudJob(id: string): Promise<IntakeCloudJob | null>;
   getCloudJobForEvent(eventId: string): Promise<IntakeCloudJob | null>;
   cancelCloudJob(id: string): Promise<IntakeCloudJob | null>;
+  markCloudJobHandedOff(id: string): Promise<IntakeCloudJob | null>;
   resumeCloudJobs(): Promise<readonly IntakeCloudJob[]>;
   getCapturePreferences(): Promise<IntakeCapturePreferences>;
   setCapturePreferences(
@@ -330,7 +438,8 @@ export function createIntakeRepository(
   async function readEvent(id: string): Promise<IntakeEvent | null> {
     const rows = await database.getAllAsync<IntakeEventRow>(
       `SELECT id, event_type, occurred_at, local_date, origin, provenance, review_state,
-        analysis_inclusion, notes, source_media_path, copied_from_event_id, created_at, updated_at
+        analysis_inclusion, notes, source_media_path, source_media_hash, source_media_size,
+        source_media_protection_json, copied_from_event_id, created_at, updated_at
        FROM intake_events WHERE id = ?;`,
       id,
     );
@@ -361,6 +470,17 @@ export function createIntakeRepository(
     return row === undefined ? null : decodeCloudJob(row);
   }
 
+  async function assertCloudConsent(cloudMode: IntakeCloudMode): Promise<void> {
+    if (cloudMode !== 'consented-cloud') return;
+    const rows = await database.getAllAsync<{ value: string }>(
+      'SELECT value FROM app_preferences WHERE key = ?;',
+      'intake.cloud-disclosure-acknowledged',
+    );
+    if (rows[0]?.value !== 'true') {
+      throw new Error('Cloud Intake Image disclosure must be acknowledged first');
+    }
+  }
+
   async function persist(
     input: CreateIntakeEventInput,
     kind: 'created' | 'logged-again',
@@ -384,9 +504,10 @@ export function createIntakeRepository(
     await withWrite(async () => {
       await database.runAsync(
         `INSERT INTO intake_events (id, event_type, occurred_at, local_date, origin, provenance,
-          review_state, analysis_inclusion, notes, source_media_path, copied_from_event_id,
+          review_state, analysis_inclusion, notes, source_media_path, source_media_hash,
+          source_media_size, source_media_protection_json, copied_from_event_id,
           log_again_undoable, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
         id,
         input.eventType,
         occurredAt,
@@ -397,6 +518,11 @@ export function createIntakeRepository(
         input.analysisInclusion ?? 'included',
         input.notes ?? null,
         input.sourceMediaPath ?? null,
+        input.sourceMediaHash ?? null,
+        input.sourceMediaSize ?? null,
+        input.sourceMediaProtection === undefined || input.sourceMediaProtection === null
+          ? null
+          : JSON.stringify(input.sourceMediaProtection),
         input.copiedFromEventId ?? null,
         undoable ? 1 : 0,
         createdAt,
@@ -431,7 +557,8 @@ export function createIntakeRepository(
     await initialize();
     const rows = await database.getAllAsync<IntakeEventRow>(
       `SELECT id, event_type, occurred_at, local_date, origin, provenance, review_state,
-        analysis_inclusion, notes, source_media_path, copied_from_event_id, created_at, updated_at
+        analysis_inclusion, notes, source_media_path, source_media_hash, source_media_size,
+        source_media_protection_json, copied_from_event_id, created_at, updated_at
        FROM intake_events ORDER BY local_date DESC, occurred_at DESC, created_at DESC;`,
     );
     return Promise.all(
@@ -447,7 +574,8 @@ export function createIntakeRepository(
     assertIntakeLocalDate(localDate);
     const rows = await database.getAllAsync<IntakeEventRow>(
       `SELECT id, event_type, occurred_at, local_date, origin, provenance, review_state,
-        analysis_inclusion, notes, source_media_path, copied_from_event_id, created_at, updated_at
+        analysis_inclusion, notes, source_media_path, source_media_hash, source_media_size,
+        source_media_protection_json, copied_from_event_id, created_at, updated_at
        FROM intake_events WHERE local_date = ? ORDER BY occurred_at DESC, created_at DESC;`,
       localDate,
     );
@@ -473,6 +601,9 @@ export function createIntakeRepository(
     readonly event: CreateIntakeEventInput;
     readonly cloudMode: IntakeCloudMode;
     readonly mediaPath: string;
+    readonly mediaHash?: string | null;
+    readonly mediaSize?: number | null;
+    readonly mediaProtection?: IntakeMediaProtection | null;
     readonly consentPolicyVersion?: string;
   }): Promise<{ readonly event: IntakeEvent; readonly cloudJob: IntakeCloudJob | null }> {
     await initialize();
@@ -495,6 +626,7 @@ export function createIntakeRepository(
     let existing = false;
 
     await withWrite(async () => {
+      await assertCloudConsent(input.cloudMode);
       const alreadySaved = await readEvent(id);
       if (alreadySaved !== null) {
         existing = true;
@@ -502,9 +634,10 @@ export function createIntakeRepository(
       }
       await database.runAsync(
         `INSERT INTO intake_events (id, event_type, occurred_at, local_date, origin, provenance,
-          review_state, analysis_inclusion, notes, source_media_path, copied_from_event_id,
+          review_state, analysis_inclusion, notes, source_media_path, source_media_hash,
+          source_media_size, source_media_protection_json, copied_from_event_id,
           log_again_undoable, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
         id,
         input.event.eventType,
         occurredAt,
@@ -515,6 +648,11 @@ export function createIntakeRepository(
         input.event.analysisInclusion ?? 'included',
         input.event.notes ?? null,
         input.mediaPath,
+        input.mediaHash ?? null,
+        input.mediaSize ?? null,
+        input.mediaProtection === undefined || input.mediaProtection === null
+          ? null
+          : JSON.stringify(input.mediaProtection),
         input.event.copiedFromEventId ?? null,
         0,
         createdAt,
@@ -565,6 +703,207 @@ export function createIntakeRepository(
       });
     }
     return { event, cloudJob };
+  }
+
+  async function readRecovery(captureId: string): Promise<IntakeCaptureRecovery | null> {
+    const rows = await database.getAllAsync<CaptureRecoveryRow>(
+      `SELECT capture_id, event_id, media_path, media_hash, media_size, media_protection_json,
+        event_json, cloud_mode, consent_policy_version, state, failure_category, created_at, updated_at
+       FROM intake_capture_recovery WHERE capture_id = ?;`,
+      captureId,
+    );
+    const row = rows[0];
+    return row === undefined ? null : decodeRecovery(row);
+  }
+
+  async function beginSnapRecovery(input: {
+    readonly captureId: string;
+    readonly mediaPath: string;
+    readonly event: CreateIntakeEventInput;
+    readonly cloudMode: IntakeCloudMode;
+    readonly consentPolicyVersion?: string;
+  }): Promise<IntakeCaptureRecovery> {
+    await initialize();
+    if (input.event.components.length === 0)
+      throw new Error('A Snap needs at least one Intake Component');
+    await withWrite(async () => {
+      await assertCloudConsent(input.cloudMode);
+      await database.runAsync(
+        `INSERT INTO intake_capture_recovery
+          (capture_id, event_id, media_path, media_hash, media_size, media_protection_json,
+           event_json, cloud_mode, consent_policy_version, state, failure_category, created_at, updated_at)
+         VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?, ?, 'capturing', NULL, ?, ?)
+         ON CONFLICT(capture_id) DO NOTHING;`,
+        input.captureId,
+        input.event.id ?? input.captureId,
+        input.mediaPath,
+        JSON.stringify({ ...input.event, id: input.event.id ?? input.captureId }),
+        input.cloudMode,
+        input.consentPolicyVersion ?? INTAKE_CLOUD_CONSENT_POLICY_VERSION,
+        now(),
+        now(),
+      );
+    });
+    const recovery = await readRecovery(input.captureId);
+    if (recovery === null) throw new Error('Snap recovery intent could not be read back');
+    return recovery;
+  }
+
+  async function stageSnapRecovery(input: {
+    readonly captureId: string;
+    readonly mediaHash: string;
+    readonly mediaSize: number | null;
+    readonly mediaProtection: IntakeMediaProtection;
+  }): Promise<IntakeCaptureRecovery> {
+    await initialize();
+    await withWrite(async () => {
+      const result = await database.runAsync(
+        `UPDATE intake_capture_recovery SET media_hash = ?, media_size = ?,
+          media_protection_json = ?, state = 'staged', failure_category = NULL, updated_at = ?
+         WHERE capture_id = ? AND state = 'capturing';`,
+        input.mediaHash,
+        input.mediaSize,
+        JSON.stringify(input.mediaProtection),
+        now(),
+        input.captureId,
+      );
+      if (result.changes !== 1) throw new Error('Snap recovery intent was not capturable');
+    });
+    const recovery = await readRecovery(input.captureId);
+    if (recovery === null) throw new Error('Snap recovery intent could not be staged');
+    return recovery;
+  }
+
+  async function commitSnapRecovery(
+    captureId: string,
+  ): Promise<{ readonly event: IntakeEvent; readonly cloudJob: IntakeCloudJob | null }> {
+    await initialize();
+    const recovery = await readRecovery(captureId);
+    if (recovery === null) throw new Error('Snap recovery intent was not found');
+    const eventInput = recovery.event as CreateIntakeEventInput;
+    const eventId = eventInput.id ?? captureId;
+    const occurredAt = normalizeTimestamp(eventInput.occurredAt ?? now());
+    const localDate = localDateForTimestamp(eventInput.localDate, occurredAt);
+    const createdAt = now();
+    const provenance = eventInput.provenance ?? 'user-entered';
+    const reviewState = eventInput.reviewState ?? 'needs-review';
+    const components = eventInput.components.map((component) => ({
+      id: component.id ?? makeId('intake-component'),
+      snapshot: normalizeSnapshot(component),
+      provenance: component.provenance ?? provenance,
+      reviewState: component.reviewState ?? reviewState,
+    }));
+    const cloudJobId = makeId('cloud-job');
+    await withWrite(async () => {
+      await assertCloudConsent(recovery.cloudMode);
+      const existing = await readEvent(eventId);
+      if (existing === null) {
+        await database.runAsync(
+          `INSERT INTO intake_events (id, event_type, occurred_at, local_date, origin, provenance,
+            review_state, analysis_inclusion, notes, source_media_path, source_media_hash,
+            source_media_size, source_media_protection_json, copied_from_event_id,
+            log_again_undoable, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          eventId,
+          eventInput.eventType,
+          occurredAt,
+          localDate,
+          'snap',
+          provenance,
+          reviewState,
+          eventInput.analysisInclusion ?? 'included',
+          eventInput.notes ?? null,
+          recovery.mediaPath,
+          recovery.mediaHash,
+          recovery.mediaSize,
+          recovery.mediaProtection === null ? null : JSON.stringify(recovery.mediaProtection),
+          eventInput.copiedFromEventId ?? null,
+          0,
+          createdAt,
+          createdAt,
+        );
+        for (const component of components) {
+          await database.runAsync(
+            `INSERT INTO intake_components (id, event_id, canonical_id, original_name, original_amount_json,
+              current_name, current_amount_json, provenance, review_state, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+            component.id,
+            eventId,
+            component.snapshot.canonicalId,
+            component.snapshot.name,
+            snapshotJson(component.snapshot),
+            component.snapshot.name,
+            snapshotJson(component.snapshot),
+            component.provenance,
+            component.reviewState,
+            createdAt,
+            createdAt,
+          );
+        }
+        if (recovery.cloudMode === 'consented-cloud') {
+          await database.runAsync(
+            `INSERT INTO cloud_jobs (id, event_id, operation, media_path, state,
+              consent_policy_version, failure_category, created_at, updated_at, submitted_at, cancelled_at)
+             VALUES (?, ?, 'intake-image', ?, 'queued', ?, NULL, ?, ?, NULL, NULL);`,
+            cloudJobId,
+            eventId,
+            recovery.mediaPath,
+            recovery.consentPolicyVersion,
+            createdAt,
+            createdAt,
+          );
+        }
+      }
+      await database.runAsync(
+        `UPDATE intake_capture_recovery SET state = 'committed', updated_at = ? WHERE capture_id = ?;`,
+        now(),
+        captureId,
+      );
+    });
+    const event = await readEvent(eventId);
+    if (event === null) throw new Error('Recovered Snap Intake Event could not be read back');
+    const cloudJob = await readCloudJobForEvent(eventId);
+    emit({ kind: 'created', eventId, occurredAt: event.occurredAt, invalidatesInsights: false });
+    return { event, cloudJob };
+  }
+
+  async function listSnapRecoveries(): Promise<readonly IntakeCaptureRecovery[]> {
+    await initialize();
+    const rows = await database.getAllAsync<CaptureRecoveryRow>(
+      `SELECT capture_id, event_id, media_path, media_hash, media_size, media_protection_json,
+        event_json, cloud_mode, consent_policy_version, state, failure_category, created_at, updated_at
+       FROM intake_capture_recovery ORDER BY created_at ASC;`,
+    );
+    return rows.map(decodeRecovery);
+  }
+
+  async function markSnapRecoveryFailed(
+    captureId: string,
+    failureCategory: string,
+  ): Promise<IntakeCaptureRecovery | null> {
+    await initialize();
+    await withWrite(async () => {
+      await database.runAsync(
+        `UPDATE intake_capture_recovery SET state = 'failed', failure_category = ?, updated_at = ?
+         WHERE capture_id = ? AND state <> 'committed';`,
+        failureCategory,
+        now(),
+        captureId,
+      );
+    });
+    return readRecovery(captureId);
+  }
+
+  async function finalizeSnapRecovery(captureId: string): Promise<void> {
+    await initialize();
+    await withWrite(async () => {
+      await database.runAsync(
+        `UPDATE intake_capture_recovery SET updated_at = ?
+         WHERE capture_id = ? AND state = 'committed';`,
+        now(),
+        captureId,
+      );
+    });
   }
 
   async function updateEvent(id: string, input: UpdateIntakeEventInput): Promise<IntakeEvent> {
@@ -628,6 +967,7 @@ export function createIntakeRepository(
       const result = await database.runAsync(
         `UPDATE intake_events SET event_type = ?, occurred_at = ?, local_date = ?, origin = ?,
           provenance = ?, review_state = ?, analysis_inclusion = ?, notes = ?, source_media_path = ?,
+          source_media_hash = ?, source_media_size = ?, source_media_protection_json = ?,
           log_again_undoable = 0, updated_at = ? WHERE id = ?;`,
         input.eventType ?? existing.eventType,
         occurredAt,
@@ -638,6 +978,17 @@ export function createIntakeRepository(
         inclusion,
         input.notes === undefined ? existing.notes : input.notes,
         input.sourceMediaPath === undefined ? existing.sourceMediaPath : input.sourceMediaPath,
+        input.sourceMediaPath === undefined || input.sourceMediaPath === existing.sourceMediaPath
+          ? existing.sourceMediaHash
+          : null,
+        input.sourceMediaPath === undefined || input.sourceMediaPath === existing.sourceMediaPath
+          ? existing.sourceMediaSize
+          : null,
+        input.sourceMediaPath === undefined || input.sourceMediaPath === existing.sourceMediaPath
+          ? existing.sourceMediaProtection === null
+            ? null
+            : JSON.stringify(existing.sourceMediaProtection)
+          : null,
         updatedAt,
         id,
       );
@@ -757,7 +1108,8 @@ export function createIntakeRepository(
     await initialize();
     await withWrite(async () => {
       const result = await database.runAsync(
-        'UPDATE intake_events SET source_media_path = NULL, updated_at = ? WHERE id = ?;',
+        `UPDATE intake_events SET source_media_path = NULL, source_media_hash = NULL,
+          source_media_size = NULL, source_media_protection_json = NULL, updated_at = ? WHERE id = ?;`,
         now(),
         id,
       );
@@ -817,12 +1169,32 @@ export function createIntakeRepository(
     return readCloudJob(id);
   }
 
+  async function markCloudJobHandedOff(id: string): Promise<IntakeCloudJob | null> {
+    await initialize();
+    await withWrite(async () => {
+      await database.runAsync(
+        `UPDATE cloud_jobs SET state = 'uploading', submitted_at = ?, updated_at = ?
+         WHERE id = ? AND state = 'queued';`,
+        now(),
+        now(),
+        id,
+      );
+    });
+    return readCloudJob(id);
+  }
+
   /**
    * The transport seam intentionally does not submit work yet. A foreground/network callback can
    * call this method safely; queued work remains durable until a future cloud transport owns it.
    */
   async function resumeCloudJobs(): Promise<readonly IntakeCloudJob[]> {
-    return listCloudJobs();
+    await initialize();
+    const rows = await database.getAllAsync<CloudJobRow>(
+      `SELECT id, event_id, operation, media_path, state, consent_policy_version,
+        failure_category, created_at, updated_at, submitted_at, cancelled_at
+       FROM cloud_jobs WHERE state = 'queued' ORDER BY created_at ASC;`,
+    );
+    return rows.map(decodeCloudJob);
   }
 
   async function getCapturePreferences(): Promise<IntakeCapturePreferences> {
@@ -880,6 +1252,7 @@ export function createIntakeRepository(
       if (event === null) return;
       sourceMediaPath = event.sourceMediaPath;
       await database.runAsync('DELETE FROM intake_components WHERE event_id = ?;', id);
+      await database.runAsync('DELETE FROM intake_capture_recovery WHERE event_id = ?;', id);
       deleted =
         (await database.runAsync('DELETE FROM intake_events WHERE id = ?;', id)).changes === 1;
       const orphans = await database.getAllAsync<{ id: string }>(
@@ -906,6 +1279,12 @@ export function createIntakeRepository(
     getEvent,
     createEvent,
     createSnap,
+    beginSnapRecovery,
+    stageSnapRecovery,
+    commitSnapRecovery,
+    listSnapRecoveries,
+    markSnapRecoveryFailed,
+    finalizeSnapRecovery,
     updateEvent,
     logAgain,
     undoLogAgain,
@@ -915,6 +1294,7 @@ export function createIntakeRepository(
     getCloudJob,
     getCloudJobForEvent,
     cancelCloudJob,
+    markCloudJobHandedOff,
     resumeCloudJobs,
     getCapturePreferences,
     setCapturePreferences,

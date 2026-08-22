@@ -6,6 +6,12 @@ export type IntakeProvenance = 'user-entered' | 'extracted' | 'estimated' | 'use
 export type IntakeReviewState = 'confirmed' | 'needs-review';
 export type AnalysisInclusion = 'included' | 'excluded';
 
+export type IntakeMediaProtection = {
+  readonly status: 'verified';
+  readonly protectedPaths: readonly string[];
+  readonly backupExcluded: true;
+};
+
 export type IntakeAmount =
   | { readonly kind: 'known'; readonly value: number; readonly unit: string }
   | {
@@ -43,6 +49,9 @@ export type IntakeEvent = {
   readonly notes: string | null;
   /** A protected local media path, when this event owns one. */
   readonly sourceMediaPath: string | null;
+  readonly sourceMediaHash: string | null;
+  readonly sourceMediaSize: number | null;
+  readonly sourceMediaProtection: IntakeMediaProtection | null;
   readonly copiedFromEventId: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -70,6 +79,9 @@ export type CreateIntakeEventInput = {
   readonly analysisInclusion?: AnalysisInclusion;
   readonly notes?: string | null;
   readonly sourceMediaPath?: string | null;
+  readonly sourceMediaHash?: string | null;
+  readonly sourceMediaSize?: number | null;
+  readonly sourceMediaProtection?: IntakeMediaProtection | null;
   readonly copiedFromEventId?: string | null;
   readonly components: readonly CreateIntakeComponentInput[];
 };

@@ -9,13 +9,13 @@ import type {
 } from '@alyte/domain';
 import { openProtectedIntakeDatabase, type IntakeRepository } from './persistence';
 import type { IntakeMediaSource } from './media-store';
+import type { ProtectedCopy } from '../labs/file-service';
 import { type IntakeCapturePreferences, type IntakeCloudJob, type IntakeCloudMode } from './outbox';
 
 export type IntakeMediaStore = {
-  readonly save?: (
-    source: IntakeMediaSource,
-    captureId: string,
-  ) => Promise<{ readonly path: string; readonly byteSize: number | null }>;
+  readonly destination?: (source: IntakeMediaSource, captureId: string) => Promise<string>;
+  readonly save?: (source: IntakeMediaSource, captureId: string) => Promise<ProtectedCopy>;
+  readonly inspect?: (path: string) => Promise<ProtectedCopy | null>;
   readonly list?: () => Promise<readonly string[]>;
   remove(path: string): Promise<void>;
   verifyRemoved(path: string): Promise<boolean>;
@@ -53,11 +53,13 @@ export type IntakeServiceOptions = {
   readonly repositoryFactory?: () => Promise<IntakeRepository>;
   readonly clock?: ServiceClock;
   readonly mediaStore?: IntakeMediaStore;
+  /** Handoff seam for the future cloud transport; it must not perform provider I/O here. */
+  readonly cloudHandoff?: (job: IntakeCloudJob) => Promise<'accepted' | 'deferred'>;
 };
 
 export function createIntakeService(options: IntakeServiceOptions = {}): IntakeService {
   let repositoryPromise: Promise<IntakeRepository> | null = null;
-  let mediaReconciled = false;
+  let recoveryReconciled = false;
   const captureInFlight = new Map<
     string,
     Promise<{ readonly event: IntakeEvent; readonly cloudJob: IntakeCloudJob | null }>
@@ -68,21 +70,38 @@ export function createIntakeService(options: IntakeServiceOptions = {}): IntakeS
   async function repository(): Promise<IntakeRepository> {
     repositoryPromise ??= repositoryFactory();
     const repo = await repositoryPromise;
-    if (!mediaReconciled && options.mediaStore?.list !== undefined) {
-      const [events, paths] = await Promise.all([repo.listEvents(), options.mediaStore.list()]);
-      const referenced = new Set(
-        events
-          .map((event) => event.sourceMediaPath)
-          .filter((path): path is string => path !== null),
-      );
-      for (const path of paths) {
-        if (referenced.has(path)) continue;
-        await options.mediaStore.remove(path);
-        if (!(await options.mediaStore.verifyRemoved(path))) {
-          throw new Error('An interrupted Intake Image could not be recovered safely');
+    if (!recoveryReconciled) {
+      const recoveries = await repo.listSnapRecoveries();
+      for (const recovery of recoveries) {
+        if (recovery.state === 'failed') continue;
+        const mediaStore = options.mediaStore;
+        if (mediaStore?.inspect === undefined) {
+          await repo.markSnapRecoveryFailed(recovery.captureId, 'interrupted-media-unavailable');
+          continue;
         }
+        const media = await mediaStore.inspect(recovery.mediaPath);
+        if (media === null) {
+          await repo.markSnapRecoveryFailed(recovery.captureId, 'interrupted-media-missing');
+          continue;
+        }
+        if (recovery.state === 'capturing') {
+          if (media.protection === undefined) {
+            await repo.markSnapRecoveryFailed(recovery.captureId, 'interrupted-media-unverified');
+            continue;
+          }
+          await repo.stageSnapRecovery({
+            captureId: recovery.captureId,
+            mediaHash: media.sourceHash,
+            mediaSize: media.byteSize,
+            mediaProtection: media.protection,
+          });
+        }
+        if (recovery.state === 'capturing' || recovery.state === 'staged') {
+          await repo.commitSnapRecovery(recovery.captureId);
+        }
+        await repo.finalizeSnapRecovery(recovery.captureId);
       }
-      mediaReconciled = true;
+      recoveryReconciled = true;
     }
     return repo;
   }
@@ -119,39 +138,64 @@ export function createIntakeService(options: IntakeServiceOptions = {}): IntakeS
           }
         }
         const mediaStore = options.mediaStore;
-        if (mediaStore?.save === undefined) {
+        if (mediaStore?.save === undefined || mediaStore.destination === undefined) {
           throw new Error('Intake media storage is unavailable');
         }
         const eventInput = { ...input.event, id: input.event.id ?? captureId };
-        const stored = await mediaStore.save(input.source, captureId);
+        const mediaPath = await mediaStore.destination(input.source, captureId);
+        const intent = await repo.beginSnapRecovery({
+          captureId,
+          mediaPath,
+          event: eventInput,
+          cloudMode,
+        });
+        if (intent.state === 'committed') {
+          const existing = await repo.getEvent(eventInput.id as string);
+          if (existing === null) throw new Error('Committed Snap recovery has no Intake Event');
+          return { event: existing, cloudJob: await repo.getCloudJobForEvent(existing.id) };
+        }
+        if (
+          intent.state === 'staged' &&
+          intent.mediaHash !== null &&
+          intent.mediaProtection !== null
+        ) {
+          const recovered = await repo.commitSnapRecovery(captureId);
+          await repo.finalizeSnapRecovery(captureId);
+          return recovered;
+        }
+        let stored: ProtectedCopy;
         let result: { readonly event: IntakeEvent; readonly cloudJob: IntakeCloudJob | null };
         try {
-          result = await repo.createSnap({
-            event: eventInput,
-            cloudMode,
-            mediaPath: stored.path,
+          stored = await mediaStore.save(input.source, captureId);
+          if (stored.protection === undefined) {
+            throw new Error('Captured Intake Image protection could not be verified');
+          }
+          await repo.stageSnapRecovery({
+            captureId,
+            mediaHash: stored.sourceHash,
+            mediaSize: stored.byteSize,
+            mediaProtection: stored.protection,
           });
+          result = await repo.commitSnapRecovery(captureId);
         } catch (error) {
-          const duplicate = await repo.getEvent(eventInput.id as string);
-          if (duplicate !== null) {
-            return { event: duplicate, cloudJob: await repo.getCloudJobForEvent(duplicate.id) };
+          const referenced = await repo.getEvent(eventInput.id as string);
+          if (referenced?.sourceMediaPath !== mediaPath) {
+            try {
+              await mediaStore.remove(mediaPath);
+              if (!(await mediaStore.verifyRemoved(mediaPath))) {
+                throw new Error('The failed Intake Image could not be cleaned up');
+              }
+            } catch (cleanupError) {
+              await repo.markSnapRecoveryFailed(captureId, 'capture-cleanup-failed');
+              throw new Error('The failed Intake Image could not be cleaned up', {
+                cause: cleanupError,
+              });
+            }
           }
-          await mediaStore.remove(stored.path);
-          if (!(await mediaStore.verifyRemoved(stored.path))) {
-            throw new Error('The captured Intake Image could not be recovered after save failure', {
-              cause: error,
-            });
-          }
+          await repo.markSnapRecoveryFailed(captureId, 'capture-failed');
           throw error;
         }
-        // A relaunch or duplicate callback may find the event already committed with another
-        // protected path. Never retain a second unreferenced image in that case.
-        if (result.event.sourceMediaPath !== stored.path) {
-          await mediaStore.remove(stored.path);
-          if (!(await mediaStore.verifyRemoved(stored.path))) {
-            throw new Error('The duplicate Intake Image could not be cleaned up');
-          }
-        }
+        await repo.finalizeSnapRecovery(captureId);
         return result;
       })();
       captureInFlight.set(captureId, work);
@@ -200,7 +244,15 @@ export function createIntakeService(options: IntakeServiceOptions = {}): IntakeS
       return job === null ? null : repo.cancelCloudJob(job.id);
     },
     async resumeCloudJobs() {
-      return (await repository()).resumeCloudJobs();
+      const repo = await repository();
+      const jobs = await repo.resumeCloudJobs();
+      if (options.cloudHandoff !== undefined) {
+        for (const job of jobs) {
+          const outcome = await options.cloudHandoff(job);
+          if (outcome === 'accepted') await repo.markCloudJobHandedOff(job.id);
+        }
+      }
+      return repo.listCloudJobs();
     },
     async getCapturePreferences() {
       return (await repository()).getCapturePreferences();

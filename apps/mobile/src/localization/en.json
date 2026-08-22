@@ -233,6 +233,7 @@
     "referenceTitle": "Reference analysis does not log consumption",
     "referenceBody": "This path is for a package or label you want to inspect. It will not create an Intake Event. Cloud reference analysis will be added behind the same disclosure boundary.",
     "saving": "Saving your Intake Image locally…",
+    "capturedIntake": "Captured intake",
     "captureFailed": "The Intake Image could not be saved. Nothing was added to your timeline.",
     "localMode": "Local-only capture",
     "localModeBody": "No account, entitlement, or network is needed. The image stays on this iPhone.",
