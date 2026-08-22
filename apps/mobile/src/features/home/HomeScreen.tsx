@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { formatIntakeLocalDate, type IntakeEvent } from '@alyte/domain';
-import type { MainTabParamList } from '../../navigation/types';
+import type { HomeStackParamList } from '../../navigation/types';
+import { dispatchHomeQuickActionFromStack } from '../../navigation/parent-tab';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppSurface, EmptyState, AppText } from '../../ui/primitives';
@@ -12,9 +13,10 @@ import { colors, screenStyles, spacing } from '../../theme';
 import { IntakeEventCard } from '../intake/IntakeEventCard';
 import type { IntakeCloudJob } from '../intake/outbox';
 
-type HomeScreenProps = BottomTabScreenProps<MainTabParamList, 'Home'>;
+type HomeNavigation = NativeStackNavigationProp<HomeStackParamList, 'HomeRoot'>;
 
-export function HomeScreen({ navigation }: HomeScreenProps) {
+export function HomeScreen() {
+  const navigation = useNavigation<HomeNavigation>();
   const { intake, clock } = useServices();
   const isFocused = useIsFocused();
   const today = formatIntakeLocalDate(clock.now());
@@ -95,7 +97,14 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
         <View style={styles.titleRow}>
-          <AppButton label={t('home.logAction')} onPress={() => navigation.navigate('Log')} />
+          <AppButton
+            label={t('home.logAction')}
+            onPress={() =>
+              dispatchHomeQuickActionFromStack(navigation, {
+                kind: 'log-intake',
+              })
+            }
+          />
         </View>
         {loading && <AppText style={styles.muted}>{t('home.loading')}</AppText>}
         {error && <AppText style={styles.error}>{t('home.error')}</AppText>}
@@ -108,9 +117,20 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
                 <AppButton
                   label={t('home.importAction')}
                   tone="secondary"
-                  onPress={() => navigation.navigate('Labs')}
+                  onPress={() =>
+                    dispatchHomeQuickActionFromStack(navigation, {
+                      kind: 'import-report',
+                    })
+                  }
                 />
-                <AppButton label={t('home.logAction')} onPress={() => navigation.navigate('Log')} />
+                <AppButton
+                  label={t('home.logAction')}
+                  onPress={() =>
+                    dispatchHomeQuickActionFromStack(navigation, {
+                      kind: 'log-intake',
+                    })
+                  }
+                />
               </View>
             }
           />
@@ -131,7 +151,12 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
               key={event.id}
               cloudJob={cloudJobs.find((job) => job.eventId === event.id) ?? null}
               onDelete={() => deleteEvent(event)}
-              onEdit={() => navigation.navigate('Log')}
+              onEdit={() =>
+                dispatchHomeQuickActionFromStack(navigation, {
+                  kind: 'edit-intake',
+                  eventId: event.id,
+                })
+              }
               onLogAgain={() =>
                 void intake
                   .logAgain(event.id)

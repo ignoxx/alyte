@@ -42,7 +42,8 @@ Completion criteria:
   recover the redacted source;
 - SQLite migration zero-to-one passes and the DB/WAL/SHM receive the intended Data Protection and
   backup-exclusion attributes;
-- the chart spike renders ten years of synthetic points accessibly on an iPhone XS simulator; and
+- the chart spike renders ten years of synthetic points accessibly on an iPhone 15 Pro iOS 26
+  simulator; and
 - a written go/no-go records any native blocker and the smallest fallback.
 
 Fallbacks:
@@ -179,7 +180,8 @@ Completion criteria:
 ### September 21–24: release candidate and submission
 
 - Freeze features on September 20.
-- Run the complete two-report journey on the oldest supported class and a current iPhone.
+- Run the complete two-report journey on an iPhone 15 Pro running iOS 26 and a current iOS 26
+  iPhone.
 - Run purchase, restore, expiry, exhaustion, account deletion, offline, password-PDF, redaction, and
   failed-provider acceptance checks.
 - Verify privacy nutrition labels, age rating override, EU trader details, support URL, terms,

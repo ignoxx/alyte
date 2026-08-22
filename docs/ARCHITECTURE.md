@@ -336,7 +336,7 @@ Only measured points receive a solid trend line. Possible relationships appear a
 labeled contextual events or bands and never extend the measured curve.
 
 Select the chart renderer during the first technical spike by testing VoiceOver access, Dynamic
-Type labels, dark mode, and scrolling performance on an iPhone XS. The domain chart model must not
+Type labels, dark mode, and scrolling performance on an iPhone 15 Pro running iOS 26. The domain chart model must not
 depend on that renderer, so the library can be replaced without changing health logic.
 
 Related Wellness Context is derived locally from:
@@ -571,8 +571,9 @@ use typechecking and focused integrated checks for obvious low-risk wiring and s
   providers, clocks, process restarts, and RevenueCat webhook events to prove leasing, deployment
   recovery, idempotency, cleanup, expiry, and charging rules.
 - A deterministic showcase mode seeds the real production screens for App Store screenshots.
-- The protected release flow is exercised on the oldest supported iPhone class and a current iPhone,
-  in light/dark mode, large Dynamic Type, VoiceOver spot checks, and offline/poor-network states.
+- The protected release flow is exercised on an iPhone 15 Pro running iOS 26 and a current iOS 26
+  iPhone, in light/dark mode, large Dynamic Type, VoiceOver spot checks, and offline/poor-network
+  states.
 
 ## Explicit non-goals
 

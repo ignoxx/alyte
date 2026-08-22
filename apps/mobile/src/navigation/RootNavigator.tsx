@@ -8,7 +8,7 @@ import type { ComponentType } from 'react';
 import { useColorScheme } from 'react-native';
 import type { AlyteServices } from '../services';
 import { t } from '../localization';
-import { colors, typography } from '../theme';
+import { colors } from '../theme';
 import { createNavigationRegistry } from './registry';
 import type { FeatureTarget, NavigationFeature } from './registry-model';
 import { featureStackRootName, snapActionDestination } from './registry-model';
@@ -36,7 +36,6 @@ const stackScreenOptions = {
   // at runtime and resolves it against the current appearance.
   headerStyle: { backgroundColor: colors.canvas as string },
   headerTintColor: colors.accent,
-  headerTitleStyle: typography.label,
   headerTitleAlign: 'left' as const,
 };
 
@@ -118,7 +117,6 @@ function MainTabNavigator({ services: _services, extensions = [], onSnap }: Main
       screenOptions={{
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.mutedInk,
-        tabBarLabelStyle: { fontSize: 12, fontWeight: '600' },
         // UIKit owns height, insets, materials, and transitions. `none` keeps the bar present while
         // scrolling until content-inset behavior is proven on every supported device.
         tabBarMinimizeBehavior: 'none',

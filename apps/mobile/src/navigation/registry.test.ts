@@ -6,6 +6,7 @@ import {
   snapActionDestination,
   type CoreNavigationFeatures,
 } from './registry-model';
+import { dispatchHomeQuickAction, type ParentTabNavigation } from './parent-tab';
 
 const coreFeatures: CoreNavigationFeatures = {
   home: { name: 'Home', target: 'home', component: () => null, titleKey: 'navigation.home' },
@@ -59,4 +60,21 @@ test('native stack roots do not shadow tab routes and Snap returns to Home', () 
   assert.equal(featureStackRootName('Labs'), 'LabsRoot');
   assert.equal(featureStackRootName('Log'), 'LogRoot');
   assert.deepEqual(snapActionDestination, { captureRoute: 'SnapCapture', returnTab: 'Home' });
+});
+
+test('Home quick actions dispatch to sibling tabs and preserve the Log edit push', () => {
+  const calls: unknown[][] = [];
+  const navigation = {
+    navigate: (...args: unknown[]) => calls.push(args),
+  } as unknown as ParentTabNavigation;
+
+  dispatchHomeQuickAction(navigation, { kind: 'import-report' });
+  dispatchHomeQuickAction(navigation, { kind: 'log-intake' });
+  dispatchHomeQuickAction(navigation, { kind: 'edit-intake', eventId: 'event-42' });
+
+  assert.deepEqual(calls, [
+    ['Labs'],
+    ['Log'],
+    ['Log', { screen: 'IntakeEntry', params: { eventId: 'event-42' } }],
+  ]);
 });

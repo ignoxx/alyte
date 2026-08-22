@@ -1,15 +1,23 @@
 import type { NavigatorScreenParams } from '@react-navigation/native';
 
+export type HomeStackParamList = {
+  HomeRoot: undefined;
+};
+
+export type SettingsStackParamList = {
+  SettingsRoot: undefined;
+};
+
 export type MainTabParamList = {
-  Home: undefined;
-  Labs: undefined;
+  Home: NavigatorScreenParams<HomeStackParamList> | undefined;
+  Labs: NavigatorScreenParams<LabsStackParamList> | undefined;
   SnapAction: undefined;
-  Log: undefined;
-  Settings: undefined;
+  Log: NavigatorScreenParams<LogStackParamList> | undefined;
+  Settings: NavigatorScreenParams<SettingsStackParamList> | undefined;
 };
 
 export type LabsStackParamList = {
-  Labs: undefined;
+  LabsRoot: undefined;
   LabReportImport: undefined;
   LabReportDetail: { readonly reportId: string };
   SanitizedReportEditor: { readonly reportId: string };
@@ -18,7 +26,7 @@ export type LabsStackParamList = {
 };
 
 export type LogStackParamList = {
-  Log: undefined;
+  LogRoot: undefined;
   IntakeEntry: { readonly eventId?: string } | undefined;
 };
 
