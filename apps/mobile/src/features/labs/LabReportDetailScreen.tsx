@@ -187,6 +187,14 @@ export function LabReportDetailScreen() {
           {previewError && (
             <AppText style={styles.errorText}>{t('labs.reportPreviewError')}</AppText>
           )}
+          {report.sourceType === 'pdf' && (
+            <AppButton
+              disabled={busy}
+              label={t('labs.sanitizedEditorOpen')}
+              onPress={() => navigation.navigate('SanitizedReportEditor', { reportId: report.id })}
+              tone="secondary"
+            />
+          )}
         </AppSurface>
       )}
       {report.importState === 'imported' && (

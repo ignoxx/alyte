@@ -19,7 +19,7 @@ import { nativeDatabaseProtection, type DatabaseProtection } from './protection'
 import { createLabReportRepository, type LabReportRepository } from './report-persistence';
 
 export const LAB_DATABASE_NAME = 'alyte-local.sqlite';
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 export type SqliteRunResult = { readonly changes: number; readonly lastInsertRowId: number };
 
@@ -142,6 +142,32 @@ export const LAB_MIGRATIONS: readonly Migration[] = [
         ON lab_reports(source_hash)
         WHERE source_hash IS NOT NULL AND original_path IS NOT NULL
           AND import_state <> 'deleted' AND deletion_state = 'none';
+    `,
+  },
+  {
+    version: 4,
+    sql: `
+      CREATE TABLE IF NOT EXISTS sanitized_report_derivatives (
+        id TEXT PRIMARY KEY NOT NULL,
+        report_id TEXT NOT NULL REFERENCES lab_reports(id) ON DELETE CASCADE,
+        recipe_json TEXT NOT NULL,
+        recipe_hash TEXT NOT NULL,
+        artifact_path TEXT,
+        artifact_hash TEXT,
+        byte_size INTEGER,
+        verification_state TEXT NOT NULL CHECK (verification_state IN ('pending', 'verified', 'failed', 'deleted')),
+        verification_json TEXT,
+        failure_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        UNIQUE(report_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS sanitized_report_derivatives_report_id_idx
+        ON sanitized_report_derivatives(report_id);
+      CREATE INDEX IF NOT EXISTS sanitized_report_derivatives_state_idx
+        ON sanitized_report_derivatives(verification_state);
     `,
   },
 ];

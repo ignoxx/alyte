@@ -14,7 +14,9 @@ import {
 import { createLabReportsService, type LabReportsService } from './report-service';
 import type { LabReportImportError } from './report-service';
 import type { PdfInspection, PdfInspectionSession, PdfInspector } from './pdf';
+import type { PdfSanitizedVerification } from './pdf';
 import type { DatabaseProtection } from './protection';
+import { addRedaction } from '@alyte/domain';
 
 class NodeSqliteDatabase implements SqliteDatabase {
   readonly databasePath: string;
@@ -142,6 +144,16 @@ class FakeFiles implements ProtectedReportFileService {
     this.transient.delete(path);
     this.removed.push(path);
   }
+
+  async sanitizedDestination(reportId: string, derivativeId: string): Promise<string> {
+    return `protected://sanitized/${reportId}-${derivativeId}.pdf`;
+  }
+
+  async protectArtifact(path: string): Promise<ProtectedCopy> {
+    const file = this.files.get(path);
+    if (file === undefined) throw new Error('sanitized artifact missing');
+    return { path, sourceHash: file.hash, byteSize: file.size };
+  }
 }
 
 class FailingDeleteFiles extends FakeFiles {
@@ -185,6 +197,39 @@ class FakePdf implements PdfInspector {
   async renderPreview(_path: string): Promise<readonly string[]> {
     this.previewCalls += 1;
     return ['data:image/png;base64,synthetic-preview'];
+  }
+}
+
+const verifiedSanitized: PdfSanitizedVerification = {
+  verified: true,
+  selectableText: false,
+  annotations: false,
+  attachments: false,
+  metadata: false,
+  removableRedactions: false,
+  recoveryChecked: true,
+  failureReasons: [],
+};
+
+class SanitizingPdf extends FakePdf {
+  readonly sanitizedPaths: string[] = [];
+  verification: PdfSanitizedVerification = verifiedSanitized;
+  files: FakeFiles | null = null;
+
+  async sanitize(
+    _sourcePath: string,
+    destinationPath: string,
+  ): Promise<{ destinationPath: string; pageCount: number }> {
+    this.sanitizedPaths.push(destinationPath);
+    this.files?.files.set(destinationPath, {
+      hash: `artifact-${this.sanitizedPaths.length}`,
+      size: 128,
+    });
+    return { destinationPath, pageCount: 2 };
+  }
+
+  async verifySanitized(_path: string): Promise<PdfSanitizedVerification> {
+    return this.verification;
   }
 }
 
@@ -466,5 +511,92 @@ describe('protected Lab Report import lifecycle', () => {
     const integrity: LabReportSourceIntegrity = await service.verifySource(report.id);
     assert.equal(integrity, 'mismatch');
     await assert.rejects(service.openOriginal(report.id), /integrity/);
+  });
+
+  test('renders, protects, re-hashes, and previews the exact verified Sanitized Report', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new SanitizingPdf();
+    pdf.files = files;
+    const service = createService(repository, files, pdf);
+    const imported = (await service.importPdf(source('sanitize-exact')))!.report;
+    const editor = await service.openSanitizationEditor(imported.id);
+    const recipe = addRedaction(editor.recipe, 0, {
+      id: 'redaction-name',
+      rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.08 },
+      origin: 'user',
+      label: 'name',
+    });
+    const saved = await service.saveSanitizedReport(imported.id, recipe);
+    assert.equal(saved.verificationState, 'verified');
+    assert.equal(saved.artifactHash, 'artifact-1');
+    const preview = await service.previewSanitizedReport(imported.id);
+    assert.equal(preview.artifactPath, saved.artifactPath);
+    assert.equal(preview.artifactHash, saved.artifactHash);
+    assert.equal(pdf.previewCalls, 1);
+    assert.equal(await files.exists(imported.originalPath!), true);
+  });
+
+  test('failed structural verification never exposes the derivative and preserves the original', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new SanitizingPdf();
+    pdf.files = files;
+    pdf.verification = {
+      ...verifiedSanitized,
+      verified: false,
+      selectableText: true,
+      failureReasons: ['selectable-source-text'],
+    };
+    const service = createService(repository, files, pdf);
+    const imported = (await service.importPdf(source('sanitize-fails')))!.report;
+    const editor = await service.openSanitizationEditor(imported.id);
+    const failed = await service.saveSanitizedReport(imported.id, editor.recipe);
+    assert.equal(failed.verificationState, 'failed');
+    assert.equal(failed.artifactPath, null);
+    await assert.rejects(service.previewSanitizedReport(imported.id), /not verified/);
+    assert.equal(await files.exists(imported.originalPath!), true);
+  });
+
+  test('recipe changes regenerate a new derivative and deletion is independent from the source', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new SanitizingPdf();
+    pdf.files = files;
+    const service = createService(repository, files, pdf);
+    const imported = (await service.importPdf(source('sanitize-regenerate')))!.report;
+    const firstRecipe = (await service.openSanitizationEditor(imported.id)).recipe;
+    const first = await service.saveSanitizedReport(imported.id, firstRecipe);
+    const secondRecipe = addRedaction(firstRecipe, 0, {
+      id: 'redaction-address',
+      rect: { x: 0.2, y: 0.2, width: 0.2, height: 0.08 },
+      origin: 'user',
+      label: 'address',
+    });
+    const second = await service.saveSanitizedReport(imported.id, secondRecipe);
+    assert.notEqual(second.recipeHash, first.recipeHash);
+    assert.equal(await files.exists(first.artifactPath!), false);
+    assert.equal(await files.exists(imported.originalPath!), true);
+    await service.deleteSanitizedReport(imported.id);
+    assert.equal(await repository.getSanitizedReport(imported.id), null);
+    assert.equal(await files.exists(imported.originalPath!), true);
+  });
+
+  test('preview invalidates a derivative after hash or structural tampering', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new SanitizingPdf();
+    pdf.files = files;
+    const service = createService(repository, files, pdf);
+    const imported = (await service.importPdf(source('sanitize-tamper')))!.report;
+    const saved = await service.saveSanitizedReport(
+      imported.id,
+      (await service.openSanitizationEditor(imported.id)).recipe,
+    );
+    files.files.set(saved.artifactPath!, { hash: 'tampered', size: 128 });
+    await assert.rejects(service.previewSanitizedReport(imported.id), /hash changed/);
+    const failed = await repository.getSanitizedReport(imported.id);
+    assert.equal(failed?.verificationState, 'failed');
+    assert.equal(await files.exists(saved.artifactPath!), false);
   });
 });

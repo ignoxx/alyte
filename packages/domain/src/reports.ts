@@ -1,4 +1,5 @@
 import type { CanonicalId } from './index';
+import type { SanitizationRecipe } from './sanitization';
 
 export type LabReportSourceType = 'pdf' | 'image';
 
@@ -93,6 +94,52 @@ export type LabReportReference = {
   readonly sourceIntegrity: LabReportSourceIntegrity;
   readonly sourceHash: string | null;
 };
+
+export type SanitizedReportVerificationState = 'pending' | 'verified' | 'failed' | 'deleted';
+
+/** Metadata for a newly rendered derivative; the Original Report is never replaced by this row. */
+export type SanitizedReport = {
+  readonly id: string;
+  readonly reportId: string;
+  readonly recipe: SanitizationRecipe;
+  readonly recipeHash: string;
+  readonly artifactPath: string | null;
+  readonly artifactHash: string | null;
+  readonly byteSize: number | null;
+  readonly verificationState: SanitizedReportVerificationState;
+  readonly verification: SanitizedReportVerification | null;
+  readonly failureReason: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly deletedAt: string | null;
+};
+
+export type SanitizedReportVerification = {
+  readonly selectableText: boolean;
+  readonly annotations: boolean;
+  readonly attachments: boolean;
+  readonly metadata: boolean;
+  readonly removableRedactions: boolean;
+  readonly recoveryChecked: boolean;
+};
+
+export type CreateSanitizedReportInput = {
+  readonly id?: string;
+  readonly reportId: string;
+  readonly recipe: SanitizationRecipe;
+  readonly recipeHash: string;
+  readonly artifactPath?: string | null;
+  readonly artifactHash?: string | null;
+  readonly byteSize?: number | null;
+  readonly verificationState?: SanitizedReportVerificationState;
+  readonly verification?: SanitizedReportVerification | null;
+  readonly failureReason?: string | null;
+  readonly deletedAt?: string | null;
+};
+
+export type UpdateSanitizedReportInput = Partial<
+  Omit<CreateSanitizedReportInput, 'reportId' | 'id'>
+>;
 
 export function assertLabReportSourceType(value: LabReportSourceType): void {
   if (value !== 'pdf' && value !== 'image') {

@@ -3,12 +3,17 @@ import {
   assertLabReportImportState,
   assertLabReportPage,
   assertLabReportSourceType,
+  createSanitizationRecipe,
   createSortableOpaqueId,
   type CreateLabReportInput,
   type CreateLabReportPageInput,
+  type CreateSanitizedReportInput,
   type LabReport,
   type LabReportPage,
+  type SanitizedReport,
+  type SanitizedReportVerification,
   type UpdateLabReportInput,
+  type UpdateSanitizedReportInput,
 } from '@alyte/domain';
 import type { SqliteDatabase } from './persistence';
 
@@ -43,6 +48,22 @@ type LabReportPageRow = {
   derived_path: unknown;
 };
 
+type SanitizedReportRow = {
+  id: unknown;
+  report_id: unknown;
+  recipe_json: unknown;
+  recipe_hash: unknown;
+  artifact_path: unknown;
+  artifact_hash: unknown;
+  byte_size: unknown;
+  verification_state: unknown;
+  verification_json: unknown;
+  failure_reason: unknown;
+  created_at: unknown;
+  updated_at: unknown;
+  deleted_at: unknown;
+};
+
 export type ReportWriteTransaction = <T>(work: () => Promise<T>) => Promise<T>;
 
 export type LabReportRepository = {
@@ -58,6 +79,10 @@ export type LabReportRepository = {
   reconcileInterruptedReports(): Promise<void>;
   listDeletionCandidates(): Promise<readonly LabReport[]>;
   countReportsReferencingPath(path: string, excludingId?: string): Promise<number>;
+  getSanitizedReport(reportId: string): Promise<SanitizedReport | null>;
+  saveSanitizedReport(input: CreateSanitizedReportInput): Promise<SanitizedReport>;
+  updateSanitizedReport(id: string, input: UpdateSanitizedReportInput): Promise<SanitizedReport>;
+  deleteSanitizedReport(id: string): Promise<void>;
 };
 
 export type LabReportRepositoryOptions = {
@@ -87,6 +112,55 @@ function nullableFiniteNumber(value: unknown, field: string): number | null {
     throw new Error(`Invalid ${field} in local database`);
   }
   return value;
+}
+
+function jsonObject<T>(value: unknown, field: string): T | null {
+  if (value === null || value === undefined) return null;
+  const serialized = requiredString(value, field);
+  try {
+    return JSON.parse(serialized) as T;
+  } catch (error) {
+    throw new Error(`Invalid ${field} JSON in local database`, { cause: error });
+  }
+}
+
+function decodeSanitizedReportRow(row: SanitizedReportRow): SanitizedReport {
+  const verificationState = row.verification_state;
+  if (
+    verificationState !== 'pending' &&
+    verificationState !== 'verified' &&
+    verificationState !== 'failed' &&
+    verificationState !== 'deleted'
+  ) {
+    throw new Error('Invalid Sanitized Report verification state in local database');
+  }
+  const rawRecipe = jsonObject<SanitizedReport['recipe']>(row.recipe_json, 'sanitized recipe');
+  if (rawRecipe === null || rawRecipe.schemaVersion !== 1) {
+    throw new Error('Sanitized Report recipe is missing or unsupported');
+  }
+  const recipe = createSanitizationRecipe(rawRecipe.reportId, rawRecipe.pages);
+  if (recipe.reportId !== requiredString(row.report_id, 'Sanitized Report report id')) {
+    throw new Error('Sanitized Report recipe and report ids do not match');
+  }
+  const verification = jsonObject<SanitizedReportVerification>(
+    row.verification_json,
+    'sanitized verification',
+  );
+  return {
+    id: requiredString(row.id, 'Sanitized Report id'),
+    reportId: recipe.reportId,
+    recipe,
+    recipeHash: requiredString(row.recipe_hash, 'Sanitized Report recipe hash'),
+    artifactPath: nullableString(row.artifact_path, 'Sanitized Report artifact path'),
+    artifactHash: nullableString(row.artifact_hash, 'Sanitized Report artifact hash'),
+    byteSize: nullableFiniteNumber(row.byte_size, 'Sanitized Report byte size'),
+    verificationState,
+    verification,
+    failureReason: nullableString(row.failure_reason, 'Sanitized Report failure reason'),
+    createdAt: requiredString(row.created_at, 'Sanitized Report created timestamp'),
+    updatedAt: requiredString(row.updated_at, 'Sanitized Report updated timestamp'),
+    deletedAt: nullableString(row.deleted_at, 'Sanitized Report deleted timestamp'),
+  };
 }
 
 function reportPage(row: LabReportPageRow): LabReportPage {
@@ -431,6 +505,124 @@ export function createLabReportRepository(
     return count;
   }
 
+  const sanitizedColumns = `id, report_id, recipe_json, recipe_hash, artifact_path, artifact_hash,
+    byte_size, verification_state, verification_json, failure_reason, created_at, updated_at, deleted_at`;
+
+  async function getSanitizedReport(reportId: string): Promise<SanitizedReport | null> {
+    await initialize();
+    const rows = await database.getAllAsync<SanitizedReportRow>(
+      `SELECT ${sanitizedColumns} FROM sanitized_report_derivatives WHERE report_id = ?;`,
+      reportId,
+    );
+    const row = rows[0];
+    return row === undefined ? null : decodeSanitizedReportRow(row);
+  }
+
+  async function saveSanitizedReport(input: CreateSanitizedReportInput): Promise<SanitizedReport> {
+    await initialize();
+    const report = await getReport(input.reportId);
+    if (report === null) throw new Error('Lab Report was not found');
+    const id = input.id ?? makeId('sanitized-report');
+    const createdAt = now();
+    const state = input.verificationState ?? 'pending';
+    const verification = input.verification ?? null;
+    await withWrite(async () => {
+      await database.runAsync(
+        `INSERT INTO sanitized_report_derivatives (
+          id, report_id, recipe_json, recipe_hash, artifact_path, artifact_hash, byte_size,
+          verification_state, verification_json, failure_reason, created_at, updated_at, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(report_id) DO UPDATE SET
+          id = excluded.id,
+          recipe_json = excluded.recipe_json,
+          recipe_hash = excluded.recipe_hash,
+          artifact_path = excluded.artifact_path,
+          artifact_hash = excluded.artifact_hash,
+          byte_size = excluded.byte_size,
+          verification_state = excluded.verification_state,
+          verification_json = excluded.verification_json,
+          failure_reason = excluded.failure_reason,
+          updated_at = excluded.updated_at,
+          deleted_at = excluded.deleted_at;`,
+        id,
+        input.reportId,
+        JSON.stringify(input.recipe),
+        input.recipeHash,
+        input.artifactPath ?? null,
+        input.artifactHash ?? null,
+        input.byteSize ?? null,
+        state,
+        verification === null ? null : JSON.stringify(verification),
+        input.failureReason ?? null,
+        createdAt,
+        createdAt,
+        input.deletedAt ?? null,
+      );
+    });
+    const saved = await getSanitizedReport(input.reportId);
+    if (saved === null) throw new Error('Sanitized Report could not be read back');
+    return saved;
+  }
+
+  async function updateSanitizedReport(
+    id: string,
+    input: UpdateSanitizedReportInput,
+  ): Promise<SanitizedReport> {
+    await initialize();
+    const rows = await database.getAllAsync<SanitizedReportRow>(
+      `SELECT ${sanitizedColumns} FROM sanitized_report_derivatives WHERE id = ?;`,
+      id,
+    );
+    const row = rows[0];
+    if (row === undefined) throw new Error('Sanitized Report was not found');
+    const existing = decodeSanitizedReportRow(row);
+    const next = {
+      recipe: input.recipe ?? existing.recipe,
+      recipeHash: input.recipeHash ?? existing.recipeHash,
+      artifactPath: input.artifactPath === undefined ? existing.artifactPath : input.artifactPath,
+      artifactHash: input.artifactHash === undefined ? existing.artifactHash : input.artifactHash,
+      byteSize: input.byteSize === undefined ? existing.byteSize : input.byteSize,
+      verificationState: input.verificationState ?? existing.verificationState,
+      verification: input.verification === undefined ? existing.verification : input.verification,
+      failureReason:
+        input.failureReason === undefined ? existing.failureReason : input.failureReason,
+      deletedAt: input.deletedAt === undefined ? existing.deletedAt : input.deletedAt,
+    };
+    await withWrite(async () => {
+      const result = await database.runAsync(
+        `UPDATE sanitized_report_derivatives SET recipe_json = ?, recipe_hash = ?, artifact_path = ?,
+          artifact_hash = ?, byte_size = ?, verification_state = ?, verification_json = ?,
+          failure_reason = ?, updated_at = ?, deleted_at = ? WHERE id = ?;`,
+        JSON.stringify(next.recipe),
+        next.recipeHash,
+        next.artifactPath,
+        next.artifactHash,
+        next.byteSize,
+        next.verificationState,
+        next.verification === null ? null : JSON.stringify(next.verification),
+        next.failureReason,
+        now(),
+        next.deletedAt,
+        id,
+      );
+      if (result.changes !== 1) throw new Error('Sanitized Report update did not complete');
+    });
+    const saved = await getSanitizedReport(existing.reportId);
+    if (saved === null) throw new Error('Updated Sanitized Report could not be read back');
+    return saved;
+  }
+
+  async function deleteSanitizedReport(id: string): Promise<void> {
+    await initialize();
+    await withWrite(async () => {
+      const result = await database.runAsync(
+        'DELETE FROM sanitized_report_derivatives WHERE id = ?;',
+        id,
+      );
+      if (result.changes !== 1) return;
+    });
+  }
+
   return {
     listReports,
     getReport,
@@ -444,5 +636,9 @@ export function createLabReportRepository(
     reconcileInterruptedReports,
     listDeletionCandidates,
     countReportsReferencingPath,
+    getSanitizedReport,
+    saveSanitizedReport,
+    updateSanitizedReport,
+    deleteSanitizedReport,
   };
 }

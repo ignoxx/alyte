@@ -19,10 +19,34 @@ export interface PdfInspectionSession {
   close(): Promise<void>;
 }
 
+export type PdfSanitizedVerification = {
+  readonly verified: boolean;
+  readonly selectableText: boolean;
+  readonly annotations: boolean;
+  readonly attachments: boolean;
+  readonly metadata: boolean;
+  readonly removableRedactions: boolean;
+  readonly recoveryChecked: boolean;
+  readonly failureReasons: readonly string[];
+};
+
+export type PdfSanitizationResult = {
+  readonly destinationPath: string;
+  readonly pageCount: number;
+};
+
 export interface PdfInspector {
   inspect(path: string): Promise<PdfInspection>;
   unlock(path: string, password: string): Promise<PdfInspectionSession>;
   renderPreview(path: string): Promise<readonly string[]>;
+  /** Native-only operations remain optional so pure import tests do not require an iOS runtime. */
+  sanitize?(
+    sourcePath: string,
+    destinationPath: string,
+    recipe: SanitizationRecipe,
+  ): Promise<PdfSanitizationResult>;
+  verifySanitized?(path: string): Promise<PdfSanitizedVerification>;
+  suggestSensitiveRegions?(path: string): Promise<readonly SensitiveRegionSuggestion[]>;
 }
 
 type NativePdfModule = {
@@ -31,6 +55,13 @@ type NativePdfModule = {
   renderPreview(path: string): Promise<readonly string[]>;
   renderPreviewSession(sessionId: string): Promise<readonly string[]>;
   close(sessionId: string): Promise<void>;
+  sanitize(
+    sourcePath: string,
+    destinationPath: string,
+    recipe: SanitizationRecipe,
+  ): Promise<PdfSanitizationResult>;
+  verifySanitized(path: string): Promise<PdfSanitizedVerification>;
+  suggestSensitiveRegions(path: string): Promise<readonly SensitiveRegionSuggestion[]>;
 };
 
 export const nativePdfInspector: PdfInspector = {
@@ -59,4 +90,23 @@ export const nativePdfInspector: PdfInspector = {
     if (native === null) throw new Error('AlytePDF is unavailable for local PDF preview');
     return native.renderPreview(path);
   },
+  async sanitize(sourcePath, destinationPath, recipe) {
+    const { requireOptionalNativeModule } = await import('expo-modules-core');
+    const native = requireOptionalNativeModule<NativePdfModule>('AlytePDF');
+    if (native === null) throw new Error('AlytePDF is unavailable for sanitization');
+    return native.sanitize(sourcePath, destinationPath, recipe);
+  },
+  async verifySanitized(path) {
+    const { requireOptionalNativeModule } = await import('expo-modules-core');
+    const native = requireOptionalNativeModule<NativePdfModule>('AlytePDF');
+    if (native === null) throw new Error('AlytePDF is unavailable for sanitization verification');
+    return native.verifySanitized(path);
+  },
+  async suggestSensitiveRegions(path) {
+    const { requireOptionalNativeModule } = await import('expo-modules-core');
+    const native = requireOptionalNativeModule<NativePdfModule>('AlytePDF');
+    if (native === null) return [];
+    return native.suggestSensitiveRegions(path);
+  },
 };
+import type { SanitizationRecipe, SensitiveRegionSuggestion } from '@alyte/domain';

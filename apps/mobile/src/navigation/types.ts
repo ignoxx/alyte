@@ -10,6 +10,7 @@ export type LabsStackParamList = {
   Labs: undefined;
   LabReportImport: undefined;
   LabReportDetail: { readonly reportId: string };
+  SanitizedReportEditor: { readonly reportId: string };
   LabRecordForm: { readonly recordId?: string } | undefined;
   LabRecordDetail: { readonly recordId: string };
 };

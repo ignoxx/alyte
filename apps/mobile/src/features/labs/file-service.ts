@@ -42,6 +42,9 @@ export type ProtectedReportFileService = {
   exists(path: string): Promise<boolean>;
   remove(path: string): Promise<void>;
   cleanupTransientImports(): Promise<void>;
+  /** Destination and verification seams for newly rendered Sanitized Reports. */
+  sanitizedDestination?(reportId: string, derivativeId: string): Promise<string>;
+  protectArtifact?(path: string): Promise<ProtectedCopy>;
 };
 
 export type ProtectedReportFileServiceOptions = {
@@ -251,6 +254,24 @@ export function createProtectedReportFileService(
     await Promise.all(names.map((name) => remove(joinPath(directory, name))));
   }
 
+  async function sanitizedDestination(reportId: string, derivativeId: string): Promise<string> {
+    await initialize();
+    if (root === null) throw new Error('Protected report storage is not initialized');
+    return joinPath(
+      joinPath(root, PROTECTED_REPORT_DIRECTORIES.sanitized),
+      `${safeFilename(reportId, 'report')}-${safeFilename(derivativeId, 'sanitized')}.pdf`,
+    );
+  }
+
+  async function protectArtifact(path: string): Promise<ProtectedCopy> {
+    await initialize();
+    await protection.protectPath(path);
+    const sourceHash = await protection.hashFile(path);
+    const fileInfo = await info(path);
+    if (!fileInfo.exists) throw new Error('Sanitized Report artifact disappeared');
+    return { path, sourceHash, byteSize: fileInfo.size };
+  }
+
   return {
     initialize,
     stage,
@@ -260,5 +281,7 @@ export function createProtectedReportFileService(
     exists,
     remove,
     cleanupTransientImports,
+    sanitizedDestination,
+    protectArtifact,
   };
 }

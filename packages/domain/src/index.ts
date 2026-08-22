@@ -21,3 +21,4 @@ export interface AlyteRuntime {
 
 export * from './labs';
 export * from './reports';
+export * from './sanitization';

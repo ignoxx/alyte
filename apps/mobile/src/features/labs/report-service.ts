@@ -1,7 +1,14 @@
 import {
   createSortableOpaqueId,
+  createSanitizationRecipe,
   type LabReport,
   type LabReportSourceIntegrity,
+  type SanitizationRecipe,
+  type SanitizedReport,
+  type SanitizedReportVerification,
+  type SensitiveRegionSuggestion,
+  normalizePageRotation,
+  sanitizationRecipeHash,
 } from '@alyte/domain';
 import { openProtectedLabDatabase, type LabRepository } from './persistence';
 import {
@@ -11,7 +18,12 @@ import {
   type ProtectedReportFileService,
 } from './file-service';
 import { createSystemLabSourcePicker, type LabSourcePicker } from './pickers';
-import { nativePdfInspector, type PdfInspection, type PdfInspector } from './pdf';
+import {
+  nativePdfInspector,
+  type PdfInspection,
+  type PdfInspector,
+  type PdfSanitizedVerification,
+} from './pdf';
 
 export type PasswordRequest = (context: {
   readonly report: LabReport;
@@ -27,6 +39,22 @@ export type LabReportPreview = {
   readonly sourceType: LabReport['sourceType'];
   /** A protected file URI for images or short-lived local data URIs for rendered PDF pages. */
   readonly uris: readonly string[];
+};
+
+export type SanitizedReportPreview = {
+  readonly sourceType: 'pdf';
+  readonly artifactPath: string;
+  readonly artifactHash: string;
+  /** Rendered from the same verified artifactPath that upload/export receives. */
+  readonly uris: readonly string[];
+  readonly verification: PdfSanitizedVerification;
+};
+
+export type SanitizationEditorState = {
+  readonly report: LabReport;
+  readonly recipe: SanitizationRecipe;
+  readonly suggestions: readonly SensitiveRegionSuggestion[];
+  readonly current: SanitizedReport | null;
 };
 
 export class LabReportImportError extends Error {
@@ -46,6 +74,16 @@ export class LabReportImportError extends Error {
   }
 }
 
+export class LabReportSanitizationError extends Error {
+  override readonly name = 'LabReportSanitizationError';
+  readonly reportId: string;
+
+  constructor(reportId: string, message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.reportId = reportId;
+  }
+}
+
 export type LabReportsService = {
   listReports(): Promise<readonly LabReport[]>;
   getReport(id: string): Promise<LabReport | null>;
@@ -61,6 +99,11 @@ export type LabReportsService = {
   verifySource(id: string): Promise<LabReportSourceIntegrity>;
   openOriginal(id: string): Promise<string>;
   previewOriginal(id: string, passwordRequest?: PasswordRequest): Promise<LabReportPreview>;
+  openSanitizationEditor(id: string): Promise<SanitizationEditorState>;
+  saveSanitizedReport(id: string, recipe: SanitizationRecipe): Promise<SanitizedReport>;
+  previewSanitizedReport(id: string): Promise<SanitizedReportPreview>;
+  getSanitizedReport(id: string): Promise<SanitizedReport | null>;
+  deleteSanitizedReport(id: string): Promise<void>;
   deleteReport(id: string): Promise<void>;
 };
 
@@ -106,6 +149,45 @@ function pageInputs(inspection: PdfInspection) {
     crop: null,
     derivedPath: null,
   }));
+}
+
+function recipeForReport(report: LabReport): SanitizationRecipe {
+  return createSanitizationRecipe(
+    report.id,
+    report.pages.map((page) => ({
+      pageIndex: page.pageIndex,
+      selected: true,
+      crop: page.crop === null ? null : JSON.parse(page.crop),
+      rotation: normalizePageRotation(page.rotation),
+      redactions: [],
+    })),
+  );
+}
+
+function verificationForSanitizedReport(
+  verification: PdfSanitizedVerification,
+): SanitizedReportVerification {
+  return {
+    selectableText: verification.selectableText,
+    annotations: verification.annotations,
+    attachments: verification.attachments,
+    metadata: verification.metadata,
+    removableRedactions: verification.removableRedactions,
+    recoveryChecked: verification.recoveryChecked,
+  };
+}
+
+function verificationPassed(verification: PdfSanitizedVerification): boolean {
+  return (
+    verification.verified &&
+    !verification.selectableText &&
+    !verification.annotations &&
+    !verification.attachments &&
+    !verification.metadata &&
+    !verification.removableRedactions &&
+    verification.recoveryChecked &&
+    verification.failureReasons.length === 0
+  );
 }
 
 export function createLabReportsService(options: LabReportsServiceOptions = {}): LabReportsService {
@@ -191,6 +273,11 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       report = await reportRepository.requestReportDeletion(reportId);
     }
     try {
+      const sanitized = await reportRepository.getSanitizedReport(report.id);
+      if (sanitized?.artifactPath !== null && sanitized?.artifactPath !== undefined) {
+        await fileService.remove(sanitized.artifactPath);
+      }
+      if (sanitized !== null) await reportRepository.deleteSanitizedReport(sanitized.id);
       if (report.originalPath !== null) {
         const references = await reportRepository.countReportsReferencingPath(
           report.originalPath,
@@ -487,6 +574,210 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }
   }
 
+  async function openSanitizationEditor(id: string): Promise<SanitizationEditorState> {
+    await ensureInitialized();
+    const repo = await repository();
+    const report = await repo.getReport(id);
+    if (report === null) throw new Error('Lab Report was not found');
+    if (report.sourceType !== 'pdf') {
+      throw new LabReportSanitizationError(id, 'Only PDF Lab Reports can be sanitized');
+    }
+    const path = await openOriginal(id);
+    const current = await repo.getSanitizedReport(id);
+    const recipe = current?.recipe ?? recipeForReport(report);
+    const suggestions =
+      pdfInspector.suggestSensitiveRegions === undefined
+        ? []
+        : await pdfInspector.suggestSensitiveRegions(path);
+    return { report, recipe, suggestions, current };
+  }
+
+  async function saveSanitizedReport(
+    id: string,
+    recipe: SanitizationRecipe,
+  ): Promise<SanitizedReport> {
+    return serialized(async () => {
+      await ensureInitialized();
+      const repo = await repository();
+      const report = await repo.getReport(id);
+      if (report === null) throw new Error('Lab Report was not found');
+      if (report.sourceType !== 'pdf') {
+        throw new LabReportSanitizationError(id, 'Only PDF Lab Reports can be sanitized');
+      }
+      if (recipe.reportId !== id) {
+        throw new LabReportSanitizationError(id, 'Sanitization recipe belongs to another report');
+      }
+      if (pdfInspector.sanitize === undefined || pdfInspector.verifySanitized === undefined) {
+        throw new LabReportSanitizationError(id, 'PDF sanitization is unavailable on this device');
+      }
+      const sourcePath = await openOriginal(id);
+      const recipeHash = sanitizationRecipeHash(recipe);
+      const current = await repo.getSanitizedReport(id);
+      if (
+        current?.verificationState === 'verified' &&
+        current.recipeHash === recipeHash &&
+        current.artifactPath !== null &&
+        current.artifactHash !== null &&
+        (await fileService.exists(current.artifactPath))
+      ) {
+        return current;
+      }
+      if (current?.artifactPath !== null && current?.artifactPath !== undefined) {
+        await fileService.remove(current.artifactPath);
+      }
+      // A changed recipe receives a new derivative identity. The prior artifact is removed before
+      // rendering, so a stale path can never be mistaken for the current exact preview.
+      const derivativeId =
+        current !== null && current !== undefined && current.recipeHash === recipeHash
+          ? current.id
+          : makeId('sanitized-report');
+      const destination =
+        fileService.sanitizedDestination === undefined
+          ? `${sourcePath}.alyte-sanitized-${derivativeId}.pdf`
+          : await fileService.sanitizedDestination(id, derivativeId);
+      const pending = await repo.saveSanitizedReport({
+        id: derivativeId,
+        reportId: id,
+        recipe,
+        recipeHash,
+        artifactPath: destination,
+        artifactHash: null,
+        byteSize: null,
+        verificationState: 'pending',
+        verification: null,
+        failureReason: null,
+        deletedAt: null,
+      });
+      try {
+        await pdfInspector.sanitize(sourcePath, destination, recipe);
+        const verification = await pdfInspector.verifySanitized(destination);
+        if (!verificationPassed(verification)) {
+          await fileService.remove(destination);
+          return repo.updateSanitizedReport(pending.id, {
+            artifactPath: null,
+            artifactHash: null,
+            byteSize: null,
+            verificationState: 'failed',
+            verification: verificationForSanitizedReport(verification),
+            failureReason:
+              verification.failureReasons.join('; ') || 'sanitized-verification-failed',
+          });
+        }
+        if (fileService.protectArtifact === undefined) {
+          throw new Error('Protected derivative storage is unavailable');
+        }
+        const protectedArtifact = await fileService.protectArtifact(destination);
+        return repo.updateSanitizedReport(pending.id, {
+          artifactPath: protectedArtifact.path,
+          artifactHash: protectedArtifact.sourceHash,
+          byteSize: protectedArtifact.byteSize,
+          verificationState: 'verified',
+          verification: verificationForSanitizedReport(verification),
+          failureReason: null,
+          deletedAt: null,
+        });
+      } catch (error) {
+        await fileService.remove(destination).catch(() => undefined);
+        await repo.updateSanitizedReport(pending.id, {
+          artifactPath: null,
+          artifactHash: null,
+          byteSize: null,
+          verificationState: 'failed',
+          failureReason: error instanceof Error ? error.message : 'sanitized-render-failed',
+        });
+        throw new LabReportSanitizationError(id, 'The Sanitized Report could not be verified', {
+          cause: error,
+        });
+      }
+    });
+  }
+
+  async function getSanitizedReport(id: string): Promise<SanitizedReport | null> {
+    await ensureInitialized();
+    return (await repository()).getSanitizedReport(id);
+  }
+
+  async function previewSanitizedReport(id: string): Promise<SanitizedReportPreview> {
+    await ensureInitialized();
+    const derivative = await (await repository()).getSanitizedReport(id);
+    if (
+      derivative === null ||
+      derivative.verificationState !== 'verified' ||
+      derivative.artifactPath === null ||
+      derivative.artifactHash === null
+    ) {
+      throw new LabReportSanitizationError(id, 'This Sanitized Report is not verified');
+    }
+    if (!(await fileService.exists(derivative.artifactPath))) {
+      await (
+        await repository()
+      ).updateSanitizedReport(derivative.id, {
+        artifactPath: null,
+        artifactHash: null,
+        byteSize: null,
+        verificationState: 'failed',
+        failureReason: 'sanitized-artifact-missing',
+      });
+      throw new LabReportSanitizationError(id, 'The verified Sanitized Report is missing');
+    }
+    const actualHash = await fileService.hashFile(derivative.artifactPath);
+    if (actualHash !== derivative.artifactHash) {
+      await fileService.remove(derivative.artifactPath);
+      await (
+        await repository()
+      ).updateSanitizedReport(derivative.id, {
+        artifactPath: null,
+        artifactHash: null,
+        byteSize: null,
+        verificationState: 'failed',
+        failureReason: 'sanitized-artifact-hash-mismatch',
+      });
+      throw new LabReportSanitizationError(id, 'The verified Sanitized Report hash changed');
+    }
+    if (pdfInspector.verifySanitized === undefined) {
+      throw new LabReportSanitizationError(
+        id,
+        'Sanitized verification is unavailable on this device',
+      );
+    }
+    const verification = await pdfInspector.verifySanitized(derivative.artifactPath);
+    if (!verificationPassed(verification)) {
+      await fileService.remove(derivative.artifactPath);
+      await (
+        await repository()
+      ).updateSanitizedReport(derivative.id, {
+        artifactPath: null,
+        artifactHash: null,
+        byteSize: null,
+        verificationState: 'failed',
+        verification: verificationForSanitizedReport(verification),
+        failureReason: verification.failureReasons.join('; ') || 'sanitized-verification-failed',
+      });
+      throw new LabReportSanitizationError(
+        id,
+        'The Sanitized Report no longer passes verification',
+      );
+    }
+    return {
+      sourceType: 'pdf',
+      artifactPath: derivative.artifactPath,
+      artifactHash: derivative.artifactHash,
+      uris: await pdfInspector.renderPreview(derivative.artifactPath),
+      verification,
+    };
+  }
+
+  async function deleteSanitizedReport(id: string): Promise<void> {
+    return serialized(async () => {
+      await ensureInitialized();
+      const repo = await repository();
+      const derivative = await repo.getSanitizedReport(id);
+      if (derivative === null) return;
+      if (derivative.artifactPath !== null) await fileService.remove(derivative.artifactPath);
+      await repo.deleteSanitizedReport(derivative.id);
+    });
+  }
+
   async function deleteReport(id: string): Promise<void> {
     return serialized(async () => {
       await ensureInitialized();
@@ -508,6 +799,11 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     verifySource,
     openOriginal,
     previewOriginal,
+    openSanitizationEditor,
+    saveSanitizedReport,
+    previewSanitizedReport,
+    getSanitizedReport,
+    deleteSanitizedReport,
     deleteReport,
   };
 }
