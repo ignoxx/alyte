@@ -4,8 +4,8 @@ import { CONTRACT_VERSION, type HealthResponse } from './index.js';
 const response: HealthResponse = {
   status: 'ok',
   contractVersion: CONTRACT_VERSION,
-  environment: 'production',
+  environment: 'local',
 };
 
 assert.equal(response.contractVersion, CONTRACT_VERSION);
-assert.equal(response.environment, 'production');
+assert.equal(response.environment, 'local');

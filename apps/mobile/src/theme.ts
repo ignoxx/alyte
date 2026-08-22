@@ -33,6 +33,7 @@ export const typography = StyleSheet.create({
 
 export const screenStyles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
+  scroll: { flex: 1 },
   content: { flexGrow: 1, padding: spacing.lg },
   centered: { alignItems: 'center', justifyContent: 'center' },
 });

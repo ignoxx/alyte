@@ -10,7 +10,7 @@ describe('API foundation', () => {
     assert.deepEqual(response.json(), {
       status: 'ok',
       contractVersion: '2026-08-01',
-      environment: 'production',
+      environment: 'local',
     });
     await server.close();
   });

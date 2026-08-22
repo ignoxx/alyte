@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ServicesContext, createServices } from './src/services';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { OnboardingScreen } from './src/features/onboarding/OnboardingScreen';
@@ -10,15 +11,17 @@ export default function App() {
   const services = createServices();
 
   return (
-    <ErrorBoundary>
-      <ServicesContext.Provider value={services}>
-        <StatusBar style="auto" />
-        {onboardingComplete ? (
-          <RootNavigator services={services} />
-        ) : (
-          <OnboardingScreen onComplete={() => setOnboardingComplete(true)} />
-        )}
-      </ServicesContext.Provider>
-    </ErrorBoundary>
+    <SafeAreaProvider>
+      <ErrorBoundary>
+        <ServicesContext.Provider value={services}>
+          <StatusBar style="auto" />
+          {onboardingComplete ? (
+            <RootNavigator services={services} />
+          ) : (
+            <OnboardingScreen onComplete={() => setOnboardingComplete(true)} />
+          )}
+        </ServicesContext.Provider>
+      </ErrorBoundary>
+    </SafeAreaProvider>
   );
 }

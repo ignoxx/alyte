@@ -19,12 +19,13 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build --workspace=@alyte/api",
     "test": "npm run test --workspaces --if-present",
     "test:boundaries": "node --test scripts/boundaries.test.mjs",
     "test:showcase": "tsx --test scripts/showcase.test.ts",
     "contract:check": "npm run contract:check --workspace=@alyte/contracts",
     "ios:config:check": "node scripts/check-expo-config.mjs",
-    "ci": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run test:boundaries && npm run test:showcase && npm run contract:check && npm run ios:config:check"
+    "ci": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test && npm run test:boundaries && npm run test:showcase && npm run contract:check && npm run ios:config:check"
   },
   "devDependencies": {
     "@types/node": "26.2.0",

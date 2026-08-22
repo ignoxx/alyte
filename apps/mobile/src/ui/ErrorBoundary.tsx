@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type PropsWithChildren, type ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../localization';
 import { AppButton, AppText } from './primitives';
 import { colors, spacing, typography } from '../theme';
@@ -27,11 +28,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     }
 
     return (
-      <View style={styles.container} accessibilityViewIsModal>
+      <SafeAreaView style={styles.container} accessibilityViewIsModal>
         <AppText variant="title">{t('errors.title')}</AppText>
         <AppText style={styles.body}>{t('errors.body')}</AppText>
         <AppButton label={t('errors.restart')} onPress={this.reset} />
-      </View>
+      </SafeAreaView>
     );
   }
 }

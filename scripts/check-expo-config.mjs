@@ -18,4 +18,6 @@ for (const [variant, bundleIdentifier] of Object.entries(expected)) {
 
 assert.notEqual(expected.development, expected.preview);
 assert.notEqual(expected.preview, expected.production);
+process.env.APP_VARIANT = 'typo';
+assert.throws(() => appConfig({ config: {} }), /Unknown APP_VARIANT/);
 process.stdout.write('Expo app variants are valid.\n');

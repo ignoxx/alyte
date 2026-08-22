@@ -9,13 +9,16 @@ import type { AlyteServices } from '../services';
 import { t } from '../localization';
 import { colors, spacing } from '../theme';
 import { createNavigationRegistry } from './registry';
+import type { FeatureTarget, NavigationFeature } from './registry-model';
 import type { MainTabParamList, RootStackParamList } from './types';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const MainTabs = createBottomTabNavigator<MainTabParamList>();
+const FeatureStack = createNativeStackNavigator<Record<string, undefined>>();
 
 type RootNavigatorProps = {
   services: AlyteServices;
+  extensions?: readonly NavigationFeature[] | undefined;
 };
 
 function SnapTabButton({ accessibilityLabel, onPress, onLongPress }: BottomTabBarButtonProps) {
@@ -34,12 +37,41 @@ function SnapTabButton({ accessibilityLabel, onPress, onLongPress }: BottomTabBa
   );
 }
 
-function MainTabNavigator({ services: _services }: RootNavigatorProps) {
-  const routes = createNavigationRegistry();
-  const [home, labs, snap, log, settings] = routes;
-  if (!home || !labs || !snap || !log || !settings) {
-    throw new Error('Core navigation registry is incomplete');
-  }
+function FeatureStackNavigator({
+  root,
+  extensions,
+}: {
+  root: NavigationFeature;
+  extensions: readonly NavigationFeature[];
+}) {
+  return (
+    <FeatureStack.Navigator>
+      <FeatureStack.Screen
+        name={root.name}
+        component={root.component}
+        options={{ title: t(root.titleKey) }}
+      />
+      {extensions.map((feature) => (
+        <FeatureStack.Screen
+          key={feature.name}
+          name={feature.name}
+          component={feature.component}
+          options={{ title: t(feature.titleKey) }}
+        />
+      ))}
+    </FeatureStack.Navigator>
+  );
+}
+
+function stackExtensions(
+  extensions: readonly NavigationFeature[],
+  target: FeatureTarget,
+): readonly NavigationFeature[] {
+  return extensions.filter((feature) => feature.target === target);
+}
+
+function MainTabNavigator({ services: _services, extensions = [] }: RootNavigatorProps) {
+  const registry = createNavigationRegistry(extensions);
 
   return (
     <MainTabs.Navigator
@@ -52,46 +84,58 @@ function MainTabNavigator({ services: _services }: RootNavigatorProps) {
         tabBarStyle: styles.tabBar,
       }}
     >
-      <MainTabs.Screen
-        name="Home"
-        component={home.component}
-        options={{ tabBarLabel: t(home.titleKey) }}
-      />
-      <MainTabs.Screen
-        name="Labs"
-        component={labs.component}
-        options={{ tabBarLabel: t(labs.titleKey) }}
-      />
+      <MainTabs.Screen name="Home" options={{ tabBarLabel: t(registry.home.titleKey) }}>
+        {() => (
+          <FeatureStackNavigator
+            root={registry.home}
+            extensions={stackExtensions(registry.extensions, 'home')}
+          />
+        )}
+      </MainTabs.Screen>
+      <MainTabs.Screen name="Labs" options={{ tabBarLabel: t(registry.labs.titleKey) }}>
+        {() => (
+          <FeatureStackNavigator
+            root={registry.labs}
+            extensions={stackExtensions(registry.extensions, 'labs')}
+          />
+        )}
+      </MainTabs.Screen>
       <MainTabs.Screen
         name="SnapAction"
-        component={snap.component}
+        component={registry.snap.component}
         options={{
-          tabBarLabel: t(snap.titleKey),
+          tabBarLabel: t(registry.snap.titleKey),
           tabBarButton: (props) => (
             <SnapTabButton {...props} accessibilityLabel={t('accessibility.snapAction')} />
           ),
         }}
       />
-      <MainTabs.Screen
-        name="Log"
-        component={log.component}
-        options={{ tabBarLabel: t(log.titleKey) }}
-      />
-      <MainTabs.Screen
-        name="Settings"
-        component={settings.component}
-        options={{ tabBarLabel: t(settings.titleKey) }}
-      />
+      <MainTabs.Screen name="Log" options={{ tabBarLabel: t(registry.log.titleKey) }}>
+        {() => (
+          <FeatureStackNavigator
+            root={registry.log}
+            extensions={stackExtensions(registry.extensions, 'log')}
+          />
+        )}
+      </MainTabs.Screen>
+      <MainTabs.Screen name="Settings" options={{ tabBarLabel: t(registry.settings.titleKey) }}>
+        {() => (
+          <FeatureStackNavigator
+            root={registry.settings}
+            extensions={stackExtensions(registry.extensions, 'settings')}
+          />
+        )}
+      </MainTabs.Screen>
     </MainTabs.Navigator>
   );
 }
 
-export function RootNavigator({ services }: RootNavigatorProps) {
+export function RootNavigator({ services, extensions }: RootNavigatorProps) {
   return (
     <NavigationContainer>
       <RootStack.Navigator screenOptions={{ headerShown: false }}>
         <RootStack.Screen name="MainTabs">
-          {() => <MainTabNavigator services={services} />}
+          {() => <MainTabNavigator services={services} extensions={extensions} />}
         </RootStack.Screen>
       </RootStack.Navigator>
     </NavigationContainer>

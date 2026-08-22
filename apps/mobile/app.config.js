@@ -14,8 +14,11 @@ const variants = {
 };
 
 module.exports = ({ config }) => {
-  const requestedVariant = process.env.APP_VARIANT ?? 'development';
-  const variant = variants[requestedVariant] ? requestedVariant : 'development';
+  const requestedVariant = process.env.APP_VARIANT;
+  const variant = requestedVariant ?? 'development';
+  if (!variants[variant]) {
+    throw new Error(`Unknown APP_VARIANT: ${variant}`);
+  }
   const selected = variants[variant];
 
   return {

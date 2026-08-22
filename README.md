@@ -10,6 +10,7 @@ Use Node.js 24 LTS and npm 11:
 
 ```sh
 npm ci
+npm run build
 npm run dev
 ```
 

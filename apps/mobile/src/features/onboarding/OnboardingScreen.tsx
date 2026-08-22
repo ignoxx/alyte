@@ -1,4 +1,5 @@
 import { StyleSheet, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import { colors, screenStyles, spacing, typography } from '../../theme';
 import { t } from '../../localization';
@@ -9,7 +10,7 @@ type OnboardingScreenProps = {
 
 export function OnboardingScreen({ onComplete }: OnboardingScreenProps) {
   return (
-    <View style={screenStyles.safe}>
+    <SafeAreaView style={screenStyles.safe}>
       <View style={styles.content}>
         <StatusPill>{t('onboarding.eyebrow')}</StatusPill>
         <AppText variant="display" style={styles.title}>
@@ -24,7 +25,7 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps) {
       <View style={styles.footer}>
         <AppButton label={t('onboarding.continue')} onPress={onComplete} />
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
