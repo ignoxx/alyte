@@ -1,11 +1,13 @@
 import type { PropsWithChildren, ReactNode } from 'react';
 import {
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
   type ColorValue,
   type PressableProps,
+  type ScrollViewProps,
   type TextProps,
   type ViewProps,
 } from 'react-native';
@@ -36,6 +38,33 @@ type AppSurfaceProps = PropsWithChildren<ViewProps> & {
 
 export function AppSurface({ tone = 'default', style, ...props }: AppSurfaceProps) {
   return <View style={[styles.surface, tone === 'soft' && styles.softSurface, style]} {...props} />;
+}
+
+/**
+ * The outer scrolling surface for app screens.
+ *
+ * Native tabs are translucent on iOS 26. Explicitly opting into UIKit's automatic adjustment
+ * keeps the last control and the scroll indicator above the native tab bar. Keyboard and
+ * indicator adjustment stay here as well so forms do not need per-screen inset guesses.
+ */
+type ScreenScrollViewProps = Omit<
+  ScrollViewProps,
+  | 'automaticallyAdjustContentInsets'
+  | 'automaticallyAdjustKeyboardInsets'
+  | 'automaticallyAdjustsScrollIndicatorInsets'
+  | 'contentInsetAdjustmentBehavior'
+>;
+
+export function ScreenScrollView(props: ScreenScrollViewProps) {
+  return (
+    <ScrollView
+      {...props}
+      automaticallyAdjustContentInsets
+      automaticallyAdjustKeyboardInsets
+      automaticallyAdjustsScrollIndicatorInsets
+      contentInsetAdjustmentBehavior="automatic"
+    />
+  );
 }
 
 type AppButtonProps = Omit<PressableProps, 'children'> & {

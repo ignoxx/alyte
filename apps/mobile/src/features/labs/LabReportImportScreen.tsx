@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { Alert, ScrollView, StyleSheet } from 'react-native';
+import { Alert, StyleSheet } from 'react-native';
 import type { LabReport } from '@alyte/domain';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppSurface, AppText } from '../../ui/primitives';
+import { AppButton, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { LabReportImportError, type PasswordRequest } from './report-service';
 
@@ -78,7 +78,7 @@ export function LabReportImportScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+    <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
       <AppText style={styles.intro}>{t('labs.reportImportBody')}</AppText>
       <AppSurface style={styles.actions}>
         <AppButton
@@ -108,7 +108,7 @@ export function LabReportImportScreen() {
         </AppSurface>
       )}
       <AppButton label={t('labs.recordCancel')} onPress={() => navigation.goBack()} tone="quiet" />
-    </ScrollView>
+    </ScreenScrollView>
   );
 }
 

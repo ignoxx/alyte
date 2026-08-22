@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { formatIntakeLocalDate, formatLocaleDate, type IntakeEvent } from '@alyte/domain';
@@ -7,7 +7,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { LogStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppSurface, EmptyState, AppText } from '../../ui/primitives';
+import { AppButton, AppSurface, EmptyState, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { IntakeEventCard } from './IntakeEventCard';
 
@@ -118,7 +118,7 @@ export function LogScreen() {
 
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+      <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
         <View style={styles.titleRow}>
           <AppButton label={t('log.action')} onPress={() => navigation.navigate('IntakeEntry')} />
         </View>
@@ -195,7 +195,7 @@ export function LogScreen() {
               onUndo={lastLogAgainId === event.id ? () => void undoLogAgain(event.id) : undefined}
             />
           ))}
-      </ScrollView>
+      </ScreenScrollView>
     </SafeAreaView>
   );
 }

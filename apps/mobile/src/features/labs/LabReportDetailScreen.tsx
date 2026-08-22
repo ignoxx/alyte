@@ -6,7 +6,7 @@ import type { LabReport } from '@alyte/domain';
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
+import { AppButton, AppSurface, AppText, ScreenScrollView, StatusPill } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { LabReportImportError, type PasswordRequest } from './report-service';
 import type { LabReportPreview } from './report-service';
@@ -148,7 +148,7 @@ export function LabReportDetailScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+    <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
       <View style={styles.header}>
         <AppButton
           disabled={busy || report.importState === 'deleted'}
@@ -237,7 +237,7 @@ export function LabReportDetailScreen() {
           </ScrollView>
         </View>
       </Modal>
-    </ScrollView>
+    </ScreenScrollView>
   );
 }
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Alert, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -8,7 +8,7 @@ import type { HomeStackParamList } from '../../navigation/types';
 import { dispatchHomeQuickActionFromStack } from '../../navigation/parent-tab';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppSurface, AppText } from '../../ui/primitives';
+import { AppButton, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { IntakeEventCard } from '../intake/IntakeEventCard';
 import type { IntakeCloudJob } from '../intake/outbox';
@@ -102,7 +102,7 @@ export function HomeScreen() {
 
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+      <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
         {loading && <AppText style={styles.muted}>{t('home.loading')}</AppText>}
         {error && <AppText style={styles.error}>{t('home.error')}</AppText>}
         {!loading && !error && events.length === 0 && (
@@ -211,7 +211,7 @@ export function HomeScreen() {
             </View>
           </View>
         )}
-      </ScrollView>
+      </ScreenScrollView>
     </SafeAreaView>
   );
 }

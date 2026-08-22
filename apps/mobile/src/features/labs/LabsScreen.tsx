@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
@@ -7,7 +7,7 @@ import type { LabRecord, LabReport, SpecimenType } from '@alyte/domain';
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppSurface, EmptyState, AppText } from '../../ui/primitives';
+import { AppButton, AppSurface, EmptyState, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
@@ -70,18 +70,20 @@ export function LabsScreen() {
 
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
-        <View style={styles.titleRow}>
-          <AppButton
-            label={t('labs.manualAction')}
-            onPress={() => navigation.navigate('LabRecordForm')}
-          />
-          <AppButton
-            label={t('labs.action')}
-            onPress={() => navigation.navigate('LabReportImport')}
-            tone="secondary"
-          />
-        </View>
+      <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+        {!loading && !error && (records.length > 0 || reports.length > 0) && (
+          <View style={styles.actionRow}>
+            <AppButton
+              label={t('labs.action')}
+              onPress={() => navigation.navigate('LabReportImport')}
+            />
+            <AppButton
+              label={t('labs.manualAction')}
+              onPress={() => navigation.navigate('LabRecordForm')}
+              tone="secondary"
+            />
+          </View>
+        )}
         {loading && <AppText style={styles.muted}>{t('labs.loading')}</AppText>}
         {error && (
           <AppSurface tone="soft" style={styles.errorSurface}>
@@ -161,17 +163,16 @@ export function LabsScreen() {
             </Pressable>
           );
         })}
-      </ScrollView>
+      </ScreenScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleRow: {
-    alignItems: 'center',
+  actionRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
-    justifyContent: 'space-between',
     marginBottom: spacing.md,
   },
   recordCard: { gap: spacing.xs, marginBottom: spacing.sm },

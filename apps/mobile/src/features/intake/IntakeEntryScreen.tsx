@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
-import { ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
@@ -16,7 +16,7 @@ import {
 import type { LogStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppSurface, AppText } from '../../ui/primitives';
+import { AppButton, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { intakeEventTypeLabel } from './ui';
 
@@ -235,9 +235,9 @@ export function IntakeEntryScreen() {
 function SafeAreaViewWithScroll({ children }: { readonly children: ReactNode }) {
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+      <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
         {children}
-      </ScrollView>
+      </ScreenScrollView>
     </SafeAreaView>
   );
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, StyleSheet, TextInput, View } from 'react-native';
 import {
   formatLocaleDate,
   formatLocaleDecimal,
@@ -12,7 +12,7 @@ import {
 } from '@alyte/domain';
 import { t } from '../../localization';
 import { colors, screenStyles, spacing, type StatusTone } from '../../theme';
-import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
+import { AppButton, AppSurface, AppText, ScreenScrollView, StatusPill } from '../../ui/primitives';
 import type { LabsService } from './service';
 
 type LabRecordDetailProps = {
@@ -197,7 +197,7 @@ export function LabRecordDetail({
       ? formatLocaleDate(record.collectionDate.value, locale)
       : t('labs.recordDateMissing');
   return (
-    <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+    <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
       <View style={styles.header}>
         <View style={styles.headerActions}>
           <AppButton
@@ -269,7 +269,7 @@ export function LabRecordDetail({
         </AppSurface>
       ))}
       {error !== null && <AppText style={styles.error}>{error}</AppText>}
-    </ScrollView>
+    </ScreenScrollView>
   );
 }
 

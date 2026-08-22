@@ -21,7 +21,7 @@ import {
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
+import { AppButton, AppSurface, AppText, ScreenScrollView, StatusPill } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import type { SanitizationEditorState, SanitizedReportPreview } from './report-service';
 
@@ -307,7 +307,7 @@ export function SanitizedReportEditorScreen() {
   if (state === null || recipe === null) return null;
 
   return (
-    <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+    <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
       <View style={styles.header}>
         <StatusPill>{t('labs.sanitizedEditorLocalOnly')}</StatusPill>
       </View>
@@ -551,7 +551,7 @@ export function SanitizedReportEditorScreen() {
           </ScrollView>
         </AppSurface>
       )}
-    </ScrollView>
+    </ScreenScrollView>
   );
 }
 

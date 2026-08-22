@@ -1,12 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  TextInput,
-  View,
-} from 'react-native';
+import { StyleSheet, TextInput, View } from 'react-native';
 import {
   formatLocaleDecimal,
   parseLocaleDecimal,
@@ -18,7 +11,7 @@ import {
 } from '@alyte/domain';
 import { t } from '../../localization';
 import { colors, screenStyles, spacing } from '../../theme';
-import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
+import { AppButton, AppSurface, AppText, ScreenScrollView, StatusPill } from '../../ui/primitives';
 import type { LabsService } from './service';
 
 type MeasurementDraft = {
@@ -368,17 +361,13 @@ export function LabRecordForm({ service, initialRecord, onSaved, onCancel }: Lab
 
 function SafeForm({ children }: { readonly children: ReactNode }) {
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    <ScreenScrollView
+      contentContainerStyle={[screenStyles.content, styles.formContent]}
+      keyboardShouldPersistTaps="handled"
       style={screenStyles.safe}
     >
-      <ScrollView
-        contentContainerStyle={[screenStyles.content, styles.formContent]}
-        keyboardShouldPersistTaps="handled"
-      >
-        {children}
-      </ScrollView>
-    </KeyboardAvoidingView>
+      {children}
+    </ScreenScrollView>
   );
 }
 
