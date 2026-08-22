@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Image, ScrollView, StyleSheet, View } from 'react-native';
+import { Image, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   addRedaction,
   removeRedaction,
+  reorderSanitizationPages,
   updateRedaction,
   updateSanitizationPage,
   type RedactionRegion,
@@ -33,6 +34,9 @@ export function SanitizedReportEditorScreen() {
   const navigation = useNavigation<Navigation>();
   const route = useRoute<EditorRoute>();
   const { reports } = useServices();
+  const { width: windowWidth } = useWindowDimensions();
+  const previewWidth = Math.max(240, windowWidth - spacing.lg * 2);
+  const previewHeight = 220;
   const [state, setState] = useState<SanitizationEditorState | null>(null);
   const [recipe, setRecipe] = useState<SanitizationRecipe | null>(null);
   const [preview, setPreview] = useState<SanitizedReportPreview | null>(null);
@@ -110,6 +114,45 @@ export function SanitizedReportEditorScreen() {
     }
   }
 
+  function adjustRegion(
+    pageIndex: number,
+    region: RedactionRegion,
+    dx: number,
+    dy: number,
+    dw = 0,
+    dh = 0,
+  ) {
+    if (recipe === null) return;
+    try {
+      const width = Math.max(0.02, Math.min(1 - region.rect.x, region.rect.width + dw));
+      const height = Math.max(0.02, Math.min(1 - region.rect.y, region.rect.height + dh));
+      setPage(
+        updateRedaction(recipe, pageIndex, region.id, {
+          x: Math.max(0, Math.min(1 - width, region.rect.x + dx)),
+          y: Math.max(0, Math.min(1 - height, region.rect.y + dy)),
+          width,
+          height,
+        }),
+      );
+    } catch {
+      setError(t('labs.sanitizedEditorEditError'));
+    }
+  }
+
+  function movePage(pageIndex: number, direction: -1 | 1) {
+    if (recipe === null) return;
+    const order = recipe.pages.map((page) => page.pageIndex);
+    const index = order.indexOf(pageIndex);
+    const next = index + direction;
+    if (index < 0 || next < 0 || next >= order.length) return;
+    const current = order[index];
+    const target = order[next];
+    if (current === undefined || target === undefined) return;
+    order[index] = target;
+    order[next] = current;
+    setPage(reorderSanitizationPages(recipe, order));
+  }
+
   async function saveAndPreview() {
     if (recipe === null) return;
     setBusy(true);
@@ -142,7 +185,10 @@ export function SanitizedReportEditorScreen() {
       <View style={styles.header}>
         <AppButton
           label={t('labs.recordCancel')}
-          onPress={() => navigation.goBack()}
+          onPress={() => {
+            void reports.closeSanitizationEditor(route.params.reportId);
+            navigation.goBack();
+          }}
           tone="quiet"
         />
         <StatusPill>{t('labs.sanitizedEditorLocalOnly')}</StatusPill>
@@ -167,6 +213,49 @@ export function SanitizedReportEditorScreen() {
                   ? t('labs.sanitizedEditorIncluded')
                   : t('labs.sanitizedEditorExcluded')}
               </StatusPill>
+            </View>
+            <View style={[styles.sourcePreview, { height: previewHeight, width: previewWidth }]}>
+              {state.pagePreviewUris[page.pageIndex] !== undefined && (
+                <Image
+                  accessibilityLabel={t('labs.sanitizedEditorSourcePreview').replace(
+                    '{page}',
+                    String(page.pageIndex + 1),
+                  )}
+                  resizeMode="contain"
+                  source={{ uri: state.pagePreviewUris[page.pageIndex] }}
+                  style={styles.sourceImage}
+                />
+              )}
+              {page.redactions.map((region) => (
+                <View
+                  key={`overlay-${region.id}`}
+                  accessibilityLabel={t('labs.sanitizedEditorOverlayLabel')}
+                  style={[
+                    styles.overlay,
+                    {
+                      backgroundColor: region.origin === 'suggested' ? colors.warm : colors.danger,
+                      left: region.rect.x * previewWidth,
+                      top: region.rect.y * previewHeight,
+                      width: region.rect.width * previewWidth,
+                      height: region.rect.height * previewHeight,
+                    },
+                  ]}
+                />
+              ))}
+            </View>
+            <View style={styles.actions}>
+              <AppButton
+                label={t('labs.sanitizedEditorMovePageEarlier')}
+                accessibilityLabel={t('labs.sanitizedEditorMovePageEarlier')}
+                onPress={() => movePage(page.pageIndex, -1)}
+                tone="quiet"
+              />
+              <AppButton
+                label={t('labs.sanitizedEditorMovePageLater')}
+                accessibilityLabel={t('labs.sanitizedEditorMovePageLater')}
+                onPress={() => movePage(page.pageIndex, 1)}
+                tone="quiet"
+              />
             </View>
             <View style={styles.actions}>
               <AppButton
@@ -224,13 +313,40 @@ export function SanitizedReportEditorScreen() {
             {page.redactions.map((region) => (
               <View key={region.id} style={styles.redactionRow}>
                 <AppText>
-                  {region.label ?? t('labs.sanitizedEditorSensitiveRegion')} ({region.origin})
+                  {region.label ?? t('labs.sanitizedEditorSensitiveRegion')} —{' '}
+                  {region.origin === 'suggested'
+                    ? t('labs.sanitizedEditorOriginSuggested')
+                    : t('labs.sanitizedEditorOriginUser')}
                 </AppText>
                 <View style={styles.actions}>
                   <AppButton
                     label="←"
                     accessibilityLabel={t('labs.sanitizedEditorMoveLeft')}
                     onPress={() => nudge(page.pageIndex, region, -0.02)}
+                    tone="quiet"
+                  />
+                  <AppButton
+                    label="↑"
+                    accessibilityLabel={t('labs.sanitizedEditorMoveUp')}
+                    onPress={() => adjustRegion(page.pageIndex, region, 0, -0.02)}
+                    tone="quiet"
+                  />
+                  <AppButton
+                    label="↓"
+                    accessibilityLabel={t('labs.sanitizedEditorMoveDown')}
+                    onPress={() => adjustRegion(page.pageIndex, region, 0, 0.02)}
+                    tone="quiet"
+                  />
+                  <AppButton
+                    label="+"
+                    accessibilityLabel={t('labs.sanitizedEditorResize')}
+                    onPress={() => adjustRegion(page.pageIndex, region, 0, 0, 0.02, 0.02)}
+                    tone="quiet"
+                  />
+                  <AppButton
+                    label="−"
+                    accessibilityLabel={t('labs.sanitizedEditorResizeSmaller')}
+                    onPress={() => adjustRegion(page.pageIndex, region, 0, 0, -0.02, -0.02)}
                     tone="quiet"
                   />
                   <AppButton
@@ -255,6 +371,21 @@ export function SanitizedReportEditorScreen() {
         label={t('labs.sanitizedEditorPreview')}
         onPress={() => void saveAndPreview()}
       />
+      {state.current !== null && (
+        <AppButton
+          label={t('labs.sanitizedEditorDelete')}
+          onPress={() =>
+            void reports
+              .deleteSanitizedReport(route.params.reportId)
+              .then(() => {
+                setPreview(null);
+                setState((current) => (current === null ? current : { ...current, current: null }));
+              })
+              .catch(() => setError(t('labs.sanitizedEditorDeleteError')))
+          }
+          tone="quiet"
+        />
+      )}
       {preview !== null && (
         <AppSurface tone="soft" style={styles.previewCard}>
           <AppText variant="heading">{t('labs.sanitizedEditorPreviewTitle')}</AppText>
@@ -287,6 +418,9 @@ const styles = StyleSheet.create({
   privacyCard: { gap: spacing.xs, marginTop: spacing.md },
   previewCard: { gap: spacing.sm, marginTop: spacing.md },
   previewImage: { height: 520, width: '100%' },
+  sourcePreview: { backgroundColor: colors.surface, overflow: 'hidden', position: 'relative' },
+  sourceImage: { height: '100%', width: '100%' },
+  overlay: { borderColor: colors.ink, borderWidth: 1, opacity: 0.55, position: 'absolute' },
   previewPages: { flexGrow: 1, gap: spacing.md, paddingVertical: spacing.md },
   redactionRow: {
     borderTopColor: colors.border,

@@ -207,7 +207,7 @@ const verifiedSanitized: PdfSanitizedVerification = {
   attachments: false,
   metadata: false,
   removableRedactions: false,
-  recoveryChecked: true,
+  reloadChecked: true,
   failureReasons: [],
 };
 
@@ -533,7 +533,7 @@ describe('protected Lab Report import lifecycle', () => {
     const preview = await service.previewSanitizedReport(imported.id);
     assert.equal(preview.artifactPath, saved.artifactPath);
     assert.equal(preview.artifactHash, saved.artifactHash);
-    assert.equal(pdf.previewCalls, 1);
+    assert.equal(pdf.previewCalls, 2);
     assert.equal(await files.exists(imported.originalPath!), true);
   });
 

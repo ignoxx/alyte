@@ -122,6 +122,19 @@ export function updateSanitizationPage(
 ): SanitizationRecipe {
   const page = recipe.pages.find((candidate) => candidate.pageIndex === pageIndex);
   if (page === undefined) throw new Error(`Sanitization page ${pageIndex} was not found`);
+  const nextCrop = update.crop === undefined ? page.crop : update.crop;
+  if (nextCrop !== null) {
+    for (const region of page.redactions) {
+      if (
+        region.rect.x < nextCrop.x ||
+        region.rect.y < nextCrop.y ||
+        region.rect.x + region.rect.width > nextCrop.x + nextCrop.width ||
+        region.rect.y + region.rect.height > nextCrop.y + nextCrop.height
+      ) {
+        throw new Error('Sanitization crop must contain every redaction region');
+      }
+    }
+  }
   return createSanitizationRecipe(
     recipe.reportId,
     recipe.pages.map((candidate) =>

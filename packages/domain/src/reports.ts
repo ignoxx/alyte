@@ -120,7 +120,8 @@ export type SanitizedReportVerification = {
   readonly attachments: boolean;
   readonly metadata: boolean;
   readonly removableRedactions: boolean;
-  readonly recoveryChecked: boolean;
+  /** The artifact was reopened and structurally checked after writing. */
+  readonly reloadChecked: boolean;
 };
 
 export type CreateSanitizedReportInput = {

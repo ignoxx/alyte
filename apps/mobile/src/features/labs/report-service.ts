@@ -54,6 +54,7 @@ export type SanitizationEditorState = {
   readonly report: LabReport;
   readonly recipe: SanitizationRecipe;
   readonly suggestions: readonly SensitiveRegionSuggestion[];
+  readonly pagePreviewUris: readonly string[];
   readonly current: SanitizedReport | null;
 };
 
@@ -99,7 +100,11 @@ export type LabReportsService = {
   verifySource(id: string): Promise<LabReportSourceIntegrity>;
   openOriginal(id: string): Promise<string>;
   previewOriginal(id: string, passwordRequest?: PasswordRequest): Promise<LabReportPreview>;
-  openSanitizationEditor(id: string): Promise<SanitizationEditorState>;
+  openSanitizationEditor(
+    id: string,
+    passwordRequest?: PasswordRequest,
+  ): Promise<SanitizationEditorState>;
+  closeSanitizationEditor(id: string): Promise<void>;
   saveSanitizedReport(id: string, recipe: SanitizationRecipe): Promise<SanitizedReport>;
   previewSanitizedReport(id: string): Promise<SanitizedReportPreview>;
   getSanitizedReport(id: string): Promise<SanitizedReport | null>;
@@ -173,7 +178,7 @@ function verificationForSanitizedReport(
     attachments: verification.attachments,
     metadata: verification.metadata,
     removableRedactions: verification.removableRedactions,
-    recoveryChecked: verification.recoveryChecked,
+    reloadChecked: verification.reloadChecked,
   };
 }
 
@@ -185,7 +190,7 @@ function verificationPassed(verification: PdfSanitizedVerification): boolean {
     !verification.attachments &&
     !verification.metadata &&
     !verification.removableRedactions &&
-    verification.recoveryChecked &&
+    verification.reloadChecked &&
     verification.failureReasons.length === 0
   );
 }
@@ -201,6 +206,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   const pdfInspector = options.pdfInspector ?? nativePdfInspector;
   const now = options.now ?? isoNow;
   const makeId = options.idGenerator ?? ((prefix: string) => createSortableOpaqueId(prefix));
+  const sanitizationSessions = new Map<string, Awaited<ReturnType<PdfInspector['unlock']>>>();
 
   async function repository(): Promise<LabRepository> {
     repositoryPromise ??= repositoryFactory();
@@ -255,6 +261,28 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           }
         }
       }
+      // A crash during independent derivative deletion leaves an actionable row. Reconcile it
+      // on relaunch before exposing the library so a stale health artifact cannot linger silently.
+      for (const report of await repo.listReports()) {
+        const derivative = await repo.getSanitizedReport(report.id);
+        if (derivative?.failureReason !== 'sanitized-delete-pending') continue;
+        try {
+          if (
+            derivative.artifactPath !== null &&
+            (await fileService.exists(derivative.artifactPath))
+          ) {
+            await fileService.remove(derivative.artifactPath);
+          }
+          if (
+            derivative.artifactPath === null ||
+            !(await fileService.exists(derivative.artifactPath))
+          ) {
+            await repo.deleteSanitizedReport(derivative.id);
+          }
+        } catch {
+          // Keep the failure state and artifact path for an actionable retry.
+        }
+      }
       initialized = true;
     })();
     try {
@@ -276,6 +304,9 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const sanitized = await reportRepository.getSanitizedReport(report.id);
       if (sanitized?.artifactPath !== null && sanitized?.artifactPath !== undefined) {
         await fileService.remove(sanitized.artifactPath);
+        if (await fileService.exists(sanitized.artifactPath)) {
+          throw new Error('Sanitized Report remained after deletion');
+        }
       }
       if (sanitized !== null) await reportRepository.deleteSanitizedReport(sanitized.id);
       if (report.originalPath !== null) {
@@ -574,7 +605,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }
   }
 
-  async function openSanitizationEditor(id: string): Promise<SanitizationEditorState> {
+  async function openSanitizationEditor(
+    id: string,
+    passwordRequest?: PasswordRequest,
+  ): Promise<SanitizationEditorState> {
     await ensureInitialized();
     const repo = await repository();
     const report = await repo.getReport(id);
@@ -585,11 +619,46 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     const path = await openOriginal(id);
     const current = await repo.getSanitizedReport(id);
     const recipe = current?.recipe ?? recipeForReport(report);
-    const suggestions =
-      pdfInspector.suggestSensitiveRegions === undefined
+    let session = sanitizationSessions.get(id) ?? null;
+    if (session === null) {
+      const inspection = await pdfInspector.inspect(path);
+      if (inspection.locked) {
+        const request = passwordRequest ?? options.passwordRequest;
+        if (request === undefined) {
+          throw new LabReportSanitizationError(id, 'A password is required to edit this PDF');
+        }
+        const entered = await request({ report, attempt: 1 });
+        if (entered === null || entered.length === 0) {
+          throw new LabReportSanitizationError(id, 'Password entry was cancelled');
+        }
+        let password = entered;
+        try {
+          session = await pdfInspector.unlock(path, password);
+          sanitizationSessions.set(id, session);
+        } catch (error) {
+          throw new LabReportSanitizationError(id, 'The PDF password was not accepted', {
+            cause: error,
+          });
+        } finally {
+          password = '';
+        }
+      }
+    }
+    const pagePreviewUris = session
+      ? await session.renderPreview()
+      : await pdfInspector.renderPreview(path);
+    const suggestions = session?.suggestSensitiveRegions
+      ? await session.suggestSensitiveRegions()
+      : pdfInspector.suggestSensitiveRegions === undefined
         ? []
         : await pdfInspector.suggestSensitiveRegions(path);
-    return { report, recipe, suggestions, current };
+    return { report, recipe, suggestions, pagePreviewUris, current };
+  }
+
+  async function closeSanitizationEditor(id: string): Promise<void> {
+    const session = sanitizationSessions.get(id);
+    sanitizationSessions.delete(id);
+    if (session !== undefined) await session.close();
   }
 
   async function saveSanitizedReport(
@@ -649,7 +718,9 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         deletedAt: null,
       });
       try {
-        await pdfInspector.sanitize(sourcePath, destination, recipe);
+        const session = sanitizationSessions.get(id);
+        if (session?.sanitize !== undefined) await session.sanitize(destination, recipe);
+        else await pdfInspector.sanitize(sourcePath, destination, recipe);
         const verification = await pdfInspector.verifySanitized(destination);
         if (!verificationPassed(verification)) {
           await fileService.remove(destination);
@@ -773,8 +844,24 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const repo = await repository();
       const derivative = await repo.getSanitizedReport(id);
       if (derivative === null) return;
-      if (derivative.artifactPath !== null) await fileService.remove(derivative.artifactPath);
+      if (derivative.artifactPath !== null) {
+        try {
+          await fileService.remove(derivative.artifactPath);
+          if (await fileService.exists(derivative.artifactPath)) {
+            throw new Error('Sanitized Report remained after deletion');
+          }
+        } catch (error) {
+          await repo.updateSanitizedReport(derivative.id, {
+            verificationState: 'failed',
+            failureReason: 'sanitized-delete-pending',
+          });
+          throw new LabReportSanitizationError(id, 'The Sanitized Report could not be deleted', {
+            cause: error,
+          });
+        }
+      }
       await repo.deleteSanitizedReport(derivative.id);
+      await closeSanitizationEditor(id);
     });
   }
 
@@ -800,6 +887,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     openOriginal,
     previewOriginal,
     openSanitizationEditor,
+    closeSanitizationEditor,
     saveSanitizedReport,
     previewSanitizedReport,
     getSanitizedReport,
