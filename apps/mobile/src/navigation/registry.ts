@@ -7,6 +7,7 @@ import { LabReportImportRoute } from '../features/labs/LabReportImportRoute';
 import { LabReportDetailRoute } from '../features/labs/LabReportDetailRoute';
 import { SanitizedReportEditorRoute } from '../features/labs/SanitizedReportEditorRoute';
 import { LogScreen } from '../features/intake/LogScreen';
+import { IntakeEntryScreen } from '../features/intake/IntakeEntryScreen';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
 import { SnapScreen } from '../features/intake/SnapScreen';
 import {
@@ -69,6 +70,15 @@ const labsFeatures: readonly NavigationFeature[] = [
   },
 ];
 
+const intakeFeatures: readonly NavigationFeature[] = [
+  {
+    name: 'IntakeEntry',
+    target: 'log',
+    component: IntakeEntryScreen,
+    titleKey: 'intake.newTitle',
+  },
+];
+
 /**
  * Later vertical slices register detail and form routes under an existing destination stack. The
  * root tabs remain stable while feature modules own their screen implementations.
@@ -76,5 +86,9 @@ const labsFeatures: readonly NavigationFeature[] = [
 export function createNavigationRegistry(
   extensions: readonly NavigationFeature[] = [],
 ): NavigationRegistry {
-  return registerNavigationFeatures(coreFeatures, [...labsFeatures, ...extensions]);
+  return registerNavigationFeatures(coreFeatures, [
+    ...labsFeatures,
+    ...intakeFeatures,
+    ...extensions,
+  ]);
 }

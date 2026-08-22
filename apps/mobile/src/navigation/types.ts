@@ -15,6 +15,11 @@ export type LabsStackParamList = {
   LabRecordDetail: { readonly recordId: string };
 };
 
+export type LogStackParamList = {
+  Log: undefined;
+  IntakeEntry: { readonly eventId?: string } | undefined;
+};
+
 export type RootStackParamList = {
   MainTabs: undefined;
 };

@@ -4,6 +4,7 @@ import type { AlyteRuntime, RuntimeVariant, ServiceClock } from '@alyte/domain';
 import { createLabsService, type LabsService } from '../features/labs/service';
 import { createLabReportsService, type LabReportsService } from '../features/labs/report-service';
 import { openProtectedLabDatabase, type LabRepository } from '../features/labs/persistence';
+import { createIntakeService, type IntakeService } from '../features/intake/service';
 
 export interface AlyteServices {
   readonly runtime: AlyteRuntime;
@@ -11,6 +12,7 @@ export interface AlyteServices {
   readonly showcase: ShowcaseSnapshot | null;
   readonly labs: LabsService;
   readonly reports: LabReportsService;
+  readonly intake: IntakeService;
 }
 
 export function runtimeVariant(): RuntimeVariant {
@@ -28,15 +30,18 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     return repositoryPromise;
   };
 
+  const clock = { now: () => new Date() };
+
   return {
     runtime: {
       variant,
       cloudEnvironment: variant === 'production' ? 'production' : 'none',
     },
-    clock: { now: () => new Date() },
+    clock,
     showcase,
     labs: createLabsService({ repositoryFactory }),
     reports: createLabReportsService({ repositoryFactory }),
+    intake: createIntakeService({ repositoryFactory, clock }),
   };
 }
 
