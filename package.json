@@ -19,7 +19,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "build": "npm run build --workspace=@alyte/api",
+    "build": "npm run build --workspace=@alyte/contracts && npm run build --workspace=@alyte/api",
     "test": "npm run test --workspaces --if-present",
     "test:boundaries": "node --test scripts/boundaries.test.mjs",
     "test:showcase": "tsx --test scripts/showcase.test.ts",

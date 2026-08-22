@@ -1,7 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
-import type { HealthResponse } from '@alyte/contracts';
-
-const CONTRACT_VERSION = '2026-08-01';
+import { CONTRACT_VERSION, type HealthResponse } from '@alyte/contracts';
 
 export function createServer(): FastifyInstance {
   const server = Fastify({ logger: false });
