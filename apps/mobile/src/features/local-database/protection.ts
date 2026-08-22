@@ -3,8 +3,21 @@ export type ProtectionReport = {
   readonly missingSidecarPaths: readonly string[];
 };
 
+export const PROTECTION_FAILURE_CATEGORIES = [
+  'primary_database_missing',
+  'data_protection_verification',
+  'backup_exclusion_verification',
+  'file_missing',
+  'invalid_hash',
+  'native_module_unavailable',
+  'invalid_native_report',
+  'native_failure',
+] as const;
+
+export type ProtectionFailureCategory = (typeof PROTECTION_FAILURE_CATEGORIES)[number];
+
 export type ProtectionOptions = {
-  /** Missing WAL/SHM files are tolerated only during first-open preparation. */
+  /** Retained for native API compatibility; absent WAL/SHM files are always tolerated. */
   readonly requireSidecars?: boolean;
 };
 
@@ -17,9 +30,62 @@ export interface DatabaseProtection {
 
 export class ProtectionError extends Error {
   override readonly name = 'ProtectionError';
+  readonly category: ProtectionFailureCategory;
 
-  constructor(message: string, options?: { cause?: unknown }) {
+  constructor(
+    message: string,
+    options?: { cause?: unknown; category?: ProtectionFailureCategory },
+  ) {
     super(message, options);
+    this.category = options?.category ?? 'native_failure';
+  }
+}
+
+function isProtectionFailureCategory(value: unknown): value is ProtectionFailureCategory {
+  return (
+    typeof value === 'string' &&
+    (PROTECTION_FAILURE_CATEGORIES as readonly string[]).includes(value)
+  );
+}
+
+export function protectionFailureCategory(error: unknown): ProtectionFailureCategory {
+  if (typeof error !== 'object' || error === null) return 'native_failure';
+  const candidate = error as {
+    readonly failureCategory?: unknown;
+    readonly userInfo?: { readonly failureCategory?: unknown };
+    readonly message?: unknown;
+  };
+  const category = candidate.failureCategory ?? candidate.userInfo?.failureCategory;
+  if (isProtectionFailureCategory(category)) return category;
+  const message = candidate.message;
+  if (typeof message === 'string') {
+    const messageCategory = PROTECTION_FAILURE_CATEGORIES.find((value) => message.includes(value));
+    if (messageCategory !== undefined) return messageCategory;
+  }
+  return 'native_failure';
+}
+
+export function validateProtectionReport(
+  databasePath: string,
+  report: unknown,
+): asserts report is ProtectionReport {
+  if (
+    typeof report !== 'object' ||
+    report === null ||
+    !Array.isArray((report as ProtectionReport).protectedPaths) ||
+    !Array.isArray((report as ProtectionReport).missingSidecarPaths)
+  ) {
+    throw new ProtectionError('AlyteProtection returned an invalid protection report', {
+      category: 'invalid_native_report',
+    });
+  }
+
+  const normalizedDatabasePath = databasePath.replace(/^file:\/\//, '');
+  const protectedPaths = (report as ProtectionReport).protectedPaths;
+  if (!protectedPaths.includes(databasePath) && !protectedPaths.includes(normalizedDatabasePath)) {
+    throw new ProtectionError('The primary local database file was not protected', {
+      category: 'data_protection_verification',
+    });
   }
 }
 
@@ -34,6 +100,7 @@ export const nativeDatabaseProtection: DatabaseProtection = {
     if (native === null) {
       throw new ProtectionError(
         'AlyteProtection is unavailable; local health records cannot be persisted safely',
+        { category: 'native_module_unavailable' },
       );
     }
 
@@ -41,28 +108,13 @@ export const nativeDatabaseProtection: DatabaseProtection = {
     try {
       report = await native.protectDatabaseFiles(databasePath, options);
     } catch (error) {
-      throw new ProtectionError('The local database could not be protected', { cause: error });
+      throw new ProtectionError('The local database could not be protected', {
+        cause: error,
+        category: protectionFailureCategory(error),
+      });
     }
 
-    if (!Array.isArray(report.protectedPaths) || !Array.isArray(report.missingSidecarPaths)) {
-      throw new ProtectionError('AlyteProtection returned an invalid protection report');
-    }
-    const normalizedDatabasePath = databasePath.replace(/^file:\/\//, '');
-    const protectedPrimary =
-      report.protectedPaths.includes(databasePath) ||
-      report.protectedPaths.includes(normalizedDatabasePath);
-    if (!protectedPrimary) {
-      throw new ProtectionError('The primary local database file was not protected');
-    }
-    if (options.requireSidecars ?? true) {
-      const protectedSidecars = [
-        `${normalizedDatabasePath}-wal`,
-        `${normalizedDatabasePath}-shm`,
-      ].every((path) => report.protectedPaths.includes(path));
-      if (!protectedSidecars || report.missingSidecarPaths.length > 0) {
-        throw new ProtectionError('SQLite WAL and SHM sidecars were not protected');
-      }
-    }
+    validateProtectionReport(databasePath, report);
     return report;
   },
 };

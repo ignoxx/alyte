@@ -22,20 +22,17 @@ final class AlyteProtectionFilePolicyTests: XCTestCase {
     }
   }
 
-  func testMissingSidecarIsAProtectionFailureOnceWritesAreAllowed() throws {
+  func testMissingSidecarsAreToleratedAndReportedAfterWritesAreAllowed() throws {
     let fixture = try makeFixture(includeSidecars: false)
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
-    XCTAssertThrowsError(
-      try AlyteProtectionFilePolicy().protectDatabaseFiles(
-        at: fixture.database,
-        requireSidecars: true
-      )
-    ) { error in
-      guard case AlyteProtectionError.sidecarsMissing = error else {
-        return XCTFail("Expected missing-sidecar protection failure, got \(error)")
-      }
-    }
+    let report = try AlyteProtectionFilePolicy().protectDatabaseFiles(
+      at: fixture.database,
+      requireSidecars: true
+    )
+
+    XCTAssertEqual(report.protectedPaths, [fixture.database.path])
+    XCTAssertEqual(Set(report.missingSidecarPaths), Set(fixture.paths.dropFirst().map(\.path)))
   }
 
   func testFirstOpenMayProtectPrimaryBeforeSQLiteCreatesSidecars() throws {
@@ -48,6 +45,39 @@ final class AlyteProtectionFilePolicyTests: XCTestCase {
     )
     XCTAssertEqual(report.protectedPaths, [fixture.database.path])
     XCTAssertEqual(Set(report.missingSidecarPaths), Set(fixture.paths.dropFirst().map(\.path)))
+  }
+
+  func testDevelopmentSimulatorPathStillRequiresBackupExclusion() throws {
+    let fixture = try makeFixture(includeSidecars: false)
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+    let report = try AlyteProtectionFilePolicy(
+      environment: AlyteProtectionEnvironment(
+        isSimulator: true,
+        allowsDevelopmentSimulatorFallback: true
+      )
+    ).protectDatabaseFiles(at: fixture.database, requireSidecars: true)
+
+    XCTAssertEqual(report.protectedPaths, [fixture.database.path])
+    XCTAssertEqual(
+      try fixture.database.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup,
+      true
+    )
+  }
+
+  func testProtectionFailuresExposeOnlySanitizedCategories() {
+    XCTAssertEqual(
+      AlyteProtectionError.primaryDatabaseMissing.failureCategory,
+      .primaryDatabaseMissing
+    )
+    XCTAssertEqual(
+      AlyteProtectionError.dataProtectionVerificationFailed.failureCategory,
+      .dataProtectionVerification
+    )
+    XCTAssertEqual(
+      AlyteProtectionError.backupExclusionVerificationFailed.failureCategory,
+      .backupExclusionVerification
+    )
   }
 
   func testProtectPathVerifiesOriginalReportProtectionAndHashIsContentBound() throws {

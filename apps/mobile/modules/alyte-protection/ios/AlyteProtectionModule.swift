@@ -18,12 +18,14 @@ public final class AlyteProtectionModule: Module {
           "missingSidecarPaths": report.missingSidecarPaths,
         ]
       } catch {
+        let category = Self.failureCategory(for: error)
         throw NSError(
           domain: "AlyteProtection",
           code: 1,
           userInfo: [
             NSLocalizedDescriptionKey: "Could not protect local database files",
-            NSUnderlyingErrorKey: error,
+            NSLocalizedFailureReasonErrorKey: category,
+            "failureCategory": category,
           ]
         )
       }
@@ -35,12 +37,14 @@ public final class AlyteProtectionModule: Module {
         let report = try AlyteProtectionFilePolicy().protectPath(at: URL(fileURLWithPath: path))
         return ["protectedPaths": report.protectedPaths]
       } catch {
+        let category = Self.failureCategory(for: error)
         throw NSError(
           domain: "AlyteProtection",
           code: 2,
           userInfo: [
             NSLocalizedDescriptionKey: "Could not protect local health file",
-            NSUnderlyingErrorKey: error,
+            NSLocalizedFailureReasonErrorKey: category,
+            "failureCategory": category,
           ]
         )
       }
@@ -51,12 +55,14 @@ public final class AlyteProtectionModule: Module {
       do {
         return try AlyteProtectionFilePolicy().hashFile(at: URL(fileURLWithPath: path))
       } catch {
+        let category = Self.failureCategory(for: error)
         throw NSError(
           domain: "AlyteProtection",
           code: 3,
           userInfo: [
             NSLocalizedDescriptionKey: "Could not hash local health file",
-            NSUnderlyingErrorKey: error,
+            NSLocalizedFailureReasonErrorKey: category,
+            "failureCategory": category,
           ]
         )
       }
@@ -68,5 +74,10 @@ public final class AlyteProtectionModule: Module {
       return url.path
     }
     return value
+  }
+
+  private static func failureCategory(for error: Error) -> String {
+    (error as? AlyteProtectionError)?.failureCategory.rawValue ??
+      AlyteProtectionFailureCategory.nativeFailure.rawValue
   }
 }

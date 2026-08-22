@@ -1,4 +1,4 @@
-import { ProtectionError } from '../local-database/protection';
+import { ProtectionError, protectionFailureCategory } from '../local-database/protection';
 
 export type {
   DatabaseProtection,
@@ -34,7 +34,10 @@ export const nativePathProtection: ProtectedPathProtection = {
     try {
       report = await native.protectPath(path);
     } catch (error) {
-      throw new ProtectionError('The local health file could not be protected', { cause: error });
+      throw new ProtectionError('The local health file could not be protected', {
+        cause: error,
+        category: protectionFailureCategory(error),
+      });
     }
     const normalizedPath = path.replace(/^file:\/\//, '');
     if (
@@ -57,7 +60,10 @@ export const nativePathProtection: ProtectedPathProtection = {
     try {
       hash = await native.hashFile(path);
     } catch (error) {
-      throw new ProtectionError('The local health file could not be hashed', { cause: error });
+      throw new ProtectionError('The local health file could not be hashed', {
+        cause: error,
+        category: protectionFailureCategory(error),
+      });
     }
     if (!/^[a-f0-9]{64}$/.test(hash)) {
       throw new ProtectionError('AlyteProtection returned an invalid source hash');
