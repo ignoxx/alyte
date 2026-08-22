@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "prebuild": "npm run build --workspace=@alyte/contracts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "pretypecheck": "npm run build --workspace=@alyte/contracts",
