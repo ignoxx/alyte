@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { afterEach, describe, test } from 'node:test';
+import { createIntakeRepository } from '../intake/persistence';
+import { createLabRepository } from '../labs/persistence';
+import type { DatabaseProtection, ProtectionOptions } from './protection';
 import { createProtectedDatabaseBoundary, type SqliteDatabase } from './persistence';
 import { CURRENT_SCHEMA_VERSION, LOCAL_MIGRATIONS } from './migrations';
 
@@ -45,9 +48,16 @@ class NodeSqliteDatabase implements SqliteDatabase {
   }
 }
 
-const protection = {
-  async protectDatabaseFiles() {
-    return undefined;
+const protection: DatabaseProtection = {
+  async protectDatabaseFiles(databasePath, options: ProtectionOptions = {}) {
+    return {
+      protectedPaths:
+        options.requireSidecars === true
+          ? [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]
+          : [databasePath],
+      missingSidecarPaths:
+        options.requireSidecars === true ? [] : [`${databasePath}-wal`, `${databasePath}-shm`],
+    };
   },
 };
 
@@ -234,8 +244,10 @@ const OLD_V5_FIXTURE_SQL = `
     current_unit, provenance, review_state, created_at, updated_at
   ) VALUES (
     'measurement-old-v5', 'record-old-v5', 'biomarker.ldl_c', 'blood', 'LDL-C', '3.2',
-    '{"kind":"numeric","value":3.2}', 'mmol/L', 'LDL-C', '3.2',
-    '{"kind":"numeric","value":3.2}', 'mmol/L', 'user-entered', 'confirmed',
+    '{"label":"LDL-C","value":{"kind":"numeric","value":3.2},"valueString":"3.2","unit":"mmol/L","referenceInterval":null,"flag":null}',
+    'mmol/L', 'LDL-C', '3.2',
+    '{"label":"LDL-C","value":{"kind":"numeric","value":3.2},"valueString":"3.2","unit":"mmol/L","referenceInterval":null,"flag":null}',
+    'mmol/L', 'user-entered', 'confirmed',
     '2026-08-22T09:00:00.000Z', '2026-08-22T09:00:00.000Z'
   );
   INSERT INTO intake_events (
@@ -273,7 +285,81 @@ const OLD_V5_FIXTURE_SQL = `
     (5, '2026-08-22T00:00:00.000Z');
 `;
 
+async function createReleasedV4Fixture(database: SqliteDatabase): Promise<void> {
+  // The released v4 and old v5 share the same lab/intake base. Remove the v5 additions so this
+  // fixture retains the exact pre-v5 shape while keeping representative v4 rows populated.
+  await database.execAsync(OLD_V5_FIXTURE_SQL);
+  await database.execAsync(`
+    DROP TABLE app_preferences;
+    DROP TABLE cloud_jobs;
+    DELETE FROM schema_migrations WHERE version = 5;
+  `);
+}
+
 describe('local schema forward migrations', () => {
+  test('upgrades populated released v4 data through v6 and repositories can read it', async () => {
+    const database = new NodeSqliteDatabase(temporaryDatabase());
+    await createReleasedV4Fixture(database);
+    const releasedVersion = await database.getAllAsync<{ version: number }>(
+      'SELECT MAX(version) AS version FROM schema_migrations;',
+    );
+    assert.equal(releasedVersion[0]?.version, 4);
+    const releasedIntakeColumns = await database.getAllAsync<{ name: string }>(
+      'PRAGMA table_info(intake_events);',
+    );
+    assert.equal(
+      releasedIntakeColumns.some((column) => column.name === 'source_media_hash'),
+      false,
+    );
+    assert.equal(
+      (
+        await database.getAllAsync(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('cloud_jobs', 'app_preferences', 'intake_capture_recovery');",
+        )
+      ).length,
+      0,
+    );
+
+    const boundary = createBoundary(database);
+    await boundary.initialize();
+    const versionRows = await database.getAllAsync<{ version: number }>(
+      'SELECT MAX(version) AS version FROM schema_migrations;',
+    );
+    assert.equal(versionRows[0]?.version, CURRENT_SCHEMA_VERSION);
+    assert.equal(
+      (await database.getAllAsync('SELECT id FROM cloud_jobs')).length,
+      0,
+      'v5 creates an empty cloud job table when upgrading a true v4 database',
+    );
+    assert.equal(
+      (await database.getAllAsync('SELECT key FROM app_preferences')).length,
+      0,
+      'v5 creates an empty preferences table when upgrading a true v4 database',
+    );
+    assert.equal(
+      (
+        await database.getAllAsync<{ original_filename: string }>(
+          'SELECT original_filename FROM lab_reports WHERE id = ?',
+          'report-old-v5',
+        )
+      )[0]?.original_filename,
+      'synthetic.pdf',
+    );
+    const labRepository = createLabRepository(database, { protection });
+    const record = await labRepository.getRecord('record-old-v5');
+    assert.equal(record?.labReportId, 'report-old-v5');
+    assert.equal(record?.measurements[0]?.id, 'measurement-old-v5');
+    assert.equal(record?.measurements[0]?.current.valueString, '3.2');
+
+    const intakeRepository = createIntakeRepository(database, { protection });
+    const event = await intakeRepository.getEvent('event-old-v5');
+    assert.equal(event?.sourceMediaPath, 'protected://intake/old.jpg');
+    assert.equal(event?.sourceMediaHash, null);
+    assert.equal(event?.components[0]?.id, 'component-old-v5');
+    assert.equal(event?.components[0]?.name, 'Breakfast');
+    await boundary.close();
+  });
+
   test('upgrades the released old-v5 shape without losing records', async () => {
     const database = new NodeSqliteDatabase(temporaryDatabase());
     await database.execAsync(OLD_V5_FIXTURE_SQL);

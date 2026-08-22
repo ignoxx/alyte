@@ -78,10 +78,10 @@ export function createProtectedDatabaseBoundary(
     for (const migration of migrations) {
       if (migration.version <= current) continue;
       await database.withTransactionAsync(async () => {
-        if (migration.apply === undefined) {
-          await database.execAsync(migration.sql);
-        } else {
+        if ('apply' in migration) {
           await migration.apply(database);
+        } else {
+          await database.execAsync(migration.sql);
         }
         await database.runAsync(
           'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?);',
