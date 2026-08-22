@@ -50,8 +50,30 @@ export interface AccountAuditEvent {
 export interface AccountExportResponse {
   readonly accountId: string;
   readonly createdAt: string;
+  readonly appleSubject: string;
   readonly consents: readonly AccountConsent[];
+  readonly sessions: readonly AccountSession[];
+  readonly operations: readonly AccountOperation[];
   readonly auditEvents: readonly AccountAuditEvent[];
+}
+
+export type AccountSessionStatus = 'active' | 'revoked' | 'expired';
+
+export interface AccountSession {
+  readonly id: string;
+  readonly familyId: string;
+  readonly status: AccountSessionStatus;
+  readonly createdAt: string;
+  readonly accessExpiresAt: string;
+  readonly refreshExpiresAt: string;
+  readonly revokedAt: string | null;
+}
+
+export interface AccountOperation {
+  readonly operation: 'auth.apple.exchange' | 'auth.refresh' | 'auth.sign-out' | 'account.delete';
+  readonly responseStatus: number;
+  readonly createdAt: string;
+  readonly expiresAt: string;
 }
 
 export interface AccountDeletionResponse {

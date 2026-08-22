@@ -16,9 +16,15 @@ try {
   process.exitCode = 1;
 }
 
+let shuttingDown = false;
 const shutdown = async () => {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
   jobRunner.stop();
   await server.close();
+  process.exit(0);
 };
 
 process.once('SIGINT', shutdown);

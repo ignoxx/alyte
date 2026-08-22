@@ -1,6 +1,5 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import {
   CONTRACT_VERSION,
@@ -21,16 +20,23 @@ import {
 } from './apple-verifier.js';
 import { AuthFailure, AuthService, type AuthLogger, type Clock } from './auth.js';
 import { AccountDatabase } from './database.js';
+import {
+  DEFAULT_LOCAL_RUNTIME_PATH,
+  loadSessionHashSecret,
+  validateRuntimePath,
+} from './runtime.js';
 
 export interface ServerOptions {
   readonly database?: AccountDatabase;
   readonly databasePath?: string;
+  readonly runtimePath?: string;
   readonly appleVerifier?: AppleIdentityVerifier;
   readonly clock?: Clock;
   readonly hashSecret?: string | Uint8Array;
   readonly accessLifetimeSeconds?: number;
   readonly refreshLifetimeSeconds?: number;
   readonly authLogger?: AuthLogger;
+  readonly cleanupIntervalMs?: number;
 }
 
 function bodyObject(request: FastifyRequest): Record<string, unknown> {
@@ -63,10 +69,20 @@ function errorResponse(code: string, message: string): ApiErrorResponse {
 }
 
 export function createServer(options: ServerOptions = {}): FastifyInstance {
+  const production = process.env.NODE_ENV === 'production';
+  const configuredRuntimePath = options.runtimePath ?? process.env.ALYTE_RUNTIME_PATH;
+  if (production && configuredRuntimePath === undefined) {
+    throw new Error('ALYTE_RUNTIME_PATH is required in production');
+  }
+  const runtimePath = validateRuntimePath(
+    configuredRuntimePath ??
+      (options.databasePath !== undefined && options.databasePath !== ':memory:'
+        ? dirname(options.databasePath)
+        : DEFAULT_LOCAL_RUNTIME_PATH),
+    production,
+  );
   const ownsDatabase = options.database === undefined;
-  const databasePath =
-    options.databasePath ??
-    join(process.env.ALYTE_RUNTIME_PATH ?? join(tmpdir(), 'alyte-api'), 'alyte.sqlite');
+  const databasePath = options.databasePath ?? join(runtimePath, 'alyte.sqlite');
   if (ownsDatabase && databasePath !== ':memory:') {
     mkdirSync(dirname(databasePath), { recursive: true });
   }
@@ -95,22 +111,64 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     }
     throw new Error('ALYTE_SESSION_HASH_SECRET is required in production');
   }
+  const secret = loadSessionHashSecret(runtimePath, {
+    production,
+    configured: options.hashSecret,
+  });
+  const server = Fastify({
+    logger: {
+      level: 'info',
+      redact: {
+        paths: [
+          'req.headers.authorization',
+          'req.headers.cookie',
+          'req.headers.idempotency-key',
+          'req.headers.x-apple-subject',
+          'req.body.identityToken',
+          'req.body.refreshToken',
+          'req.body.accessToken',
+          'req.body.idToken',
+          'req.body.idempotencyKey',
+          'req.body.appleSubject',
+          'req.body.subject',
+          'req.body.email',
+          'req.body.name',
+        ],
+        censor: '[REDACTED]',
+      },
+    },
+  });
+  const authLogger: AuthLogger = options.authLogger ?? {
+    info(event, attributes) {
+      server.log.info({ event, outcome: attributes.outcome }, 'auth operation');
+    },
+    warn(event, attributes) {
+      server.log.warn({ event, outcome: attributes.outcome }, 'auth operation rejected');
+    },
+  };
   const auth = new AuthService({
     database,
     appleVerifier,
     clock: options.clock,
-    hashSecret: options.hashSecret,
+    hashSecret: secret,
     accessLifetimeSeconds: options.accessLifetimeSeconds,
     refreshLifetimeSeconds: options.refreshLifetimeSeconds,
-    logger: options.authLogger,
+    logger: authLogger,
   });
-  const server = Fastify({ logger: false });
+  database.cleanupExpired(options.clock?.now() ?? new Date());
+  const cleanupInterval = setInterval(
+    () => database.cleanupExpired(options.clock?.now() ?? new Date()),
+    options.cleanupIntervalMs ?? 15 * 60 * 1_000,
+  );
+  cleanupInterval.unref();
 
   server.setErrorHandler((error, _request, reply) => {
     if (error instanceof AuthFailure) {
+      server.log.warn({ event: 'api.request_rejected', outcome: error.code }, 'request rejected');
       void reply.status(error.statusCode).send(errorResponse(error.code, error.code));
       return;
     }
+    server.log.error({ event: 'api.request_failed', outcome: 'internal_error' }, 'request failed');
     void reply.status(500).send(errorResponse('internal_error', 'internal_error'));
   });
 
@@ -122,18 +180,22 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
 
   const exchange = async (request: FastifyRequest): Promise<SessionResponse> => {
     const body = bodyObject(request) as Partial<AppleExchangeRequest>;
-    return auth.exchangeApple(body.identityToken, body.consentPolicyVersion);
+    return auth.exchangeApple(
+      body.identityToken,
+      body.consentPolicyVersion,
+      idempotencyKey(request),
+    );
   };
   server.post('/v1/auth/apple', exchange);
   server.post('/v1/auth/apple/exchange', exchange);
 
   server.post('/v1/auth/refresh', async (request): Promise<SessionResponse> => {
     const body = bodyObject(request) as Partial<RefreshSessionRequest>;
-    return auth.refresh(body.refreshToken);
+    return auth.refresh(body.refreshToken, idempotencyKey(request));
   });
 
   const signOut = async (request: FastifyRequest): Promise<SignOutResponse> =>
-    auth.signOut(bearerToken(request));
+    auth.signOut(bearerToken(request), idempotencyKey(request));
   server.post('/v1/auth/sign-out', signOut);
 
   server.get('/v1/account/export', async (request): Promise<AccountExportResponse> =>
@@ -145,6 +207,7 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
   );
 
   server.addHook('onClose', async () => {
+    clearInterval(cleanupInterval);
     if (ownsDatabase) {
       database.close();
     }

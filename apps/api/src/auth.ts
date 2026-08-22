@@ -1,22 +1,36 @@
-import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+} from 'node:crypto';
 import type {
   AccountAuditEvent,
   AccountConsent,
   AccountDeletionResponse,
   AccountExportResponse,
+  AccountOperation,
+  AccountSession,
   SessionResponse,
   SignOutResponse,
 } from '@alyte/contracts';
 import { AppleTokenVerificationError, type AppleIdentityVerifier } from './apple-verifier.js';
-import { type AccountDatabase, type SessionRow } from './database.js';
+import {
+  OPERATION_IDEMPOTENCY_RETENTION_MS,
+  type AccountDatabase,
+  type OperationName,
+  type SessionRow,
+} from './database.js';
 
 export interface Clock {
   now(): Date;
 }
 
 export interface AuthLogger {
-  info(event: string, attributes: Readonly<Record<string, string | number | boolean>>): void;
-  warn(event: string, attributes: Readonly<Record<string, string | number | boolean>>): void;
+  info(event: string, attributes: Readonly<{ outcome: string }>): void;
+  warn(event: string, attributes: Readonly<{ outcome: string }>): void;
 }
 
 const silentLogger: AuthLogger = {
@@ -42,7 +56,7 @@ export interface AuthServiceOptions {
   readonly clock?: Clock | undefined;
   readonly accessLifetimeSeconds?: number | undefined;
   readonly refreshLifetimeSeconds?: number | undefined;
-  readonly hashSecret?: string | Uint8Array | undefined;
+  readonly hashSecret: string | Uint8Array;
   readonly logger?: AuthLogger | undefined;
 }
 
@@ -92,14 +106,11 @@ export class AuthService {
     if (this.accessLifetimeSeconds <= 0 || this.refreshLifetimeSeconds <= 0) {
       throw new Error('session_lifetime_must_be_positive');
     }
-    const configuredSecret = options.hashSecret ?? process.env.ALYTE_SESSION_HASH_SECRET;
-    if (configuredSecret === undefined && process.env.NODE_ENV === 'production') {
-      throw new Error('ALYTE_SESSION_HASH_SECRET is required in production');
-    }
+    const configuredSecret = options.hashSecret;
     this.hashSecret =
       typeof configuredSecret === 'string'
         ? new TextEncoder().encode(configuredSecret)
-        : (configuredSecret ?? randomBytes(32));
+        : configuredSecret;
     if (this.hashSecret.length < 32) {
       throw new Error('session_hash_secret_too_short');
     }
@@ -109,6 +120,7 @@ export class AuthService {
   async exchangeApple(
     identityToken: unknown,
     consentPolicyVersion: unknown,
+    idempotencyKey: unknown,
   ): Promise<SessionResponse> {
     if (identityToken === undefined || identityToken === null || identityToken === '') {
       throw new AuthFailure(
@@ -118,6 +130,20 @@ export class AuthService {
     }
     if (!validText(identityToken, 16_384)) {
       throw new AuthFailure(400, 'identity_token_invalid');
+    }
+    const key = this.parseIdempotencyKey(idempotencyKey);
+    const now = this.clock.now();
+    const keyHash = this.hash(key);
+    const credentialHash = this.hash(identityToken);
+    const replay = this.replayOperation<SessionResponse>(
+      'auth.apple.exchange',
+      keyHash,
+      credentialHash,
+      now,
+    );
+    if (replay !== undefined) {
+      this.logger.info('auth.apple_exchange_replayed', { outcome: 'replayed' });
+      return replay;
     }
     const policyVersion = this.parsePolicyVersion(consentPolicyVersion);
     let identity;
@@ -137,7 +163,6 @@ export class AuthService {
       throw new AuthFailure(401, 'identity_token_invalid');
     }
 
-    const now = this.clock.now();
     const { mapped, result } = this.database.transaction(() => {
       const account = this.database.createAccountForAppleSubject(
         identity.subject,
@@ -147,7 +172,18 @@ export class AuthService {
       if (policyVersion !== undefined) {
         this.database.recordConsent(account.account.id, policyVersion, asIso(now));
       }
-      return { mapped: account, result: this.createSession(account.account.id, now) };
+      const session = this.createSession(account.account.id, now);
+      this.database.createOperation({
+        operation: 'auth.apple.exchange',
+        keyHash,
+        credentialHash,
+        accountId: account.account.id,
+        responseStatus: 200,
+        responseCiphertext: this.encryptResponse(session),
+        createdAt: asIso(now),
+        expiresAt: asIso(addSeconds(now, OPERATION_IDEMPOTENCY_RETENTION_MS / 1_000)),
+      });
+      return { mapped: account, result: session };
     });
     this.logger.info('auth.apple_exchange_succeeded', {
       outcome: mapped.created ? 'created' : 'existing',
@@ -155,12 +191,25 @@ export class AuthService {
     return result;
   }
 
-  refresh(refreshToken: unknown): SessionResponse {
+  refresh(refreshToken: unknown, idempotencyKey: unknown): SessionResponse {
     if (!validText(refreshToken, 16_384)) {
       throw new AuthFailure(400, 'refresh_token_required');
     }
+    const key = this.parseIdempotencyKey(idempotencyKey);
     const now = this.clock.now();
-    const oldSession = this.database.findSessionByRefreshHash(this.hash(refreshToken));
+    const credentialHash = this.hash(refreshToken);
+    const keyHash = this.hash(key);
+    const replay = this.replayOperation<SessionResponse>(
+      'auth.refresh',
+      keyHash,
+      credentialHash,
+      now,
+    );
+    if (replay !== undefined) {
+      this.logger.info('auth.refresh_replayed', { outcome: 'replayed' });
+      return replay;
+    }
+    const oldSession = this.database.findSessionByRefreshHash(credentialHash);
     if (oldSession === undefined) {
       this.logger.warn('auth.refresh_rejected', { outcome: 'unknown_token' });
       throw new AuthFailure(401, 'refresh_token_invalid');
@@ -182,16 +231,56 @@ export class AuthService {
     this.database.transaction(() => {
       this.database.createSession(next.record);
       this.database.revokeSession(oldSession.id, asIso(now), next.record.id);
+      this.database.createOperation({
+        operation: 'auth.refresh',
+        keyHash,
+        credentialHash,
+        accountId: oldSession.account_id,
+        responseStatus: 200,
+        responseCiphertext: this.encryptResponse(next.response),
+        createdAt: asIso(now),
+        expiresAt: asIso(addSeconds(now, OPERATION_IDEMPOTENCY_RETENTION_MS / 1_000)),
+      });
     });
     this.logger.info('auth.refresh_succeeded', { outcome: 'rotated' });
     return next.response;
   }
 
-  signOut(accessToken: unknown): SignOutResponse {
+  signOut(accessToken: unknown, idempotencyKey: unknown): SignOutResponse {
+    if (!validText(accessToken, 16_384)) {
+      throw new AuthFailure(401, 'session_invalid');
+    }
+    const key = this.parseIdempotencyKey(idempotencyKey);
+    const now = this.clock.now();
+    const credentialHash = this.hash(accessToken);
+    const keyHash = this.hash(key);
+    const replay = this.replayOperation<SignOutResponse>(
+      'auth.sign-out',
+      keyHash,
+      credentialHash,
+      now,
+    );
+    if (replay !== undefined) {
+      this.logger.info('auth.sign_out_replayed', { outcome: 'replayed' });
+      return replay;
+    }
     const authenticated = this.authenticateAccess(accessToken);
-    this.database.revokeSessionFamily(authenticated.session.family_id, asIso(this.clock.now()));
+    const response: SignOutResponse = { signedOut: true };
+    this.database.transaction(() => {
+      this.database.revokeSessionFamily(authenticated.session.family_id, asIso(now));
+      this.database.createOperation({
+        operation: 'auth.sign-out',
+        keyHash,
+        credentialHash,
+        accountId: authenticated.accountId,
+        responseStatus: 200,
+        responseCiphertext: this.encryptResponse(response),
+        createdAt: asIso(now),
+        expiresAt: asIso(addSeconds(now, OPERATION_IDEMPOTENCY_RETENTION_MS / 1_000)),
+      });
+    });
     this.logger.info('auth.sign_out_succeeded', { outcome: 'revoked_family' });
-    return { signedOut: true };
+    return response;
   }
 
   exportAccount(accessToken: unknown): AccountExportResponse {
@@ -204,10 +293,9 @@ export class AuthService {
         type: 'account.exported',
         occurredAt: asIso(now),
       });
-      const account = this.database.sqlite
-        .prepare('SELECT id, created_at FROM accounts WHERE id = ?')
-        .get(authenticated.accountId) as { id: string; created_at: string } | undefined;
-      if (account === undefined) {
+      const account = this.database.findAccount(authenticated.accountId);
+      const appleSubject = this.database.findAppleSubject(authenticated.accountId);
+      if (account === undefined || appleSubject === undefined) {
         throw new AuthFailure(401, 'session_invalid');
       }
       const consents: AccountConsent[] = this.database
@@ -215,6 +303,31 @@ export class AuthService {
         .map((consent) => ({
           policyVersion: consent.policy_version,
           acceptedAt: consent.accepted_at,
+        }));
+      const sessions: AccountSession[] = this.database
+        .listSessions(authenticated.accountId)
+        .map((session) => ({
+          id: session.id,
+          familyId: session.family_id,
+          status:
+            session.revoked_at !== null
+              ? 'revoked'
+              : isExpired(session.access_expires_at, now) &&
+                  isExpired(session.refresh_expires_at, now)
+                ? 'expired'
+                : 'active',
+          createdAt: session.created_at,
+          accessExpiresAt: session.access_expires_at,
+          refreshExpiresAt: session.refresh_expires_at,
+          revokedAt: session.revoked_at,
+        }));
+      const operations: AccountOperation[] = this.database
+        .listOperations(authenticated.accountId)
+        .map((operation) => ({
+          operation: operation.operation,
+          responseStatus: operation.response_status,
+          createdAt: operation.created_at,
+          expiresAt: operation.expires_at,
         }));
       const auditEvents: AccountAuditEvent[] = this.database
         .listAuditEvents(authenticated.accountId)
@@ -225,7 +338,10 @@ export class AuthService {
       return {
         accountId: account.id,
         createdAt: account.created_at,
+        appleSubject,
         consents,
+        sessions,
+        operations,
         auditEvents,
       } satisfies AccountExportResponse;
     });
@@ -234,23 +350,41 @@ export class AuthService {
   }
 
   deleteAccount(accessToken: unknown, idempotencyKey: unknown): AccountDeletionResponse {
+    if (!validText(accessToken, 16_384)) {
+      throw new AuthFailure(401, 'session_invalid');
+    }
     const key = this.parseIdempotencyKey(idempotencyKey);
-    const keyHash = key === undefined ? null : this.hash(key);
-    if (keyHash !== null) {
-      const tombstone = this.database.findDeletionByKeyHash(keyHash);
-      if (tombstone !== undefined) {
-        return this.decodeDeletionResponse(tombstone.response_json);
-      }
+    const keyHash = this.hash(key);
+    const credentialHash = this.hash(accessToken);
+    const now = this.clock.now();
+    const replay = this.replayOperation<AccountDeletionResponse>(
+      'account.delete',
+      keyHash,
+      credentialHash,
+      now,
+    );
+    if (replay !== undefined) {
+      this.logger.info('auth.account_delete_replayed', { outcome: 'replayed' });
+      return replay;
     }
     const authenticated = this.authenticateAccess(accessToken);
     const response: AccountDeletionResponse = { deleted: true };
     const responseJson = JSON.stringify(response);
-    const now = asIso(this.clock.now());
     this.database.transaction(() => {
+      this.database.createOperation({
+        operation: 'account.delete',
+        keyHash,
+        credentialHash,
+        accountId: authenticated.accountId,
+        responseStatus: 200,
+        responseCiphertext: this.encryptResponse(response),
+        createdAt: asIso(now),
+        expiresAt: asIso(addSeconds(now, OPERATION_IDEMPOTENCY_RETENTION_MS / 1_000)),
+      });
       this.database.saveDeletionTombstone({
         accountId: authenticated.accountId,
-        idempotencyKeyHash: keyHash,
-        deletedAt: now,
+        idempotencyKeyHash: null,
+        deletedAt: asIso(now),
         responseStatus: 200,
         responseJson,
       });
@@ -304,6 +438,7 @@ export class AuthService {
       accessExpiresAt,
       refreshTokenHash: this.hash(refreshToken),
       refreshExpiresAt,
+      createdAt: asIso(now),
     };
     return {
       record,
@@ -322,9 +457,9 @@ export class AuthService {
     return createHmac('sha256', this.hashSecret).update(value, 'utf8').digest('hex');
   }
 
-  private parsePolicyVersion(value: unknown): string | undefined {
-    if (value === undefined) {
-      return undefined;
+  private parsePolicyVersion(value: unknown): string {
+    if (value === undefined || value === null) {
+      throw new AuthFailure(400, 'consent_policy_version_required');
     }
     if (!validText(value, 128) || !/^[A-Za-z0-9._:-]+$/.test(value)) {
       throw new AuthFailure(400, 'consent_policy_version_invalid');
@@ -332,9 +467,9 @@ export class AuthService {
     return value;
   }
 
-  private parseIdempotencyKey(value: unknown): string | undefined {
-    if (value === undefined) {
-      return undefined;
+  private parseIdempotencyKey(value: unknown): string {
+    if (value === undefined || value === null) {
+      throw new AuthFailure(400, 'idempotency_key_required');
     }
     if (!validText(value, 256) || !/^[\x21-\x7E]+$/.test(value)) {
       throw new AuthFailure(400, 'idempotency_key_invalid');
@@ -342,20 +477,71 @@ export class AuthService {
     return value;
   }
 
-  private decodeDeletionResponse(value: string): AccountDeletionResponse {
-    try {
-      const parsed: unknown = JSON.parse(value);
-      if (
-        typeof parsed === 'object' &&
-        parsed !== null &&
-        'deleted' in parsed &&
-        parsed.deleted === true
-      ) {
-        return { deleted: true };
-      }
-    } catch {
-      // Treat a corrupt tombstone as a safe server failure, without exposing its contents.
+  private replayOperation<T>(
+    operation: OperationName,
+    keyHash: string,
+    credentialHash: string,
+    now: Date,
+  ): T | undefined {
+    const record = this.database.findOperation(operation, keyHash);
+    if (record === undefined) {
+      return undefined;
     }
-    throw new AuthFailure(500, 'deletion_record_invalid');
+    if (record.credential_hash !== credentialHash) {
+      throw new AuthFailure(409, 'idempotency_key_conflict');
+    }
+    if (
+      record.account_id !== null &&
+      this.database.findAccount(record.account_id) === undefined &&
+      operation !== 'account.delete'
+    ) {
+      this.database.deleteOperation(operation, keyHash);
+      return undefined;
+    }
+    if (isExpired(record.expires_at, now)) {
+      this.database.deleteOperation(operation, keyHash);
+      return undefined;
+    }
+    try {
+      return this.decryptResponse<T>(record.response_ciphertext);
+    } catch {
+      // Treat a corrupt replay record as a safe server failure, without exposing its contents.
+      throw new AuthFailure(500, 'idempotency_record_invalid');
+    }
+  }
+
+  private encryptResponse(value: unknown): string {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', this.operationCipherKey(), iv);
+    cipher.setAAD(Buffer.from('alyte-operation-v1', 'utf8'));
+    const ciphertext = Buffer.concat([
+      cipher.update(JSON.stringify(value), 'utf8'),
+      cipher.final(),
+    ]);
+    const tag = cipher.getAuthTag();
+    return [iv, tag, ciphertext].map((part) => part.toString('base64url')).join('.');
+  }
+
+  private decryptResponse<T>(value: string): T {
+    const [ivEncoded, tagEncoded, ciphertextEncoded] = value.split('.');
+    if (ivEncoded === undefined || tagEncoded === undefined || ciphertextEncoded === undefined) {
+      throw new Error('idempotency_ciphertext_invalid');
+    }
+    const decipher = createDecipheriv(
+      'aes-256-gcm',
+      this.operationCipherKey(),
+      Buffer.from(ivEncoded, 'base64url'),
+    );
+    decipher.setAAD(Buffer.from('alyte-operation-v1', 'utf8'));
+    decipher.setAuthTag(Buffer.from(tagEncoded, 'base64url'));
+    const plaintext = Buffer.concat([
+      decipher.update(Buffer.from(ciphertextEncoded, 'base64url')),
+      decipher.final(),
+    ]).toString('utf8');
+    return JSON.parse(plaintext) as T;
+  }
+
+  private operationCipherKey(): Buffer {
+    return createHash('sha256').update(this.hashSecret).digest();
   }
 }

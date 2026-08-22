@@ -1,6 +1,12 @@
 import Database from 'better-sqlite3';
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
+
+export const SESSION_RETENTION_MS = 24 * 60 * 60 * 1_000;
+export const OPERATION_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1_000;
+
+export type OperationName =
+  'auth.apple.exchange' | 'auth.refresh' | 'auth.sign-out' | 'account.delete';
 
 export interface AccountRow {
   readonly id: string;
@@ -16,6 +22,7 @@ export interface SessionRow {
   readonly refresh_token_hash: string;
   readonly refresh_expires_at: string;
   readonly revoked_at: string | null;
+  readonly created_at: string;
 }
 
 export interface ConsentRow {
@@ -34,6 +41,34 @@ export interface DeletionTombstoneRow {
   readonly deleted_at: string;
   readonly response_status: number;
   readonly response_json: string;
+}
+
+export interface OperationRow {
+  readonly operation: OperationName;
+  readonly key_hash: string;
+  readonly credential_hash: string;
+  readonly account_id: string | null;
+  readonly response_status: number;
+  readonly response_ciphertext: string;
+  readonly created_at: string;
+  readonly expires_at: string;
+}
+
+export interface SessionExportRow {
+  readonly id: string;
+  readonly family_id: string;
+  readonly access_expires_at: string;
+  readonly refresh_expires_at: string;
+  readonly revoked_at: string | null;
+  readonly created_at: string;
+}
+
+export interface OperationExportRow {
+  readonly operation: OperationName;
+  readonly account_id: string | null;
+  readonly response_status: number;
+  readonly created_at: string;
+  readonly expires_at: string;
 }
 
 export interface AccountDatabaseOptions {
@@ -70,6 +105,7 @@ const migrations: readonly string[] = [
       revoked_at TEXT,
       replaced_by TEXT
     );
+
     CREATE INDEX sessions_family_idx ON sessions(family_id);
     CREATE INDEX sessions_account_idx ON sessions(account_id);
 
@@ -88,6 +124,22 @@ const migrations: readonly string[] = [
       response_status INTEGER NOT NULL,
       response_json TEXT NOT NULL
     );
+  `,
+  `
+    ALTER TABLE sessions ADD COLUMN created_at TEXT NOT NULL DEFAULT '';
+
+    CREATE TABLE operation_idempotency (
+      operation TEXT NOT NULL CHECK (operation IN ('auth.apple.exchange', 'auth.refresh', 'auth.sign-out', 'account.delete')),
+      key_hash TEXT NOT NULL,
+      credential_hash TEXT NOT NULL,
+      account_id TEXT,
+      response_status INTEGER NOT NULL,
+      response_ciphertext TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      PRIMARY KEY (operation, key_hash)
+    );
+    CREATE INDEX operation_idempotency_account_idx ON operation_idempotency(account_id, created_at);
   `,
 ];
 
@@ -203,13 +255,14 @@ export class AccountDatabase {
     accessExpiresAt: string;
     refreshTokenHash: string;
     refreshExpiresAt: string;
+    createdAt: string;
   }): void {
     this.sqlite
       .prepare(
         `INSERT INTO sessions
           (id, account_id, family_id, access_token_hash, access_expires_at,
-           refresh_token_hash, refresh_expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+           refresh_token_hash, refresh_expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -219,6 +272,7 @@ export class AccountDatabase {
         session.accessExpiresAt,
         session.refreshTokenHash,
         session.refreshExpiresAt,
+        session.createdAt,
       );
   }
 
@@ -263,6 +317,108 @@ export class AccountDatabase {
         'SELECT type, occurred_at FROM audit_events WHERE account_id = ? ORDER BY occurred_at ASC, id ASC',
       )
       .all(accountId) as AuditEventRow[];
+  }
+
+  findAccount(accountId: string): AccountRow | undefined {
+    return this.sqlite
+      .prepare('SELECT id, created_at FROM accounts WHERE id = ?')
+      .get(accountId) as AccountRow | undefined;
+  }
+
+  findAppleSubject(accountId: string): string | undefined {
+    const row = this.sqlite
+      .prepare('SELECT subject FROM apple_subjects WHERE account_id = ?')
+      .get(accountId) as { subject: string } | undefined;
+    return row?.subject;
+  }
+
+  listSessions(accountId: string): readonly SessionExportRow[] {
+    return this.sqlite
+      .prepare(
+        `SELECT id, family_id, access_expires_at, refresh_expires_at, revoked_at, created_at
+         FROM sessions WHERE account_id = ? ORDER BY created_at ASC, id ASC`,
+      )
+      .all(accountId) as SessionExportRow[];
+  }
+
+  findOperation(operation: OperationName, keyHash: string): OperationRow | undefined {
+    return this.sqlite
+      .prepare(
+        `SELECT operation, key_hash, credential_hash, account_id, response_status,
+                response_ciphertext, created_at, expires_at
+         FROM operation_idempotency WHERE operation = ? AND key_hash = ?`,
+      )
+      .get(operation, keyHash) as OperationRow | undefined;
+  }
+
+  deleteOperation(operation: OperationName, keyHash: string): void {
+    this.sqlite
+      .prepare('DELETE FROM operation_idempotency WHERE operation = ? AND key_hash = ?')
+      .run(operation, keyHash);
+  }
+
+  createOperation(operation: {
+    operation: OperationName;
+    keyHash: string;
+    credentialHash: string;
+    accountId: string | null;
+    responseStatus: number;
+    responseCiphertext: string;
+    createdAt: string;
+    expiresAt: string;
+  }): void {
+    this.sqlite
+      .prepare(
+        `INSERT INTO operation_idempotency
+          (operation, key_hash, credential_hash, account_id, response_status,
+           response_ciphertext, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        operation.operation,
+        operation.keyHash,
+        operation.credentialHash,
+        operation.accountId,
+        operation.responseStatus,
+        operation.responseCiphertext,
+        operation.createdAt,
+        operation.expiresAt,
+      );
+  }
+
+  listOperations(accountId: string): readonly OperationExportRow[] {
+    return this.sqlite
+      .prepare(
+        `SELECT operation, account_id, response_status, created_at, expires_at
+         FROM operation_idempotency WHERE account_id = ? ORDER BY created_at ASC, operation ASC`,
+      )
+      .all(accountId) as OperationExportRow[];
+  }
+
+  cleanupExpired(now: Date, limit = 100): { sessions: number; operations: number } {
+    const nowIso = now.toISOString();
+    const sessionCutoff = new Date(now.getTime() - SESSION_RETENTION_MS).toISOString();
+    const cleanup = this.transaction(() => {
+      const operations = this.sqlite
+        .prepare(
+          `DELETE FROM operation_idempotency WHERE rowid IN (
+             SELECT rowid FROM operation_idempotency WHERE expires_at <= ? LIMIT ?
+           )`,
+        )
+        .run(nowIso, limit).changes;
+      const sessions = this.sqlite
+        .prepare(
+          `DELETE FROM sessions WHERE rowid IN (
+             SELECT rowid FROM sessions
+             WHERE (revoked_at IS NOT NULL AND revoked_at <= ?)
+                OR (access_expires_at <= ? AND refresh_expires_at <= ?)
+             LIMIT ?
+           )`,
+        )
+        .run(sessionCutoff, nowIso, nowIso, limit).changes;
+      return { sessions, operations };
+    });
+    return cleanup;
   }
 
   saveDeletionTombstone(tombstone: {
