@@ -18,6 +18,39 @@ const aliases: readonly ExtractionAliasEntry[] = [
   },
 ];
 
+const tableAliases: readonly ExtractionAliasEntry[] = [
+  {
+    id: 'biomarker.vitamin_d_total',
+    aliases: ['Vitamin D', '25-OH vitamin D'],
+    specimens: ['blood', 'serum', 'plasma', 'unknown'],
+    units: ['ng/mL', 'nmol/L'],
+  },
+  {
+    id: 'biomarker.ldl_c',
+    aliases: ['LDL cholesterol'],
+    specimens: ['blood', 'serum', 'plasma', 'unknown'],
+    units: ['mg/dL', 'mmol/L'],
+  },
+  {
+    id: 'biomarker.hdl_c',
+    aliases: ['HDL cholesterol'],
+    specimens: ['blood', 'serum', 'plasma', 'unknown'],
+    units: ['mg/dL', 'mmol/L'],
+  },
+  {
+    id: 'biomarker.triglycerides',
+    aliases: ['Triglycerides'],
+    specimens: ['blood', 'serum', 'plasma', 'unknown'],
+    units: ['mg/dL', 'mmol/L'],
+  },
+  {
+    id: 'biomarker.hba1c',
+    aliases: ['HbA1c'],
+    specimens: ['blood', 'unknown'],
+    units: ['%', 'mmol/mol'],
+  },
+];
+
 describe('local extraction domain', () => {
   it('rejects untrusted OCR contract data outside normalized bounds', () => {
     assert.throws(
@@ -166,6 +199,92 @@ describe('local extraction domain', () => {
     }
     assert.equal(parseComparatorValue('1.234,56')?.kind, 'numeric');
     assert.equal(parseComparatorValue('1.234,56')?.value, 1234.56);
+  });
+
+  it('infers unambiguous numeric date order before device locale', () => {
+    assert.deepEqual(parseLabDate('20.08.2026', 'en-US'), {
+      kind: 'known',
+      value: '2026-08-20',
+    });
+    assert.deepEqual(parseLabDate('08/22/2026', 'de-DE'), {
+      kind: 'known',
+      value: '2026-08-22',
+    });
+  });
+
+  it('maps aliases anywhere in table rows while selecting only an unambiguous result token', () => {
+    const texts = [
+      ['ng/mL  31  30 - 100  Vitamin D(25-OH)', 'biomarker.vitamin_d_total', 31, 'ng/mL'],
+      ['mg/dL  LDL cholesterol  H  <115  118', 'biomarker.ldl_c', 118, 'mg/dL'],
+      ['62  mg/dL  > 40  HDL cholesterol', 'biomarker.hdl_c', 62, 'mg/dL'],
+      ['mg/dL  < 150  92  Triglycerides', 'biomarker.triglycerides', 92, 'mg/dL'],
+      ['4.0 - 5.6  5.2  %  HbA1c', 'biomarker.hba1c', 5.2, '%'],
+    ] as const;
+    const rows = groupObservationsIntoRows(
+      texts.map(([text], index) => ({
+        id: `table-${index}`,
+        text,
+        alternatives: [],
+        boundingBox: { x: 0.1, y: 0.1 + index * 0.1, width: 0.8, height: 0.04 },
+        pageIndex: 0,
+        orientation: 0,
+        recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+      })),
+      { aliases: tableAliases, collectionDate: { kind: 'known', value: '2026-08-20' } },
+    );
+    assert.equal(rows.length, texts.length);
+    for (const [index, [, biomarkerId, value, unit]] of texts.entries()) {
+      const row = rows[index];
+      assert.equal(row?.proposedBiomarkerId, biomarkerId);
+      assert.equal(row?.proposedValue.kind, 'numeric');
+      assert.equal(row?.proposedValue.value, value);
+      assert.equal(row?.proposedUnit, unit);
+      assert.ok(!row?.reviewReasons.includes('unsupported-alias'));
+    }
+    assert.equal(rows[0]?.sourceLabel, 'Vitamin D(25-OH)');
+    assert.equal(rows[1]?.sourceReferenceInterval, '<115');
+    assert.equal(rows[2]?.sourceReferenceInterval, '> 40');
+    assert.equal(rows[3]?.sourceReferenceInterval, '< 150');
+    assert.equal(rows[4]?.sourceReferenceInterval, '4.0 - 5.6');
+  });
+
+  it('maps a known alias but flags multiple scalar tokens instead of guessing', () => {
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'ambiguous-table',
+          text: 'mg/dL LDL cholesterol 100 118',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.8, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+      ],
+      { aliases: tableAliases, collectionDate: { kind: 'known', value: '2026-08-20' } },
+    );
+    assert.equal(row?.proposedBiomarkerId, 'biomarker.ldl_c');
+    assert.ok(row?.reviewReasons.includes('unsupported-layout'));
+    assert.equal(row?.proposedValue.kind, 'free_text');
+  });
+
+  it('keeps a bounded result when no separate scalar result is present', () => {
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'bounded-result',
+          text: 'LDL-C <3.8 mmol/L',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+      ],
+      { aliases, collectionDate: { kind: 'known', value: '2026-08-20' } },
+    );
+    assert.deepEqual(row?.proposedValue, { kind: 'bounded', comparator: '<', value: 3.8 });
+    assert.equal(row?.proposedReferenceInterval, null);
   });
 
   it('preserves a laboratory reference interval and flag separately from the measured value', () => {

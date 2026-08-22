@@ -147,6 +147,8 @@
     "extractionLocation": "Source location (page · normalized position)",
     "extractionSourcePreview": "Preview source page and region",
     "extractionSourcePreviewTitle": "Original source preview",
+    "extractionSourceRegionLabel": "Selected source region on page",
+    "extractionSourceRegion": "Page {page} · highlighted region x {x}, y {y}",
     "extractionNeedsReview": "Needs review",
     "extractionReady": "Ready",
     "extractionSaveRow": "Save row correction",

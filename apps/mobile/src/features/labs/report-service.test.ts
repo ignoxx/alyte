@@ -443,6 +443,69 @@ describe('protected Lab Report import lifecycle', () => {
     assert.ok(draft.rows[1]?.reviewReasons.includes('ambiguous-date'));
   });
 
+  test('infers unambiguous collection date order when device and report locales differ', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const ocr: VisionOCR = {
+      async recognize(): Promise<VisionOCRResult> {
+        return {
+          contractVersion: 'alyte.vision.ocr.v1',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'eu-date-on-us-device',
+              text: 'Collection date 20.08.2026 08:15',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.1, width: 0.5, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: null, internalConfidence: null },
+            },
+            {
+              id: 'eu-date-value',
+              text: 'LDL-C 3.8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: null, internalConfidence: null },
+            },
+            {
+              id: 'us-date-on-eu-report',
+              text: 'Collection date 08/22/2026',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.5, width: 0.5, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'de', internalConfidence: null },
+            },
+            {
+              id: 'us-date-value',
+              text: 'LDL-C 4.0 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.6, width: 0.5, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'de', internalConfidence: null },
+            },
+          ],
+        };
+      },
+    };
+    const service = createService(repository, files, new FakePdf(), ocr);
+    const report = (await service.importImages([source('locale-date-boundary', 'image')]))[0]!
+      .report;
+    const draft = await service.startExtraction(report.id);
+    assert.deepEqual(
+      draft.rows.map((row) => row.collectionDate),
+      [
+        { kind: 'known', value: '2026-08-20' },
+        { kind: 'known', value: '2026-08-22' },
+      ],
+    );
+  });
+
   test('copies an image into protected storage, records page metadata, and survives relaunch', async () => {
     const databasePath = join(
       mkdtempSync(join(tmpdir(), 'alyte-reports-relaunch-')),

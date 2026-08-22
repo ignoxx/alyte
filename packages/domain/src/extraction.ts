@@ -6,7 +6,9 @@ export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.ocr.v1' as const;
 export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v1' as const;
 
 const NUMERIC_TOKEN_PATTERN =
-  '[<>≤≥]?\\s*[+-]?(?:(?:\\d{1,3}(?:[ .\\u00a0\\u202f]\\d{3})+(?:,\\d+)?)|(?:\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)|(?:\\d+(?:[.,]\\d+)?)|(?:\\.\\d+))';
+  '[<>≤≥]?\\s*[+-]?(?:(?:\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)|(?:\\d+(?:[.,]\\d+)?)|(?:\\.\\d+))';
+const PLAIN_NUMERIC_TOKEN_PATTERN =
+  '[+-]?(?:(?:\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)|(?:\\d+(?:[.,]\\d+)?)|(?:\\.\\d+))';
 
 export type NormalizedBoundingBox = {
   readonly x: number;
@@ -321,6 +323,8 @@ export function parseLabDate(input: string, locale = 'en-US'): LabDateState | nu
   let month: number;
   let day: number;
   if (String(parts[0]).length === 4) [year, month, day] = parts as [number, number, number];
+  else if ((parts[0] ?? 0) > 12) [day, month, year] = parts as [number, number, number];
+  else if ((parts[1] ?? 0) > 12) [month, day, year] = parts as [number, number, number];
   else if (/^en-(us|ca)/i.test(locale)) [month, day, year] = parts as [number, number, number];
   else [day, month, year] = parts as [number, number, number];
   if (year < 100) year += 2000;
@@ -392,6 +396,55 @@ function specimenCompatible(
   if (biomarkerId === null || specimen === 'unknown') return true;
   const entry = aliases.find((candidate) => candidate.id === biomarkerId);
   return entry === undefined || entry.specimens.includes(specimen);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function aliasPattern(alias: string): RegExp | null {
+  const words = normalizeAlias(alias).split(' ').filter(Boolean);
+  if (words.length === 0) return null;
+  return new RegExp(words.map(escapeRegExp).join('[^\\p{L}\\p{N}]+'), 'iu');
+}
+
+function findAliasInText(
+  sourceText: string,
+  aliases: readonly ExtractionAliasEntry[],
+): { readonly id: CanonicalId; readonly text: string } | null {
+  const matches = aliases.flatMap((entry) =>
+    entry.aliases.flatMap((alias) => {
+      const pattern = aliasPattern(alias);
+      const match = pattern?.exec(sourceText);
+      return match === null || match === undefined
+        ? []
+        : (() => {
+            const start = match.index;
+            let end = start + match[0].length;
+            if (sourceText[end] === '(') {
+              const closing = sourceText.indexOf(')', end + 1);
+              if (closing >= 0) end = closing + 1;
+            }
+            return [
+              {
+                id: entry.id as CanonicalId,
+                text: sourceText.slice(start, end),
+                length: normalizeAlias(alias).length,
+              },
+            ];
+          })();
+    }),
+  );
+  matches.sort((a, b) => b.length - a.length || a.text.length - b.text.length);
+  const match = matches[0];
+  return match === undefined ? null : { id: match.id, text: match.text };
+}
+
+function findUnitInText(sourceText: string): string | null {
+  const match = sourceText.match(
+    /(?:mg\s*\/\s*dL?|mmol\s*\/\s*L|g\s*\/\s*dL?|g\s*\/\s*L|ng\s*\/\s*mL|nmol\s*\/\s*L|µ?g\s*\/\s*L|pg\s*\/\s*mL|pmol\s*\/\s*L|IU\s*\/\s*L|U\s*\/\s*L|fL|%|mmol\s*\/\s*mol)/iu,
+  );
+  return normalizeUnit(match?.[0] ?? null);
 }
 
 export function groupObservationsIntoRows(
@@ -475,42 +528,92 @@ function parseSourceRow(
       { ...firstBox },
     ),
   };
-  const columns = sourceText
-    .split(/\t+|\s{2,}/)
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const valueMatch = sourceText.match(
-    new RegExp(`(?:^|\\s)(${NUMERIC_TOKEN_PATTERN})(?=\\s|$)`, 'u'),
+  const aliasMatch = findAliasInText(sourceText, aliases);
+  const numericCandidates = [...sourceText.matchAll(new RegExp(NUMERIC_TOKEN_PATTERN, 'gu'))]
+    .map((match) => {
+      const raw = match[0].trim();
+      const start = (match.index ?? 0) + match[0].indexOf(raw);
+      return {
+        raw,
+        start,
+        end: start + raw.length,
+        value: parseComparatorValue(raw),
+      };
+    })
+    .filter((candidate) => {
+      const before = sourceText[candidate.start - 1] ?? '';
+      const after = sourceText[candidate.end] ?? '';
+      const afterAfter = sourceText[candidate.end + 1] ?? '';
+      return (
+        !/[\p{L}\p{N}]/u.test(before) &&
+        !/[\p{L}\p{N}]/u.test(after) &&
+        !(after === '-' && /[\p{L}]/u.test(afterAfter))
+      );
+    });
+  const referenceCandidates = [
+    ...sourceText.matchAll(
+      new RegExp(
+        `(?:[<>≤≥]\\s*${PLAIN_NUMERIC_TOKEN_PATTERN}|${PLAIN_NUMERIC_TOKEN_PATTERN}\\s*(?:-|–|—|to)\\s*[<>≤≥]?\\s*${PLAIN_NUMERIC_TOKEN_PATTERN})`,
+        'giu',
+      ),
+    ),
+  ].map((match) => ({
+    raw: match[0].trim(),
+    start: match.index ?? 0,
+    end: (match.index ?? 0) + match[0].length,
+  }));
+  const rangeReferences = referenceCandidates.filter(
+    (reference) => !/^[<>≤≥]/u.test(reference.raw),
   );
-  const columnValue = columns.find((column) => {
-    const parsed = parseComparatorValue(column);
-    return parsed?.kind === 'numeric' || parsed?.kind === 'bounded';
-  });
-  const candidateValue = columnValue?.match(new RegExp(NUMERIC_TOKEN_PATTERN, 'u'))?.[0];
-  const rawValue = (valueMatch?.[1] ?? candidateValue ?? '').trim();
-  const valueStart = rawValue ? sourceText.lastIndexOf(rawValue) : -1;
-  const rawLabel = valueStart > 0 ? sourceText.slice(0, valueStart) : sourceText;
-  const trailing = valueStart >= 0 ? sourceText.slice(valueStart + rawValue.length).trim() : '';
+  const overlapsRangeReference = (candidate: { start: number; end: number }) =>
+    rangeReferences.some(
+      (reference) => candidate.start < reference.end && candidate.end > reference.start,
+    );
+  const numericOutsideRange = numericCandidates.filter(
+    (candidate) => candidate.value?.kind === 'numeric' && !overlapsRangeReference(candidate),
+  );
+  const isReference = (candidate: {
+    start: number;
+    end: number;
+    value?: MeasurementValue | null;
+  }) =>
+    referenceCandidates.some(
+      (reference) =>
+        candidate.start < reference.end &&
+        candidate.end > reference.start &&
+        (!/^[<>≤≥]/u.test(reference.raw) || numericOutsideRange.length > 0),
+    );
+  const scalarCandidates = numericCandidates.filter(
+    (candidate) => candidate.value?.kind === 'numeric' && !isReference(candidate),
+  );
+  const boundedCandidates = numericCandidates.filter(
+    (candidate) => candidate.value?.kind === 'bounded' && !isReference(candidate),
+  );
+  const valueCandidates = scalarCandidates.length > 0 ? scalarCandidates : boundedCandidates;
+  const selectedValue = valueCandidates.length === 1 ? valueCandidates[0] : undefined;
+  const rawValue = selectedValue?.raw ?? '';
+  const valueStart = selectedValue?.start ?? -1;
+  const rawLabel = valueStart > 0 ? sourceText.slice(0, valueStart).trim() : sourceText;
   const proposedValue = parseComparatorValue(rawValue) ?? {
     kind: 'free_text' as const,
     value: sourceText,
   };
-  const unit = normalizeUnit(
-    trailing.split(/\s+/).find((part) => /[%/]|(?:mg|mmol|ng|pg|g|u|iu|fl|l)/i.test(part)) ?? null,
+  const unit = findUnitInText(sourceText);
+  const effectiveReferences = referenceCandidates.filter(
+    (reference) => !/^[<>≤≥]/u.test(reference.raw) || numericOutsideRange.length > 0,
   );
-  const referenceCandidate =
-    trailing.match(
-      /(?:^|\s)((?:[<>≤≥]\s*)?[+-]?(?:\d[\d\s\u00a0\u202f.,]*\d|\d|\.\d+)(?:\s*(?:-|–|—|to)\s*[<>≤≥]?\s*[+-]?(?:\d[\d\s\u00a0\u202f.,]*\d|\d|\.\d+))?)(?=\s|$)/iu,
-    )?.[1] ?? null;
+  const referenceCandidate = effectiveReferences[0]?.raw ?? null;
   const reference = parseReferenceInterval(referenceCandidate);
   const flagCandidate =
-    trailing.match(/(?:^|\s)(high|low|normal|abnormal|h|l|n)(?=\s|$)/iu)?.[1] ?? null;
-  const label = rawLabel.trim() || sourceText;
-  const biomarkerId = proposeBiomarkerId(label, aliases);
+    sourceText.match(/(?:^|\s)(high|low|normal|abnormal|h|l|n)(?=\s|$)/iu)?.[1] ?? null;
+  const label = aliasMatch?.text ?? (rawLabel.trim() || sourceText);
+  const biomarkerId = aliasMatch?.id ?? proposeBiomarkerId(label, aliases);
   const reasons: ExtractionReviewReason[] = [];
   if (!label) reasons.push('missing-label');
   if (!rawValue) reasons.push('missing-value');
-  if (proposedValue.kind === 'free_text' && !rawValue) reasons.push('unparseable-value');
+  if (proposedValue.kind === 'free_text') reasons.push('unparseable-value');
+  if (valueCandidates.length > 1 || effectiveReferences.length > 1)
+    reasons.push('unsupported-layout');
   if (biomarkerId === null) reasons.push('unsupported-alias');
   if (!unitCompatible(unit, biomarkerId, aliases)) reasons.push('incompatible-unit');
   if (!specimenCompatible(specimenType, biomarkerId, aliases))

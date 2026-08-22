@@ -59,7 +59,10 @@ export function ExtractionDraftScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
-  const [sourcePreview, setSourcePreview] = useState<LabReportPreview | null>(null);
+  const [sourcePreview, setSourcePreview] = useState<{
+    readonly preview: LabReportPreview;
+    readonly row: ExtractionDraftRow;
+  } | null>(null);
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
 
   const load = useCallback(async () => {
@@ -156,10 +159,12 @@ export function ExtractionDraftScreen() {
     }
   }
 
-  async function openSource() {
+  async function openSource(row: ExtractionDraftRow) {
     setBusy(true);
     try {
-      setSourcePreview(await reports.previewOriginal(route.params.reportId));
+      const preview = await reports.previewOriginal(route.params.reportId);
+      if (preview.uris[row.source.pageIndex] === undefined) throw new Error('Source page missing');
+      setSourcePreview({ preview, row });
     } catch {
       setError(true);
     } finally {
@@ -212,7 +217,7 @@ export function ExtractionDraftScreen() {
             <AppButton
               disabled={busy}
               label={t('labs.extractionSourcePreview')}
-              onPress={() => void openSource()}
+              onPress={() => void openSource(row)}
               tone="quiet"
             />
             {row.reviewReasons.length > 0 && (
@@ -328,15 +333,38 @@ export function ExtractionDraftScreen() {
             tone="quiet"
           />
           <ScrollView contentContainerStyle={styles.previewPages}>
-            {sourcePreview?.uris.map((uri, index) => (
-              <Image
-                accessibilityLabel={`${t('labs.reportPreviewImageLabel')} ${index + 1}`}
-                key={`${uri}-${index}`}
-                resizeMode="contain"
-                source={{ uri }}
-                style={styles.previewImage}
-              />
-            ))}
+            {sourcePreview !== null && (
+              <View
+                accessible
+                accessibilityLabel={`${t('labs.extractionSourceRegionLabel')} ${sourcePreview.row.source.pageIndex + 1}`}
+                style={styles.previewPage}
+              >
+                <Image
+                  accessibilityLabel={`${t('labs.reportPreviewImageLabel')} ${sourcePreview.row.source.pageIndex + 1}`}
+                  resizeMode="contain"
+                  source={{ uri: sourcePreview.preview.uris[sourcePreview.row.source.pageIndex] }}
+                  style={styles.previewImage}
+                />
+                <View
+                  pointerEvents="none"
+                  style={[
+                    styles.sourceRegion,
+                    {
+                      height: `${sourcePreview.row.source.boundingBox.height * 100}%`,
+                      left: `${sourcePreview.row.source.boundingBox.x * 100}%`,
+                      top: `${sourcePreview.row.source.boundingBox.y * 100}%`,
+                      width: `${sourcePreview.row.source.boundingBox.width * 100}%`,
+                    },
+                  ]}
+                />
+                <AppText style={styles.sourceRegionText}>
+                  {t('labs.extractionSourceRegion')
+                    .replace('{page}', String(sourcePreview.row.source.pageIndex + 1))
+                    .replace('{x}', sourcePreview.row.source.boundingBox.x.toFixed(3))
+                    .replace('{y}', sourcePreview.row.source.boundingBox.y.toFixed(3))}
+                </AppText>
+              </View>
+            )}
           </ScrollView>
         </View>
       </Modal>
@@ -364,6 +392,14 @@ const styles = StyleSheet.create({
   },
   decisionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   previewModal: { backgroundColor: colors.canvas, flex: 1, padding: spacing.lg },
+  previewPage: { minHeight: 560, position: 'relative', width: '100%' },
   previewPages: { gap: spacing.md, paddingVertical: spacing.md },
   previewImage: { height: 520, width: '100%' },
+  sourceRegion: {
+    borderColor: colors.danger,
+    borderRadius: 4,
+    borderWidth: 3,
+    position: 'absolute',
+  },
+  sourceRegionText: { color: colors.danger, marginTop: spacing.xs },
 });
