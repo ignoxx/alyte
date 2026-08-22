@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
@@ -45,6 +45,8 @@ export function LabsScreen() {
   const [reports, setReports] = useState<readonly LabReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const { fontScale } = useWindowDimensions();
+  const usesAccessibilityTextSize = fontScale >= 1.3;
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
 
   const loadRecords = useCallback(async () => {
@@ -71,15 +73,17 @@ export function LabsScreen() {
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
-        {!loading && !error && (records.length > 0 || reports.length > 0) && (
-          <View style={styles.actionRow}>
+        {!loading && (error || records.length > 0 || reports.length > 0) && (
+          <View style={usesAccessibilityTextSize ? styles.actionStack : styles.actionRow}>
             <AppButton
               label={t('labs.action')}
               onPress={() => navigation.navigate('LabReportImport')}
+              style={usesAccessibilityTextSize ? styles.fullWidthAction : undefined}
             />
             <AppButton
               label={t('labs.manualAction')}
               onPress={() => navigation.navigate('LabRecordForm')}
+              style={usesAccessibilityTextSize ? styles.fullWidthAction : undefined}
               tone="secondary"
             />
           </View>
@@ -105,10 +109,12 @@ export function LabsScreen() {
                 <AppButton
                   label={t('labs.action')}
                   onPress={() => navigation.navigate('LabReportImport')}
+                  style={usesAccessibilityTextSize ? styles.fullWidthAction : undefined}
                 />
                 <AppButton
                   label={t('labs.manualAction')}
                   onPress={() => navigation.navigate('LabRecordForm')}
+                  style={usesAccessibilityTextSize ? styles.fullWidthAction : undefined}
                   tone="secondary"
                 />
               </View>
@@ -175,6 +181,8 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     marginBottom: spacing.md,
   },
+  actionStack: { gap: spacing.sm, marginBottom: spacing.md },
+  fullWidthAction: { alignSelf: 'stretch', width: '100%' },
   recordCard: { gap: spacing.xs, marginBottom: spacing.sm },
   emptyActions: { gap: spacing.sm },
   muted: { color: colors.mutedInk },
