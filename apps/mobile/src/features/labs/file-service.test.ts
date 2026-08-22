@@ -10,11 +10,15 @@ import {
 import type { ProtectedPathProtection } from './protection';
 
 class SyntheticFileSystem {
-  readonly documentDirectory = 'file:///sandbox/';
+  readonly documentDirectory: string;
   readonly directories = new Set<string>();
   readonly files = new Map<string, { content: string }>();
   readonly copies: Array<{ from: string; to: string }> = [];
   failNextCopyAfterPartial = false;
+
+  constructor(documentDirectory = 'file:///sandbox/') {
+    this.documentDirectory = documentDirectory;
+  }
 
   async getInfoAsync(path: string) {
     const file = this.files.get(path);
@@ -79,8 +83,8 @@ function makeSource(uri = 'file:///picker/report.pdf'): LabSourceSelection {
   };
 }
 
-function makeFixture() {
-  const fileSystem = new SyntheticFileSystem();
+function makeFixture(documentDirectory?: string) {
+  const fileSystem = new SyntheticFileSystem(documentDirectory);
   fileSystem.files.set('file:///picker/report.pdf', { content: 'synthetic-pdf-data' });
   const protectedPaths: string[] = [];
   const protection: ProtectedPathProtection = {
@@ -167,5 +171,55 @@ describe('protected Original Report file adapter', () => {
 
     await fixture.service.cleanupTransientImports();
     assert.equal(await fixture.service.exists(transient), false);
+  });
+
+  test('rebases a prior iOS app-container path and keeps hash and deletion behavior safe', async () => {
+    const fixture = makeFixture(
+      'file:///Users/test/Containers/Data/Application/11111111-1111-4111-8111-111111111111/Documents/',
+    );
+    fixtures.push(fixture);
+    await fixture.service.initialize();
+    const legacy =
+      'file:///Users/test/Containers/Data/Application/22222222-2222-4222-8222-222222222222/Documents/alyte-protected/original-reports/report.pdf';
+    const current =
+      'file:///Users/test/Containers/Data/Application/11111111-1111-4111-8111-111111111111/Documents/alyte-protected/original-reports/report.pdf';
+    fixture.fileSystem.files.set(current, { content: 'synthetic-pdf-data' });
+
+    assert.equal(await fixture.service.resolvePath!(legacy), current);
+    assert.equal(fixture.service.portablePath!(legacy), 'protected://original-reports/report.pdf');
+    assert.equal(await fixture.service.exists(legacy), true);
+    assert.equal(await fixture.service.hashFile(legacy), await fixture.service.hashFile(current));
+    await fixture.service.remove(legacy);
+    assert.equal(await fixture.service.exists(current), false);
+  });
+
+  test('accepts current and portable paths but rejects unowned and traversal paths', async () => {
+    const fixture = makeFixture(
+      'file:///Users/test/Containers/Data/Application/11111111-1111-4111-8111-111111111111/Documents/',
+    );
+    fixtures.push(fixture);
+    await fixture.service.initialize();
+    const current =
+      'file:///Users/test/Containers/Data/Application/11111111-1111-4111-8111-111111111111/Documents/alyte-protected/intake-media/photo.jpg';
+    fixture.fileSystem.files.set(current, { content: 'image-data' });
+
+    assert.equal(await fixture.service.resolvePath!('protected://intake-media/photo.jpg'), current);
+    assert.equal(fixture.service.portablePath!(current), 'protected://intake-media/photo.jpg');
+    await assert.rejects(
+      fixture.service.resolvePath!('file:///tmp/alyte-protected/intake-media/photo.jpg'),
+      /owned protected file/,
+    );
+    await assert.rejects(
+      fixture.service.remove(
+        'file:///Users/test/Containers/Data/Application/11111111-1111-4111-8111-111111111111/Documents/alyte-protected/intake-media/../original-reports/report.pdf',
+      ),
+      /owned protected file/,
+    );
+    await assert.rejects(
+      fixture.service.inspectIntake!('protected://original-reports/report.pdf'),
+      /owned Intake Image/,
+    );
+    const intakeCopy = await fixture.service.inspectIntake!('protected://intake-media/photo.jpg');
+    assert.equal(intakeCopy?.path, current);
   });
 });

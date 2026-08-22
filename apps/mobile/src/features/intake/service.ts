@@ -17,6 +17,8 @@ export type IntakeMediaStore = {
   readonly save?: (source: IntakeMediaSource, captureId: string) => Promise<ProtectedCopy>;
   readonly inspect?: (path: string) => Promise<ProtectedCopy | null>;
   readonly list?: () => Promise<readonly string[]>;
+  /** Stable database representation for a protected media reference. */
+  readonly portablePath?: (path: string) => string;
   remove(path: string): Promise<void>;
   verifyRemoved(path: string): Promise<boolean>;
 };
@@ -73,10 +75,27 @@ export function createIntakeService(options: IntakeServiceOptions = {}): IntakeS
     repositoryPromise ??= repositoryFactory();
     const repo = await repositoryPromise;
     if (!recoveryReconciled) {
+      const mediaStore = options.mediaStore;
+      if (mediaStore?.portablePath !== undefined) {
+        const paths = new Set<string>();
+        for (const event of await repo.listEvents()) {
+          if (event.sourceMediaPath !== null) paths.add(event.sourceMediaPath);
+        }
+        for (const recovery of await repo.listSnapRecoveries()) paths.add(recovery.mediaPath);
+        for (const job of await repo.listCloudJobs()) paths.add(job.mediaPath);
+        for (const path of paths) {
+          try {
+            const nextPath = mediaStore.portablePath(path);
+            if (nextPath !== path) await repo.rebaseProtectedMediaPath(path, nextPath);
+          } catch {
+            // Leave an unowned or hostile legacy reference untouched; the media adapter will
+            // refuse to open or delete it rather than widening the ownership boundary.
+          }
+        }
+      }
       const recoveries = await repo.listSnapRecoveries();
       for (const recovery of recoveries) {
         if (recovery.state === 'failed') continue;
-        const mediaStore = options.mediaStore;
         if (mediaStore?.inspect === undefined) {
           await repo.markSnapRecoveryFailed(recovery.captureId, 'interrupted-media-unavailable');
           continue;

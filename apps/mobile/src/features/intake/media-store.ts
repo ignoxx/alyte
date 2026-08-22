@@ -23,7 +23,8 @@ export function createProtectedIntakeMediaStore(
   files: Pick<
     ProtectedReportFileService,
     'remove' | 'exists' | 'intakeDestination' | 'stageIntake' | 'inspectIntake' | 'listIntake'
-  > = createProtectedReportFileService(),
+  > &
+    Partial<Pick<ProtectedReportFileService, 'portablePath'>> = createProtectedReportFileService(),
 ): IntakeMediaStore {
   function required<T>(value: T | undefined, operation: string): T {
     if (value === undefined)
@@ -32,18 +33,33 @@ export function createProtectedIntakeMediaStore(
   }
 
   return {
+    portablePath(path) {
+      assertOwnedIntakePath(path);
+      return files.portablePath === undefined ? path : files.portablePath(path);
+    },
     async destination(source, captureId) {
-      return required(files.intakeDestination, 'name').call(files, captureId, source);
+      const path = await required(files.intakeDestination, 'name').call(files, captureId, source);
+      return files.portablePath === undefined ? path : files.portablePath(path);
     },
     async save(source, captureId): Promise<ProtectedCopy> {
-      return required(files.stageIntake, 'stage').call(files, source, captureId);
+      const copy = await required(files.stageIntake, 'stage').call(files, source, captureId);
+      return files.portablePath === undefined
+        ? copy
+        : { ...copy, path: files.portablePath(copy.path) };
     },
     async inspect(path) {
       assertOwnedIntakePath(path);
-      return required(files.inspectIntake, 'inspect').call(files, path);
+      const portable = files.portablePath === undefined ? path : files.portablePath(path);
+      const copy = await required(files.inspectIntake, 'inspect').call(files, portable);
+      return copy === null || files.portablePath === undefined
+        ? copy
+        : { ...copy, path: files.portablePath(copy.path) };
     },
     async list() {
-      return required(files.listIntake, 'list').call(files);
+      const paths = await required(files.listIntake, 'list').call(files);
+      return files.portablePath === undefined
+        ? paths
+        : paths.map((path) => files.portablePath!(path));
     },
     async remove(path) {
       assertOwnedIntakePath(path);

@@ -378,6 +378,8 @@ export type IntakeRepository = {
   ): Promise<IntakeCaptureRecovery | null>;
   finalizeSnapRecovery(captureId: string): Promise<void>;
   updateEvent(id: string, input: UpdateIntakeEventInput): Promise<IntakeEvent>;
+  /** Rewrite only validated app-owned media references after an iOS container relocation. */
+  rebaseProtectedMediaPath(path: string, nextPath: string): Promise<void>;
   logAgain(id: string, occurredAt?: string): Promise<IntakeEvent>;
   undoLogAgain(id: string): Promise<void>;
   setAnalysisInclusion(id: string, inclusion: AnalysisInclusion): Promise<IntakeEvent>;
@@ -1048,6 +1050,34 @@ export function createIntakeRepository(
     return event;
   }
 
+  async function rebaseProtectedMediaPath(path: string, nextPath: string): Promise<void> {
+    await initialize();
+    if (path.length === 0 || nextPath.length === 0) {
+      throw new Error('Protected Intake Image paths are required');
+    }
+    if (path === nextPath) return;
+    await withWrite(async () => {
+      await database.runAsync(
+        'UPDATE intake_events SET source_media_path = ?, updated_at = ? WHERE source_media_path = ?;',
+        nextPath,
+        now(),
+        path,
+      );
+      await database.runAsync(
+        'UPDATE intake_capture_recovery SET media_path = ?, updated_at = ? WHERE media_path = ?;',
+        nextPath,
+        now(),
+        path,
+      );
+      await database.runAsync(
+        'UPDATE cloud_jobs SET media_path = ?, updated_at = ? WHERE media_path = ?;',
+        nextPath,
+        now(),
+        path,
+      );
+    });
+  }
+
   async function logAgain(id: string, occurredAt?: string): Promise<IntakeEvent> {
     await initialize();
     const source = await readEvent(id);
@@ -1310,6 +1340,7 @@ export function createIntakeRepository(
     markSnapRecoveryFailed,
     finalizeSnapRecovery,
     updateEvent,
+    rebaseProtectedMediaPath,
     logAgain,
     undoLogAgain,
     setAnalysisInclusion,

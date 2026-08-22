@@ -166,6 +166,46 @@ class FailingDeleteFiles extends FakeFiles {
   }
 }
 
+class RelocatingFiles extends FakeFiles {
+  readonly legacyPath =
+    'file:///Users/test/Containers/Data/Application/22222222-2222-4222-8222-222222222222/Documents/alyte-protected/original-reports/relocated.pdf';
+  readonly currentPath =
+    'file:///Users/test/Containers/Data/Application/11111111-1111-4111-8111-111111111111/Documents/alyte-protected/original-reports/relocated.pdf';
+
+  portablePath(path: string): string {
+    if (path === this.legacyPath || path === this.currentPath) {
+      return 'protected://original-reports/relocated.pdf';
+    }
+    if (path.startsWith('protected://')) return path;
+    throw new Error('unowned path');
+  }
+
+  async resolvePath(path: string): Promise<string> {
+    if (path === this.legacyPath || path === 'protected://original-reports/relocated.pdf') {
+      return this.currentPath;
+    }
+    return path;
+  }
+
+  private current(path: string): string {
+    return path === this.legacyPath || path === 'protected://original-reports/relocated.pdf'
+      ? this.currentPath
+      : path;
+  }
+
+  override async hashFile(path: string): Promise<string> {
+    return super.hashFile(this.current(path));
+  }
+
+  override async exists(path: string): Promise<boolean> {
+    return super.exists(this.current(path));
+  }
+
+  override async remove(path: string): Promise<void> {
+    return super.remove(this.current(path));
+  }
+}
+
 const pdfInspection: PdfInspection = {
   encrypted: false,
   locked: false,
@@ -477,6 +517,37 @@ describe('protected Lab Report import lifecycle', () => {
       uris: ['data:image/png;base64,synthetic-preview'],
     });
     assert.equal(pdf.previewCalls, 1);
+  });
+
+  test('rebases a legacy absolute report path before preview, hash verification, and deletion', async () => {
+    const repository = createRepository();
+    const files = new RelocatingFiles();
+    files.files.set(files.currentPath, { hash: 'relocated-hash', size: 42 });
+    const pdf = new FakePdf();
+    const report = await repository.createReport({
+      id: 'lab-report-relocated',
+      sourceType: 'pdf',
+      originalFilename: 'relocated.pdf',
+      mimeType: 'application/pdf',
+      byteSize: 42,
+      sourceHash: 'relocated-hash',
+      originalPath: files.legacyPath,
+      importState: 'imported',
+      pageCount: 1,
+      importedAt: '2026-08-22T10:00:00.000Z',
+    });
+    const service = createService(repository, files, pdf);
+
+    const reopened = await service.getReport(report.id);
+    assert.equal(reopened?.originalPath, 'protected://original-reports/relocated.pdf');
+    assert.equal(await service.verifySource(report.id), 'verified');
+    assert.deepEqual(await service.previewOriginal(report.id), {
+      sourceType: 'pdf',
+      uris: ['data:image/png;base64,synthetic-preview'],
+    });
+    await service.deleteReport(report.id);
+    assert.equal(files.files.has(files.currentPath), false);
+    assert.equal((await repository.getReport(report.id))?.importState, 'deleted');
   });
 
   test('password preview uses an ephemeral unlock session and reports unavailable sources honestly', async () => {

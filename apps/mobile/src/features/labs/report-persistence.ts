@@ -72,6 +72,8 @@ export type LabReportRepository = {
   findReportByHash(sourceHash: string): Promise<LabReport | null>;
   createReport(input: CreateLabReportInput): Promise<LabReport>;
   updateReport(id: string, input: UpdateLabReportInput): Promise<LabReport>;
+  /** Rewrite only the container-dependent file reference; source provenance and hash stay intact. */
+  rebaseOriginalPath(id: string, path: string): Promise<LabReport>;
   requestReportDeletion(id: string): Promise<LabReport>;
   failReportDeletion(id: string, reason: string): Promise<LabReport>;
   completeReportDeletion(id: string): Promise<LabReport>;
@@ -82,6 +84,8 @@ export type LabReportRepository = {
   getSanitizedReport(reportId: string): Promise<SanitizedReport | null>;
   saveSanitizedReport(input: CreateSanitizedReportInput): Promise<SanitizedReport>;
   updateSanitizedReport(id: string, input: UpdateSanitizedReportInput): Promise<SanitizedReport>;
+  /** Rewrite only the container-dependent derivative reference. */
+  rebaseSanitizedArtifactPath(id: string, path: string): Promise<SanitizedReport>;
   deleteSanitizedReport(id: string): Promise<void>;
 };
 
@@ -462,6 +466,23 @@ export function createLabReportRepository(
     });
   }
 
+  async function rebaseOriginalPath(id: string, path: string): Promise<LabReport> {
+    await initialize();
+    if (path.length === 0) throw new Error('Original Report path is required');
+    await withWrite(async () => {
+      const result = await database.runAsync(
+        'UPDATE lab_reports SET original_path = ?, updated_at = ? WHERE id = ? AND original_path IS NOT NULL;',
+        path,
+        now(),
+        id,
+      );
+      if (result.changes !== 1) throw new Error('Original Report path rebase did not complete');
+    });
+    const report = await getReport(id);
+    if (report === null) throw new Error('Rebased Lab Report could not be read back');
+    return report;
+  }
+
   async function failReportDeletion(id: string, reason: string): Promise<LabReport> {
     return updateReport(id, { deletionState: 'failed', deletionError: reason });
   }
@@ -623,6 +644,29 @@ export function createLabReportRepository(
     return saved;
   }
 
+  async function rebaseSanitizedArtifactPath(id: string, path: string): Promise<SanitizedReport> {
+    await initialize();
+    if (path.length === 0) throw new Error('Sanitized Report artifact path is required');
+    await withWrite(async () => {
+      const result = await database.runAsync(
+        'UPDATE sanitized_report_derivatives SET artifact_path = ?, updated_at = ? WHERE id = ? AND artifact_path IS NOT NULL;',
+        path,
+        now(),
+        id,
+      );
+      if (result.changes !== 1) {
+        throw new Error('Sanitized Report artifact path rebase did not complete');
+      }
+    });
+    const rows = await database.getAllAsync<SanitizedReportRow>(
+      `SELECT ${sanitizedColumns} FROM sanitized_report_derivatives WHERE id = ?;`,
+      id,
+    );
+    const row = rows[0];
+    if (row === undefined) throw new Error('Rebased Sanitized Report could not be read back');
+    return decodeSanitizedReportRow(row);
+  }
+
   async function deleteSanitizedReport(id: string): Promise<void> {
     await initialize();
     await withWrite(async () => {
@@ -640,6 +684,7 @@ export function createLabReportRepository(
     findReportByHash,
     createReport,
     updateReport,
+    rebaseOriginalPath,
     requestReportDeletion,
     failReportDeletion,
     completeReportDeletion,
@@ -650,6 +695,7 @@ export function createLabReportRepository(
     getSanitizedReport,
     saveSanitizedReport,
     updateSanitizedReport,
+    rebaseSanitizedArtifactPath,
     deleteSanitizedReport,
   };
 }

@@ -450,6 +450,58 @@ test('Snap commits protected media reference, pending event, and consented outbo
   await reopened.repository.close();
 });
 
+test('intake service rebases legacy media references without changing event provenance', async () => {
+  const databasePath = temporaryDatabase();
+  const first = createRepository(databasePath);
+  const legacyPath =
+    'file:///Users/test/Containers/Data/Application/22222222-2222-4222-8222-222222222222/Documents/alyte-protected/intake-media/legacy.jpg';
+  await first.repository.setCapturePreferences({
+    cloudMode: 'consented-cloud',
+    disclosureAcknowledged: true,
+  });
+  await first.repository.createSnap({
+    event: {
+      id: 'snap-relocated',
+      eventType: 'food',
+      occurredAt: '2026-08-22T14:00:00.000Z',
+      localDate: '2026-08-22',
+      origin: 'snap',
+      components: [
+        {
+          name: 'Legacy image',
+          amount: { kind: 'unknown', reason: 'not-confirmed' },
+        },
+      ],
+    },
+    cloudMode: 'consented-cloud',
+    mediaPath: legacyPath,
+  });
+  await first.repository.close();
+
+  const reopened = createRepository(databasePath);
+  const portablePath = 'protected://intake-media/legacy.jpg';
+  const mediaStore: IntakeMediaStore = {
+    portablePath(path) {
+      if (path === legacyPath) return portablePath;
+      if (path === portablePath) return portablePath;
+      throw new Error('unowned path');
+    },
+    async remove() {},
+    async verifyRemoved() {
+      return true;
+    },
+  };
+  const service = createIntakeService({
+    repositoryFactory: async () => reopened.repository,
+    mediaStore,
+  });
+
+  const event = (await service.listEvents())[0];
+  assert.equal(event?.sourceMediaPath, portablePath);
+  assert.equal((await reopened.repository.listCloudJobs())[0]?.mediaPath, portablePath);
+  await reopened.repository.close();
+});
+
 test('local-only Snap has no cloud job and cancellation is limited to queued work', async () => {
   const { repository } = createRepository(temporaryDatabase());
   assert.deepEqual(await repository.getCapturePreferences(), {

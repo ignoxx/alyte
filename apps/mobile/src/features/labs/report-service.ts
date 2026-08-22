@@ -258,6 +258,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   const makeId = options.idGenerator ?? ((prefix: string) => createSortableOpaqueId(prefix));
   const sanitizationSessions = new Map<string, Awaited<ReturnType<PdfInspector['unlock']>>>();
 
+  function persistedPath(path: string): string {
+    return fileService.portablePath === undefined ? path : fileService.portablePath(path);
+  }
+
+  async function nativePath(path: string): Promise<string> {
+    return fileService.resolvePath === undefined ? path : fileService.resolvePath(path);
+  }
+
   async function repository(): Promise<LabRepository> {
     repositoryPromise ??= repositoryFactory();
     return repositoryPromise;
@@ -268,6 +276,45 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     initializationPromise ??= (async () => {
       const repo = await repository();
       await fileService.initialize();
+      // iOS may assign a new UUID to the app's data container during an update. Rebase every
+      // validated app-owned reference before any preview, cleanup, or deletion work uses it.
+      if (fileService.portablePath !== undefined) {
+        for (const report of await repo.listReports()) {
+          if (report.originalPath !== null) {
+            try {
+              const nextPath = persistedPath(report.originalPath);
+              if (nextPath !== report.originalPath) {
+                await repo.rebaseOriginalPath(report.id, nextPath);
+              }
+            } catch {
+              // An unowned or hostile legacy row is preserved for review; it is never rebased.
+            }
+          }
+          const pages = report.pages.map((page) => {
+            if (page.derivedPath === null) return page;
+            try {
+              const nextPath = persistedPath(page.derivedPath);
+              return nextPath === page.derivedPath ? page : { ...page, derivedPath: nextPath };
+            } catch {
+              return page;
+            }
+          });
+          if (pages.some((page, index) => page.derivedPath !== report.pages[index]?.derivedPath)) {
+            await repo.updateReport(report.id, { pages });
+          }
+          const derivative = await repo.getSanitizedReport(report.id);
+          if (derivative?.artifactPath !== null && derivative?.artifactPath !== undefined) {
+            try {
+              const nextPath = persistedPath(derivative.artifactPath);
+              if (nextPath !== derivative.artifactPath) {
+                await repo.rebaseSanitizedArtifactPath(derivative.id, nextPath);
+              }
+            } catch {
+              // Preserve an unowned derivative row; the file adapter will refuse to open it.
+            }
+          }
+        }
+      }
       await fileService.cleanupTransientImports();
       const interrupted = (await repo.listReports()).filter(
         (report) => report.importState === 'importing' && report.originalPath === null,
@@ -294,7 +341,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         if (recovered !== null) {
           await repo.updateReport(report.id, {
             sourceHash: recovered.sourceHash,
-            originalPath: recovered.path,
+            originalPath: persistedPath(recovered.path),
             importState: 'interrupted',
             failureReason: 'interrupted-after-promotion',
           });
@@ -478,7 +525,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       // relaunch can recover the source and present an actionable interrupted state.
       report = await repo.updateReport(reportId, {
         sourceHash: promoted.sourceHash,
-        originalPath: promoted.path,
+        originalPath: persistedPath(promoted.path),
         importState: 'importing',
         failureReason: null,
       });
@@ -508,7 +555,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             };
       report = await repo.updateReport(reportId, {
         sourceHash: promoted.sourceHash,
-        originalPath: promoted.path,
+        originalPath: persistedPath(promoted.path),
         importState: 'imported',
         failureReason: null,
         encrypted: inspection.encrypted,
@@ -519,7 +566,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       return { report, duplicate: false };
     } catch (error) {
       const reason = classifyFailure(error);
-      const preservedPath = promoted?.path ?? null;
+      const preservedPath = promoted === null ? null : persistedPath(promoted.path);
       const preservedHash = promoted?.sourceHash ?? staged?.sourceHash ?? null;
       report = await repo.updateReport(reportId, {
         sourceHash: preservedHash,
@@ -584,7 +631,11 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           pageCount: report.pageCount ?? 1,
         });
       }
-      const result = await sourceInspection(report, report.originalPath, passwordRequest);
+      const result = await sourceInspection(
+        report,
+        await nativePath(report.originalPath),
+        passwordRequest,
+      );
       return repo.updateReport(id, {
         importState: 'imported',
         failureReason: null,
@@ -601,10 +652,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     const report = await (await repository()).getReport(id);
     if (report === null || report.originalPath === null || report.sourceHash === null)
       return 'missing';
-    if (!(await fileService.exists(report.originalPath))) return 'missing';
-    return (await fileService.hashFile(report.originalPath)) === report.sourceHash
-      ? 'verified'
-      : 'mismatch';
+    try {
+      if (!(await fileService.exists(report.originalPath))) return 'missing';
+      return (await fileService.hashFile(report.originalPath)) === report.sourceHash
+        ? 'verified'
+        : 'mismatch';
+    } catch {
+      return 'missing';
+    }
   }
 
   async function openOriginal(id: string): Promise<string> {
@@ -614,7 +669,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     if (integrity !== 'verified' || report.originalPath === null) {
       throw new Error('Original Report integrity could not be verified');
     }
-    return report.originalPath;
+    return nativePath(report.originalPath);
   }
 
   async function previewOriginal(
@@ -765,7 +820,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         reportId: id,
         recipe,
         recipeHash,
-        artifactPath: destination,
+        artifactPath: persistedPath(destination),
         artifactHash: null,
         byteSize: null,
         verificationState: 'pending',
@@ -812,7 +867,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         }
         const protectedArtifact = await fileService.protectArtifact(destination);
         return repo.updateSanitizedReport(pending.id, {
-          artifactPath: protectedArtifact.path,
+          artifactPath: persistedPath(protectedArtifact.path),
           artifactHash: protectedArtifact.sourceHash,
           byteSize: protectedArtifact.byteSize,
           verificationState: 'verified',
@@ -865,7 +920,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       });
       throw new LabReportSanitizationError(id, 'The verified Sanitized Report is missing');
     }
-    const actualHash = await fileService.hashFile(derivative.artifactPath);
+    const artifactPath = await nativePath(derivative.artifactPath);
+    const actualHash = await fileService.hashFile(artifactPath);
     if (actualHash !== derivative.artifactHash) {
       await fileService.remove(derivative.artifactPath);
       await (
@@ -885,7 +941,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         'Sanitized verification is unavailable on this device',
       );
     }
-    const verification = await pdfInspector.verifySanitized(derivative.artifactPath);
+    const verification = await pdfInspector.verifySanitized(artifactPath);
     if (!structuralVerificationPassed(verification)) {
       await fileService.remove(derivative.artifactPath);
       await (
@@ -905,9 +961,9 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }
     return {
       sourceType: 'pdf',
-      artifactPath: derivative.artifactPath,
+      artifactPath,
       artifactHash: derivative.artifactHash,
-      uris: await pdfInspector.renderPreview(derivative.artifactPath),
+      uris: await pdfInspector.renderPreview(artifactPath),
       verification,
     };
   }

@@ -13,6 +13,20 @@ export const PROTECTED_REPORT_DIRECTORIES = {
   exports: 'exports',
 } as const;
 
+/**
+ * A protected path is stored in the local database as this container-independent URI. Native
+ * APIs still receive an absolute file URI after `resolvePath` has checked ownership.
+ */
+const PROTECTED_PATH_SCHEME = 'protected://';
+const PROTECTED_DIRECTORY_NAMES = new Set<string>([
+  PROTECTED_REPORT_DIRECTORIES.originals,
+  PROTECTED_REPORT_DIRECTORIES.working,
+  PROTECTED_REPORT_DIRECTORIES.sanitized,
+  PROTECTED_REPORT_DIRECTORIES.intake,
+  PROTECTED_REPORT_DIRECTORIES.transient,
+  PROTECTED_REPORT_DIRECTORIES.exports,
+]);
+
 export type ProtectedPathFacts = {
   readonly status: 'verified';
   readonly protectedPaths: readonly string[];
@@ -57,6 +71,10 @@ export type ProtectedReportFileService = {
   hashFile(path: string): Promise<string>;
   exists(path: string): Promise<boolean>;
   remove(path: string): Promise<void>;
+  /** Rebase a persisted path onto the current app container after an iOS container relocation. */
+  resolvePath?(path: string): Promise<string>;
+  /** Return the stable database representation for an app-owned protected path. */
+  portablePath?(path: string): string;
   cleanupTransientImports(): Promise<void>;
   /** Destination and verification seams for newly rendered Sanitized Reports. */
   sanitizedDestination?(reportId: string, derivativeId: string): Promise<string>;
@@ -80,6 +98,47 @@ function stripTrailingSlash(value: string): string {
 
 function joinPath(directory: string, component: string): string {
   return `${stripTrailingSlash(directory)}/${component}`;
+}
+
+function hasUnsafePathSegment(path: string): boolean {
+  return (
+    path.length === 0 ||
+    path.includes('\\') ||
+    path.includes('\u0000') ||
+    path.includes('?') ||
+    path.includes('#') ||
+    path.split('/').some((segment) => segment.length === 0 || segment === '.' || segment === '..')
+  );
+}
+
+function protectedSuffix(path: string): string | null {
+  if (path.startsWith(PROTECTED_PATH_SCHEME)) {
+    const suffix = path.slice(PROTECTED_PATH_SCHEME.length);
+    if (hasUnsafePathSegment(suffix)) return null;
+    const segments = suffix.split('/');
+    if (segments.length !== 2 || !PROTECTED_DIRECTORY_NAMES.has(segments[0]!)) return null;
+    return suffix;
+  }
+
+  const marker = `/${PROTECTED_REPORT_DIRECTORIES.root}/`;
+  const markerIndex = path.indexOf(marker);
+  if (markerIndex < 0) return null;
+  const prefix = path.slice(0, markerIndex);
+  const suffix = path.slice(markerIndex + marker.length);
+  if (hasUnsafePathSegment(suffix)) return null;
+  const segments = suffix.split('/');
+  if (segments.length !== 2 || !PROTECTED_DIRECTORY_NAMES.has(segments[0]!)) return null;
+
+  // Current paths are accepted only beneath the initialized root. Legacy paths are accepted only
+  // when they have the shape of an iOS app Documents container. This prevents a hostile database
+  // row such as /tmp/alyte-protected/... from being rebased into the current app container.
+  if (
+    prefix.startsWith('file://') &&
+    /\/Containers\/Data\/Application\/[0-9a-f-]{36}\/Documents$/i.test(prefix)
+  ) {
+    return suffix;
+  }
+  return null;
 }
 
 function safeFilename(value: string, fallback: string): string {
@@ -139,6 +198,38 @@ export function createProtectedReportFileService(
       joinPath(root, PROTECTED_REPORT_DIRECTORIES.transient),
       joinPath(root, PROTECTED_REPORT_DIRECTORIES.exports),
     ];
+  }
+
+  function suffixForOwnedPath(path: string): string {
+    if (root !== null) {
+      const currentPrefix = `${stripTrailingSlash(root)}/`;
+      if (path.startsWith(currentPrefix)) {
+        const suffix = path.slice(currentPrefix.length);
+        if (!hasUnsafePathSegment(suffix)) {
+          const segments = suffix.split('/');
+          if (segments.length === 2 && PROTECTED_DIRECTORY_NAMES.has(segments[0]!)) {
+            return suffix;
+          }
+        }
+      }
+    }
+    const suffix = protectedSuffix(path);
+    if (suffix === null) throw new Error('The requested path is not an owned protected file');
+    return suffix;
+  }
+
+  function nativePathForSuffix(suffix: string): string {
+    if (root === null) throw new Error('Protected report storage is not initialized');
+    return joinPath(root, suffix);
+  }
+
+  function portablePath(path: string): string {
+    return `${PROTECTED_PATH_SCHEME}${suffixForOwnedPath(path)}`;
+  }
+
+  async function resolvePath(path: string): Promise<string> {
+    await initialize();
+    return nativePathForSuffix(suffixForOwnedPath(path));
   }
 
   async function protectDirectory(path: string): Promise<void> {
@@ -259,19 +350,31 @@ export function createProtectedReportFileService(
   }
 
   async function hashFile(path: string): Promise<string> {
-    return protection.hashFile(path);
+    return protection.hashFile(await resolvePath(path));
   }
 
   async function exists(path: string): Promise<boolean> {
     fileSystemPromise ??= import('expo-file-system/legacy');
     fileSystem ??= await fileSystemPromise;
-    return (await info(path)).exists;
+    try {
+      return (await info(await resolvePath(path))).exists;
+    } catch (error) {
+      if (
+        path.startsWith(PROTECTED_PATH_SCHEME) ||
+        path.includes(`/${PROTECTED_REPORT_DIRECTORIES.root}/`)
+      ) {
+        throw error;
+      }
+      // Existence checks are also used to verify that a picker-owned source was not mutated. They
+      // are read-only; destructive/hash operations still require an owned protected path.
+      return (await info(path)).exists;
+    }
   }
 
   async function remove(path: string): Promise<void> {
     fileSystemPromise ??= import('expo-file-system/legacy');
     fileSystem ??= await fileSystemPromise;
-    await fileSystem.deleteAsync(path, { idempotent: true });
+    await fileSystem.deleteAsync(await resolvePath(path), { idempotent: true });
   }
 
   async function cleanupTransientImports(): Promise<void> {
@@ -295,12 +398,13 @@ export function createProtectedReportFileService(
 
   async function protectArtifact(path: string): Promise<ProtectedCopy> {
     await initialize();
-    const protectionReport = await protection.protectPath(path);
-    const sourceHash = await protection.hashFile(path);
-    const fileInfo = await info(path);
+    const nativePath = await resolvePath(path);
+    const protectionReport = await protection.protectPath(nativePath);
+    const sourceHash = await protection.hashFile(nativePath);
+    const fileInfo = await info(nativePath);
     if (!fileInfo.exists) throw new Error('Sanitized Report artifact disappeared');
     return {
-      path,
+      path: nativePath,
       sourceHash,
       byteSize: fileInfo.size,
       protection: {
@@ -353,12 +457,17 @@ export function createProtectedReportFileService(
 
   async function inspectIntake(path: string): Promise<ProtectedCopy | null> {
     await initialize();
-    if (!(await exists(path))) return null;
-    const fileInfo = await info(path);
-    const protectionReport = await protection.protectPath(path);
+    const suffix = suffixForOwnedPath(path);
+    if (!suffix.startsWith(`${PROTECTED_REPORT_DIRECTORIES.intake}/`)) {
+      throw new Error('The requested path is not an owned Intake Image');
+    }
+    const nativePath = nativePathForSuffix(suffix);
+    if (!(await exists(nativePath))) return null;
+    const fileInfo = await info(nativePath);
+    const protectionReport = await protection.protectPath(nativePath);
     return {
-      path,
-      sourceHash: await protection.hashFile(path),
+      path: nativePath,
+      sourceHash: await protection.hashFile(nativePath),
       byteSize: fileInfo.size,
       protection: {
         status: 'verified',
@@ -385,6 +494,8 @@ export function createProtectedReportFileService(
     hashFile,
     exists,
     remove,
+    resolvePath,
+    portablePath,
     cleanupTransientImports,
     sanitizedDestination,
     protectArtifact,
