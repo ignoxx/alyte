@@ -50,6 +50,28 @@ final class AlyteProtectionFilePolicyTests: XCTestCase {
     XCTAssertEqual(Set(report.missingSidecarPaths), Set(fixture.paths.dropFirst().map(\.path)))
   }
 
+  func testProtectPathVerifiesOriginalReportProtectionAndHashIsContentBound() throws {
+    let fixture = try makeFixture(includeSidecars: false)
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let reportURL = fixture.directory.appendingPathComponent("original-report.pdf")
+    try Data("synthetic-original-report".utf8).write(to: reportURL)
+
+    let policy = AlyteProtectionFilePolicy()
+    let report = try policy.protectPath(at: reportURL)
+    let firstHash = try policy.hashFile(at: reportURL)
+    try Data("synthetic-original-report-changed".utf8).write(to: reportURL)
+    let secondHash = try policy.hashFile(at: reportURL)
+
+    XCTAssertEqual(report.protectedPaths, [reportURL.path])
+    XCTAssertEqual(
+      try reportURL.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup,
+      true
+    )
+    XCTAssertNotEqual(firstHash, secondHash)
+    XCTAssertEqual(firstHash.count, 64)
+    XCTAssertEqual(secondHash.count, 64)
+  }
+
   private func makeFixture(includeSidecars: Bool) throws -> (directory: URL, database: URL, paths: [URL]) {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("alyte-protection-\(UUID().uuidString)", isDirectory: true)

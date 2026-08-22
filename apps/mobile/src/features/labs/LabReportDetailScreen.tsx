@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Image, Modal, ScrollView, StyleSheet, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { LabReport } from '@alyte/domain';
@@ -9,6 +9,7 @@ import { t } from '../../localization';
 import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { LabReportImportError, type PasswordRequest } from './report-service';
+import type { LabReportPreview } from './report-service';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
 type DetailRoute = RouteProp<LabsStackParamList, 'LabReportDetail'>;
@@ -48,6 +49,8 @@ export function LabReportDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
+  const [preview, setPreview] = useState<LabReportPreview | null>(null);
+  const [previewError, setPreviewError] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -91,6 +94,19 @@ export function LabReportDetailScreen() {
       setIntegrity(await reports.verifySource(next.id));
     } catch (caught) {
       setError(caught instanceof LabReportImportError ? true : true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openPreview() {
+    if (report === null) return;
+    setBusy(true);
+    setPreviewError(false);
+    try {
+      setPreview(await reports.previewOriginal(report.id, promptPassword()));
+    } catch {
+      setPreviewError(true);
     } finally {
       setBusy(false);
     }
@@ -160,6 +176,19 @@ export function LabReportDetailScreen() {
         <AppText>{`${t('labs.reportSize')}: ${formatBytes(report.byteSize)}`}</AppText>
         <AppText>{`${t('labs.reportIntegrity')}: ${t(`labs.reportIntegrity${integrity[0]?.toUpperCase() ?? ''}${integrity.slice(1)}`)}`}</AppText>
       </AppSurface>
+      {report.importState !== 'deleted' && integrity === 'verified' && (
+        <AppSurface tone="soft" style={styles.previewSurface}>
+          <AppText>{t('labs.reportPreviewBody')}</AppText>
+          <AppButton
+            disabled={busy}
+            label={t('labs.reportPreview')}
+            onPress={() => void openPreview()}
+          />
+          {previewError && (
+            <AppText style={styles.errorText}>{t('labs.reportPreviewError')}</AppText>
+          )}
+        </AppSurface>
+      )}
       {report.importState === 'imported' && (
         <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
       )}
@@ -174,6 +203,38 @@ export function LabReportDetailScreen() {
           {t('labs.reportLinkedRecords').replace('{count}', String(report.labRecordIds.length))}
         </AppText>
       )}
+      <Modal
+        accessibilityViewIsModal
+        animationType="slide"
+        onRequestClose={() => setPreview(null)}
+        visible={preview !== null}
+      >
+        <View style={styles.previewModal}>
+          <View style={styles.previewHeader}>
+            <AppText variant="heading">{t('labs.reportPreviewTitle')}</AppText>
+            <AppButton
+              label={t('labs.reportPreviewClose')}
+              onPress={() => setPreview(null)}
+              tone="quiet"
+            />
+          </View>
+          <ScrollView contentContainerStyle={styles.previewPages}>
+            {preview?.uris.map((uri, index) => (
+              <Image
+                accessibilityLabel={`${t('labs.reportPreviewImageLabel')} ${index + 1}`}
+                key={`${uri}-${index}`}
+                onError={() => {
+                  setPreview(null);
+                  setPreviewError(true);
+                }}
+                resizeMode="contain"
+                source={{ uri }}
+                style={styles.previewImage}
+              />
+            ))}
+          </ScrollView>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -184,4 +245,10 @@ const styles = StyleSheet.create({
   error: { gap: spacing.sm, marginTop: spacing.md },
   header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
   meta: { gap: spacing.xs, marginTop: spacing.md },
+  previewSurface: { gap: spacing.sm, marginTop: spacing.md },
+  errorText: { color: colors.danger },
+  previewModal: { backgroundColor: colors.canvas, flex: 1, padding: spacing.lg },
+  previewHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
+  previewPages: { flexGrow: 1, gap: spacing.md, paddingVertical: spacing.md },
+  previewImage: { height: 520, width: '100%' },
 });

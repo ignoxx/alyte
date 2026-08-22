@@ -8,13 +8,6 @@ import {
   type CreateLabRecordInput,
   type CreateMeasurementInput,
   type LabRecord,
-  type LabReport,
-  type CreateLabReportInput,
-  type UpdateLabReportInput,
-  assertLabReportImportState,
-  assertLabReportPage,
-  assertLabReportSourceType,
-  type LabReportPage,
   type Measurement,
   type MeasurementCorrection,
   type MeasurementCorrectionState,
@@ -23,9 +16,10 @@ import {
   type UpdateLabRecordInput,
 } from '@alyte/domain';
 import { nativeDatabaseProtection, type DatabaseProtection } from './protection';
+import { createLabReportRepository, type LabReportRepository } from './report-persistence';
 
 export const LAB_DATABASE_NAME = 'alyte-local.sqlite';
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 export type SqliteRunResult = { readonly changes: number; readonly lastInsertRowId: number };
 
@@ -135,6 +129,21 @@ export const LAB_MIGRATIONS: readonly Migration[] = [
         WHERE source_hash IS NOT NULL AND import_state <> 'deleted';
     `,
   },
+  {
+    version: 3,
+    sql: `
+      ALTER TABLE lab_reports ADD COLUMN deletion_state TEXT NOT NULL DEFAULT 'none'
+        CHECK (deletion_state IN ('none', 'requested', 'failed', 'complete'));
+      ALTER TABLE lab_reports ADD COLUMN deletion_requested_at TEXT;
+      ALTER TABLE lab_reports ADD COLUMN deletion_error TEXT;
+      CREATE INDEX IF NOT EXISTS lab_reports_deletion_state_idx ON lab_reports(deletion_state);
+      DROP INDEX IF EXISTS lab_reports_active_source_hash_uq;
+      CREATE UNIQUE INDEX lab_reports_active_source_hash_uq
+        ON lab_reports(source_hash)
+        WHERE source_hash IS NOT NULL AND original_path IS NOT NULL
+          AND import_state <> 'deleted' AND deletion_state = 'none';
+    `,
+  },
 ];
 
 type LabRecordRow = {
@@ -147,34 +156,6 @@ type LabRecordRow = {
   notes: unknown;
   created_at: unknown;
   updated_at: unknown;
-};
-
-type LabReportRow = {
-  id: unknown;
-  source_type: unknown;
-  original_filename: unknown;
-  mime_type: unknown;
-  byte_size: unknown;
-  source_hash: unknown;
-  original_path: unknown;
-  import_state: unknown;
-  failure_reason: unknown;
-  encrypted: unknown;
-  page_count: unknown;
-  created_at: unknown;
-  updated_at: unknown;
-  imported_at: unknown;
-};
-
-type LabReportPageRow = {
-  id: unknown;
-  report_id: unknown;
-  page_index: unknown;
-  width: unknown;
-  height: unknown;
-  rotation: unknown;
-  crop: unknown;
-  derived_path: unknown;
 };
 
 type MeasurementRow = {
@@ -222,16 +203,6 @@ function nullableString(value: unknown, field: string): string | null {
     return null;
   }
   if (typeof value !== 'string') {
-    throw new Error(`Invalid ${field} in local database`);
-  }
-  return value;
-}
-
-function nullableFiniteNumber(value: unknown, field: string): number | null {
-  if (value === null || value === undefined) {
-    return null;
-  }
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new Error(`Invalid ${field} in local database`);
   }
   return value;
@@ -335,73 +306,6 @@ export function decodeLabRecordRow(row: LabRecordRow): Omit<LabRecord, 'measurem
     notes: nullableString(row.notes, 'lab record notes'),
     createdAt: requiredString(row.created_at, 'lab record created timestamp'),
     updatedAt: requiredString(row.updated_at, 'lab record updated timestamp'),
-  };
-}
-
-function decodeLabReportPageRow(row: LabReportPageRow): LabReportPage {
-  const reportId = requiredString(row.report_id, 'Lab Report page report id');
-  const pageIndex = row.page_index;
-  if (typeof pageIndex !== 'number' || !Number.isInteger(pageIndex) || pageIndex < 0) {
-    throw new Error('Invalid Lab Report page index in local database');
-  }
-  const rotation = row.rotation;
-  if (typeof rotation !== 'number' || !Number.isFinite(rotation)) {
-    throw new Error('Invalid Lab Report page rotation in local database');
-  }
-  return {
-    id: requiredString(row.id, 'Lab Report page id'),
-    reportId,
-    pageIndex,
-    width: nullableFiniteNumber(row.width, 'Lab Report page width'),
-    height: nullableFiniteNumber(row.height, 'Lab Report page height'),
-    rotation,
-    crop: nullableString(row.crop, 'Lab Report page crop'),
-    derivedPath: nullableString(row.derived_path, 'Lab Report page derived path'),
-  };
-}
-
-export function decodeLabReportRow(row: LabReportRow): Omit<LabReport, 'pages' | 'labRecordIds'> {
-  const sourceType = row.source_type;
-  if (sourceType !== 'pdf' && sourceType !== 'image') {
-    throw new Error('Invalid Lab Report source type in local database');
-  }
-  const importState = row.import_state;
-  if (
-    importState !== 'importing' &&
-    importState !== 'imported' &&
-    importState !== 'interrupted' &&
-    importState !== 'failed' &&
-    importState !== 'deleted'
-  ) {
-    throw new Error('Invalid Lab Report import state in local database');
-  }
-  const encrypted = row.encrypted;
-  if (encrypted !== 0 && encrypted !== 1) {
-    throw new Error('Invalid Lab Report encryption state in local database');
-  }
-  const pageCount = nullableFiniteNumber(row.page_count, 'Lab Report page count');
-  if (pageCount !== null && (!Number.isInteger(pageCount) || pageCount < 0)) {
-    throw new Error('Invalid Lab Report page count in local database');
-  }
-  const byteSize = nullableFiniteNumber(row.byte_size, 'Lab Report byte size');
-  if (byteSize !== null && (!Number.isInteger(byteSize) || byteSize < 0)) {
-    throw new Error('Invalid Lab Report byte size in local database');
-  }
-  return {
-    id: requiredString(row.id, 'Lab Report id'),
-    sourceType,
-    originalFilename: requiredString(row.original_filename, 'Lab Report filename'),
-    mimeType: requiredString(row.mime_type, 'Lab Report MIME type'),
-    byteSize,
-    sourceHash: nullableString(row.source_hash, 'Lab Report source hash'),
-    originalPath: nullableString(row.original_path, 'Lab Report original path'),
-    importState,
-    failureReason: nullableString(row.failure_reason, 'Lab Report failure reason'),
-    encrypted: encrypted === 1,
-    pageCount,
-    createdAt: requiredString(row.created_at, 'Lab Report created timestamp'),
-    updatedAt: requiredString(row.updated_at, 'Lab Report updated timestamp'),
-    importedAt: nullableString(row.imported_at, 'Lab Report imported timestamp'),
   };
 }
 
@@ -566,15 +470,7 @@ export type LabRepository = {
   updateRecord(id: string, input: UpdateLabRecordInput): Promise<LabRecord>;
   correctMeasurement(id: string, input: CorrectMeasurementInput): Promise<Measurement>;
   deleteRecord(id: string): Promise<void>;
-  listReports(): Promise<readonly LabReport[]>;
-  getReport(id: string): Promise<LabReport | null>;
-  findReportByHash(sourceHash: string): Promise<LabReport | null>;
-  createReport(input: CreateLabReportInput): Promise<LabReport>;
-  updateReport(id: string, input: UpdateLabReportInput): Promise<LabReport>;
-  deleteReport(id: string): Promise<void>;
-  reconcileInterruptedReports(): Promise<void>;
-  countReportsReferencingPath(path: string, excludingId?: string): Promise<number>;
-};
+} & LabReportRepository;
 
 export type LabRepositoryOptions = {
   readonly protection?: DatabaseProtection;
@@ -962,246 +858,13 @@ export function createLabRepository(
     });
   }
 
-  async function reportPages(reportId: string): Promise<readonly LabReportPage[]> {
-    const rows = await database.getAllAsync<LabReportPageRow>(
-      `SELECT id, report_id, page_index, width, height, rotation, crop, derived_path
-       FROM lab_report_pages WHERE report_id = ? ORDER BY page_index ASC;`,
-      reportId,
-    );
-    return rows.map(decodeLabReportPageRow);
-  }
-
-  async function reportRecordIds(reportId: string): Promise<readonly string[]> {
-    const rows = await database.getAllAsync<{ id: unknown }>(
-      'SELECT id FROM lab_records WHERE lab_report_id = ? ORDER BY created_at ASC;',
-      reportId,
-    );
-    return rows.map((row) => requiredString(row.id, 'Lab Record id'));
-  }
-
-  async function decodeReport(row: LabReportRow): Promise<LabReport> {
-    const report = decodeLabReportRow(row);
-    return {
-      ...report,
-      pages: await reportPages(report.id),
-      labRecordIds: await reportRecordIds(report.id),
-    };
-  }
-
-  const reportColumns = `id, source_type, original_filename, mime_type, byte_size, source_hash,
-    original_path, import_state, failure_reason, encrypted, page_count, created_at, updated_at,
-    imported_at`;
-
-  async function listReports(): Promise<readonly LabReport[]> {
-    await initialize();
-    const rows = await database.getAllAsync<LabReportRow>(
-      `SELECT ${reportColumns} FROM lab_reports ORDER BY updated_at DESC, created_at DESC;`,
-    );
-    return Promise.all(rows.map(decodeReport));
-  }
-
-  async function getReport(id: string): Promise<LabReport | null> {
-    await initialize();
-    const rows = await database.getAllAsync<LabReportRow>(
-      `SELECT ${reportColumns} FROM lab_reports WHERE id = ?;`,
-      id,
-    );
-    const row = rows[0];
-    return row === undefined ? null : decodeReport(row);
-  }
-
-  async function findReportByHash(sourceHash: string): Promise<LabReport | null> {
-    await initialize();
-    const rows = await database.getAllAsync<LabReportRow>(
-      `SELECT ${reportColumns} FROM lab_reports
-       WHERE source_hash = ? AND import_state <> 'deleted'
-       ORDER BY updated_at DESC LIMIT 1;`,
-      sourceHash,
-    );
-    const row = rows[0];
-    return row === undefined ? null : decodeReport(row);
-  }
-
-  async function createReport(input: CreateLabReportInput): Promise<LabReport> {
-    await initialize();
-    assertLabReportSourceType(input.sourceType);
-    const importState = input.importState ?? 'importing';
-    assertLabReportImportState(importState);
-    if (input.originalFilename.trim().length === 0) {
-      throw new Error('Lab Report filename is required');
-    }
-    if (input.mimeType.trim().length === 0) {
-      throw new Error('Lab Report MIME type is required');
-    }
-    const reportId = input.id ?? makeId('lab-report');
-    const createdAt = now();
-    const pages = input.pages ?? [];
-    pages.forEach(assertLabReportPage);
-    await withWrite(async () => {
-      await database.runAsync(
-        `INSERT INTO lab_reports (
-          id, source_type, original_filename, mime_type, byte_size, source_hash, original_path,
-          import_state, failure_reason, encrypted, page_count, created_at, updated_at, imported_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-        reportId,
-        input.sourceType,
-        input.originalFilename,
-        input.mimeType,
-        input.byteSize ?? null,
-        input.sourceHash ?? null,
-        input.originalPath ?? null,
-        importState,
-        input.failureReason ?? null,
-        input.encrypted === true ? 1 : 0,
-        input.pageCount ?? null,
-        createdAt,
-        createdAt,
-        input.importedAt ?? null,
-      );
-      for (const page of pages) {
-        await database.runAsync(
-          `INSERT INTO lab_report_pages (
-            id, report_id, page_index, width, height, rotation, crop, derived_path
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
-          page.id ?? makeId('lab-report-page'),
-          reportId,
-          page.pageIndex,
-          page.width ?? null,
-          page.height ?? null,
-          page.rotation ?? 0,
-          page.crop ?? null,
-          page.derivedPath ?? null,
-        );
-      }
-    });
-    const report = await getReport(reportId);
-    if (report === null) {
-      throw new Error('Created Lab Report could not be read back');
-    }
-    return report;
-  }
-
-  async function updateReport(id: string, input: UpdateLabReportInput): Promise<LabReport> {
-    await initialize();
-    const existing = await getReport(id);
-    if (existing === null) {
-      throw new Error('Lab Report was not found');
-    }
-    if (input.importState !== undefined) {
-      assertLabReportImportState(input.importState);
-    }
-    const nextHash = input.sourceHash === undefined ? existing.sourceHash : input.sourceHash;
-    if (
-      existing.sourceHash !== null &&
-      input.sourceHash !== undefined &&
-      input.sourceHash !== existing.sourceHash
-    ) {
-      throw new Error('Original Report hash is immutable');
-    }
-    const nextPath = input.originalPath === undefined ? existing.originalPath : input.originalPath;
-    if (
-      existing.originalPath !== null &&
-      input.originalPath !== undefined &&
-      input.originalPath !== existing.originalPath &&
-      input.importState !== 'deleted'
-    ) {
-      throw new Error('Original Report path is immutable');
-    }
-    const nextState = input.importState ?? existing.importState;
-    const nextFailure =
-      input.failureReason === undefined ? existing.failureReason : input.failureReason;
-    const nextEncrypted = input.encrypted === undefined ? existing.encrypted : input.encrypted;
-    const nextPageCount = input.pageCount === undefined ? existing.pageCount : input.pageCount;
-    const nextImportedAt = input.importedAt === undefined ? existing.importedAt : input.importedAt;
-    const pages = input.pages;
-    if (pages !== undefined) {
-      pages.forEach(assertLabReportPage);
-    }
-    await withWrite(async () => {
-      const result = await database.runAsync(
-        `UPDATE lab_reports SET source_hash = ?, original_path = ?, import_state = ?,
-          failure_reason = ?, encrypted = ?, page_count = ?, updated_at = ?, imported_at = ?
-         WHERE id = ?;`,
-        nextHash,
-        nextPath,
-        nextState,
-        nextFailure,
-        nextEncrypted ? 1 : 0,
-        nextPageCount,
-        now(),
-        nextImportedAt,
-        id,
-      );
-      if (result.changes !== 1) {
-        throw new Error('Lab Report update did not complete');
-      }
-      if (pages !== undefined) {
-        await database.runAsync('DELETE FROM lab_report_pages WHERE report_id = ?;', id);
-        for (const page of pages) {
-          await database.runAsync(
-            `INSERT INTO lab_report_pages (
-              id, report_id, page_index, width, height, rotation, crop, derived_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
-            page.id ?? makeId('lab-report-page'),
-            id,
-            page.pageIndex,
-            page.width ?? null,
-            page.height ?? null,
-            page.rotation ?? 0,
-            page.crop ?? null,
-            page.derivedPath ?? null,
-          );
-        }
-      }
-    });
-    const report = await getReport(id);
-    if (report === null) {
-      throw new Error('Updated Lab Report could not be read back');
-    }
-    return report;
-  }
-
-  async function deleteReport(id: string): Promise<void> {
-    await initialize();
-    await withWrite(async () => {
-      const result = await database.runAsync(
-        `UPDATE lab_reports SET import_state = 'deleted', original_path = NULL,
-          updated_at = ?, failure_reason = NULL WHERE id = ?;`,
-        now(),
-        id,
-      );
-      if (result.changes !== 1) {
-        throw new Error('Lab Report was not found');
-      }
-    });
-  }
-
-  async function reconcileInterruptedReports(): Promise<void> {
-    await initialize();
-    await withWrite(async () => {
-      await database.runAsync(
-        `UPDATE lab_reports SET import_state = 'interrupted', failure_reason = 'interrupted',
-          updated_at = ? WHERE import_state = 'importing';`,
-        now(),
-      );
-    });
-  }
-
-  async function countReportsReferencingPath(path: string, excludingId?: string): Promise<number> {
-    await initialize();
-    const rows = await database.getAllAsync<{ count: unknown }>(
-      `SELECT COUNT(*) AS count FROM lab_reports
-       WHERE original_path = ? AND import_state <> 'deleted' AND (? IS NULL OR id <> ?);`,
-      path,
-      excludingId ?? null,
-      excludingId ?? null,
-    );
-    const count = rows[0]?.count;
-    if (typeof count !== 'number') {
-      throw new Error('Invalid Lab Report reference count in local database');
-    }
-    return count;
-  }
+  const reportRepository = createLabReportRepository({
+    database,
+    initialize,
+    withWrite,
+    now,
+    idGenerator: makeId,
+  });
 
   return {
     initialize,
@@ -1212,14 +875,7 @@ export function createLabRepository(
     updateRecord,
     correctMeasurement,
     deleteRecord,
-    listReports,
-    getReport,
-    findReportByHash,
-    createReport,
-    updateReport,
-    deleteReport,
-    reconcileInterruptedReports,
-    countReportsReferencingPath,
+    ...reportRepository,
   };
 }
 

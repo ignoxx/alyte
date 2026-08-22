@@ -37,6 +37,7 @@ export type ProtectedReportFileService = {
     reportId: string,
     source: LabSourceSelection,
   ): Promise<ProtectedCopy>;
+  recoverPromoted(reportId: string, source: LabSourceSelection): Promise<ProtectedCopy | null>;
   hashFile(path: string): Promise<string>;
   exists(path: string): Promise<boolean>;
   remove(path: string): Promise<void>;
@@ -76,6 +77,10 @@ function extensionFor(source: LabSourceSelection): string {
   }
   const extension = name.match(/\.[a-z0-9]{1,8}$/)?.[0];
   return extension ?? '.image';
+}
+
+function originalFilename(reportId: string, source: LabSourceSelection): string {
+  return `${safeFilename(reportId, createSortableOpaqueId('report'))}-${safeFilename(source.name, 'source')}${extensionFor(source)}`;
 }
 
 function requireDocumentDirectory(fileSystem: typeof FileSystemTypes): string {
@@ -171,16 +176,53 @@ export function createProtectedReportFileService(
   ): Promise<ProtectedCopy> {
     await initialize();
     if (root === null) throw new Error('Protected report storage is not initialized');
-    const filename = `${safeFilename(reportId, createSortableOpaqueId('report'))}-${safeFilename(source.name, 'source')}${extensionFor(source)}`;
     const promoted = await copyProtected(
       staged.path,
-      joinPath(joinPath(root, PROTECTED_REPORT_DIRECTORIES.originals), filename),
+      joinPath(
+        joinPath(root, PROTECTED_REPORT_DIRECTORIES.originals),
+        originalFilename(reportId, source),
+      ),
     );
     if (promoted.sourceHash !== staged.sourceHash) {
       await fileSystem.deleteAsync(promoted.path, { idempotent: true });
       throw new Error('Protected Original Report hash changed during copy');
     }
     return promoted;
+  }
+
+  async function recoverPromoted(
+    reportId: string,
+    source: LabSourceSelection,
+  ): Promise<ProtectedCopy | null> {
+    await initialize();
+    if (root === null) throw new Error('Protected report storage is not initialized');
+    const path = joinPath(
+      joinPath(root, PROTECTED_REPORT_DIRECTORIES.originals),
+      originalFilename(reportId, source),
+    );
+    if (!(await exists(path))) return null;
+    const fileInfo = await info(path);
+    // A copy can be interrupted after its destination is created but before the database row is
+    // updated. When the picker supplied a size, reject and remove a truncated destination rather
+    // than turning an incomplete artifact into a retained Original Report on relaunch.
+    if (
+      source.byteSize !== undefined &&
+      source.byteSize !== null &&
+      fileInfo.size !== source.byteSize
+    ) {
+      await fileSystem.deleteAsync(path, { idempotent: true });
+      return null;
+    }
+    let sourceHash: string;
+    try {
+      sourceHash = await protection.hashFile(path);
+    } catch (error) {
+      // A destination found without a verifiable hash is an interrupted artifact, not a source
+      // we may retain or deduplicate. Remove it before relaunch reconciliation continues.
+      await fileSystem.deleteAsync(path, { idempotent: true });
+      throw error;
+    }
+    return { path, sourceHash, byteSize: fileInfo.size };
   }
 
   async function hashFile(path: string): Promise<string> {
@@ -209,5 +251,14 @@ export function createProtectedReportFileService(
     await Promise.all(names.map((name) => remove(joinPath(directory, name))));
   }
 
-  return { initialize, stage, promote, hashFile, exists, remove, cleanupTransientImports };
+  return {
+    initialize,
+    stage,
+    promote,
+    recoverPromoted,
+    hashFile,
+    exists,
+    remove,
+    cleanupTransientImports,
+  };
 }

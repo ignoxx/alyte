@@ -120,6 +120,13 @@ class FakeFiles implements ProtectedReportFileService {
     return { path, sourceHash: current.hash, byteSize: current.size };
   }
 
+  async recoverPromoted(
+    _reportId: string,
+    _source: LabSourceSelection,
+  ): Promise<ProtectedCopy | null> {
+    return null;
+  }
+
   async hashFile(path: string): Promise<string> {
     const file = this.files.get(path);
     if (file === undefined) throw new Error('file missing');
@@ -137,6 +144,15 @@ class FakeFiles implements ProtectedReportFileService {
   }
 }
 
+class FailingDeleteFiles extends FakeFiles {
+  failRemoval = false;
+
+  override async remove(path: string): Promise<void> {
+    if (this.failRemoval) throw new Error('synthetic file cleanup failure');
+    await super.remove(path);
+  }
+}
+
 const pdfInspection: PdfInspection = {
   encrypted: false,
   locked: false,
@@ -151,6 +167,7 @@ const pdfInspection: PdfInspection = {
 class FakePdf implements PdfInspector {
   locked = false;
   passwordAttempts: string[] = [];
+  previewCalls = 0;
   async inspect(_path: string): Promise<PdfInspection> {
     return this.locked
       ? { ...pdfInspection, encrypted: true, locked: true, pageCount: 0, pages: [] }
@@ -159,7 +176,15 @@ class FakePdf implements PdfInspector {
   async unlock(_path: string, password: string): Promise<PdfInspectionSession> {
     this.passwordAttempts.push(password);
     if (password !== 'correct horse') throw new Error('Wrong password');
-    return { inspection: { ...pdfInspection, encrypted: true }, close: async () => {} };
+    return {
+      inspection: { ...pdfInspection, encrypted: true },
+      renderPreview: async () => ['data:image/png;base64,synthetic-preview'],
+      close: async () => {},
+    };
+  }
+  async renderPreview(_path: string): Promise<readonly string[]> {
+    this.previewCalls += 1;
+    return ['data:image/png;base64,synthetic-preview'];
   }
 }
 
@@ -232,6 +257,62 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(files.removed.filter((path) => path.includes('transient')).length, 2);
   });
 
+  test('does not treat a failed pathless import as a usable duplicate', async () => {
+    const repository = createRepository();
+    await repository.createReport({
+      id: 'lab-report-pathless-failed',
+      sourceType: 'pdf',
+      originalFilename: 'failed.pdf',
+      mimeType: 'application/pdf',
+      sourceHash: 'hash-file:///same-source',
+      importState: 'failed',
+      failureReason: 'promotion-interrupted',
+    });
+    const files = new FakeFiles();
+    const service = createService(repository, files);
+    const imported = (await service.importPdf(source('same-source')))!.report;
+
+    assert.equal(imported.importState, 'imported');
+    assert.equal(imported.originalPath !== null, true);
+    assert.equal((await service.listReports()).length, 2);
+  });
+
+  test('previews retained image sources and PDF pages locally from report detail', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new FakePdf();
+    const service = createService(repository, files, pdf);
+    const image = (await service.importImages([source('preview-image', 'image')]))[0]!.report;
+    const importedPdf = (await service.importPdf(source('preview-pdf')))!.report;
+
+    const imagePreview = await service.previewOriginal(image.id);
+    assert.deepEqual(imagePreview, { sourceType: 'image', uris: [image.originalPath] });
+    const pdfPreview = await service.previewOriginal(importedPdf.id);
+    assert.deepEqual(pdfPreview, {
+      sourceType: 'pdf',
+      uris: ['data:image/png;base64,synthetic-preview'],
+    });
+    assert.equal(pdf.previewCalls, 1);
+  });
+
+  test('password preview uses an ephemeral unlock session and reports unavailable sources honestly', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new FakePdf();
+    pdf.locked = true;
+    const service = createService(repository, files, pdf);
+    const imported = (await service.importPdf(
+      source('preview-locked'),
+      async () => 'correct horse',
+    ))!.report;
+    const preview = await service.previewOriginal(imported.id, async () => 'correct horse');
+    assert.equal(preview.sourceType, 'pdf');
+    assert.equal(pdf.passwordAttempts.includes('correct horse'), true);
+
+    files.files.delete(imported.originalPath!);
+    await assert.rejects(service.previewOriginal(imported.id), /integrity/);
+  });
+
   test('wrong password is recoverable without persisting the password', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
@@ -263,6 +344,9 @@ describe('protected Lab Report import lifecycle', () => {
         throw new Error('malformed PDF');
       },
       async unlock() {
+        throw new Error('unreachable');
+      },
+      async renderPreview() {
         throw new Error('unreachable');
       },
     };
@@ -312,6 +396,44 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(await files.exists(imported.originalPath!), false);
   });
 
+  test('deletion intent survives a file cleanup failure and remains retryable', async () => {
+    const repository = createRepository();
+    const files = new FailingDeleteFiles();
+    const service = createService(repository, files);
+    const imported = (await service.importPdf(source('delete-retry')))!.report;
+
+    files.failRemoval = true;
+    await assert.rejects(service.deleteReport(imported.id), /cleanup failure/);
+    const failed = await repository.getReport(imported.id);
+    assert.equal(failed?.importState, 'imported');
+    assert.equal(failed?.deletionState, 'failed');
+    assert.equal(failed?.originalPath, imported.originalPath);
+    assert.equal(await files.exists(imported.originalPath!), true);
+
+    files.failRemoval = false;
+    await service.deleteReport(imported.id);
+    const deleted = await repository.getReport(imported.id);
+    assert.equal(deleted?.importState, 'deleted');
+    assert.equal(deleted?.deletionState, 'complete');
+    assert.equal(deleted?.failureReason, 'user-deleted');
+    assert.equal(await files.exists(imported.originalPath!), false);
+  });
+
+  test('relaunch completes a durable deletion intent after process death before file cleanup', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const service = createService(repository, files);
+    const imported = (await service.importPdf(source('delete-relaunch')))!.report;
+    await repository.requestReportDeletion(imported.id);
+    assert.equal(await files.exists(imported.originalPath!), true);
+
+    const reopened = createService(repository, files);
+    const deleted = await reopened.getReport(imported.id);
+    assert.equal(deleted?.importState, 'deleted');
+    assert.equal(deleted?.deletionState, 'complete');
+    assert.equal(await files.exists(imported.originalPath!), false);
+  });
+
   test('relaunch turns an unfinished durable import into an interrupted library item', async () => {
     const databasePath = join(
       mkdtempSync(join(tmpdir(), 'alyte-reports-interrupted-')),
@@ -330,7 +452,7 @@ describe('protected Lab Report import lifecycle', () => {
     const service = createService(createRepository(databasePath), new FakeFiles());
     const reopened = await service.getReport(report.id);
     assert.equal(reopened?.importState, 'interrupted');
-    assert.equal(reopened?.failureReason, 'interrupted');
+    assert.equal(reopened?.failureReason, 'interrupted-no-protected-source');
   });
 
   test('hash verification detects accidental source replacement', async () => {

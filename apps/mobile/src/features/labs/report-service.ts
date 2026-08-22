@@ -23,6 +23,12 @@ export type LabReportImportResult = {
   readonly duplicate: boolean;
 };
 
+export type LabReportPreview = {
+  readonly sourceType: LabReport['sourceType'];
+  /** A protected file URI for images or short-lived local data URIs for rendered PDF pages. */
+  readonly uris: readonly string[];
+};
+
 export class LabReportImportError extends Error {
   override readonly name = 'LabReportImportError';
   readonly report: LabReport;
@@ -54,6 +60,7 @@ export type LabReportsService = {
   retryImport(id: string, passwordRequest?: PasswordRequest): Promise<LabReport>;
   verifySource(id: string): Promise<LabReportSourceIntegrity>;
   openOriginal(id: string): Promise<string>;
+  previewOriginal(id: string, passwordRequest?: PasswordRequest): Promise<LabReportPreview>;
   deleteReport(id: string): Promise<void>;
 };
 
@@ -123,14 +130,82 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     initializationPromise ??= (async () => {
       const repo = await repository();
       await fileService.initialize();
-      await repo.reconcileInterruptedReports();
       await fileService.cleanupTransientImports();
+      const interrupted = (await repo.listReports()).filter(
+        (report) => report.importState === 'importing' && report.originalPath === null,
+      );
+      for (const report of interrupted) {
+        let recovered: ProtectedCopy | null = null;
+        try {
+          recovered = await fileService.recoverPromoted(report.id, {
+            uri: '',
+            name: report.originalFilename,
+            mimeType: report.mimeType,
+            sourceType: report.sourceType,
+            byteSize: report.byteSize,
+          });
+        } catch {
+          // Keep the durable row actionable even when a promoted artifact is unreadable. The
+          // source path remains recorded only after a successful recovery and can be retried or
+          // deleted from detail without silently treating corrupt bytes as a usable duplicate.
+          await repo.updateReport(report.id, {
+            importState: 'failed',
+            failureReason: 'interrupted-source-unreadable',
+          });
+        }
+        if (recovered !== null) {
+          await repo.updateReport(report.id, {
+            sourceHash: recovered.sourceHash,
+            originalPath: recovered.path,
+            importState: 'interrupted',
+            failureReason: 'interrupted-after-promotion',
+          });
+        }
+      }
+      await repo.reconcileInterruptedReports();
+      for (const candidate of await repo.listDeletionCandidates()) {
+        if (candidate.deletionState === 'requested') {
+          try {
+            await processDeletion(candidate.id, repo);
+          } catch {
+            // A failed cleanup is durable and actionable from report detail; it must not prevent
+            // the rest of the local Labs library from opening after relaunch.
+          }
+        }
+      }
       initialized = true;
     })();
     try {
       await initializationPromise;
     } catch (error) {
       initializationPromise = null;
+      throw error;
+    }
+  }
+
+  async function processDeletion(reportId: string, repo?: LabRepository): Promise<void> {
+    const reportRepository = repo ?? (await repository());
+    let report = await reportRepository.getReport(reportId);
+    if (report === null || report.importState === 'deleted') return;
+    if (report.deletionState !== 'requested') {
+      report = await reportRepository.requestReportDeletion(reportId);
+    }
+    try {
+      if (report.originalPath !== null) {
+        const references = await reportRepository.countReportsReferencingPath(
+          report.originalPath,
+          report.id,
+        );
+        if (references === 0) {
+          await fileService.remove(report.originalPath);
+          if (await fileService.exists(report.originalPath)) {
+            throw new Error('Original Report remained after deletion');
+          }
+        }
+      }
+      await reportRepository.completeReportDeletion(report.id);
+    } catch (error) {
+      await reportRepository.failReportDeletion(report.id, 'source-cleanup-failed');
       throw error;
     }
   }
@@ -226,6 +301,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         return { report: duplicate, duplicate: true };
       }
       promoted = await fileService.promote(staged, reportId, source);
+      // Persist the protected promotion before inspection. If the process dies after this point,
+      // relaunch can recover the source and present an actionable interrupted state.
+      report = await repo.updateReport(reportId, {
+        sourceHash: promoted.sourceHash,
+        originalPath: promoted.path,
+        importState: 'importing',
+        failureReason: null,
+      });
       const inspection =
         source.sourceType === 'pdf'
           ? await sourceInspection(
@@ -361,17 +444,58 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     return report.originalPath;
   }
 
+  async function previewOriginal(
+    id: string,
+    passwordRequest?: PasswordRequest,
+  ): Promise<LabReportPreview> {
+    const report = await getReport(id);
+    if (report === null) throw new Error('Lab Report was not found');
+    const path = await openOriginal(id);
+    if (report.sourceType === 'image') return { sourceType: 'image', uris: [path] };
+
+    const initial = await pdfInspector.inspect(path);
+    if (!initial.locked) {
+      return { sourceType: 'pdf', uris: await pdfInspector.renderPreview(path) };
+    }
+    const request = passwordRequest ?? options.passwordRequest;
+    if (request === undefined) {
+      throw new LabReportImportError(
+        report,
+        'wrong-password',
+        'A password is required to preview this PDF',
+      );
+    }
+    const entered = await request({ report, attempt: 1 });
+    if (entered === null || entered.length === 0) {
+      throw new LabReportImportError(report, 'cancelled', 'Password entry was cancelled');
+    }
+    let password = entered;
+    let session: Awaited<ReturnType<PdfInspector['unlock']>> | null = null;
+    try {
+      session = await pdfInspector.unlock(path, password);
+      return { sourceType: 'pdf', uris: await session.renderPreview() };
+    } catch (error) {
+      throw new LabReportImportError(
+        report,
+        'wrong-password',
+        'The PDF password was not accepted',
+        { cause: error },
+      );
+    } finally {
+      password = '';
+      if (session !== null) await session.close();
+    }
+  }
+
   async function deleteReport(id: string): Promise<void> {
     return serialized(async () => {
       await ensureInitialized();
       const repo = await repository();
       const report = await repo.getReport(id);
       if (report === null) return;
-      if (report.originalPath !== null) {
-        const references = await repo.countReportsReferencingPath(report.originalPath, id);
-        if (references === 0) await fileService.remove(report.originalPath);
-      }
-      await repo.deleteReport(id);
+      if (report.importState === 'deleted') return;
+      await repo.requestReportDeletion(id);
+      await processDeletion(id, repo);
     });
   }
 
@@ -383,6 +507,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     retryImport,
     verifySource,
     openOriginal,
+    previewOriginal,
     deleteReport,
   };
 }

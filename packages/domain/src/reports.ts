@@ -4,6 +4,7 @@ export type LabReportSourceType = 'pdf' | 'image';
 
 /** Durable state for the source document, independent of any structured Lab Record. */
 export type LabReportImportState = 'importing' | 'imported' | 'interrupted' | 'failed' | 'deleted';
+export type LabReportDeletionState = 'none' | 'requested' | 'failed' | 'complete';
 
 export type LabReportPage = {
   readonly id: string;
@@ -27,6 +28,9 @@ export type LabReport = {
   /** A protected app-container path, or null after source deletion/import failure. */
   readonly originalPath: string | null;
   readonly importState: LabReportImportState;
+  readonly deletionState: LabReportDeletionState;
+  readonly deletionRequestedAt: string | null;
+  readonly deletionError: string | null;
   readonly failureReason: string | null;
   readonly encrypted: boolean;
   readonly pageCount: number | null;
@@ -46,6 +50,9 @@ export type CreateLabReportInput = {
   readonly sourceHash?: string | null;
   readonly originalPath?: string | null;
   readonly importState?: LabReportImportState;
+  readonly deletionState?: LabReportDeletionState;
+  readonly deletionRequestedAt?: string | null;
+  readonly deletionError?: string | null;
   readonly failureReason?: string | null;
   readonly encrypted?: boolean;
   readonly pageCount?: number | null;
@@ -67,6 +74,9 @@ export type UpdateLabReportInput = {
   readonly sourceHash?: string | null;
   readonly originalPath?: string | null;
   readonly importState?: LabReportImportState;
+  readonly deletionState?: LabReportDeletionState;
+  readonly deletionRequestedAt?: string | null;
+  readonly deletionError?: string | null;
   readonly failureReason?: string | null;
   readonly encrypted?: boolean;
   readonly pageCount?: number | null;
@@ -93,6 +103,12 @@ export function assertLabReportSourceType(value: LabReportSourceType): void {
 export function assertLabReportImportState(value: LabReportImportState): void {
   if (!['importing', 'imported', 'interrupted', 'failed', 'deleted'].includes(value)) {
     throw new Error(`Invalid Lab Report import state: ${value}`);
+  }
+}
+
+export function assertLabReportDeletionState(value: LabReportDeletionState): void {
+  if (!['none', 'requested', 'failed', 'complete'].includes(value)) {
+    throw new Error(`Invalid Lab Report deletion state: ${value}`);
   }
 }
 

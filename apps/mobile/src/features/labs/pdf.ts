@@ -15,17 +15,21 @@ export type PdfInspection = {
 
 export interface PdfInspectionSession {
   readonly inspection: PdfInspection;
+  renderPreview(): Promise<readonly string[]>;
   close(): Promise<void>;
 }
 
 export interface PdfInspector {
   inspect(path: string): Promise<PdfInspection>;
   unlock(path: string, password: string): Promise<PdfInspectionSession>;
+  renderPreview(path: string): Promise<readonly string[]>;
 }
 
 type NativePdfModule = {
   inspect(path: string): Promise<PdfInspection>;
   unlock(path: string, password: string): Promise<PdfInspection & { readonly sessionId: string }>;
+  renderPreview(path: string): Promise<readonly string[]>;
+  renderPreviewSession(sessionId: string): Promise<readonly string[]>;
   close(sessionId: string): Promise<void>;
 };
 
@@ -45,7 +49,14 @@ export const nativePdfInspector: PdfInspector = {
     // again and the native PDFDocument is released in close().
     return {
       inspection: result,
+      renderPreview: () => native.renderPreviewSession(result.sessionId),
       close: () => native.close(result.sessionId),
     };
+  },
+  async renderPreview(path) {
+    const { requireOptionalNativeModule } = await import('expo-modules-core');
+    const native = requireOptionalNativeModule<NativePdfModule>('AlytePDF');
+    if (native === null) throw new Error('AlytePDF is unavailable for local PDF preview');
+    return native.renderPreview(path);
   },
 };

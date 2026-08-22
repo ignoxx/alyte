@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useNavigation } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import type { LabRecord, LabReport, SpecimenType } from '@alyte/domain';
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
@@ -40,6 +40,7 @@ export function LabsScreen() {
   const navigation = useNavigation<Navigation>();
   const services = useServices();
   const { labs } = services;
+  const isFocused = useIsFocused();
   const [records, setRecords] = useState<readonly LabRecord[]>([]);
   const [reports, setReports] = useState<readonly LabReport[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,8 +65,8 @@ export function LabsScreen() {
   }, [labs, services.reports]);
 
   useEffect(() => {
-    void loadRecords();
-  }, [loadRecords]);
+    if (isFocused) void loadRecords();
+  }, [isFocused, loadRecords]);
 
   return (
     <SafeAreaView style={screenStyles.safe}>
