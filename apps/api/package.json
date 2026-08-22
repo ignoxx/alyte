@@ -15,6 +15,11 @@
   },
   "dependencies": {
     "@alyte/contracts": "0.1.0",
-    "fastify": "5.12.1"
+    "better-sqlite3": "13.0.3",
+    "fastify": "5.12.1",
+    "jose": "6.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13"
   }
 }
