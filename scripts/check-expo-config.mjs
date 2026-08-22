@@ -11,6 +11,7 @@ for (const [variant, bundleIdentifier] of Object.entries(expected)) {
   process.env.APP_VARIANT = variant;
   const config = appConfig({ config: {} });
   assert.equal(config.ios.bundleIdentifier, bundleIdentifier);
+  assert.equal(config.ios.deploymentTarget, '26.0');
   assert.equal(config.extra.variant, variant);
   assert.equal(config.extra.apiEnvironment, variant === 'production' ? 'production' : 'none');
   assert.equal(config.extra.showcaseAllowed, variant !== 'production');

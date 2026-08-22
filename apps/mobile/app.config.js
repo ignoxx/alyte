@@ -32,6 +32,7 @@ module.exports = ({ config }) => {
     ios: {
       ...config.ios,
       bundleIdentifier: selected.bundleIdentifier,
+      deploymentTarget: '26.0',
       supportsTablet: false,
       infoPlist: {
         ...config.ios?.infoPlist,

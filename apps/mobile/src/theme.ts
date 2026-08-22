@@ -2,7 +2,7 @@ import { Platform, PlatformColor, StyleSheet, type ColorValue } from 'react-nati
 
 /**
  * Semantic system colors keep ordinary React Native surfaces in sync with UIKit's light and dark
- * appearances. The explicit fallback is used by non-iOS targets and older platform versions.
+ * appearances. The explicit fallback keeps shared pure/UI checks portable outside iOS.
  */
 function systemColor(name: string, fallback: string): ColorValue {
   return Platform.OS === 'ios' ? PlatformColor(name) : fallback;

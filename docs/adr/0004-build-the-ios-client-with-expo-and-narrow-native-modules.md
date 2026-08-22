@@ -1,7 +1,9 @@
 # Build the iOS client with Expo and narrow native modules
 
-Alyte will use React Native, Expo, and strict TypeScript for the first iOS client. React
-Navigation native stacks and sheets provide platform navigation. Custom Apple-framework behavior
+Alyte will use React Native, Expo, and strict TypeScript for the first iOS client, with iOS 26 as
+the minimum deployment target for the MVP. React Navigation's native bottom tabs and native
+stacks/sheets provide platform navigation and UIKit materials, including Liquid Glass where the
+system supplies it. Custom Apple-framework behavior
 will live in small tracked Expo modules and config plugins, while generated native projects remain
 reproducible through Expo prebuild.
 

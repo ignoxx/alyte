@@ -103,9 +103,9 @@ headroom rather than treating it as abuse.
 
 ## Confirmed product boundaries
 
-- iOS 18 or later, with an English interface that is localization-ready. The supported floor is
-  iPhone XS, XS Max, XR, and SE (2nd generation) or newer; oldest-device OCR, chart, camera, and
-  document workflows require explicit performance testing.
+- iOS 26 or later, with an English interface that is localization-ready. The MVP deliberately
+  targets the iOS 26 native component set, including UIKit's native tab-bar materials. Older iOS
+  versions are not supported; the supported floor is the iOS 26-compatible iPhone lineup.
 - Core laboratory-history functionality works locally without an account.
 - Measured values and inferred possible influences remain visibly and conceptually distinct.
 - The app does not invent or predict concrete biomarker values.
