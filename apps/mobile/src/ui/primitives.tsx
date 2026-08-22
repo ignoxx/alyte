@@ -28,11 +28,12 @@ export function AppText({
 }: AppTextProps) {
   const { fontScale } = useWindowDimensions();
   const baseStyle = typography[variant];
-  // At the default size, keep the app's deliberate type rhythm. Once Dynamic Type is active,
-  // clear the explicit line box so the native text renderer can size each line around its scaled
-  // glyphs instead of clipping them or applying a second, oversized font-scale multiplier.
+  // At standard and larger-but-non-accessibility sizes, keep the app's deliberate type rhythm.
+  // At the accessibility-size threshold, clear the explicit line box so the native text renderer
+  // can size each line around its scaled glyphs instead of clipping them or applying a second,
+  // oversized font-scale multiplier.
   const dynamicTypeStyle =
-    allowFontScaling && fontScale > 1 ? { lineHeight: undefined } : undefined;
+    allowFontScaling && fontScale >= 1.3 ? { lineHeight: undefined } : undefined;
 
   return (
     <Text
