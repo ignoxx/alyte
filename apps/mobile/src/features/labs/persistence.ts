@@ -2,6 +2,7 @@ import {
   assertLabDateState,
   assertMeasurementValue,
   canonicalId,
+  createSortableOpaqueId,
   formatMeasurementValue,
   type CorrectMeasurementInput,
   type CreateLabRecordInput,
@@ -9,6 +10,7 @@ import {
   type LabRecord,
   type Measurement,
   type MeasurementCorrection,
+  type MeasurementCorrectionState,
   type MeasurementSnapshot,
   type MeasurementValue,
   type UpdateLabRecordInput,
@@ -190,10 +192,16 @@ function snapshotFromUnknown(value: unknown): MeasurementSnapshot {
     throw new Error('Invalid measurement snapshot in local database');
   }
   const candidate = value as Record<string, unknown>;
+  const storedMeasurementValue = storedValue(candidate.value);
   const snapshot: MeasurementSnapshot = {
     label: requiredString(candidate.label, 'measurement label'),
-    value: storedValue(candidate.value),
-    valueString: requiredString(candidate.valueString, 'measurement value string'),
+    value: storedMeasurementValue,
+    // Numeric and bounded display strings are derived from the typed value so a stale
+    // hand-edited column can never reintroduce a comparator/value contradiction after reopen.
+    valueString:
+      storedMeasurementValue.kind === 'numeric' || storedMeasurementValue.kind === 'bounded'
+        ? formatMeasurementValue(storedMeasurementValue)
+        : requiredString(candidate.valueString, 'measurement value string'),
     unit: nullableString(candidate.unit, 'measurement unit'),
     referenceInterval: nullableString(candidate.referenceInterval, 'reference interval'),
     flag: nullableString(candidate.flag, 'laboratory flag'),
@@ -269,7 +277,10 @@ export function decodeMeasurementRow(row: MeasurementRow): Omit<Measurement, 'co
     current: {
       ...current,
       label: requiredString(row.current_label, 'current measurement label'),
-      valueString: requiredString(row.current_value_string, 'current measurement value string'),
+      valueString:
+        current.value.kind === 'numeric' || current.value.kind === 'bounded'
+          ? formatMeasurementValue(current.value)
+          : requiredString(row.current_value_string, 'current measurement value string'),
       unit: nullableString(row.current_unit, 'current measurement unit'),
       referenceInterval: nullableString(
         row.current_reference_interval,
@@ -282,19 +293,68 @@ export function decodeMeasurementRow(row: MeasurementRow): Omit<Measurement, 'co
   };
 }
 
-function decodeCorrectionRow(row: CorrectionRow): MeasurementCorrection {
+function decodeCorrectionRow(
+  row: CorrectionRow,
+  measurement: Omit<Measurement, 'corrections'>,
+): MeasurementCorrection {
+  const previousProvenance = enumValue(
+    row.previous_provenance,
+    provenances,
+    'previous measurement provenance',
+  );
+  const previous = correctionStateFromUnknown(parseJson(row.previous_json, 'previous correction'), {
+    biomarkerId: measurement.biomarkerId,
+    specimenType: measurement.specimenType,
+    reviewState: measurement.reviewState,
+    provenance: previousProvenance,
+  });
+  const next = correctionStateFromUnknown(parseJson(row.next_json, 'next correction'), {
+    biomarkerId: measurement.biomarkerId,
+    specimenType: measurement.specimenType,
+    reviewState: measurement.reviewState,
+    provenance: 'user-corrected',
+  });
   return {
     id: requiredString(row.id, 'measurement correction id'),
     measurementId: requiredString(row.measurement_id, 'correction measurement id'),
     correctedAt: requiredString(row.corrected_at, 'correction timestamp'),
     reason: nullableString(row.reason, 'correction reason'),
-    previous: snapshotFromUnknown(parseJson(row.previous_json, 'previous correction')),
-    next: snapshotFromUnknown(parseJson(row.next_json, 'next correction')),
-    previousProvenance: enumValue(
-      row.previous_provenance,
-      provenances,
-      'previous measurement provenance',
-    ),
+    previous,
+    next,
+    previousProvenance: previous.provenance,
+  };
+}
+
+function correctionStateFromUnknown(
+  value: unknown,
+  fallback: Omit<MeasurementCorrectionState, 'snapshot'>,
+): MeasurementCorrectionState {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error('Invalid correction state in local database');
+  }
+  const candidate = value as Record<string, unknown>;
+  const biomarkerValue = candidate.biomarkerId;
+  const snapshotValue = candidate.snapshot === undefined ? candidate : candidate.snapshot;
+  return {
+    biomarkerId:
+      candidate.biomarkerId === undefined
+        ? fallback.biomarkerId
+        : biomarkerValue === null
+          ? null
+          : canonicalId(requiredString(biomarkerValue, 'correction biomarker id')),
+    specimenType:
+      candidate.specimenType === undefined
+        ? fallback.specimenType
+        : enumValue(candidate.specimenType, specimenTypes, 'correction specimen type'),
+    snapshot: snapshotFromUnknown(snapshotValue),
+    reviewState:
+      candidate.reviewState === undefined
+        ? fallback.reviewState
+        : enumValue(candidate.reviewState, reviewStates, 'correction review state'),
+    provenance:
+      candidate.provenance === undefined
+        ? fallback.provenance
+        : enumValue(candidate.provenance, provenances, 'correction provenance'),
   };
 }
 
@@ -315,7 +375,10 @@ function normalizeSnapshotInput(
     throw new Error('Measurement value is required');
   }
   assertMeasurementValue(value);
-  const valueString = input.valueString ?? current?.valueString ?? formatMeasurementValue(value);
+  const valueString =
+    value.kind === 'numeric' || value.kind === 'bounded'
+      ? formatMeasurementValue(value)
+      : value.value;
   return {
     label,
     value,
@@ -330,11 +393,7 @@ function normalizeSnapshotInput(
 }
 
 function idFor(prefix: string): string {
-  const uuid = globalThis.crypto?.randomUUID?.();
-  if (uuid !== undefined) {
-    return uuid;
-  }
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return createSortableOpaqueId(prefix);
 }
 
 function isoNow(): string {
@@ -379,8 +438,8 @@ export function createLabRepository(
   let initialized = false;
   let writeQueue: Promise<void> = Promise.resolve();
 
-  async function ensureProtection(): Promise<void> {
-    await protection.protectDatabaseFiles(database.databasePath);
+  async function ensureProtection(options: { readonly requireSidecars: boolean }): Promise<void> {
+    await protection.protectDatabaseFiles(database.databasePath, options);
   }
 
   async function initialize(): Promise<void> {
@@ -390,10 +449,13 @@ export function createLabRepository(
     await database.execAsync(
       'PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;',
     );
-    await ensureProtection();
+    await ensureProtection({ requireSidecars: false });
     await database.execAsync(
       'CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL);',
     );
+    // The first schema write is the point at which SQLite may create WAL/SHM sidecars.
+    // Refuse to continue until those files are protected and verified as well.
+    await ensureProtection({ requireSidecars: true });
     const currentRows = await database.getAllAsync<{ version: number }>(
       'SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations;',
     );
@@ -412,10 +474,10 @@ export function createLabRepository(
           migration.version,
           now(),
         );
+        await ensureProtection({ requireSidecars: true });
       });
-      await ensureProtection();
     }
-    await ensureProtection();
+    await ensureProtection({ requireSidecars: true });
     initialized = true;
   }
 
@@ -427,9 +489,14 @@ export function createLabRepository(
     });
     await previous;
     try {
-      await ensureProtection();
-      const result = await work();
-      await ensureProtection();
+      let result!: T;
+      await database.withTransactionAsync(async () => {
+        await ensureProtection({ requireSidecars: true });
+        result = await work();
+        // Keep the transaction open until the native adapter has verified every SQLite sidecar.
+        // A failure here rolls back the requested health-record mutation.
+        await ensureProtection({ requireSidecars: true });
+      });
       return result;
     } finally {
       release();
@@ -468,7 +535,12 @@ export function createLabRepository(
            FROM measurement_corrections WHERE measurement_id = ? ORDER BY corrected_at ASC;`,
           measurement.id,
         );
-        return { ...measurement, corrections: correctionRows.map(decodeCorrectionRow) };
+        return {
+          ...measurement,
+          corrections: correctionRows.map((correctionRow) =>
+            decodeCorrectionRow(correctionRow, measurement),
+          ),
+        };
       }),
     );
   }
@@ -493,54 +565,52 @@ export function createLabRepository(
     const recordId = input.id ?? makeId('lab-record');
     const createdAt = now();
     await withWrite(async () => {
-      await database.withTransactionAsync(async () => {
+      await database.runAsync(
+        `INSERT INTO lab_records (id, collection_date, date_state, specimen_type, laboratory_name, notes, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+        recordId,
+        input.collectionDate.kind === 'known' ? input.collectionDate.value : null,
+        input.collectionDate.kind,
+        input.specimenType ?? 'unknown',
+        input.laboratoryName ?? null,
+        input.notes ?? null,
+        createdAt,
+        createdAt,
+      );
+      for (const measurementInput of input.measurements) {
+        const measurementId = measurementInput.id ?? makeId('measurement');
+        const snapshot = normalizeSnapshotInput(measurementInput);
+        const provenance = measurementInput.provenance ?? 'user-entered';
+        const reviewState = measurementInput.reviewState ?? 'confirmed';
         await database.runAsync(
-          `INSERT INTO lab_records (id, collection_date, date_state, specimen_type, laboratory_name, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+          `INSERT INTO measurements (
+            id, lab_record_id, biomarker_id, specimen_type, original_label, original_value_string,
+            original_value_json, original_unit, original_reference_interval, original_flag,
+            current_label, current_value_string, current_value_json, current_unit,
+            current_reference_interval, current_flag, provenance, review_state, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          measurementId,
           recordId,
-          input.collectionDate.kind === 'known' ? input.collectionDate.value : null,
-          input.collectionDate.kind,
-          input.specimenType ?? 'unknown',
-          input.laboratoryName ?? null,
-          input.notes ?? null,
+          measurementInput.biomarkerId ?? null,
+          measurementInput.specimenType ?? input.specimenType ?? 'unknown',
+          snapshot.label,
+          snapshot.valueString,
+          snapshotToJson(snapshot),
+          snapshot.unit,
+          snapshot.referenceInterval,
+          snapshot.flag,
+          snapshot.label,
+          snapshot.valueString,
+          snapshotToJson(snapshot),
+          snapshot.unit,
+          snapshot.referenceInterval,
+          snapshot.flag,
+          provenance,
+          reviewState,
           createdAt,
           createdAt,
         );
-        for (const measurementInput of input.measurements) {
-          const measurementId = measurementInput.id ?? makeId('measurement');
-          const snapshot = normalizeSnapshotInput(measurementInput);
-          const provenance = measurementInput.provenance ?? 'user-entered';
-          const reviewState = measurementInput.reviewState ?? 'confirmed';
-          await database.runAsync(
-            `INSERT INTO measurements (
-              id, lab_record_id, biomarker_id, specimen_type, original_label, original_value_string,
-              original_value_json, original_unit, original_reference_interval, original_flag,
-              current_label, current_value_string, current_value_json, current_unit,
-              current_reference_interval, current_flag, provenance, review_state, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-            measurementId,
-            recordId,
-            measurementInput.biomarkerId ?? null,
-            measurementInput.specimenType ?? input.specimenType ?? 'unknown',
-            snapshot.label,
-            snapshot.valueString,
-            snapshotToJson(snapshot),
-            snapshot.unit,
-            snapshot.referenceInterval,
-            snapshot.flag,
-            snapshot.label,
-            snapshot.valueString,
-            snapshotToJson(snapshot),
-            snapshot.unit,
-            snapshot.referenceInterval,
-            snapshot.flag,
-            provenance,
-            reviewState,
-            createdAt,
-            createdAt,
-          );
-        }
-      });
+      }
     });
     const record = await getRecord(recordId);
     if (record === null) {
@@ -553,21 +623,19 @@ export function createLabRepository(
     await initialize();
     assertLabDateState(input.collectionDate);
     await withWrite(async () => {
-      await database.withTransactionAsync(async () => {
-        const result = await database.runAsync(
-          `UPDATE lab_records SET collection_date = ?, date_state = ?, specimen_type = ?, laboratory_name = ?, notes = ?, updated_at = ? WHERE id = ?;`,
-          input.collectionDate.kind === 'known' ? input.collectionDate.value : null,
-          input.collectionDate.kind,
-          input.specimenType,
-          input.laboratoryName,
-          input.notes,
-          now(),
-          id,
-        );
-        if (result.changes !== 1) {
-          throw new Error('Lab Record was not found');
-        }
-      });
+      const result = await database.runAsync(
+        `UPDATE lab_records SET collection_date = ?, date_state = ?, specimen_type = ?, laboratory_name = ?, notes = ?, updated_at = ? WHERE id = ?;`,
+        input.collectionDate.kind === 'known' ? input.collectionDate.value : null,
+        input.collectionDate.kind,
+        input.specimenType,
+        input.laboratoryName,
+        input.notes,
+        now(),
+        id,
+      );
+      if (result.changes !== 1) {
+        throw new Error('Lab Record was not found');
+      }
     });
     const record = await getRecord(id);
     if (record === null) {
@@ -581,105 +649,116 @@ export function createLabRepository(
     input: CorrectMeasurementInput,
   ): Promise<Measurement> {
     await initialize();
-    return withWrite(async () => {
-      let corrected: Measurement | null = null;
-      await database.withTransactionAsync(async () => {
-        const rows = await database.getAllAsync<MeasurementRow>(
-          `SELECT id, lab_record_id, biomarker_id, specimen_type,
-            original_label, original_value_string, original_value_json, original_unit,
-            original_reference_interval, original_flag, current_label, current_value_string,
-            current_value_json, current_unit, current_reference_interval, current_flag,
-            provenance, review_state, created_at, updated_at
-           FROM measurements WHERE id = ?;`,
-          id,
-        );
-        const row = rows[0];
-        if (row === undefined) {
-          throw new Error('Measurement was not found');
-        }
-        const existing = decodeMeasurementRow(row);
-        const nextInput: CreateMeasurementInput = {
-          ...asSnapshotInput(existing.current),
-          ...(input.label === undefined ? {} : { label: input.label }),
-          ...(input.value === undefined ? {} : { value: input.value }),
-          ...(input.valueString === undefined ? {} : { valueString: input.valueString }),
-          ...(input.unit === undefined ? {} : { unit: input.unit }),
-          ...(input.referenceInterval === undefined
-            ? {}
-            : { referenceInterval: input.referenceInterval }),
-          ...(input.flag === undefined ? {} : { flag: input.flag }),
-        };
-        const next = normalizeSnapshotInput(nextInput, existing.current);
-        const correctedAt = now();
-        await database.runAsync(
-          `INSERT INTO measurement_corrections (
-            id, measurement_id, corrected_at, reason, previous_json, next_json, previous_provenance
-          ) VALUES (?, ?, ?, ?, ?, ?, ?);`,
-          makeId('measurement-correction'),
-          id,
-          correctedAt,
-          input.reason ?? null,
-          JSON.stringify(existing.current),
-          JSON.stringify(next),
-          existing.provenance,
-        );
-        await database.runAsync(
-          `UPDATE measurements SET current_label = ?, current_value_string = ?, current_value_json = ?,
-            current_unit = ?, current_reference_interval = ?, current_flag = ?, provenance = 'user-corrected',
-            updated_at = ? WHERE id = ?;`,
-          next.label,
-          next.valueString,
-          snapshotToJson(next),
-          next.unit,
-          next.referenceInterval,
-          next.flag,
-          correctedAt,
-          id,
-        );
-        corrected = {
-          ...existing,
-          current: next,
-          provenance: 'user-corrected',
-          corrections: [],
-        };
-      });
-      if (corrected === null) {
-        throw new Error('Corrected Measurement could not be read back');
-      }
-      const recordRows = await database.getAllAsync<{ lab_record_id: string }>(
-        'SELECT lab_record_id FROM measurements WHERE id = ?;',
+    let recordId: string | null = null;
+    await withWrite(async () => {
+      const rows = await database.getAllAsync<MeasurementRow>(
+        `SELECT id, lab_record_id, biomarker_id, specimen_type,
+          original_label, original_value_string, original_value_json, original_unit,
+          original_reference_interval, original_flag, current_label, current_value_string,
+          current_value_json, current_unit, current_reference_interval, current_flag,
+          provenance, review_state, created_at, updated_at
+         FROM measurements WHERE id = ?;`,
         id,
       );
-      const recordId = recordRows[0]?.lab_record_id;
-      if (recordId === undefined) {
-        throw new Error('Corrected Measurement could not be associated with a Lab Record');
+      const row = rows[0];
+      if (row === undefined) {
+        throw new Error('Measurement was not found');
       }
-      const readBack = await getRecord(recordId);
-      const measurement = readBack?.measurements.find((candidate) => candidate.id === id);
-      if (measurement === undefined) {
-        throw new Error('Corrected Measurement could not be read back');
+      const existing = decodeMeasurementRow(row);
+      recordId = existing.labRecordId;
+      const nextInput: CreateMeasurementInput = {
+        ...asSnapshotInput(existing.current),
+        ...(input.label === undefined ? {} : { label: input.label }),
+        ...(input.value === undefined ? {} : { value: input.value }),
+        ...(input.biomarkerId === undefined ? {} : { biomarkerId: input.biomarkerId }),
+        ...(input.specimenType === undefined ? {} : { specimenType: input.specimenType }),
+        ...(input.reviewState === undefined ? {} : { reviewState: input.reviewState }),
+        ...(input.unit === undefined ? {} : { unit: input.unit }),
+        ...(input.referenceInterval === undefined
+          ? {}
+          : { referenceInterval: input.referenceInterval }),
+        ...(input.flag === undefined ? {} : { flag: input.flag }),
+      };
+      const next = normalizeSnapshotInput(nextInput, existing.current);
+      const nextBiomarkerId =
+        input.biomarkerId === undefined ? existing.biomarkerId : input.biomarkerId;
+      const nextSpecimenType = input.specimenType ?? existing.specimenType;
+      const nextReviewState = input.reviewState ?? existing.reviewState;
+      const nextProvenance = 'user-corrected' as const;
+      const previousState: MeasurementCorrectionState = {
+        biomarkerId: existing.biomarkerId,
+        specimenType: existing.specimenType,
+        snapshot: existing.current,
+        reviewState: existing.reviewState,
+        provenance: existing.provenance,
+      };
+      const nextState: MeasurementCorrectionState = {
+        biomarkerId: nextBiomarkerId ?? null,
+        specimenType: nextSpecimenType,
+        snapshot: next,
+        reviewState: nextReviewState,
+        provenance: nextProvenance,
+      };
+      const correctedAt = now();
+      await database.runAsync(
+        `INSERT INTO measurement_corrections (
+          id, measurement_id, corrected_at, reason, previous_json, next_json, previous_provenance
+        ) VALUES (?, ?, ?, ?, ?, ?, ?);`,
+        makeId('measurement-correction'),
+        id,
+        correctedAt,
+        input.reason ?? null,
+        JSON.stringify(previousState),
+        JSON.stringify(nextState),
+        existing.provenance,
+      );
+      const result = await database.runAsync(
+        `UPDATE measurements SET biomarker_id = ?, specimen_type = ?, current_label = ?, current_value_string = ?, current_value_json = ?,
+          current_unit = ?, current_reference_interval = ?, current_flag = ?, provenance = ?, review_state = ?,
+          updated_at = ? WHERE id = ?;`,
+        nextBiomarkerId,
+        nextSpecimenType,
+        next.label,
+        next.valueString,
+        snapshotToJson(next),
+        next.unit,
+        next.referenceInterval,
+        next.flag,
+        nextProvenance,
+        nextReviewState,
+        correctedAt,
+        id,
+      );
+      if (result.changes !== 1) {
+        throw new Error('Corrected Measurement could not be saved');
       }
-      return measurement;
     });
+    if (recordId === null) {
+      throw new Error('Corrected Measurement could not be associated with a Lab Record');
+    }
+    const readBack = await getRecord(recordId);
+    const measurement = readBack?.measurements.find((candidate) => candidate.id === id);
+    if (measurement === undefined) {
+      throw new Error('Corrected Measurement could not be read back');
+    }
+    return measurement;
   }
 
   async function deleteRecord(id: string): Promise<void> {
     await initialize();
     await withWrite(async () => {
-      await database.withTransactionAsync(async () => {
-        const existingRows = await database.getAllAsync<{ id: string }>(
-          'SELECT id FROM lab_records WHERE id = ?;',
-          id,
-        );
-        if (existingRows.length === 0) {
-          return;
-        }
-        await database.runAsync('DELETE FROM measurements WHERE lab_record_id = ?;', id);
-        const result = await database.runAsync('DELETE FROM lab_records WHERE id = ?;', id);
-        if (result.changes !== 1) {
-          throw new Error('Lab Record deletion did not complete');
-        }
-      });
+      const existingRows = await database.getAllAsync<{ id: string }>(
+        'SELECT id FROM lab_records WHERE id = ?;',
+        id,
+      );
+      if (existingRows.length === 0) {
+        return;
+      }
+      await database.runAsync('DELETE FROM measurements WHERE lab_record_id = ?;', id);
+      const result = await database.runAsync('DELETE FROM lab_records WHERE id = ?;', id);
+      if (result.changes !== 1) {
+        throw new Error('Lab Record deletion did not complete');
+      }
       const orphanRows = await database.getAllAsync<{ id: string }>(
         'SELECT id FROM measurements WHERE lab_record_id = ?;',
         id,

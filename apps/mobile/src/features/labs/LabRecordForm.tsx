@@ -7,7 +7,15 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import type { CreateMeasurementInput, MeasurementValue, SpecimenType } from '@alyte/domain';
+import {
+  formatLocaleDecimal,
+  parseLocaleDecimal,
+  parseLocalDateInput,
+  type CreateMeasurementInput,
+  type LabRecord,
+  type MeasurementValue,
+  type SpecimenType,
+} from '@alyte/domain';
 import { t } from '../../localization';
 import { colors, screenStyles, spacing } from '../../theme';
 import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
@@ -25,6 +33,7 @@ type MeasurementDraft = {
 
 type LabRecordFormProps = {
   readonly service: LabsService;
+  readonly initialRecord?: LabRecord | null;
   readonly onSaved: (recordId: string) => void;
   readonly onCancel: () => void;
 };
@@ -57,39 +66,93 @@ function emptyMeasurement(): MeasurementDraft {
   };
 }
 
-function inputForMeasurement(draft: MeasurementDraft): CreateMeasurementInput {
+function draftFromMeasurement(measurement: LabRecord['measurements'][number]): MeasurementDraft {
+  const value = measurement.current.value;
+  return {
+    label: measurement.current.label,
+    value:
+      value.kind === 'numeric' || value.kind === 'bounded'
+        ? formatLocaleDecimal(value.value)
+        : value.value,
+    valueType: value.kind,
+    comparator: value.kind === 'bounded' ? value.comparator : '<',
+    unit: measurement.current.unit ?? '',
+    referenceInterval: measurement.current.referenceInterval ?? '',
+    flag: measurement.current.flag ?? '',
+  };
+}
+
+function inputForMeasurement(draft: MeasurementDraft): CreateMeasurementInput | null {
+  const trimmedValue = draft.value.trim();
+  const parsed =
+    draft.valueType === 'numeric' || draft.valueType === 'bounded'
+      ? parseLocaleDecimal(trimmedValue)
+      : null;
+  if ((draft.valueType === 'numeric' || draft.valueType === 'bounded') && parsed === null) {
+    return null;
+  }
   const value =
     draft.valueType === 'numeric'
-      ? { kind: 'numeric' as const, value: Number(draft.value) }
+      ? { kind: 'numeric' as const, value: parsed as number }
       : draft.valueType === 'bounded'
-        ? { kind: 'bounded' as const, comparator: draft.comparator, value: Number(draft.value) }
+        ? { kind: 'bounded' as const, comparator: draft.comparator, value: parsed as number }
         : draft.valueType === 'categorical'
-          ? { kind: 'categorical' as const, value: draft.value }
-          : { kind: 'free_text' as const, value: draft.value };
+          ? { kind: 'categorical' as const, value: trimmedValue }
+          : { kind: 'free_text' as const, value: trimmedValue };
   return {
     label: draft.label.trim(),
     value,
-    valueString: draft.valueType === 'bounded' ? `${draft.comparator}${draft.value}` : draft.value,
     unit: draft.unit.trim() || null,
     referenceInterval: draft.referenceInterval.trim() || null,
     flag: draft.flag.trim() || null,
   };
 }
 
-export function LabRecordForm({ service, onSaved, onCancel }: LabRecordFormProps) {
-  const [date, setDate] = useState('');
-  const [dateMissing, setDateMissing] = useState(false);
-  const [specimenType, setSpecimenType] = useState<SpecimenType>('unknown');
-  const [laboratoryName, setLaboratoryName] = useState('');
-  const [notes, setNotes] = useState('');
-  const [measurements, setMeasurements] = useState<MeasurementDraft[]>([emptyMeasurement()]);
+function specimenLabel(value: SpecimenType): string {
+  const suffix =
+    value === 'unknown' ? 'Unknown' : `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
+  return t(`labs.specimen${suffix}`);
+}
+
+function valueTypeLabel(value: MeasurementValue['kind']): string {
+  return t(
+    value === 'numeric'
+      ? 'labs.measurementNumeric'
+      : value === 'bounded'
+        ? 'labs.measurementBounded'
+        : value === 'categorical'
+          ? 'labs.measurementCategorical'
+          : 'labs.measurementFreeText',
+  );
+}
+
+export function LabRecordForm({ service, initialRecord, onSaved, onCancel }: LabRecordFormProps) {
+  const editing = initialRecord !== undefined && initialRecord !== null;
+  const [date, setDate] = useState(
+    initialRecord?.collectionDate.kind === 'known' ? initialRecord.collectionDate.value : '',
+  );
+  const [dateMissing, setDateMissing] = useState(initialRecord?.collectionDate.kind !== 'known');
+  const [specimenType, setSpecimenType] = useState<SpecimenType>(
+    initialRecord?.specimenType ?? 'unknown',
+  );
+  const [laboratoryName, setLaboratoryName] = useState(initialRecord?.laboratoryName ?? '');
+  const [notes, setNotes] = useState(initialRecord?.notes ?? '');
+  const [measurements, setMeasurements] = useState<MeasurementDraft[]>(
+    !editing ? [emptyMeasurement()] : initialRecord.measurements.map(draftFromMeasurement),
+  );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const locale = Intl.DateTimeFormat().resolvedOptions().locale;
 
   async function save() {
     setError(null);
-    if (!dateMissing && date.trim().length === 0) {
+    const parsedDate = dateMissing ? null : parseLocalDateInput(date, locale);
+    if (!dateMissing && parsedDate === null) {
       setError(t('labs.invalidDate'));
+      return;
+    }
+    if (!editing && measurements.length === 0) {
+      setError(t('labs.requiredMeasurement'));
       return;
     }
     if (
@@ -101,29 +164,35 @@ export function LabRecordForm({ service, onSaved, onCancel }: LabRecordFormProps
       setError(t('labs.requiredField'));
       return;
     }
-    if (
-      measurements.some(
-        (measurement) =>
-          (measurement.valueType === 'numeric' || measurement.valueType === 'bounded') &&
-          !Number.isFinite(Number(measurement.value)),
-      )
-    ) {
+    const inputs = measurements.map(inputForMeasurement);
+    if (inputs.some((input) => input === null)) {
       setError(t('labs.invalidNumeric'));
       return;
     }
 
     setSaving(true);
     try {
-      const record = await service.createRecord({
-        collectionDate: dateMissing ? { kind: 'missing' } : { kind: 'known', value: date.trim() },
-        specimenType,
-        laboratoryName: laboratoryName.trim() || null,
-        notes: notes.trim() || null,
-        measurements: measurements.map(inputForMeasurement),
-      });
+      const collectionDate =
+        parsedDate === null
+          ? { kind: 'missing' as const }
+          : { kind: 'known' as const, value: parsedDate };
+      const record = editing
+        ? await service.updateRecord(initialRecord.id, {
+            collectionDate,
+            specimenType,
+            laboratoryName: laboratoryName.trim() || null,
+            notes: notes.trim() || null,
+          })
+        : await service.createRecord({
+            collectionDate,
+            specimenType,
+            laboratoryName: laboratoryName.trim() || null,
+            notes: notes.trim() || null,
+            measurements: inputs as CreateMeasurementInput[],
+          });
       onSaved(record.id);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t('labs.recordSaveError'));
+    } catch {
+      setError(t('labs.recordSaveError'));
     } finally {
       setSaving(false);
     }
@@ -131,169 +200,169 @@ export function LabRecordForm({ service, onSaved, onCancel }: LabRecordFormProps
 
   return (
     <SafeForm>
-      <AppText variant="title">{t('labs.recordCreateTitle')}</AppText>
-      <AppText style={styles.intro}>{t('labs.recordIntro')}</AppText>
-
+      <AppText variant="title">
+        {editing ? t('labs.recordEditTitle') : t('labs.recordCreateTitle')}
+      </AppText>
+      {!editing && <AppText style={styles.intro}>{t('labs.recordIntro')}</AppText>}
       <AppSurface style={styles.section}>
         <AppText variant="label">{t('labs.recordDateLabel')}</AppText>
         <TextInput
           accessibilityLabel={t('labs.recordDateLabel')}
           editable={!dateMissing}
           onChangeText={setDate}
-          placeholder="2026-08-22"
+          placeholder={t('labs.recordDatePlaceholder')}
           style={[styles.input, dateMissing && styles.disabledInput]}
           value={date}
         />
         <AppButton
+          accessibilityRole="checkbox"
+          accessibilityState={{ selected: dateMissing }}
           label={t('labs.recordDateMissingLabel')}
           onPress={() => setDateMissing((current) => !current)}
           tone="quiet"
         />
         {dateMissing && <StatusPill>{t('labs.dateMissing')}</StatusPill>}
-
         <AppText variant="label">{t('labs.recordSpecimenLabel')}</AppText>
         <ChoiceRow>
           {specimens.map((value) => (
             <ChoiceButton
               key={value}
-              label={value}
+              label={specimenLabel(value)}
               selected={specimenType === value}
               onPress={() => setSpecimenType(value)}
             />
           ))}
         </ChoiceRow>
         <AppText variant="label">{t('labs.recordLabLabel')}</AppText>
-        <TextInput onChangeText={setLaboratoryName} style={styles.input} value={laboratoryName} />
+        <TextInput
+          accessibilityLabel={t('labs.recordLabLabel')}
+          onChangeText={setLaboratoryName}
+          placeholder={t('labs.optionalPlaceholder')}
+          style={styles.input}
+          value={laboratoryName}
+        />
         <AppText variant="label">{t('labs.recordNotesLabel')}</AppText>
         <TextInput
+          accessibilityLabel={t('labs.recordNotesLabel')}
           multiline
           onChangeText={setNotes}
+          placeholder={t('labs.optionalPlaceholder')}
           style={[styles.input, styles.multiline]}
           value={notes}
         />
       </AppSurface>
 
-      {measurements.map((measurement, index) => (
-        <AppSurface key={index} style={styles.section}>
-          <AppText variant="heading">{`${t('labs.recordDetail')} ${index + 1}`}</AppText>
-          <AppText variant="label">{t('labs.measurementLabel')}</AppText>
-          <TextInput
-            accessibilityLabel={t('labs.measurementLabel')}
-            onChangeText={(label) =>
-              setMeasurements((current) =>
-                current.map((item, itemIndex) => (itemIndex === index ? { ...item, label } : item)),
-              )
-            }
-            style={styles.input}
-            value={measurement.label}
-          />
-          <AppText variant="label">{t('labs.measurementType')}</AppText>
-          <ChoiceRow>
-            {valueTypes.map((valueType) => (
-              <ChoiceButton
-                key={valueType}
-                label={
-                  valueType === 'numeric'
-                    ? t('labs.measurementNumeric')
-                    : valueType === 'bounded'
-                      ? t('labs.measurementBounded')
-                      : valueType === 'categorical'
-                        ? t('labs.measurementCategorical')
-                        : t('labs.measurementFreeText')
-                }
-                selected={measurement.valueType === valueType}
-                onPress={() =>
-                  setMeasurements((current) =>
-                    current.map((item, itemIndex) =>
-                      itemIndex === index ? { ...item, valueType } : item,
-                    ),
-                  )
-                }
-              />
-            ))}
-          </ChoiceRow>
-          <View style={styles.valueRow}>
-            {measurement.valueType === 'bounded' && (
-              <ChoiceButton
-                label={measurement.comparator}
-                selected
-                onPress={() =>
-                  setMeasurements((current) =>
-                    current.map((item, itemIndex) =>
-                      itemIndex === index
-                        ? { ...item, comparator: item.comparator === '<' ? '>' : '<' }
-                        : item,
-                    ),
-                  )
-                }
-              />
-            )}
+      {!editing &&
+        measurements.map((measurement, index) => (
+          <AppSurface key={index} style={styles.section}>
+            <AppText variant="heading">{`${t('labs.recordDetail')} ${index + 1}`}</AppText>
+            <AppText variant="label">{t('labs.measurementLabel')}</AppText>
             <TextInput
-              accessibilityLabel={t('labs.measurementValue')}
-              keyboardType={
-                measurement.valueType === 'numeric' || measurement.valueType === 'bounded'
-                  ? 'decimal-pad'
-                  : 'default'
-              }
-              onChangeText={(value) =>
+              accessibilityLabel={t('labs.measurementLabel')}
+              onChangeText={(label) =>
                 setMeasurements((current) =>
                   current.map((item, itemIndex) =>
-                    itemIndex === index ? { ...item, value } : item,
+                    itemIndex === index ? { ...item, label } : item,
                   ),
                 )
               }
-              placeholder={t('labs.measurementValue')}
-              style={[styles.input, styles.valueInput]}
-              value={measurement.value}
+              placeholder={t('labs.measurementLabel')}
+              style={styles.input}
+              value={measurement.label}
             />
-          </View>
-          <AppText variant="label">{t('labs.measurementUnit')}</AppText>
-          <TextInput
-            onChangeText={(unit) =>
-              setMeasurements((current) =>
-                current.map((item, itemIndex) => (itemIndex === index ? { ...item, unit } : item)),
-              )
-            }
-            style={styles.input}
-            value={measurement.unit}
-          />
-          <AppText variant="label">{t('labs.measurementReference')}</AppText>
-          <TextInput
-            onChangeText={(referenceInterval) =>
-              setMeasurements((current) =>
-                current.map((item, itemIndex) =>
-                  itemIndex === index ? { ...item, referenceInterval } : item,
-                ),
-              )
-            }
-            style={styles.input}
-            value={measurement.referenceInterval}
-          />
-          <AppText variant="label">{t('labs.measurementFlag')}</AppText>
-          <TextInput
-            onChangeText={(flag) =>
-              setMeasurements((current) =>
-                current.map((item, itemIndex) => (itemIndex === index ? { ...item, flag } : item)),
-              )
-            }
-            style={styles.input}
-            value={measurement.flag}
-          />
-        </AppSurface>
-      ))}
-
-      <AppButton
-        label={t('labs.measurementAdd')}
-        onPress={() => setMeasurements((current) => [...current, emptyMeasurement()])}
-        tone="secondary"
-      />
+            <AppText variant="label">{t('labs.measurementType')}</AppText>
+            <ChoiceRow>
+              {valueTypes.map((valueType) => (
+                <ChoiceButton
+                  key={valueType}
+                  label={valueTypeLabel(valueType)}
+                  selected={measurement.valueType === valueType}
+                  onPress={() =>
+                    setMeasurements((current) =>
+                      current.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, valueType } : item,
+                      ),
+                    )
+                  }
+                />
+              ))}
+            </ChoiceRow>
+            <View style={styles.valueRow}>
+              {measurement.valueType === 'bounded' && (
+                <ChoiceButton
+                  accessibilityLabel={t('labs.measurementComparator')}
+                  label={measurement.comparator}
+                  selected
+                  onPress={() =>
+                    setMeasurements((current) =>
+                      current.map((item, itemIndex) =>
+                        itemIndex === index
+                          ? { ...item, comparator: item.comparator === '<' ? '>' : '<' }
+                          : item,
+                      ),
+                    )
+                  }
+                />
+              )}
+              <TextInput
+                accessibilityLabel={t('labs.measurementValue')}
+                keyboardType={
+                  measurement.valueType === 'numeric' || measurement.valueType === 'bounded'
+                    ? 'decimal-pad'
+                    : 'default'
+                }
+                onChangeText={(value) =>
+                  setMeasurements((current) =>
+                    current.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, value } : item,
+                    ),
+                  )
+                }
+                placeholder={t('labs.measurementValue')}
+                style={[styles.input, styles.valueInput]}
+                value={measurement.value}
+              />
+            </View>
+            {(
+              [
+                ['measurementUnit', 'unit'],
+                ['measurementReference', 'referenceInterval'],
+                ['measurementFlag', 'flag'],
+              ] as const
+            ).map(([labelKey, field]) => (
+              <View key={field}>
+                <AppText variant="label">{t(`labs.${labelKey}`)}</AppText>
+                <TextInput
+                  accessibilityLabel={t(`labs.${labelKey}`)}
+                  onChangeText={(value) =>
+                    setMeasurements((current) =>
+                      current.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, [field]: value } : item,
+                      ),
+                    )
+                  }
+                  placeholder={t('labs.optionalPlaceholder')}
+                  style={styles.input}
+                  value={measurement[field]}
+                />
+              </View>
+            ))}
+          </AppSurface>
+        ))}
+      {!editing && (
+        <AppButton
+          label={t('labs.measurementAdd')}
+          onPress={() => setMeasurements((current) => [...current, emptyMeasurement()])}
+          tone="secondary"
+        />
+      )}
       {error !== null && <AppText style={styles.error}>{error}</AppText>}
       <View style={styles.actions}>
         <AppButton label={t('labs.recordCancel')} onPress={onCancel} tone="quiet" />
         <AppButton
           disabled={saving}
           label={saving ? t('labs.loading') : t('labs.recordSave')}
-          onPress={save}
+          onPress={() => void save()}
         />
       </View>
     </SafeForm>
@@ -324,12 +393,23 @@ function ChoiceButton({
   label,
   selected,
   onPress,
+  accessibilityLabel,
 }: {
   readonly label: string;
   readonly selected: boolean;
   readonly onPress: () => void;
+  readonly accessibilityLabel?: string;
 }) {
-  return <AppButton label={label} onPress={onPress} tone={selected ? 'primary' : 'secondary'} />;
+  return (
+    <AppButton
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      label={label}
+      onPress={onPress}
+      tone={selected ? 'primary' : 'secondary'}
+    />
+  );
 }
 
 const styles = StyleSheet.create({

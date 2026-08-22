@@ -1,6 +1,8 @@
 import type { MainTabParamList } from './types';
 import { HomeScreen } from '../features/home/HomeScreen';
 import { LabsScreen } from '../features/labs/LabsScreen';
+import { LabRecordDetailRoute } from '../features/labs/LabRecordDetailRoute';
+import { LabRecordFormRoute } from '../features/labs/LabRecordFormRoute';
 import { LogScreen } from '../features/intake/LogScreen';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
 import { SnapScreen } from '../features/intake/SnapScreen';
@@ -31,6 +33,21 @@ const coreFeatures = {
   },
 } satisfies Omit<NavigationRegistry, 'extensions'>;
 
+const labsFeatures: readonly NavigationFeature[] = [
+  {
+    name: 'LabRecordForm',
+    target: 'labs',
+    component: LabRecordFormRoute,
+    titleKey: 'labs.recordCreateTitle',
+  },
+  {
+    name: 'LabRecordDetail',
+    target: 'labs',
+    component: LabRecordDetailRoute,
+    titleKey: 'labs.recordTitle',
+  },
+];
+
 /**
  * Later vertical slices register detail and form routes under an existing destination stack. The
  * root tabs remain stable while feature modules own their screen implementations.
@@ -38,5 +55,5 @@ const coreFeatures = {
 export function createNavigationRegistry(
   extensions: readonly NavigationFeature[] = [],
 ): NavigationRegistry {
-  return registerNavigationFeatures(coreFeatures, extensions);
+  return registerNavigationFeatures(coreFeatures, [...labsFeatures, ...extensions]);
 }

@@ -14,7 +14,7 @@ import type { MainTabParamList, RootStackParamList } from './types';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const MainTabs = createBottomTabNavigator<MainTabParamList>();
-const FeatureStack = createNativeStackNavigator<Record<string, undefined>>();
+const FeatureStack = createNativeStackNavigator<Record<string, object | undefined>>();
 
 type RootNavigatorProps = {
   services: AlyteServices;

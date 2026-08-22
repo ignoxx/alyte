@@ -28,9 +28,17 @@ export type MeasurementCorrection = {
   readonly measurementId: string;
   readonly correctedAt: string;
   readonly reason: string | null;
-  readonly previous: MeasurementSnapshot;
-  readonly next: MeasurementSnapshot;
+  readonly previous: MeasurementCorrectionState;
+  readonly next: MeasurementCorrectionState;
   readonly previousProvenance: MeasurementProvenance;
+};
+
+export type MeasurementCorrectionState = {
+  readonly biomarkerId: CanonicalId | null;
+  readonly specimenType: SpecimenType;
+  readonly snapshot: MeasurementSnapshot;
+  readonly reviewState: MeasurementReviewState;
+  readonly provenance: MeasurementProvenance;
 };
 
 export type Measurement = {
@@ -87,12 +95,15 @@ export type UpdateLabRecordInput = {
 };
 
 export type CorrectMeasurementInput = {
+  readonly biomarkerId?: CanonicalId | null;
   readonly label?: string;
   readonly value?: MeasurementValue;
   readonly valueString?: string;
   readonly unit?: string | null;
   readonly referenceInterval?: string | null;
   readonly flag?: string | null;
+  readonly specimenType?: SpecimenType;
+  readonly reviewState?: MeasurementReviewState;
   readonly reason?: string | null;
 };
 
@@ -119,6 +130,102 @@ export function formatMeasurementValue(value: MeasurementValue): string {
     case 'free_text':
       return value.value;
   }
+}
+
+export function parseLocaleDecimal(input: string): number | null {
+  const trimmed = input.trim().replace(/[\u00a0\u202f\s]/g, '');
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const lastComma = trimmed.lastIndexOf(',');
+  const lastDot = trimmed.lastIndexOf('.');
+  let normalized = trimmed;
+  if (lastComma >= 0 && lastDot >= 0) {
+    const decimalSeparator = lastComma > lastDot ? ',' : '.';
+    const groupingSeparator = decimalSeparator === ',' ? '.' : ',';
+    normalized = trimmed.split(groupingSeparator).join('').replace(decimalSeparator, '.');
+  } else if (lastComma >= 0) {
+    normalized = trimmed.replace(',', '.');
+  }
+  if (!/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(normalized)) {
+    return null;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function formatLocaleDecimal(value: number, locale?: string): string {
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 20 }).format(value);
+}
+
+export function parseLocalDateInput(input: string, locale?: string): string | null {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const parts = trimmed.split(/[./-]/).map((part) => Number(part));
+  if (parts.some((part) => !Number.isInteger(part))) {
+    return null;
+  }
+  let year: number;
+  let month: number;
+  let day: number;
+  if (parts.length !== 3) {
+    return null;
+  }
+  if (String(parts[0]).length === 4) {
+    [year, month, day] = parts as [number, number, number];
+  } else {
+    const language = (locale ?? Intl.DateTimeFormat().resolvedOptions().locale).toLowerCase();
+    const monthFirst = language.startsWith('en-us') || language.startsWith('en-ca');
+    if (monthFirst) {
+      [month, day, year] = parts as [number, number, number];
+    } else {
+      [day, month, year] = parts as [number, number, number];
+    }
+  }
+  if (year < 100) {
+    year += 2000;
+  }
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (year < 1 || month < 1 || month > 12 || day < 1 || day > daysInMonth) {
+    return null;
+  }
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+export function formatLocaleDate(value: string, locale?: string): string {
+  const parts = value.split('-').map(Number);
+  const year = parts[0] ?? 0;
+  const month = parts[1] ?? 1;
+  const day = parts[2] ?? 1;
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone: 'UTC' }).format(
+    new Date(Date.UTC(year, month - 1, day)),
+  );
+}
+
+export function createSortableOpaqueId(
+  prefix: string,
+  nowMs = Date.now(),
+  randomPart?: string,
+): string {
+  const timestamp = Math.max(0, Math.floor(nowMs)).toString(16).padStart(12, '0');
+  const entropy = randomPart ?? randomHex(20);
+  return `${prefix}-${timestamp}-${entropy}`;
+}
+
+function randomHex(length: number): string {
+  const bytes = new Uint8Array(Math.ceil(length / 2));
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256);
+    }
+  }
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+    .slice(0, length);
 }
 
 export function assertMeasurementValue(value: MeasurementValue): void {

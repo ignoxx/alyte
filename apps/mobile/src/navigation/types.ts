@@ -6,6 +6,12 @@ export type MainTabParamList = {
   Settings: undefined;
 };
 
+export type LabsStackParamList = {
+  Labs: undefined;
+  LabRecordForm: { readonly recordId?: string } | undefined;
+  LabRecordDetail: { readonly recordId: string };
+};
+
 export type RootStackParamList = {
   MainTabs: undefined;
 };
