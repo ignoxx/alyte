@@ -308,9 +308,97 @@ describe('protected Lab Report import lifecycle', () => {
       collectionDate: { kind: 'known', value: '2026-08-22' },
     });
     assert.equal(corrected.proposedBiomarkerId, 'biomarker.ldl_c');
+    await service.updateExtractionRow(corrected.id, { decision: 'resolve' });
     const records = await service.confirmExtraction(draft.id);
     assert.equal(records.length, 1);
     assert.equal(records[0]?.measurements[0]?.original.valueString, '3,8');
+  });
+
+  test('uses contextual collection dates, keeps ambiguity reviewable, and groups events', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const ocr: VisionOCR = {
+      async recognize(): Promise<VisionOCRResult> {
+        return {
+          contractVersion: 'alyte.vision.ocr.v1',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'collection-one',
+              text: 'Collection date 22.08.2026',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.1, width: 0.4, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'de', internalConfidence: null },
+            },
+            {
+              id: 'measurement-one',
+              text: 'LDL-C 3,8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.4, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'de', internalConfidence: null },
+            },
+            {
+              id: 'collection-ambiguous',
+              text: 'Collection date 01/02/2026',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.4, width: 0.4, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: null, internalConfidence: null },
+            },
+            {
+              id: 'measurement-ambiguous',
+              text: 'LDL-C 4,0 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.5, width: 0.4, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: null, internalConfidence: null },
+            },
+            {
+              id: 'collection-two',
+              text: 'Collection date 23.08.2026',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.7, width: 0.4, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'de', internalConfidence: null },
+            },
+            {
+              id: 'measurement-two',
+              text: 'LDL-C 3,9 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.8, width: 0.4, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'de', internalConfidence: null },
+            },
+          ],
+        };
+      },
+    };
+    const service = createService(repository, files, new FakePdf(), ocr);
+    const report = (await service.importImages([source('contextual-date', 'image')]))[0]!.report;
+    const draft = await service.startExtraction(report.id);
+    assert.equal(draft.rows.length, 3);
+    assert.deepEqual(
+      draft.rows.map((row) => row.collectionDate),
+      [
+        { kind: 'known', value: '2026-08-22' },
+        { kind: 'missing' },
+        { kind: 'known', value: '2026-08-23' },
+      ],
+    );
+    assert.deepEqual(
+      draft.rows.map((row) => row.source.observationIds),
+      [['measurement-one'], ['measurement-ambiguous'], ['measurement-two']],
+    );
+    assert.ok(draft.rows[1]?.reviewReasons.includes('ambiguous-date'));
   });
 
   test('copies an image into protected storage, records page metadata, and survives relaunch', async () => {

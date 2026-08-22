@@ -78,6 +78,96 @@ describe('local extraction domain', () => {
     assert.equal(rows[0]?.source.pageIndex, 0);
   });
 
+  it('selects the numeric token from split OCR columns and unions only observed regions', () => {
+    const rows = groupObservationsIntoRows(
+      [
+        {
+          id: 'split-label',
+          text: 'LDL-C',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.2, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+        {
+          id: 'split-value',
+          text: '3.8 mmol/L',
+          alternatives: [],
+          boundingBox: { x: 0.5, y: 0.2, width: 0.2, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+      ],
+      { aliases, collectionDate: { kind: 'known', value: '2026-08-22' }, specimenType: 'blood' },
+    );
+    assert.equal(rows[0]?.proposedValue.kind, 'numeric');
+    assert.equal(rows[0]?.proposedValue.value, 3.8);
+    assert.equal(rows[0]?.proposedBiomarkerId, 'biomarker.ldl_c');
+    assert.deepEqual(rows[0]?.source.observationIds, ['split-label', 'split-value']);
+    assert.equal(rows[0]?.source.boundingBox.x, 0.1);
+    assert.equal(rows[0]?.source.boundingBox.y, 0.2);
+    assert.equal(rows[0]?.source.boundingBox.width, 0.6);
+    assert.ok(Math.abs((rows[0]?.source.boundingBox.height ?? 0) - 0.04) < 0.000001);
+  });
+
+  it('requires an explicit decision and preserves unresolved rows as needs-review', () => {
+    const rows = groupObservationsIntoRows(
+      [
+        {
+          id: 'unknown-row',
+          text: 'Mystery Marker positive',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.4, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: null, internalConfidence: null },
+        },
+      ],
+      { aliases, collectionDate: { kind: 'missing' }, specimenType: 'unknown' },
+    );
+    const base = {
+      id: 'draft-decision',
+      reportId: 'report-decision',
+      state: 'draft' as const,
+      ocrContractVersion: 'alyte.vision.ocr.v1' as const,
+      parserVersion: 'alyte.local-parser.v1' as const,
+      collectionDate: { kind: 'missing' as const },
+      rows,
+      createdAt: '2026-08-22T00:00:00.000Z',
+      updatedAt: '2026-08-22T00:00:00.000Z',
+      confirmedAt: null,
+    };
+    assert.throws(
+      () => buildExtractionConfirmationPlan(base, { record: () => 'r', measurement: () => 'm' }),
+      /requires a decision/,
+    );
+    const plan = buildExtractionConfirmationPlan(
+      { ...base, rows: rows.map((row) => ({ ...row, decision: 'preserve' as const })) },
+      { record: () => 'r', measurement: () => 'm' },
+    );
+    assert.equal(plan.records[0]?.measurements[0]?.reviewState, 'needs-review');
+    assert.equal(plan.records[0]?.measurements[0]?.provenance, 'extracted');
+  });
+
+  it('supports the launch locale date and decimal boundaries without fallback guessing', () => {
+    for (const [locale, date] of [
+      ['en-US', '08/22/2026'],
+      ['de-DE', '22.08.2026'],
+      ['fr-FR', '22/08/2026'],
+      ['es-ES', '22/08/2026'],
+      ['it-IT', '22/08/2026'],
+      ['pt-PT', '22/08/2026'],
+      ['nl-NL', '22/08/2026'],
+      ['pl-PL', '22.08.2026'],
+    ] as const) {
+      assert.deepEqual(parseLabDate(date, locale), { kind: 'known', value: '2026-08-22' });
+    }
+    assert.equal(parseComparatorValue('1.234,56')?.kind, 'numeric');
+    assert.equal(parseComparatorValue('1.234,56')?.value, 1234.56);
+  });
+
   it('preserves a laboratory reference interval and flag separately from the measured value', () => {
     const rows = groupObservationsIntoRows(
       [
@@ -121,7 +211,7 @@ describe('local extraction domain', () => {
       ocrContractVersion: 'alyte.vision.ocr.v1' as const,
       parserVersion: 'alyte.local-parser.v1' as const,
       collectionDate: { kind: 'missing' as const },
-      rows,
+      rows: rows.map((row) => ({ ...row, decision: 'preserve' as const })),
       createdAt: '2026-08-22T00:00:00.000Z',
       updatedAt: '2026-08-22T00:00:00.000Z',
       confirmedAt: null,

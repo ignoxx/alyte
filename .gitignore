@@ -8,6 +8,8 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 ios/
+!apps/mobile/modules/alyte-vision/ios/
+!apps/mobile/modules/alyte-vision/ios/**
 android/
 .env
 .env.*

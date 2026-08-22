@@ -19,7 +19,7 @@ type CallbackMigration = {
 
 export type Migration = SqlMigration | CallbackMigration;
 
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 const INTAKE_CAPTURE_RECOVERY_DDL = `
   CREATE TABLE IF NOT EXISTS intake_capture_recovery (
@@ -341,6 +341,23 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
       ] as const) {
         if (!existing.has(name))
           await database.execAsync(`ALTER TABLE measurements ADD COLUMN ${name} ${type};`);
+      }
+    },
+  },
+  {
+    version: 8,
+    apply: async (database) => {
+      const columns = await database.getAllAsync<{ name: string }>(
+        'PRAGMA table_info(extraction_draft_rows);',
+      );
+      const existing = new Set(columns.map((column) => column.name));
+      for (const [name, type] of [
+        ['source_value_json', 'TEXT'],
+        ['date_context_json', 'TEXT'],
+        ['decision', "TEXT NOT NULL DEFAULT 'unresolved'"],
+      ] as const) {
+        if (!existing.has(name))
+          await database.execAsync(`ALTER TABLE extraction_draft_rows ADD COLUMN ${name} ${type};`);
       }
     },
   },

@@ -19,6 +19,8 @@ import {
   type ExtractionDraft,
   type ExtractionDraftRow,
   type ExtractionDraftRowPatch,
+  type ExtractionDateContext,
+  type VisionTextObservation,
   type VisionOCRResult,
   type SpecimenType,
 } from '@alyte/domain';
@@ -958,30 +960,74 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     });
   }
 
-  function collectionDateFromOCR(results: readonly VisionOCRResult[]): LabDateState {
-    const locales = [
-      Intl.DateTimeFormat().resolvedOptions().locale,
-      'de-DE',
-      'fr-FR',
-      'es-ES',
-      'it-IT',
-      'pt-PT',
-      'nl-NL',
-      'pl-PL',
-      'en-US',
-    ];
-    for (const result of results) {
-      for (const observation of result.observations) {
-        const candidates = observation.text.match(/\b\d{1,4}[./-]\d{1,2}[./-]\d{1,4}\b/g) ?? [];
-        for (const candidate of candidates) {
-          for (const locale of locales) {
-            const parsed = parseLabDate(candidate, locale);
-            if (parsed !== null) return parsed;
-          }
-        }
-      }
+  function localeForObservation(observation: VisionTextObservation): string {
+    const language = observation.recognition.language?.toLowerCase().split(/[-_]/u)[0];
+    const languageLocales: Record<string, string> = {
+      de: 'de-DE',
+      fr: 'fr-FR',
+      es: 'es-ES',
+      it: 'it-IT',
+      pt: 'pt-PT',
+      nl: 'nl-NL',
+      pl: 'pl-PL',
+      en: Intl.DateTimeFormat().resolvedOptions().locale,
+    };
+    return languageLocales[language ?? ''] ?? Intl.DateTimeFormat().resolvedOptions().locale;
+  }
+
+  function dateIsAmbiguous(candidate: string): boolean {
+    const parts = candidate.split(/[./-]/u).map(Number);
+    if (parts.length !== 3 || String(parts[0]).length === 4) return false;
+    return (parts[0] ?? 0) <= 12 && (parts[1] ?? 0) <= 12;
+  }
+
+  function dateContextFromOCR(results: readonly VisionOCRResult[]): {
+    readonly contexts: readonly ExtractionDateContext[];
+    readonly excludedObservationIds: ReadonlySet<string>;
+    readonly collectionDate: LabDateState;
+  } {
+    const observations = results.flatMap((result) => result.observations);
+    const contexts: ExtractionDateContext[] = [];
+    const excludedObservationIds = new Set<string>();
+    const collectionWords =
+      /\b(collection|collected|sample|specimen|date of collection|abnahme|entnahme|proben|prélèvement|prelevement|muestra|toma de muestra|prelievo|campione|colheita|amostra|afname|monster|pobranie|próbka)\b/iu;
+    const nonCollectionWords =
+      /\b(issued|report date|birth|dob|date of birth|ausgestellt|geburt|naissance|nacimiento|nascita|nascimento|geboorte|urodzenia|wydania)\b/iu;
+    for (const observation of observations) {
+      const candidate = observation.text.match(/\b\d{1,4}[./-]\d{1,2}[./-]\d{1,4}\b/u)?.[0];
+      if (candidate === undefined) continue;
+      const center = observation.boundingBox.y + observation.boundingBox.height / 2;
+      const neighbors = observations.filter(
+        (other) =>
+          other.pageIndex === observation.pageIndex &&
+          Math.abs(other.boundingBox.y + other.boundingBox.height / 2 - center) <=
+            Math.max(observation.boundingBox.height, other.boundingBox.height) * 1.5,
+      );
+      const lineText = neighbors.map((other) => other.text).join(' ');
+      const isCollection = collectionWords.test(lineText);
+      const isNonCollection = nonCollectionWords.test(lineText);
+      if (!isCollection && !isNonCollection) continue;
+      neighbors.forEach((other) => excludedObservationIds.add(other.id));
+      if (isNonCollection) continue;
+      const locale = localeForObservation(observation);
+      const ambiguous = dateIsAmbiguous(candidate);
+      const parsed = ambiguous ? null : parseLabDate(candidate, locale);
+      contexts.push({
+        observationId: observation.id,
+        pageIndex: observation.pageIndex,
+        centerY: center,
+        locale,
+        context: 'collection',
+        ambiguous: ambiguous || parsed === null,
+        collectionDate: parsed ?? { kind: 'missing' },
+      });
     }
-    return { kind: 'missing' };
+    const known = contexts.filter((context) => context.collectionDate.kind === 'known');
+    const collectionDate =
+      contexts.length === 1 && known.length === 1
+        ? (known[0]?.collectionDate ?? { kind: 'missing' })
+        : { kind: 'missing' as const };
+    return { contexts, excludedObservationIds, collectionDate };
   }
 
   function specimenTypeFromOCR(results: readonly VisionOCRResult[]): SpecimenType {
@@ -1008,9 +1054,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       if (report.importState !== 'imported' || report.originalPath === null) {
         throw new Error('Only an imported Lab Report can be extracted');
       }
-      if ((await repo.getExtractionDraftForReport(id))?.state === 'draft') {
-        return (await repo.getExtractionDraftForReport(id)) as ExtractionDraft;
-      }
+      const existingDraft = await repo.getExtractionDraftForReport(id);
+      if (existingDraft !== null) return existingDraft;
       const integrity = await verifySource(id);
       if (integrity !== 'verified')
         throw new Error('Original Report integrity could not be verified');
@@ -1041,17 +1086,24 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             await visionOCR.recognize(report.originalPath, page.pageIndex, page.rotation, password),
           );
         }
-        const date = collectionDateFromOCR(results);
-        const observations = results.flatMap((result) => result.observations);
+        const dateContext = dateContextFromOCR(results);
+        const observations = results
+          .flatMap((result) => result.observations)
+          .filter((observation) => !dateContext.excludedObservationIds.has(observation.id));
         const specimenType = specimenTypeFromOCR(results);
         const rows = groupObservationsIntoRows(observations, {
           locale: Intl.DateTimeFormat().resolvedOptions().locale,
-          collectionDate: date,
+          collectionDate: dateContext.collectionDate,
+          collectionDateContexts: dateContext.contexts,
           specimenType,
           aliases: extractionAliases,
         });
         if (rows.length === 0) throw new Error('Local OCR found no reviewable source rows');
-        return repo.createExtractionDraft({ reportId: id, collectionDate: date, rows });
+        return repo.createExtractionDraft({
+          reportId: id,
+          collectionDate: dateContext.collectionDate,
+          rows,
+        });
       } finally {
         // Keep the PDF password in memory only for the current OCR session. It is never passed to
         // persistence, diagnostics, or a cloud operation.

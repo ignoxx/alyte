@@ -32,6 +32,8 @@ export type MeasurementSourceLocation = {
     readonly height: number;
   };
   readonly orientation: number;
+  /** OCR observations contributing to this source region, when extracted. */
+  readonly observationIds?: readonly string[];
 };
 
 export type MeasurementCorrection = {

@@ -208,11 +208,15 @@ export function LabReportDetailScreen() {
       {report.importState === 'imported' && (
         <>
           <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
-          <AppButton
-            disabled={busy}
-            label={t('labs.extractionStart')}
-            onPress={() => void extractLocally()}
-          />
+          {report.labRecordIds.length === 0 ? (
+            <AppButton
+              disabled={busy}
+              label={t('labs.extractionStart')}
+              onPress={() => void extractLocally()}
+            />
+          ) : (
+            <AppText style={styles.body}>{t('labs.extractionAlreadyConfirmed')}</AppText>
+          )}
         </>
       )}
       {(report.importState === 'failed' || report.importState === 'interrupted') && (

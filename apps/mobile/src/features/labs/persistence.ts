@@ -16,6 +16,7 @@ import {
   type ExtractionDraft,
   type ExtractionDraftRow,
   type ExtractionDraftRowPatch,
+  type ExtractionDateContext,
 } from '@alyte/domain';
 import {
   buildExtractionConfirmationPlan,
@@ -95,6 +96,7 @@ type ExtractionDraftRowDb = {
   panel_label: unknown;
   source_text: unknown;
   source_label: unknown;
+  source_value_json: unknown;
   source_value_string: unknown;
   source_unit: unknown;
   source_reference_interval: unknown;
@@ -102,6 +104,7 @@ type ExtractionDraftRowDb = {
   source_page_index: unknown;
   source_bbox_json: unknown;
   source_orientation: unknown;
+  date_context_json: unknown;
   proposed_label: unknown;
   proposed_value_json: unknown;
   proposed_unit: unknown;
@@ -113,6 +116,7 @@ type ExtractionDraftRowDb = {
   date_state: unknown;
   review_reasons_json: unknown;
   review_state: unknown;
+  decision: unknown;
 };
 
 type ExtractionDraftDb = {
@@ -229,11 +233,44 @@ function sourceLocationFromUnknown(row: {
     width: Number(box.width),
     height: Number(box.height),
   };
-  if (Object.values(boundingBox).some((value) => !Number.isFinite(value)))
+  if (
+    Object.values(boundingBox).some((value) => !Number.isFinite(value)) ||
+    boundingBox.x < 0 ||
+    boundingBox.y < 0 ||
+    boundingBox.width <= 0 ||
+    boundingBox.height <= 0 ||
+    boundingBox.x + boundingBox.width > 1.000001 ||
+    boundingBox.y + boundingBox.height > 1.000001
+  )
     throw new Error('Invalid measurement source bounding box in local database');
   if (typeof row.source_orientation !== 'number' || !Number.isInteger(row.source_orientation))
     throw new Error('Invalid measurement source orientation in local database');
-  return { pageIndex: row.source_page_index, boundingBox, orientation: row.source_orientation };
+  const observationIds =
+    typeof box.observationIds === 'object' && Array.isArray(box.observationIds)
+      ? box.observationIds.filter((value): value is string => typeof value === 'string')
+      : [];
+  return {
+    pageIndex: row.source_page_index,
+    boundingBox,
+    orientation: row.source_orientation,
+    observationIds,
+  };
+}
+
+function sourceLocationValue(value: unknown): Measurement['source'] {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'object') throw new Error('Invalid measurement source in local database');
+  const candidate = value as Record<string, unknown>;
+  return sourceLocationFromUnknown({
+    source_page_index: candidate.pageIndex,
+    source_bbox_json: JSON.stringify({
+      ...(typeof candidate.boundingBox === 'object' && candidate.boundingBox !== null
+        ? candidate.boundingBox
+        : {}),
+      observationIds: candidate.observationIds,
+    }),
+    source_orientation: candidate.orientation,
+  });
 }
 
 function parseJson(value: unknown, field: string): unknown {
@@ -268,9 +305,21 @@ function extractionRowFromDb(row: ExtractionDraftRowDb): ExtractionDraftRow {
     width: Number(sourceBox.width),
     height: Number(sourceBox.height),
   };
-  if (Object.values(boundingBox).some((value) => !Number.isFinite(value)))
+  if (
+    Object.values(boundingBox).some((value) => !Number.isFinite(value)) ||
+    boundingBox.x < 0 ||
+    boundingBox.y < 0 ||
+    boundingBox.width <= 0 ||
+    boundingBox.height <= 0 ||
+    boundingBox.x + boundingBox.width > 1.000001 ||
+    boundingBox.y + boundingBox.height > 1.000001
+  )
     throw new Error('Invalid extraction source bounding box');
   const value = storedValue(parseJson(row.proposed_value_json, 'extraction proposed value'));
+  const sourceValue =
+    row.source_value_json === null || row.source_value_json === undefined
+      ? value
+      : storedValue(parseJson(row.source_value_json, 'extraction source value'));
   const reasons = parseJson(row.review_reasons_json, 'extraction review reasons');
   if (!Array.isArray(reasons) || reasons.some((reason) => typeof reason !== 'string'))
     throw new Error('Invalid extraction review reasons');
@@ -280,12 +329,23 @@ function extractionRowFromDb(row: ExtractionDraftRowDb): ExtractionDraftRow {
   const orientation = row.source_orientation;
   if (typeof orientation !== 'number' || !Number.isInteger(orientation))
     throw new Error('Invalid extraction source orientation');
+  const dateContext =
+    row.date_context_json === null || row.date_context_json === undefined
+      ? null
+      : (parseJson(row.date_context_json, 'extraction date context') as ExtractionDateContext);
+  const observationIds =
+    typeof sourceBox.observationIds === 'object' && Array.isArray(sourceBox.observationIds)
+      ? sourceBox.observationIds.filter(
+          (candidate): candidate is string => typeof candidate === 'string',
+        )
+      : [];
   return {
     id: requiredString(row.id, 'extraction row id'),
     order: typeof row.row_order === 'number' ? row.row_order : Number(row.row_order),
     panelLabel: nullableString(row.panel_label, 'extraction panel label'),
     sourceText: requiredString(row.source_text, 'extraction source text'),
     sourceLabel: requiredString(row.source_label, 'extraction source label'),
+    sourceValue,
     sourceValueString: requiredString(row.source_value_string, 'extraction source value'),
     sourceUnit: nullableString(row.source_unit, 'extraction source unit'),
     sourceReferenceInterval: nullableString(
@@ -293,7 +353,8 @@ function extractionRowFromDb(row: ExtractionDraftRowDb): ExtractionDraftRow {
       'extraction source reference interval',
     ),
     sourceFlag: nullableString(row.source_flag, 'extraction source flag'),
-    source: { pageIndex, boundingBox, orientation },
+    source: { pageIndex, boundingBox, orientation, observationIds },
+    collectionDateContext: dateContext,
     proposedLabel: requiredString(row.proposed_label, 'extraction proposed label'),
     proposedValue: value,
     proposedUnit: nullableString(row.proposed_unit, 'extraction proposed unit'),
@@ -319,6 +380,11 @@ function extractionRowFromDb(row: ExtractionDraftRowDb): ExtractionDraftRow {
       row.review_state,
       ['ready', 'needs-review'] as const,
       'extraction review state',
+    ),
+    decision: enumValue(
+      row.decision ?? 'unresolved',
+      ['unresolved', 'preserve', 'skip', 'resolve'] as const,
+      'extraction row decision',
     ),
   };
 }
@@ -491,11 +557,7 @@ function correctionStateFromUnknown(
         ? fallback.provenance
         : enumValue(candidate.provenance, provenances, 'correction provenance'),
     source:
-      candidate.source === undefined
-        ? fallback.source
-        : candidate.source === null
-          ? null
-          : fallback.source,
+      candidate.source === undefined ? fallback.source : sourceLocationValue(candidate.source),
   };
 }
 
@@ -701,7 +763,10 @@ export function createLabRepository(
           measurementInput.source?.pageIndex ?? null,
           measurementInput.source === undefined || measurementInput.source === null
             ? null
-            : JSON.stringify(measurementInput.source.boundingBox),
+            : JSON.stringify({
+                ...measurementInput.source.boundingBox,
+                observationIds: measurementInput.source.observationIds ?? [],
+              }),
           measurementInput.source?.orientation ?? null,
           provenance,
           reviewState,
@@ -839,10 +904,16 @@ export function createLabRepository(
         input.source === undefined
           ? existing.source === null
             ? null
-            : JSON.stringify(existing.source.boundingBox)
+            : JSON.stringify({
+                ...existing.source.boundingBox,
+                observationIds: existing.source.observationIds ?? [],
+              })
           : input.source === null
             ? null
-            : JSON.stringify(input.source.boundingBox),
+            : JSON.stringify({
+                ...input.source.boundingBox,
+                observationIds: input.source.observationIds ?? [],
+              }),
         input.source === undefined
           ? (existing.source?.orientation ?? null)
           : (input.source?.orientation ?? null),
@@ -901,10 +972,10 @@ export function createLabRepository(
   const extractionDraftColumns = `id, report_id, state, ocr_contract_version, parser_version,
     collection_date, date_state, created_at, updated_at, confirmed_at`;
   const extractionRowColumns = `id, draft_id, row_order, panel_label, source_text, source_label,
-    source_value_string, source_unit, source_reference_interval, source_flag, source_page_index,
+    source_value_string, source_value_json, source_unit, source_reference_interval, source_flag, source_page_index,
     source_bbox_json, source_orientation, proposed_label, proposed_value_json, proposed_unit,
     proposed_reference_interval, proposed_flag, proposed_biomarker_id, proposed_specimen_type,
-    collection_date, date_state, review_reasons_json, review_state`;
+    collection_date, date_state, date_context_json, review_reasons_json, review_state, decision`;
 
   async function extractionRowsFor(draftId: string): Promise<readonly ExtractionDraftRow[]> {
     const rows = await database.getAllAsync<ExtractionDraftRowDb>(
@@ -970,11 +1041,11 @@ export function createLabRepository(
         await database.runAsync(
           `INSERT INTO extraction_draft_rows (
             id, draft_id, row_order, panel_label, source_text, source_label, source_value_string,
-            source_unit, source_reference_interval, source_flag, source_page_index, source_bbox_json,
+            source_value_json, source_unit, source_reference_interval, source_flag, source_page_index, source_bbox_json,
             source_orientation, proposed_label, proposed_value_json, proposed_unit,
             proposed_reference_interval, proposed_flag, proposed_biomarker_id, proposed_specimen_type,
-            collection_date, date_state, review_reasons_json, review_state
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+            collection_date, date_state, date_context_json, review_reasons_json, review_state, decision
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
           row.id,
           draftId,
           row.order,
@@ -982,11 +1053,12 @@ export function createLabRepository(
           row.sourceText,
           row.sourceLabel,
           row.sourceValueString,
+          JSON.stringify(row.sourceValue),
           row.sourceUnit,
           row.sourceReferenceInterval,
           row.sourceFlag,
           row.source.pageIndex,
-          JSON.stringify(row.source.boundingBox),
+          JSON.stringify({ ...row.source.boundingBox, observationIds: row.source.observationIds }),
           row.source.orientation,
           row.proposedLabel,
           JSON.stringify(row.proposedValue),
@@ -997,8 +1069,10 @@ export function createLabRepository(
           row.proposedSpecimenType,
           row.collectionDate.kind === 'known' ? row.collectionDate.value : null,
           row.collectionDate.kind,
+          row.collectionDateContext === null ? null : JSON.stringify(row.collectionDateContext),
           JSON.stringify(row.reviewReasons),
           row.reviewState,
+          row.decision,
         );
       }
     });
@@ -1034,16 +1108,10 @@ export function createLabRepository(
       updated = revalidateExtractionRow(current, resolvedPatch, aliases);
       const next = updated;
       await database.runAsync(
-        `UPDATE extraction_draft_rows SET source_label = ?, source_value_string = ?, source_unit = ?,
-          source_reference_interval = ?, source_flag = ?, proposed_label = ?, proposed_value_json = ?,
+        `UPDATE extraction_draft_rows SET proposed_label = ?, proposed_value_json = ?,
           proposed_unit = ?, proposed_reference_interval = ?, proposed_flag = ?, proposed_biomarker_id = ?,
           proposed_specimen_type = ?, collection_date = ?, date_state = ?, review_reasons_json = ?,
-          review_state = ? WHERE id = ?;`,
-        next.sourceLabel,
-        next.sourceValueString,
-        next.sourceUnit,
-        next.sourceReferenceInterval,
-        next.sourceFlag,
+          review_state = ?, decision = ? WHERE id = ?;`,
         next.proposedLabel,
         JSON.stringify(next.proposedValue),
         next.proposedUnit,
@@ -1055,6 +1123,7 @@ export function createLabRepository(
         next.collectionDate.kind,
         JSON.stringify(next.reviewReasons),
         next.reviewState,
+        next.decision,
         id,
       );
       await database.runAsync(
@@ -1082,6 +1151,14 @@ export function createLabRepository(
         return;
       }
       if (draft.state !== 'draft') throw new Error('Extraction Draft cannot be confirmed');
+      const unresolved = draft.rows.filter((row) => row.decision === 'unresolved');
+      if (unresolved.length > 0)
+        throw new Error('Every extraction row must be explicitly resolved, preserved, or skipped');
+      const invalidResolved = draft.rows.filter(
+        (row) => row.decision === 'resolve' && row.reviewState !== 'ready',
+      );
+      if (invalidResolved.length > 0)
+        throw new Error('Resolved extraction rows still require review');
       const plan = buildExtractionConfirmationPlan(draft, {
         record: (key) => makeId(`lab-record-${key.replace(/[^a-z0-9]+/gi, '-')}`),
         measurement: (rowId) => makeId(`measurement-${rowId}`),
@@ -1090,11 +1167,12 @@ export function createLabRepository(
       for (const planned of plan.records) {
         await database.runAsync(
           `INSERT INTO lab_records (id, lab_report_id, collection_date, date_state, specimen_type, laboratory_name, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 'unknown', NULL, NULL, ?, ?);`,
+           VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?);`,
           planned.id,
           draft.reportId,
           planned.collectionDate.kind === 'known' ? planned.collectionDate.value : null,
           planned.collectionDate.kind,
+          planned.specimenType,
           createdAt,
           createdAt,
         );
@@ -1106,7 +1184,7 @@ export function createLabRepository(
               current_label, current_value_string, current_value_json, current_unit,
               current_reference_interval, current_flag, source_page_index, source_bbox_json,
               source_orientation, provenance, review_state, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'extracted', ?, ?, ?);`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
             measurement.id,
             planned.id,
             measurement.biomarkerId,
@@ -1131,8 +1209,12 @@ export function createLabRepository(
             measurement.referenceInterval,
             measurement.flag,
             measurement.source.pageIndex,
-            JSON.stringify(measurement.source.boundingBox),
+            JSON.stringify({
+              ...measurement.source.boundingBox,
+              observationIds: measurement.source.observationIds,
+            }),
             measurement.source.orientation,
+            measurement.provenance,
             measurement.reviewState,
             createdAt,
             createdAt,

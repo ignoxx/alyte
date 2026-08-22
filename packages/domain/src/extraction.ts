@@ -5,6 +5,9 @@ import type { MeasurementValue, SpecimenType, LabDateState } from './labs';
 export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.ocr.v1' as const;
 export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v1' as const;
 
+const NUMERIC_TOKEN_PATTERN =
+  '[<>≤≥]?\\s*[+-]?(?:(?:\\d{1,3}(?:[ .\\u00a0\\u202f]\\d{3})+(?:,\\d+)?)|(?:\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)|(?:\\d+(?:[.,]\\d+)?)|(?:\\.\\d+))';
+
 export type NormalizedBoundingBox = {
   readonly x: number;
   readonly y: number;
@@ -38,7 +41,20 @@ export type ExtractionSourceLocation = {
   readonly pageIndex: number;
   readonly boundingBox: NormalizedBoundingBox;
   readonly orientation: number;
+  readonly observationIds: readonly string[];
 };
+
+export type ExtractionDateContext = {
+  readonly observationId: string;
+  readonly pageIndex: number;
+  readonly centerY: number;
+  readonly locale: string | null;
+  readonly context: 'collection' | 'unknown';
+  readonly ambiguous: boolean;
+  readonly collectionDate: LabDateState;
+};
+
+export type ExtractionRowDecision = 'unresolved' | 'preserve' | 'skip' | 'resolve';
 
 export type ExtractionReviewReason =
   | 'missing-label'
@@ -58,11 +74,13 @@ export type ExtractionDraftRow = {
   readonly panelLabel: string | null;
   readonly sourceText: string;
   readonly sourceLabel: string;
+  readonly sourceValue: MeasurementValue;
   readonly sourceValueString: string;
   readonly sourceUnit: string | null;
   readonly sourceReferenceInterval: string | null;
   readonly sourceFlag: string | null;
   readonly source: ExtractionSourceLocation;
+  readonly collectionDateContext: ExtractionDateContext | null;
   readonly proposedLabel: string;
   readonly proposedValue: MeasurementValue;
   readonly proposedUnit: string | null;
@@ -73,6 +91,7 @@ export type ExtractionDraftRow = {
   readonly collectionDate: LabDateState;
   readonly reviewReasons: readonly ExtractionReviewReason[];
   readonly reviewState: 'ready' | 'needs-review';
+  readonly decision: ExtractionRowDecision;
 };
 
 export type ExtractionDraft = {
@@ -102,6 +121,7 @@ export type ExtractionRowInput = {
   readonly text: string;
   readonly source: ExtractionSourceLocation;
   readonly collectionDate?: LabDateState;
+  readonly collectionDateContexts?: readonly ExtractionDateContext[];
   readonly specimenType?: SpecimenType;
 };
 
@@ -114,6 +134,7 @@ export type ExtractionDraftRowPatch = {
   readonly proposedBiomarkerId?: CanonicalId | null;
   readonly proposedSpecimenType?: SpecimenType;
   readonly collectionDate?: LabDateState;
+  readonly decision?: ExtractionRowDecision;
 };
 
 export type ExtractionConfirmationPlan = {
@@ -143,6 +164,7 @@ export type ExtractionConfirmationPlan = {
       };
       readonly sourceRowId: string;
       readonly reviewState: 'confirmed' | 'needs-review';
+      readonly provenance: 'extracted' | 'user-corrected';
     }[];
   }[];
 };
@@ -377,6 +399,7 @@ export function groupObservationsIntoRows(
   options: {
     readonly locale?: string;
     readonly collectionDate?: LabDateState;
+    readonly collectionDateContexts?: readonly ExtractionDateContext[];
     readonly specimenType?: SpecimenType;
     readonly aliases?: readonly ExtractionAliasEntry[];
   } = {},
@@ -415,6 +438,7 @@ export function groupObservationsIntoRows(
       order,
       options.locale ?? 'en-US',
       options.collectionDate ?? { kind: 'missing' },
+      options.collectionDateContexts ?? [],
       options.specimenType ?? 'unknown',
       aliases,
     ),
@@ -426,15 +450,18 @@ function parseSourceRow(
   order: number,
   locale: string,
   collectionDate: LabDateState,
+  collectionDateContexts: readonly ExtractionDateContext[],
   specimenType: SpecimenType,
   aliases: readonly ExtractionAliasEntry[],
 ): ExtractionDraftRow {
   const sourceText = group.map((observation) => observation.text.trim()).join('  ');
   const first = group[0];
+  const firstBox = first?.boundingBox ?? { x: 0, y: 0, width: 0, height: 0 };
   const source = {
     pageIndex: first?.pageIndex ?? 0,
     orientation: first?.orientation ?? 0,
-    boundingBox: group.reduce(
+    observationIds: group.map((item) => item.id),
+    boundingBox: group.slice(1).reduce(
       (box, item) => ({
         x: Math.min(box.x, item.boundingBox.x),
         y: Math.min(box.y, item.boundingBox.y),
@@ -445,7 +472,7 @@ function parseSourceRow(
           Math.max(box.y + box.height, item.boundingBox.y + item.boundingBox.height) -
           Math.min(box.y, item.boundingBox.y),
       }),
-      { x: 1, y: 1, width: 0, height: 0 },
+      { ...firstBox },
     ),
   };
   const columns = sourceText
@@ -453,20 +480,16 @@ function parseSourceRow(
     .map((value) => value.trim())
     .filter(Boolean);
   const valueMatch = sourceText.match(
-    /(?:^|\s)([<>≤≥]?\s*[+-]?(?:\d[\d\s\u00a0\u202f.,]*\d|\d|\.\d+))(?=\s|$)/u,
+    new RegExp(`(?:^|\\s)(${NUMERIC_TOKEN_PATTERN})(?=\\s|$)`, 'u'),
   );
-  const rawValue = (
-    columns.length > 1
-      ? (columns.find((column) => parseComparatorValue(column) !== null) ?? valueMatch?.[1] ?? '')
-      : (valueMatch?.[1] ?? '')
-  ).trim();
+  const columnValue = columns.find((column) => {
+    const parsed = parseComparatorValue(column);
+    return parsed?.kind === 'numeric' || parsed?.kind === 'bounded';
+  });
+  const candidateValue = columnValue?.match(new RegExp(NUMERIC_TOKEN_PATTERN, 'u'))?.[0];
+  const rawValue = (valueMatch?.[1] ?? candidateValue ?? '').trim();
   const valueStart = rawValue ? sourceText.lastIndexOf(rawValue) : -1;
-  const rawLabel =
-    columns.length > 1
-      ? columns.slice(0, Math.max(1, columns.indexOf(rawValue))).join(' ')
-      : valueStart > 0
-        ? sourceText.slice(0, valueStart)
-        : sourceText;
+  const rawLabel = valueStart > 0 ? sourceText.slice(0, valueStart) : sourceText;
   const trailing = valueStart >= 0 ? sourceText.slice(valueStart + rawValue.length).trim() : '';
   const proposedValue = parseComparatorValue(rawValue) ?? {
     kind: 'free_text' as const,
@@ -494,20 +517,28 @@ function parseSourceRow(
     reasons.push('incompatible-specimen');
   if (referenceCandidate !== null && reference === null)
     reasons.push('unparseable-reference-interval');
-  const effectiveDate =
-    collectionDate.kind === 'missing' ? { kind: 'missing' as const } : collectionDate;
+  const rowCenterY =
+    group.reduce((sum, item) => sum + item.boundingBox.y + item.boundingBox.height / 2, 0) /
+    Math.max(1, group.length);
+  const nearestDateContext = collectionDateContexts
+    .filter((candidate) => candidate.pageIndex === source.pageIndex)
+    .sort((a, b) => Math.abs(a.centerY - rowCenterY) - Math.abs(b.centerY - rowCenterY))[0];
+  const effectiveDate = nearestDateContext?.collectionDate ?? collectionDate;
   if (effectiveDate.kind === 'missing') reasons.push('missing-collection-date');
+  if (nearestDateContext?.ambiguous) reasons.push('ambiguous-date');
   return {
     id: first?.id ?? `row-${order}`,
     order,
     panelLabel: null,
     sourceText,
     sourceLabel: label,
+    sourceValue: proposedValue,
     sourceValueString: rawValue || sourceText,
     sourceUnit: unit,
     sourceReferenceInterval: reference,
     sourceFlag: flagCandidate,
     source,
+    collectionDateContext: nearestDateContext ?? null,
     proposedLabel: label,
     proposedValue,
     proposedUnit: unit,
@@ -518,6 +549,7 @@ function parseSourceRow(
     collectionDate: effectiveDate,
     reviewReasons: [...new Set(reasons)],
     reviewState: reasons.length === 0 ? 'ready' : 'needs-review',
+    decision: 'unresolved',
   };
 }
 
@@ -526,20 +558,32 @@ export function revalidateExtractionRow(
   patch: ExtractionDraftRowPatch,
   aliases: readonly ExtractionAliasEntry[],
 ): ExtractionDraftRow {
-  const next = { ...row, ...patch, source: row.source };
+  const next = { ...row, ...patch, source: row.source, sourceValue: row.sourceValue };
   const reasons = new Set<ExtractionReviewReason>();
   if (!next.proposedLabel.trim()) reasons.add('missing-label');
   if (!next.sourceValueString.trim()) reasons.add('missing-value');
+  if (next.proposedValue.kind === 'free_text' && !next.proposedValue.value.trim())
+    reasons.add('unparseable-value');
   const id = next.proposedBiomarkerId;
   if (id === null) reasons.add('unsupported-alias');
   if (!unitCompatible(next.proposedUnit, id, aliases)) reasons.add('incompatible-unit');
   if (!specimenCompatible(next.proposedSpecimenType, id, aliases))
     reasons.add('incompatible-specimen');
   if (next.collectionDate.kind === 'missing') reasons.add('missing-collection-date');
+  if (next.collectionDateContext?.ambiguous) reasons.add('ambiguous-date');
+  if (next.proposedReferenceInterval !== null && next.proposedReferenceInterval !== '') {
+    if (parseReferenceInterval(next.proposedReferenceInterval) === null)
+      reasons.add('unparseable-reference-interval');
+  }
   return {
     ...next,
     reviewReasons: [...reasons],
     reviewState: reasons.size === 0 ? 'ready' : 'needs-review',
+    decision:
+      patch.decision ??
+      (patch.proposedLabel !== undefined || patch.proposedValue !== undefined
+        ? 'unresolved'
+        : row.decision),
   };
 }
 
@@ -559,6 +603,8 @@ export function buildExtractionConfirmationPlan(
   };
   const groups = new Map<string, PlannedRecord>();
   for (const row of draft.rows) {
+    if (row.decision === 'unresolved') throw new Error('Every extraction row requires a decision');
+    if (row.decision === 'skip') continue;
     const key = `${row.collectionDate.kind === 'known' ? row.collectionDate.value : 'missing'}|${row.proposedSpecimenType}`;
     let group = groups.get(key);
     if (group === undefined) {
@@ -587,14 +633,24 @@ export function buildExtractionConfirmationPlan(
       source: row.source,
       original: {
         label: row.sourceLabel,
-        value: row.proposedValue,
+        value: row.sourceValue,
         valueString: row.sourceValueString,
         unit: row.sourceUnit,
         referenceInterval: row.sourceReferenceInterval,
         flag: row.sourceFlag,
       },
       sourceRowId: row.id,
-      reviewState: row.reviewState === 'ready' ? 'confirmed' : 'needs-review',
+      reviewState:
+        row.decision === 'resolve' && row.reviewState === 'ready' ? 'confirmed' : 'needs-review',
+      provenance:
+        row.decision === 'resolve' &&
+        (row.proposedLabel !== row.sourceLabel ||
+          JSON.stringify(row.proposedValue) !== JSON.stringify(row.sourceValue) ||
+          row.proposedUnit !== row.sourceUnit ||
+          row.proposedReferenceInterval !== row.sourceReferenceInterval ||
+          row.proposedFlag !== row.sourceFlag)
+          ? 'user-corrected'
+          : 'extracted',
     });
   }
   return { draftId: draft.id, reportId: draft.reportId, records: [...groups.values()] };

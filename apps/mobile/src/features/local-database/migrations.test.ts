@@ -468,6 +468,12 @@ describe('local schema forward migrations', () => {
       measurementColumns.map((column) => column.name).filter((name) => name.startsWith('source_')),
       ['source_page_index', 'source_bbox_json', 'source_orientation'],
     );
+    const extractionColumns = await firstDatabase.getAllAsync<{ name: string }>(
+      'PRAGMA table_info(extraction_draft_rows);',
+    );
+    for (const name of ['source_value_json', 'date_context_json', 'decision']) {
+      assert.ok(extractionColumns.some((column) => column.name === name));
+    }
     const columns = await firstDatabase.getAllAsync<{ name: string }>(
       'PRAGMA table_info(intake_events);',
     );

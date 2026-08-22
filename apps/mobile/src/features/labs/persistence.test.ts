@@ -128,14 +128,17 @@ describe('protected manual Lab Record persistence', () => {
       id: 'draft-extraction',
       reportId: 'report-extraction',
       collectionDate: { kind: 'missing' },
-      rows,
+      rows: rows.map((row) => ({ ...row, decision: 'preserve' as const })),
     });
     assert.equal(draft.rows[0]?.source.pageIndex, 0);
     const records = await repository.confirmExtractionDraft(draft.id);
     assert.equal(records.length, 1);
     assert.equal(records[0]?.collectionDate.kind, 'missing');
+    assert.equal(records[0]?.specimenType, 'blood');
     assert.equal(records[0]?.measurements[0]?.source?.boundingBox.x, 0.1);
+    assert.deepEqual(records[0]?.measurements[0]?.source?.observationIds, ['source-row-1']);
     assert.equal(records[0]?.measurements[0]?.original.valueString, '3,8');
+    assert.equal(records[0]?.measurements[0]?.original.value.kind, 'numeric');
     assert.equal(records[0]?.measurements[0]?.current.valueString, '3.8');
     const repeated = await repository.confirmExtractionDraft(draft.id);
     assert.deepEqual(
@@ -163,6 +166,78 @@ describe('protected manual Lab Record persistence', () => {
     const preservedDraft = await repository.getExtractionDraft(draft.id);
     assert.equal(preservedDraft?.rows[0]?.sourceText, 'LDL-C 3,8 mmol/L');
     await repository.close();
+  });
+
+  test('enforces explicit extraction decisions and keeps source provenance through correction', async () => {
+    const { repository } = createRepository();
+    await repository.createReport({
+      id: 'report-decision',
+      sourceType: 'image',
+      originalFilename: 'synthetic-decision.png',
+      mimeType: 'image/png',
+      importState: 'imported',
+      originalPath: 'protected://original/synthetic-decision.png',
+      sourceHash: 'decision-hash',
+      pageCount: 1,
+    });
+    const aliases: readonly ExtractionAliasEntry[] = [
+      {
+        id: 'biomarker.ldl_c',
+        aliases: ['LDL-C'],
+        specimens: ['blood'],
+        units: ['mmol/L'],
+      },
+    ];
+    const rows = groupObservationsIntoRows(
+      [
+        {
+          id: 'decision-source',
+          text: 'LDL-C 3,8 mmol/L',
+          alternatives: [],
+          boundingBox: { x: 0.2, y: 0.3, width: 0.4, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'de', internalConfidence: null },
+        },
+      ],
+      {
+        aliases,
+        collectionDate: { kind: 'known', value: '2026-08-22' },
+        specimenType: 'blood',
+      },
+    );
+    const draft = await repository.createExtractionDraft({
+      id: 'draft-decision',
+      reportId: 'report-decision',
+      collectionDate: { kind: 'known', value: '2026-08-22' },
+      rows,
+    });
+    await assert.rejects(repository.confirmExtractionDraft(draft.id), /explicitly resolved/);
+    const invalidReference = await repository.updateExtractionDraftRow(
+      rows[0]!.id,
+      { proposedReferenceInterval: 'not-a-range' },
+      aliases,
+    );
+    assert.ok(invalidReference.reviewReasons.includes('unparseable-reference-interval'));
+    const corrected = await repository.updateExtractionDraftRow(
+      rows[0]!.id,
+      {
+        proposedValue: { kind: 'numeric', value: 4.2 },
+        proposedReferenceInterval: null,
+        decision: 'resolve',
+      },
+      aliases,
+    );
+    assert.equal(corrected.decision, 'resolve');
+    const records = await repository.confirmExtractionDraft(draft.id);
+    const measurement = records[0]!.measurements[0]!;
+    assert.equal(measurement.original.valueString, '3,8');
+    assert.equal(measurement.original.value.value, 3.8);
+    assert.equal(measurement.current.value.value, 4.2);
+    assert.equal(measurement.provenance, 'user-corrected');
+    assert.deepEqual(measurement.source?.observationIds, ['decision-source']);
+    const reopened = await repository.getRecord(records[0]!.id);
+    assert.deepEqual(reopened?.measurements[0]?.source?.observationIds, ['decision-source']);
   });
 
   test('migration and typed repository preserve every manual value kind', async () => {
@@ -253,6 +328,12 @@ describe('protected manual Lab Record persistence', () => {
           unit: 'mmol/L',
           referenceInterval: '<3.0',
           provenance: 'user-entered',
+          source: {
+            pageIndex: 0,
+            boundingBox: { x: 0.1, y: 0.2, width: 0.3, height: 0.04 },
+            orientation: 0,
+            observationIds: ['manual-source'],
+          },
         },
       ],
     });
@@ -266,6 +347,12 @@ describe('protected manual Lab Record persistence', () => {
       flag: 'H',
       specimenType: 'serum',
       reviewState: 'needs-review',
+      source: {
+        pageIndex: 1,
+        boundingBox: { x: 0.2, y: 0.3, width: 0.4, height: 0.05 },
+        orientation: 90,
+        observationIds: ['corrected-source'],
+      },
       reason: 'Transcription correction',
     });
     assert.equal(corrected.provenance, 'user-corrected');
@@ -278,6 +365,7 @@ describe('protected manual Lab Record persistence', () => {
     assert.equal(corrected.current.referenceInterval, '100-200');
     assert.equal(corrected.current.flag, 'H');
     assert.equal(corrected.specimenType, 'serum');
+    assert.deepEqual(corrected.source?.observationIds, ['corrected-source']);
     assert.equal(corrected.reviewState, 'needs-review');
     assert.equal(corrected.corrections.length, 1);
     assert.equal(corrected.corrections[0]?.previousProvenance, 'user-entered');
@@ -291,6 +379,7 @@ describe('protected manual Lab Record persistence', () => {
       canonicalId('biomarker.total_cholesterol'),
     );
     assert.equal(corrected.corrections[0]?.next.specimenType, 'serum');
+    assert.deepEqual(corrected.corrections[0]?.next.source?.observationIds, ['corrected-source']);
     assert.equal(corrected.corrections[0]?.reason, 'Transcription correction');
     await repository.close();
 

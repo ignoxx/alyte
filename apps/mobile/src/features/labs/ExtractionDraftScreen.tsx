@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Image, Modal, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
@@ -9,6 +9,7 @@ import {
   type ExtractionDraftRow,
   type LabDateState,
 } from '@alyte/domain';
+import type { LabReportPreview } from './report-service';
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
@@ -58,6 +59,7 @@ export function ExtractionDraftScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
+  const [sourcePreview, setSourcePreview] = useState<LabReportPreview | null>(null);
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
 
   const load = useCallback(async () => {
@@ -133,6 +135,38 @@ export function ExtractionDraftScreen() {
     }
   }
 
+  async function decide(row: ExtractionDraftRow, decision: 'preserve' | 'skip' | 'resolve') {
+    setBusy(true);
+    try {
+      const updated = await reports.updateExtractionRow(row.id, { decision });
+      setDraft((current) =>
+        current === null
+          ? current
+          : {
+              ...current,
+              rows: current.rows.map((candidate) =>
+                candidate.id === row.id ? updated : candidate,
+              ),
+            },
+      );
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openSource() {
+    setBusy(true);
+    try {
+      setSourcePreview(await reports.previewOriginal(route.params.reportId));
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (loading) return <AppText>{t('labs.loading')}</AppText>;
   if (error || draft === null) {
     return (
@@ -144,6 +178,7 @@ export function ExtractionDraftScreen() {
   }
 
   const needsReview = draft.rows.filter((row) => row.reviewState === 'needs-review').length;
+  const unresolved = draft.rows.filter((row) => row.decision === 'unresolved').length;
   return (
     <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
       <AppText style={styles.intro}>{t('labs.extractionIntro')}</AppText>
@@ -174,6 +209,12 @@ export function ExtractionDraftScreen() {
             <AppText
               style={styles.source}
             >{`${t('labs.extractionLocation')}: ${row.source.pageIndex + 1} · x ${row.source.boundingBox.x.toFixed(3)}, y ${row.source.boundingBox.y.toFixed(3)}`}</AppText>
+            <AppButton
+              disabled={busy}
+              label={t('labs.extractionSourcePreview')}
+              onPress={() => void openSource()}
+              tone="quiet"
+            />
             {row.reviewReasons.length > 0 && (
               <AppText style={styles.warning}>
                 {row.reviewReasons
@@ -232,20 +273,73 @@ export function ExtractionDraftScreen() {
               onPress={() => void saveRow(row)}
               tone="secondary"
             />
+            <View style={styles.decisionRow}>
+              <AppButton
+                disabled={busy}
+                label={t('labs.extractionPreserve')}
+                onPress={() => void decide(row, 'preserve')}
+                tone={row.decision === 'preserve' ? 'primary' : 'secondary'}
+              />
+              <AppButton
+                disabled={busy}
+                label={t('labs.extractionSkip')}
+                onPress={() => void decide(row, 'skip')}
+                tone={row.decision === 'skip' ? 'primary' : 'secondary'}
+              />
+              {row.reviewState === 'ready' && (
+                <AppButton
+                  disabled={busy}
+                  label={t('labs.extractionResolve')}
+                  onPress={() => void decide(row, 'resolve')}
+                  tone={row.decision === 'resolve' ? 'primary' : 'secondary'}
+                />
+              )}
+            </View>
           </AppSurface>
         );
       })}
       <AppButton
-        disabled={busy}
+        disabled={busy || unresolved > 0}
         label={t('labs.extractionConfirm')}
         onPress={() => void confirm()}
       />
+      {unresolved > 0 && (
+        <AppText style={styles.warning}>
+          {t('labs.extractionDecisionRequired').replace('{count}', String(unresolved))}
+        </AppText>
+      )}
       <AppButton
         disabled={busy}
         label={t('labs.recordCancel')}
         onPress={() => navigation.goBack()}
         tone="quiet"
       />
+      <Modal
+        accessibilityViewIsModal
+        animationType="slide"
+        onRequestClose={() => setSourcePreview(null)}
+        visible={sourcePreview !== null}
+      >
+        <View style={styles.previewModal}>
+          <AppText variant="heading">{t('labs.extractionSourcePreviewTitle')}</AppText>
+          <AppButton
+            label={t('labs.reportPreviewClose')}
+            onPress={() => setSourcePreview(null)}
+            tone="quiet"
+          />
+          <ScrollView contentContainerStyle={styles.previewPages}>
+            {sourcePreview?.uris.map((uri, index) => (
+              <Image
+                accessibilityLabel={`${t('labs.reportPreviewImageLabel')} ${index + 1}`}
+                key={`${uri}-${index}`}
+                resizeMode="contain"
+                source={{ uri }}
+                style={styles.previewImage}
+              />
+            ))}
+          </ScrollView>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -268,4 +362,8 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingHorizontal: spacing.sm,
   },
+  decisionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  previewModal: { backgroundColor: colors.canvas, flex: 1, padding: spacing.lg },
+  previewPages: { gap: spacing.md, paddingVertical: spacing.md },
+  previewImage: { height: 520, width: '100%' },
 });
