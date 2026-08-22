@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
-import type { LabRecord, SpecimenType } from '@alyte/domain';
+import type { LabRecord, LabReport, SpecimenType } from '@alyte/domain';
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
@@ -18,10 +18,30 @@ function specimenLabel(value: SpecimenType): string {
   return t(`labs.specimen${suffix}`);
 }
 
+function reportSourceLabel(report: LabReport): string {
+  return report.sourceType === 'pdf' ? t('labs.reportPdf') : t('labs.reportImage');
+}
+
+function reportStateLabel(report: LabReport): string {
+  return t(
+    report.importState === 'imported'
+      ? 'labs.reportStateImported'
+      : report.importState === 'failed'
+        ? 'labs.reportStateFailed'
+        : report.importState === 'interrupted'
+          ? 'labs.reportStateInterrupted'
+          : report.importState === 'deleted'
+            ? 'labs.reportStateDeleted'
+            : 'labs.reportStateImporting',
+  );
+}
+
 export function LabsScreen() {
   const navigation = useNavigation<Navigation>();
-  const { labs } = useServices();
+  const services = useServices();
+  const { labs } = services;
   const [records, setRecords] = useState<readonly LabRecord[]>([]);
+  const [reports, setReports] = useState<readonly LabReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
@@ -30,13 +50,18 @@ export function LabsScreen() {
     setLoading(true);
     setError(false);
     try {
-      setRecords(await labs.listRecords());
+      const [nextRecords, nextReports] = await Promise.all([
+        labs.listRecords(),
+        services.reports.listReports(),
+      ]);
+      setRecords(nextRecords);
+      setReports(nextReports);
     } catch {
       setError(true);
     } finally {
       setLoading(false);
     }
-  }, [labs]);
+  }, [labs, services.reports]);
 
   useEffect(() => {
     void loadRecords();
@@ -51,6 +76,11 @@ export function LabsScreen() {
             label={t('labs.manualAction')}
             onPress={() => navigation.navigate('LabRecordForm')}
           />
+          <AppButton
+            label={t('labs.action')}
+            onPress={() => navigation.navigate('LabReportImport')}
+            tone="secondary"
+          />
         </View>
         {loading && <AppText style={styles.muted}>{t('labs.loading')}</AppText>}
         {error && (
@@ -64,18 +94,45 @@ export function LabsScreen() {
             />
           </AppSurface>
         )}
-        {!loading && !error && records.length === 0 && (
+        {!loading && !error && records.length === 0 && reports.length === 0 && (
           <EmptyState
             title={t('labs.emptyTitle')}
             body={t('labs.emptyBody')}
             action={
-              <AppButton
-                label={t('labs.manualAction')}
-                onPress={() => navigation.navigate('LabRecordForm')}
-              />
+              <View style={styles.emptyActions}>
+                <AppButton
+                  label={t('labs.action')}
+                  onPress={() => navigation.navigate('LabReportImport')}
+                />
+                <AppButton
+                  label={t('labs.manualAction')}
+                  onPress={() => navigation.navigate('LabRecordForm')}
+                  tone="secondary"
+                />
+              </View>
             }
           />
         )}
+        {reports.map((report) => (
+          <Pressable
+            accessibilityLabel={`${t('labs.reportTitle')}: ${report.originalFilename}`}
+            accessibilityRole="button"
+            key={report.id}
+            onPress={() => navigation.navigate('LabReportDetail', { reportId: report.id })}
+            style={({ pressed }) => pressed && styles.pressed}
+          >
+            <AppSurface style={styles.recordCard}>
+              <AppText variant="heading">{report.originalFilename}</AppText>
+              <AppText style={styles.muted}>{reportSourceLabel(report)}</AppText>
+              <AppText style={styles.muted}>{reportStateLabel(report)}</AppText>
+              {report.pageCount !== null && (
+                <AppText style={styles.muted}>
+                  {t('labs.reportPageCount').replace('{count}', String(report.pageCount))}
+                </AppText>
+              )}
+            </AppSurface>
+          </Pressable>
+        ))}
         {records.map((record) => {
           const date =
             record.collectionDate.kind === 'known'
@@ -118,6 +175,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   recordCard: { gap: spacing.xs, marginBottom: spacing.sm },
+  emptyActions: { gap: spacing.sm },
   muted: { color: colors.mutedInk },
   errorSurface: { gap: spacing.sm, marginBottom: spacing.md },
   pressed: { opacity: 0.78 },

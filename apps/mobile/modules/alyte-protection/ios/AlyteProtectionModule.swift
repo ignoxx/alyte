@@ -28,6 +28,39 @@ public final class AlyteProtectionModule: Module {
         )
       }
     }
+
+    AsyncFunction("protectPath") { (pathValue: String) throws -> [String: Any] in
+      let path = Self.filePath(from: pathValue)
+      do {
+        let report = try AlyteProtectionFilePolicy().protectPath(at: URL(fileURLWithPath: path))
+        return ["protectedPaths": report.protectedPaths]
+      } catch {
+        throw NSError(
+          domain: "AlyteProtection",
+          code: 2,
+          userInfo: [
+            NSLocalizedDescriptionKey: "Could not protect local health file",
+            NSUnderlyingErrorKey: error,
+          ]
+        )
+      }
+    }
+
+    AsyncFunction("hashFile") { (pathValue: String) throws -> String in
+      let path = Self.filePath(from: pathValue)
+      do {
+        return try AlyteProtectionFilePolicy().hashFile(at: URL(fileURLWithPath: path))
+      } catch {
+        throw NSError(
+          domain: "AlyteProtection",
+          code: 3,
+          userInfo: [
+            NSLocalizedDescriptionKey: "Could not hash local health file",
+            NSUnderlyingErrorKey: error,
+          ]
+        )
+      }
+    }
   }
 
   private static func filePath(from value: String) -> String {

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 struct AlyteProtectionReport {
   let protectedPaths: [String]
@@ -10,6 +11,8 @@ enum AlyteProtectionError: Error {
   case sidecarsMissing([String])
   case dataProtectionVerificationFailed(String)
   case backupExclusionVerificationFailed(String)
+  case fileMissing
+  case invalidHash
 }
 
 final class AlyteProtectionFilePolicy {
@@ -41,6 +44,33 @@ final class AlyteProtectionFilePolicy {
       protectedPaths: protectedPaths,
       missingSidecarPaths: missingSidecars
     )
+  }
+
+  func protectPath(at url: URL) throws -> AlyteProtectionReport {
+    guard fileManager.fileExists(atPath: url.path) else {
+      throw AlyteProtectionError.fileMissing
+    }
+    try protect(path: url.path)
+    return AlyteProtectionReport(protectedPaths: [url.path], missingSidecarPaths: [])
+  }
+
+  func hashFile(at url: URL) throws -> String {
+    guard fileManager.fileExists(atPath: url.path) else {
+      throw AlyteProtectionError.fileMissing
+    }
+    do {
+      let handle = try FileHandle(forReadingFrom: url)
+      defer { try? handle.close() }
+      var hasher = SHA256()
+      while true {
+        let data = try handle.read(upToCount: 1024 * 1024) ?? Data()
+        if data.isEmpty { break }
+        hasher.update(data: data)
+      }
+      return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    } catch {
+      throw AlyteProtectionError.dataProtectionVerificationFailed(url.path)
+    }
   }
 
   private func protect(path: String) throws {

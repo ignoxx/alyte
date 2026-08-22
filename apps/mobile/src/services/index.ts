@@ -2,12 +2,15 @@ import { createContext, useContext } from 'react';
 import { loadShowcaseSnapshot, type ShowcaseSnapshot } from '@alyte/fixtures';
 import type { AlyteRuntime, RuntimeVariant, ServiceClock } from '@alyte/domain';
 import { createLabsService, type LabsService } from '../features/labs/service';
+import { createLabReportsService, type LabReportsService } from '../features/labs/report-service';
+import { openProtectedLabDatabase, type LabRepository } from '../features/labs/persistence';
 
 export interface AlyteServices {
   readonly runtime: AlyteRuntime;
   readonly clock: ServiceClock;
   readonly showcase: ShowcaseSnapshot | null;
   readonly labs: LabsService;
+  readonly reports: LabReportsService;
 }
 
 export function runtimeVariant(): RuntimeVariant {
@@ -19,6 +22,12 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
   const requestedShowcase = process.env.EXPO_PUBLIC_SHOWCASE_MODE === 'true';
   const showcase = loadShowcaseSnapshot(variant, requestedShowcase && variant !== 'production');
 
+  let repositoryPromise: Promise<LabRepository> | null = null;
+  const repositoryFactory = () => {
+    repositoryPromise ??= openProtectedLabDatabase();
+    return repositoryPromise;
+  };
+
   return {
     runtime: {
       variant,
@@ -26,7 +35,8 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     },
     clock: { now: () => new Date() },
     showcase,
-    labs: createLabsService(),
+    labs: createLabsService({ repositoryFactory }),
+    reports: createLabReportsService({ repositoryFactory }),
   };
 }
 

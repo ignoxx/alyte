@@ -1,0 +1,79 @@
+import ExpoModulesCore
+import Foundation
+import PDFKit
+
+public final class AlytePDFModule: Module {
+  private var sessions: [String: PDFDocument] = [:]
+  private let lock = NSLock()
+
+  public func definition() -> ModuleDefinition {
+    Name("AlytePDF")
+
+    AsyncFunction("inspect") { (path: String) throws -> [String: Any] in
+      try Self.inspection(for: PDFDocument(url: URL(fileURLWithPath: Self.filePath(from: path))))
+    }
+
+    AsyncFunction("unlock") { (path: String, password: String) throws -> [String: Any] in
+      let documentURL = URL(fileURLWithPath: Self.filePath(from: path))
+      guard let document = PDFDocument(url: documentURL) else {
+        throw Self.error("The selected file is not a readable PDF", code: 10)
+      }
+      if document.isLocked && !document.unlock(withPassword: password) {
+        throw Self.error("Wrong password for the selected PDF", code: 11)
+      }
+      let sessionID = UUID().uuidString
+      self.lock.lock()
+      self.sessions[sessionID] = document
+      self.lock.unlock()
+      var result = try Self.inspection(for: document)
+      result["sessionId"] = sessionID
+      return result
+    }
+
+    AsyncFunction("close") { (sessionID: String) in
+      self.lock.lock()
+      self.sessions.removeValue(forKey: sessionID)
+      self.lock.unlock()
+    }
+  }
+
+  private static func inspection(for document: PDFDocument?) throws -> [String: Any] {
+    guard let document else {
+      throw error("The selected file is not a readable PDF", code: 10)
+    }
+    let locked = document.isLocked
+    let pages: [[String: Any]] = locked ? [] : (0..<document.pageCount).compactMap { index in
+      guard let page = document.page(at: index) else { return nil }
+      let bounds = page.bounds(for: .mediaBox)
+      return [
+        "pageIndex": index,
+        "width": Double(bounds.width),
+        "height": Double(bounds.height),
+        "hasTextLayer": page.string != nil,
+      ]
+    }
+    var metadata: [String: String] = [:]
+    if let attributes = document.documentAttributes {
+      for (key, value) in attributes {
+        guard let key = key as? String, let value = value as? String else { continue }
+        metadata[key] = value
+      }
+    }
+    return [
+      "encrypted": document.isEncrypted,
+      "locked": locked,
+      "pageCount": document.pageCount,
+      "metadata": metadata,
+      "pages": pages,
+    ]
+  }
+
+  private static func error(_ message: String, code: Int) -> NSError {
+    NSError(domain: "AlytePDF", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+  }
+
+  private static func filePath(from value: String) -> String {
+    if value.hasPrefix("file://"), let url = URL(string: value) { return url.path }
+    return value
+  }
+}

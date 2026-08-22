@@ -55,6 +55,7 @@ export type Measurement = {
 
 export type LabRecord = {
   readonly id: string;
+  readonly labReportId: string | null;
   readonly collectionDate: LabDateState;
   readonly specimenType: SpecimenType;
   readonly laboratoryName: string | null;
@@ -80,6 +81,7 @@ export type CreateMeasurementInput = {
 
 export type CreateLabRecordInput = {
   readonly id?: string;
+  readonly labReportId?: string | null;
   readonly collectionDate: LabDateState;
   readonly specimenType?: SpecimenType;
   readonly laboratoryName?: string | null;
@@ -88,6 +90,7 @@ export type CreateLabRecordInput = {
 };
 
 export type UpdateLabRecordInput = {
+  readonly labReportId?: string | null;
   readonly collectionDate: LabDateState;
   readonly specimenType: SpecimenType;
   readonly laboratoryName: string | null;
