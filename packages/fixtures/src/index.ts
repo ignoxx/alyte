@@ -5,8 +5,18 @@ export interface ShowcaseSnapshot {
   readonly label: 'Synthetic showcase data';
   readonly records: readonly ['Synthetic lab report', 'Synthetic intake event'];
   readonly intakeEvents: readonly [
-    { readonly eventType: 'food'; readonly name: 'Synthetic breakfast' },
-    { readonly eventType: 'drink'; readonly name: 'Synthetic drink' },
+    {
+      readonly id: 'showcase-intake-breakfast';
+      readonly eventType: 'food';
+      readonly name: 'Synthetic breakfast';
+      readonly localTime: '09:00';
+    },
+    {
+      readonly id: 'showcase-intake-drink';
+      readonly eventType: 'drink';
+      readonly name: 'Synthetic drink';
+      readonly localTime: '12:00';
+    },
   ];
 }
 
@@ -20,8 +30,18 @@ const SYNTHETIC_SNAPSHOT: ShowcaseSnapshot = Object.freeze({
   label: 'Synthetic showcase data',
   records: SYNTHETIC_RECORDS,
   intakeEvents: Object.freeze([
-    { eventType: 'food', name: 'Synthetic breakfast' },
-    { eventType: 'drink', name: 'Synthetic drink' },
+    {
+      id: 'showcase-intake-breakfast',
+      eventType: 'food',
+      name: 'Synthetic breakfast',
+      localTime: '09:00',
+    },
+    {
+      id: 'showcase-intake-drink',
+      eventType: 'drink',
+      name: 'Synthetic drink',
+      localTime: '12:00',
+    },
   ] as const),
 });
 

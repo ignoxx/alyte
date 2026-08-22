@@ -12,6 +12,7 @@ import { openProtectedLabDatabase, type LabRepository } from '../features/labs/p
 import { createIntakeService, type IntakeService } from '../features/intake/service';
 import { openProtectedIntakeDatabase, type IntakeRepository } from '../features/intake/persistence';
 import { createProtectedIntakeMediaStore } from '../features/intake/media-store';
+import { missingShowcaseIntakeInputs, showcaseIntakeInputs } from './showcase-seed';
 
 export interface AlyteServices {
   readonly runtime: AlyteRuntime;
@@ -73,26 +74,21 @@ async function seedShowcaseIntake(
   clock: ServiceClock,
 ): Promise<void> {
   try {
-    if ((await intake.listEvents()).length > 0) return;
-    const now = clock.now();
-    for (const [index, fixture] of showcase.intakeEvents.entries()) {
-      const occurredAt = new Date(now.getTime() - (index + 1) * 45 * 60 * 1000);
-      await intake.createEvent({
-        eventType: fixture.eventType,
-        occurredAt: occurredAt.toISOString(),
-        localDate: formatIntakeLocalDate(occurredAt),
-        origin: 'manual',
-        provenance: 'user-entered',
-        components: [
-          {
-            name: fixture.name,
-            amount: { kind: 'unknown', reason: 'not-provided' },
-          },
-        ],
-      });
+    const existingIds = new Set((await intake.listEvents()).map((event) => event.id));
+    const localDate = formatIntakeLocalDate(clock.now());
+    const missingInputs = missingShowcaseIntakeInputs(
+      showcaseIntakeInputs(showcase, localDate),
+      existingIds,
+    );
+    for (const input of missingInputs) {
+      try {
+        await intake.createEvent(input);
+      } catch {
+        // A later launch retries this missing fixture without overwriting user edits or records.
+      }
     }
   } catch {
-    // Showcase seeding is an optional development aid; local mode stays usable if it is unavailable.
+    // Showcase seeding is an optional development aid; local mode stays usable if its store is unavailable.
   }
 }
 

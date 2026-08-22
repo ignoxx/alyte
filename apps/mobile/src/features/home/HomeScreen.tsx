@@ -12,36 +12,40 @@ import { AppButton, AppSurface, AppText } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { IntakeEventCard } from '../intake/IntakeEventCard';
 import type { IntakeCloudJob } from '../intake/outbox';
-import { groupIntakeTimeline } from './home-model';
+import { homeHasLocalHistory, sortHomeTimeline } from './home-model';
 
 type HomeNavigation = NativeStackNavigationProp<HomeStackParamList, 'HomeRoot'>;
 
 export function HomeScreen() {
   const navigation = useNavigation<HomeNavigation>();
-  const { intake, clock } = useServices();
+  const { intake, reports, clock } = useServices();
   const isFocused = useIsFocused();
   const today = formatIntakeLocalDate(clock.now());
   const [events, setEvents] = useState<readonly IntakeEvent[]>([]);
   const [cloudJobs, setCloudJobs] = useState<readonly IntakeCloudJob[]>([]);
+  const [hasLocalHistory, setHasLocalHistory] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextEvents, nextJobs] = await Promise.all([
+      const [nextEvents, nextJobs, allEvents, labReports] = await Promise.all([
         intake.listEventsForDay(today),
         intake.resumeCloudJobs(),
+        intake.listEvents(),
+        reports.listReports(),
       ]);
       setEvents(nextEvents);
       setCloudJobs(nextJobs);
+      setHasLocalHistory(homeHasLocalHistory(allEvents, labReports.length));
       setError(false);
     } catch {
       setError(true);
     } finally {
       setLoading(false);
     }
-  }, [intake, today]);
+  }, [intake, reports, today]);
 
   useEffect(() => {
     if (isFocused) void load();
@@ -101,16 +105,31 @@ export function HomeScreen() {
         {error && <AppText style={styles.error}>{t('home.error')}</AppText>}
         {!loading && !error && events.length === 0 && (
           <View style={styles.emptyState}>
-            <AppText variant="title">{t('home.emptyTitle')}</AppText>
-            <AppText style={styles.muted}>{t('home.emptyBody')}</AppText>
-            <AppButton
-              label={t('home.importAction')}
-              onPress={() =>
-                dispatchHomeQuickActionFromStack(navigation, {
-                  kind: 'import-report',
-                })
-              }
-            />
+            <AppText variant="title">
+              {hasLocalHistory ? t('home.noEventsTitle') : t('home.emptyTitle')}
+            </AppText>
+            <AppText style={styles.muted}>
+              {hasLocalHistory ? t('home.noEventsBody') : t('home.emptyBody')}
+            </AppText>
+            {hasLocalHistory ? (
+              <AppButton
+                label={t('home.logAction')}
+                onPress={() =>
+                  dispatchHomeQuickActionFromStack(navigation, {
+                    kind: 'log-intake',
+                  })
+                }
+              />
+            ) : (
+              <AppButton
+                label={t('home.importAction')}
+                onPress={() =>
+                  dispatchHomeQuickActionFromStack(navigation, {
+                    kind: 'import-report',
+                  })
+                }
+              />
+            )}
             <View style={styles.secondaryActions}>
               <AppButton
                 label={t('home.snapAction')}
@@ -122,11 +141,11 @@ export function HomeScreen() {
                 }
               />
               <AppButton
-                label={t('home.logAction')}
+                label={hasLocalHistory ? t('home.importAnotherAction') : t('home.logAction')}
                 tone="quiet"
                 onPress={() =>
                   dispatchHomeQuickActionFromStack(navigation, {
-                    kind: 'log-intake',
+                    kind: hasLocalHistory ? 'import-report' : 'log-intake',
                   })
                 }
               />
@@ -152,44 +171,42 @@ export function HomeScreen() {
                 }
               />
             </View>
-            {groupIntakeTimeline(events).map((group) => (
-              <View key={group.localDate} style={styles.group}>
-                <AppText variant="label" style={styles.groupLabel}>
-                  {group.localDate === today ? t('home.todayGroup') : group.localDate}
-                </AppText>
-                <AppSurface style={styles.timelineSurface}>
-                  {group.events.map((event) => (
-                    <IntakeEventCard
-                      compact
-                      event={event}
-                      key={event.id}
-                      cloudJob={cloudJobs.find((job) => job.eventId === event.id) ?? null}
-                      onDelete={() => deleteEvent(event)}
-                      onEdit={() =>
-                        dispatchHomeQuickActionFromStack(navigation, {
-                          kind: 'edit-intake',
-                          eventId: event.id,
-                        })
-                      }
-                      onLogAgain={() =>
-                        void intake
-                          .logAgain(event.id)
-                          .then(() => load())
-                          .catch(() => setError(true))
-                      }
-                      onRemoveImage={() => removeImage(event)}
-                      onCancelAnalysis={() => cancelAnalysis(event)}
-                      onToggleInclusion={() =>
-                        void intake
-                          .setAnalysisInclusion(event.id, event.analysisInclusion === 'excluded')
-                          .then(() => load())
-                          .catch(() => setError(true))
-                      }
-                    />
-                  ))}
-                </AppSurface>
-              </View>
-            ))}
+            <View style={styles.group}>
+              <AppText variant="label" style={styles.groupLabel}>
+                {t('home.todayGroup')}
+              </AppText>
+              <AppSurface style={styles.timelineSurface}>
+                {sortHomeTimeline(events).map((event) => (
+                  <IntakeEventCard
+                    compact
+                    event={event}
+                    key={event.id}
+                    cloudJob={cloudJobs.find((job) => job.eventId === event.id) ?? null}
+                    onDelete={() => deleteEvent(event)}
+                    onEdit={() =>
+                      dispatchHomeQuickActionFromStack(navigation, {
+                        kind: 'edit-intake',
+                        eventId: event.id,
+                      })
+                    }
+                    onLogAgain={() =>
+                      void intake
+                        .logAgain(event.id)
+                        .then(() => load())
+                        .catch(() => setError(true))
+                    }
+                    onRemoveImage={() => removeImage(event)}
+                    onCancelAnalysis={() => cancelAnalysis(event)}
+                    onToggleInclusion={() =>
+                      void intake
+                        .setAnalysisInclusion(event.id, event.analysisInclusion === 'excluded')
+                        .then(() => load())
+                        .catch(() => setError(true))
+                    }
+                  />
+                ))}
+              </AppSurface>
+            </View>
           </View>
         )}
       </ScrollView>

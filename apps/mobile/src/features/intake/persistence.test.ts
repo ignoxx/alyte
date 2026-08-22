@@ -81,6 +81,20 @@ function temporaryDatabase(): string {
   return join(directory, 'alyte.sqlite');
 }
 
+test('local app preferences stay protected and survive an intake database relaunch', async () => {
+  const databasePath = temporaryDatabase();
+  const first = createRepository(databasePath);
+
+  assert.equal(await first.repository.getLocalPreference('app.onboarding-completed'), null);
+  await first.repository.setLocalPreference('app.onboarding-completed', 'true');
+  assert.equal(await first.repository.getLocalPreference('app.onboarding-completed'), 'true');
+  await first.repository.close();
+
+  const reopened = createRepository(databasePath);
+  assert.equal(await reopened.repository.getLocalPreference('app.onboarding-completed'), 'true');
+  await reopened.repository.close();
+});
+
 test('local intake journey survives correction, relaunch, undo, exclusion, day navigation, and deletion', async () => {
   const databasePath = temporaryDatabase();
   const first = createRepository(databasePath);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { IntakeEvent } from '@alyte/domain';
 import type { IntakeCloudJob } from '../intake/outbox';
 import { intakeEventMenuActions } from '../intake/ui';
-import { groupIntakeTimeline } from './home-model';
+import { homeHasLocalHistory, sortHomeTimeline } from './home-model';
 
 function event(
   id: string,
@@ -46,23 +46,26 @@ const queuedJob = {
   cancelledAt: null,
 } satisfies IntakeCloudJob;
 
-test('Home groups timeline records by local day and keeps newest first', () => {
+test('Home keeps the requested day timeline newest first', () => {
   const records = [
-    event('older', '2026-08-21', '2026-08-21T08:00:00.000Z'),
+    event('older', '2026-08-22', '2026-08-22T08:00:00.000Z'),
     event('newer', '2026-08-22', '2026-08-22T09:00:00.000Z'),
     event('latest', '2026-08-22', '2026-08-22T11:00:00.000Z'),
   ];
 
   assert.deepEqual(
-    groupIntakeTimeline(records).map((group) => [
-      group.localDate,
-      group.events.map((record) => record.id),
-    ]),
-    [
-      ['2026-08-22', ['latest', 'newer']],
-      ['2026-08-21', ['older']],
-    ],
+    sortHomeTimeline(records).map((record) => record.id),
+    ['latest', 'newer', 'older'],
   );
+});
+
+test('Home only calls the first-use state empty when both local histories are empty', () => {
+  assert.equal(homeHasLocalHistory([], 0), false);
+  assert.equal(
+    homeHasLocalHistory([event('prior', '2026-08-21', '2026-08-21T09:00:00.000Z')], 0),
+    true,
+  );
+  assert.equal(homeHasLocalHistory([], 1), true);
 });
 
 test('Home menu keeps destructive and uncommon actions out of the row', () => {

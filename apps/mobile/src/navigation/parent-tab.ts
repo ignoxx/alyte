@@ -27,10 +27,10 @@ export function dispatchHomeQuickAction(
 ): void {
   switch (action.kind) {
     case 'import-report':
-      navigation.navigate('Labs');
+      navigation.navigate('Labs', { screen: 'LabReportImport' });
       return;
     case 'log-intake':
-      navigation.navigate('Log');
+      navigation.navigate('Log', { screen: 'IntakeEntry' });
       return;
     case 'snap': {
       const root = navigation.getParent<NavigationProp<RootStackParamList>>();

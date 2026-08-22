@@ -90,7 +90,8 @@ export function StatusPill({
   );
 }
 
-export type AppIconName = 'home' | 'labs' | 'snap' | 'log' | 'settings' | 'chevronRight';
+export type AppIconName =
+  'home' | 'labs' | 'snap' | 'log' | 'settings' | 'chevronRight' | 'ellipsis';
 
 const iconGlyphs: Record<AppIconName, string> = {
   home: '⌂',
@@ -99,6 +100,7 @@ const iconGlyphs: Record<AppIconName, string> = {
   log: '≡',
   settings: '⚙',
   chevronRight: '›',
+  ellipsis: '…',
 };
 
 /** Small cross-platform icon seam for inline controls; navigation uses native SF Symbols directly. */

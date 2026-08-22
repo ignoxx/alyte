@@ -5,11 +5,29 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ServicesContext, createServices } from './src/services';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { OnboardingScreen } from './src/features/onboarding/OnboardingScreen';
+import { ONBOARDING_COMPLETED_PREFERENCE } from './src/features/onboarding/preferences';
 import { ErrorBoundary } from './src/ui/ErrorBoundary';
 
 export default function App() {
-  const [onboardingComplete, setOnboardingComplete] = useState(false);
+  const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null);
   const [services] = useState(() => createServices());
+
+  useEffect(() => {
+    let active = true;
+    void services.intake
+      .getLocalPreference(ONBOARDING_COMPLETED_PREFERENCE)
+      .then((value) => {
+        if (active) setOnboardingComplete(value === 'true');
+      })
+      .catch(() => {
+        // A protected preference read failure must not block local mode. Showing onboarding is the
+        // safe fallback and does not discard any local records.
+        if (active) setOnboardingComplete(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [services]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
@@ -23,10 +41,20 @@ export default function App() {
       <ErrorBoundary>
         <ServicesContext.Provider value={services}>
           <StatusBar style="auto" />
-          {onboardingComplete ? (
+          {onboardingComplete === null ? null : onboardingComplete ? (
             <RootNavigator services={services} />
           ) : (
-            <OnboardingScreen onComplete={() => setOnboardingComplete(true)} />
+            <OnboardingScreen
+              onComplete={() => {
+                void services.intake
+                  .setLocalPreference(ONBOARDING_COMPLETED_PREFERENCE, 'true')
+                  .catch(() => {
+                    // Continue into local mode even when the preference write is unavailable. A
+                    // later launch will safely show onboarding again rather than blocking use.
+                  });
+                setOnboardingComplete(true);
+              }}
+            />
           )}
         </ServicesContext.Provider>
       </ErrorBoundary>

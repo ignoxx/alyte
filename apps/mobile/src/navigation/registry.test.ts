@@ -75,8 +75,8 @@ test('Home quick actions dispatch to sibling tabs and preserve the Log edit push
   dispatchHomeQuickAction(navigation, { kind: 'edit-intake', eventId: 'event-42' });
 
   assert.deepEqual(calls, [
-    ['Labs'],
-    ['Log'],
+    ['Labs', { screen: 'LabReportImport' }],
+    ['Log', { screen: 'IntakeEntry' }],
     ['SnapCapture'],
     ['Log', { screen: 'IntakeEntry', params: { eventId: 'event-42' } }],
   ]);

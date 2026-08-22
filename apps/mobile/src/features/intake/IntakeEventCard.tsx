@@ -1,9 +1,14 @@
 import { ActionSheetIOS, Alert, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { formatIntakeAmount, type IntakeEvent } from '@alyte/domain';
 import { t } from '../../localization';
-import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
+import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import { colors, spacing } from '../../theme';
-import { intakeEventMenuActions, intakeEventTypeLabel, type IntakeEventMenuAction } from './ui';
+import {
+  intakeEventMenuActions,
+  intakeEventTypeLabel,
+  intakeProvenanceDescriptor,
+  type IntakeEventMenuAction,
+} from './ui';
 import type { IntakeCloudJob } from './outbox';
 
 type IntakeEventCardProps = {
@@ -42,30 +47,6 @@ function cloudJobLabel(job: IntakeCloudJob): string {
   }
 }
 
-function provenanceLabel(provenance: IntakeEvent['provenance']): string {
-  return t(
-    provenance === 'user-entered'
-      ? 'intake.provenanceUserEntered'
-      : provenance === 'user-corrected'
-        ? 'intake.provenanceUserCorrected'
-        : provenance === 'extracted'
-          ? 'intake.provenanceExtracted'
-          : 'intake.provenanceEstimated',
-  );
-}
-
-function provenanceTone(
-  provenance: IntakeEvent['provenance'],
-): 'userEntered' | 'userCorrected' | 'extracted' | 'estimated' {
-  return provenance === 'user-entered'
-    ? 'userEntered'
-    : provenance === 'user-corrected'
-      ? 'userCorrected'
-      : provenance === 'estimated'
-        ? 'estimated'
-        : 'extracted';
-}
-
 function menuActionLabel(action: IntakeEventMenuAction, event: IntakeEvent): string {
   switch (action) {
     case 'cancel-analysis':
@@ -95,6 +76,13 @@ export function IntakeEventCard({
     new Date(event.occurredAt),
   );
   const menuActions = intakeEventMenuActions(event, cloudJob);
+  const componentProvenances = new Set(event.components.map((component) => component.provenance));
+  const mixedComponentProvenance =
+    componentProvenances.size > 1 ||
+    event.components.some((component) => component.provenance !== event.provenance);
+  const eventProvenance = mixedComponentProvenance
+    ? { label: t('intake.mixedProvenance'), tone: 'neutral' as const }
+    : intakeProvenanceDescriptor(event.provenance);
 
   function runMenuAction(action: IntakeEventMenuAction): void {
     switch (action) {
@@ -156,9 +144,7 @@ export function IntakeEventCard({
             <AppText style={styles.muted}>
               {intakeEventTypeLabel(event.eventType)} · {time}
             </AppText>
-            <StatusPill tone={provenanceTone(event.provenance)}>
-              {provenanceLabel(event.provenance)}
-            </StatusPill>
+            <StatusPill tone={eventProvenance.tone}>{eventProvenance.label}</StatusPill>
           </View>
         </View>
         <View style={styles.statuses}>
@@ -175,15 +161,25 @@ export function IntakeEventCard({
             onPress={openMenu}
             style={({ pressed }) => [styles.moreButton, pressed && styles.morePressed]}
           >
-            <AppText style={styles.moreGlyph}>•••</AppText>
+            <AppIcon name="ellipsis" size={20} />
           </Pressable>
         </View>
       </View>
       <View style={styles.components}>
         {event.components.map((component) => (
-          <AppText key={component.id} style={styles.muted}>
-            {component.name}: {formatIntakeAmount(component.amount)}
-          </AppText>
+          <View key={component.id} style={styles.componentRow}>
+            <AppText style={styles.muted}>
+              {component.name}: {formatIntakeAmount(component.amount)}
+            </AppText>
+            {mixedComponentProvenance && (
+              <StatusPill tone={intakeProvenanceDescriptor(component.provenance).tone}>
+                {intakeProvenanceDescriptor(component.provenance).label}
+              </StatusPill>
+            )}
+            {component.reviewState === 'needs-review' && (
+              <StatusPill tone="reviewNeeded">{t('intake.checkThis')}</StatusPill>
+            )}
+          </View>
         ))}
       </View>
       {event.notes !== null && <AppText style={styles.muted}>{event.notes}</AppText>}
@@ -235,6 +231,7 @@ const styles = StyleSheet.create({
   meta: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   statuses: { alignItems: 'flex-end', gap: spacing.xs },
   components: { gap: spacing.xs },
+  componentRow: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   analysis: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   muted: { color: colors.mutedInk },
@@ -243,9 +240,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRadius: 16,
     justifyContent: 'center',
-    minHeight: 32,
-    minWidth: 32,
+    minHeight: 44,
+    minWidth: 44,
   },
   morePressed: { backgroundColor: colors.accentSoft },
-  moreGlyph: { color: colors.mutedInk, fontSize: 16, letterSpacing: 1, lineHeight: 20 },
 });

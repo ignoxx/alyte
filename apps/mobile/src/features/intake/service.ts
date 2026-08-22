@@ -45,6 +45,8 @@ export type IntakeService = {
   setCapturePreferences(
     input: Partial<IntakeCapturePreferences>,
   ): Promise<IntakeCapturePreferences>;
+  getLocalPreference(key: string): Promise<string | null>;
+  setLocalPreference(key: string, value: string): Promise<void>;
   deleteEvent(id: string): Promise<void>;
   subscribe(listener: IntakeChangeListener): () => void;
 };
@@ -259,6 +261,12 @@ export function createIntakeService(options: IntakeServiceOptions = {}): IntakeS
     },
     async setCapturePreferences(input) {
       return (await repository()).setCapturePreferences(input);
+    },
+    async getLocalPreference(key) {
+      return (await repository()).getLocalPreference(key);
+    },
+    async setLocalPreference(key, value) {
+      await (await repository()).setLocalPreference(key, value);
     },
     async deleteEvent(id) {
       const repo = await repository();

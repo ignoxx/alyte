@@ -392,6 +392,8 @@ export type IntakeRepository = {
   setCapturePreferences(
     input: Partial<IntakeCapturePreferences>,
   ): Promise<IntakeCapturePreferences>;
+  getLocalPreference(key: string): Promise<string | null>;
+  setLocalPreference(key: string, value: string): Promise<void>;
   deleteEvent(
     id: string,
   ): Promise<{ readonly deleted: boolean; readonly sourceMediaPath: string | null }>;
@@ -1241,6 +1243,28 @@ export function createIntakeRepository(
     return getCapturePreferences();
   }
 
+  async function getLocalPreference(key: string): Promise<string | null> {
+    await initialize();
+    const rows = await database.getAllAsync<{ value: string }>(
+      'SELECT value FROM app_preferences WHERE key = ?;',
+      key,
+    );
+    return rows[0]?.value ?? null;
+  }
+
+  async function setLocalPreference(key: string, value: string): Promise<void> {
+    await initialize();
+    await withWrite(async () => {
+      await database.runAsync(
+        `INSERT INTO app_preferences (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`,
+        key,
+        value,
+        now(),
+      );
+    });
+  }
+
   async function deleteEvent(
     id: string,
   ): Promise<{ readonly deleted: boolean; readonly sourceMediaPath: string | null }> {
@@ -1298,6 +1322,8 @@ export function createIntakeRepository(
     resumeCloudJobs,
     getCapturePreferences,
     setCapturePreferences,
+    getLocalPreference,
+    setLocalPreference,
     deleteEvent,
     subscribe,
   };
