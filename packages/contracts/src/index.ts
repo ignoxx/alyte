@@ -15,7 +15,7 @@ export interface ShowcaseRequest {
 
 export interface AppleExchangeRequest {
   readonly identityToken?: string | null;
-  readonly consentPolicyVersion?: string;
+  readonly consentPolicyVersion: string;
 }
 
 export interface RefreshSessionRequest {
