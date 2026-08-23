@@ -97,7 +97,7 @@
     "reportActions": "Local actions",
     "reportMoreActions": "Report actions",
     "sanitizedEditorOpen": "Review Sanitized Report",
-    "sanitizedEditorTitle": "Review Sanitized Report",
+    "sanitizedEditorTitle": "Sanitize Report",
     "sanitizedEditorBody": "Choose pages and review every redaction before creating a new derivative. The Original Report stays unchanged on this iPhone.",
     "sanitizedEditorExactTitle": "Exact outgoing artifact",
     "sanitizedEditorExactBody": "Preview is rendered from the verified derivative bytes that a later upload or export would use. Failed verification never appears here.",
