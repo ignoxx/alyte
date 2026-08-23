@@ -8,6 +8,7 @@ import {
   ScrollView,
   StyleSheet,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -26,6 +27,7 @@ import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import { colors, spacing } from '../../theme';
+import { canConfirmExtraction, extractionDecisionPresentation } from './extraction-ui-model';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
 type DraftRoute = RouteProp<LabsStackParamList, 'ExtractionDraft'>;
@@ -62,17 +64,39 @@ function editFrom(row: ExtractionDraftRow): RowEdit {
 }
 
 function decisionLabel(row: ExtractionDraftRow): string {
-  if (row.decision === 'preserve') return t('labs.extractionKept');
-  if (row.decision === 'skip') return t('labs.extractionSkipped');
-  if (row.decision === 'resolve') return t('labs.extractionResolved');
-  return t('labs.extractionDecisionPending');
+  switch (extractionDecisionPresentation(row.decision).label) {
+    case 'kept':
+      return t('labs.extractionKept');
+    case 'skipped':
+      return t('labs.extractionSkipped');
+    case 'resolved':
+      return t('labs.extractionResolved');
+    case 'needs-decision':
+      return t('labs.extractionDecisionPending');
+  }
 }
 
-function reviewTone(row: ExtractionDraftRow) {
-  if (row.decision === 'skip') return 'excluded' as const;
-  if (row.decision === 'resolve') return 'measured' as const;
-  if (row.decision === 'preserve') return 'extracted' as const;
-  return row.reviewState === 'needs-review' ? ('reviewNeeded' as const) : ('neutral' as const);
+function rowAccessibilityLabel(row: ExtractionDraftRow): string {
+  const source = row.sourceText || row.sourceLabel || t('labs.extractionUnmapped');
+  const proposed = row.proposedLabel || t('labs.extractionUnmapped');
+  const value = `${valueText(row)}${row.proposedUnit === null ? '' : ` ${row.proposedUnit}`}`;
+  const date = dateText(row.collectionDate) || t('labs.recordDateMissing');
+  const review =
+    row.reviewState === 'needs-review'
+      ? t('labs.extractionNeedsReview')
+      : t('labs.extractionReady');
+  const reasons =
+    row.reviewReasons.length === 0
+      ? ''
+      : ` ${row.reviewReasons.map((reason) => t(`labs.extractionReason.${reason}`)).join(', ')}`;
+  return [
+    `${t('labs.extractionRow')} ${row.order + 1}`,
+    `${t('labs.extractionSource')}: ${source}`,
+    `${t('labs.extractionProposedValues')}: ${proposed}, ${value}`,
+    `${t('labs.recordDateLabel')}: ${date}`,
+    `${t('labs.extractionDecision')}: ${decisionLabel(row)}`,
+    `${review}${reasons}`,
+  ].join('. ');
 }
 
 export function ExtractionDraftScreen() {
@@ -80,6 +104,8 @@ export function ExtractionDraftScreen() {
   const route = useRoute<DraftRoute>();
   const { reports } = useServices();
   const insets = useSafeAreaInsets();
+  const { fontScale } = useWindowDimensions();
+  const usesAccessibilityTextSize = fontScale >= 1.3;
   const [draft, setDraft] = useState<ExtractionDraft | null>(null);
   const [edits, setEdits] = useState<Record<string, RowEdit>>({});
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
@@ -195,7 +221,7 @@ export function ExtractionDraftScreen() {
   }
 
   async function confirm() {
-    if (draft === null || draft.rows.some((row) => row.decision === 'unresolved')) return;
+    if (draft === null || !canConfirmExtraction(draft.rows)) return;
     setBusy(true);
     try {
       const records = await reports.confirmExtraction(draft.id);
@@ -221,6 +247,7 @@ export function ExtractionDraftScreen() {
 
   const unresolved = draft.rows.filter((row) => row.decision === 'unresolved').length;
   const resolved = draft.rows.length - unresolved;
+  const canConfirm = canConfirmExtraction(draft.rows);
   const selectedRow = draft.rows.find((row) => row.id === selectedRowId) ?? null;
   const selectedEdit =
     selectedRow === null ? null : (edits[selectedRow.id] ?? editFrom(selectedRow));
@@ -252,31 +279,48 @@ export function ExtractionDraftScreen() {
             </AppText>
           </View>
         }
-        renderItem={({ item: row }) => (
-          <Pressable
-            accessibilityLabel={`${t('labs.extractionRow')} ${row.order + 1}: ${row.proposedLabel}`}
-            accessibilityRole="button"
-            onPress={() => setSelectedRowId(row.id)}
-            style={({ pressed }) => [styles.queueRow, pressed && styles.rowPressed]}
-          >
-            <AppIcon name="doc" size={21} />
-            <View style={styles.rowBody}>
-              <View style={styles.rowTopline}>
-                <AppText numberOfLines={1} style={styles.sourceLabel}>
-                  {row.sourceText}
+        renderItem={({ item: row }) => {
+          const decision = extractionDecisionPresentation(row.decision);
+          const source = row.sourceText || row.sourceLabel || t('labs.extractionUnmapped');
+          const numberOfLines = usesAccessibilityTextSize ? undefined : 1;
+          return (
+            <Pressable
+              accessibilityLabel={rowAccessibilityLabel(row)}
+              accessibilityRole="button"
+              onPress={() => setSelectedRowId(row.id)}
+              style={({ pressed }) => [
+                styles.queueRow,
+                usesAccessibilityTextSize && styles.accessibilityQueueRow,
+                pressed && styles.rowPressed,
+              ]}
+            >
+              <AppIcon name="doc" size={21} />
+              <View style={styles.rowBody}>
+                <View
+                  style={[
+                    styles.rowTopline,
+                    usesAccessibilityTextSize && styles.accessibilityRowTopline,
+                  ]}
+                >
+                  <AppText numberOfLines={numberOfLines} style={styles.sourceLabel}>
+                    {source}
+                  </AppText>
+                  <StatusPill tone={decision.tone}>{decisionLabel(row)}</StatusPill>
+                </View>
+                {row.reviewState === 'needs-review' && (
+                  <StatusPill tone="reviewNeeded">{t('labs.extractionNeedsReview')}</StatusPill>
+                )}
+                <AppText numberOfLines={numberOfLines} variant="heading">
+                  {row.proposedLabel || t('labs.extractionUnmapped')}
                 </AppText>
-                <StatusPill tone={reviewTone(row)}>{decisionLabel(row)}</StatusPill>
+                <AppText numberOfLines={numberOfLines} style={styles.muted}>
+                  {`${valueText(row)}${row.proposedUnit === null ? '' : ` ${row.proposedUnit}`} · ${dateText(row.collectionDate) || t('labs.recordDateMissing')}`}
+                </AppText>
               </View>
-              <AppText numberOfLines={1} variant="heading">
-                {row.proposedLabel || t('labs.extractionUnmapped')}
-              </AppText>
-              <AppText numberOfLines={1} style={styles.muted}>
-                {`${valueText(row)}${row.proposedUnit === null ? '' : ` ${row.proposedUnit}`} · ${dateText(row.collectionDate) || t('labs.recordDateMissing')}`}
-              </AppText>
-            </View>
-            <AppIcon name="chevronRight" size={16} />
-          </Pressable>
-        )}
+              <AppIcon name="chevronRight" size={16} />
+            </Pressable>
+          );
+        }}
         showsVerticalScrollIndicator
         style={styles.list}
       />
@@ -291,7 +335,7 @@ export function ExtractionDraftScreen() {
           </AppText>
         </View>
         <AppButton
-          disabled={busy || unresolved > 0}
+          disabled={busy || !canConfirm}
           label={t('labs.extractionConfirm')}
           onPress={() => void confirm()}
           style={styles.confirmButton}
@@ -537,9 +581,11 @@ const styles = StyleSheet.create({
     minHeight: 82,
     paddingVertical: spacing.sm,
   },
+  accessibilityQueueRow: { alignItems: 'flex-start' },
   rowPressed: { backgroundColor: colors.accentSoft },
   rowBody: { flex: 1, gap: spacing.xs, minWidth: 0 },
   rowTopline: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
+  accessibilityRowTopline: { alignItems: 'flex-start', flexDirection: 'column' },
   sourceLabel: { color: colors.mutedInk, flex: 1 },
   muted: { color: colors.mutedInk },
   warning: { color: colors.danger },

@@ -274,26 +274,25 @@ export function LabReportDetailScreen() {
               <AppIcon name="chevronRight" size={16} />
             </Pressable>
           )}
-        </AppSurface>
-      )}
-      {report.importState === 'imported' && (
-        <>
-          <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
-          {report.labRecordIds.length === 0 ? (
-            <>
+          {report.importState === 'imported' && report.labRecordIds.length === 0 && (
+            <View style={styles.extractAction}>
+              <AppText variant="heading">{t('labs.extractionStart')}</AppText>
+              <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
               <AppButton
                 disabled={busy}
                 label={t('labs.extractionStart')}
                 onPress={() => void extractLocally()}
+                style={styles.extractButton}
               />
               {extractionError && (
                 <AppText style={styles.errorText}>{t('labs.extractionStartError')}</AppText>
               )}
-            </>
-          ) : (
-            <AppText style={styles.body}>{t('labs.extractionAlreadyConfirmed')}</AppText>
+            </View>
           )}
-        </>
+          {report.importState === 'imported' && report.labRecordIds.length > 0 && (
+            <AppText style={styles.actionStatus}>{t('labs.extractionAlreadyConfirmed')}</AppText>
+          )}
+        </AppSurface>
       )}
       {(report.importState === 'failed' || report.importState === 'interrupted') && (
         <AppSurface tone="soft" style={styles.error}>
@@ -386,6 +385,14 @@ const styles = StyleSheet.create({
   },
   actionPressed: { backgroundColor: colors.accentSoft },
   actionBody: { flex: 1 },
+  extractAction: {
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: spacing.xs,
+    padding: spacing.md,
+  },
+  extractButton: { alignSelf: 'stretch' },
+  actionStatus: { color: colors.mutedInk, padding: spacing.md },
   errorText: { color: colors.danger },
   previewModal: { backgroundColor: colors.canvas, flex: 1, padding: spacing.lg },
   previewHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },

@@ -16,6 +16,7 @@ import {
   ScreenScrollView,
 } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
+import { labsShowsManualRecordAction } from './labs-ui-model';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
 
@@ -55,7 +56,7 @@ export function LabsScreen() {
   const { fontScale } = useWindowDimensions();
   const usesAccessibilityTextSize = fontScale >= 1.3;
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
-  const hasData = reports.length > 0 || records.length > 0;
+  const hasData = labsShowsManualRecordAction(reports.length, records.length);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -195,13 +196,15 @@ export function LabsScreen() {
                 );
               })}
             </AppSurface>
-            <AppButton
-              label={t('labs.manualAction')}
-              onPress={() => navigation.navigate('LabRecordForm')}
-              style={styles.manualAction}
-              tone="quiet"
-            />
           </View>
+        )}
+        {!loading && !error && hasData && (
+          <AppButton
+            label={t('labs.manualAction')}
+            onPress={() => navigation.navigate('LabRecordForm')}
+            style={styles.manualAction}
+            tone="quiet"
+          />
         )}
       </ScreenScrollView>
     </SafeAreaView>
