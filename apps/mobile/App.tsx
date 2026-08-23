@@ -7,16 +7,12 @@ import { RootNavigator } from './src/navigation/RootNavigator';
 import { OnboardingScreen } from './src/features/onboarding/OnboardingScreen';
 import { ONBOARDING_COMPLETED_PREFERENCE } from './src/features/onboarding/preferences';
 import { ErrorBoundary } from './src/ui/ErrorBoundary';
-import { DesignLabNavigator } from './src/features/design-lab/DesignLabNavigator';
-import { designLabEnabled } from './src/features/design-lab/model';
 
 export default function App() {
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null);
   const [services] = useState(() => createServices());
-  const useDesignLab = designLabEnabled();
 
   useEffect(() => {
-    if (useDesignLab) return;
     let active = true;
     void services.intake
       .getLocalPreference(ONBOARDING_COMPLETED_PREFERENCE)
@@ -31,7 +27,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [services, useDesignLab]);
+  }, [services]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
@@ -45,9 +41,7 @@ export default function App() {
       <ErrorBoundary>
         <ServicesContext.Provider value={services}>
           <StatusBar style="auto" />
-          {useDesignLab ? (
-            <DesignLabNavigator />
-          ) : onboardingComplete === null ? null : onboardingComplete ? (
+          {onboardingComplete === null ? null : onboardingComplete ? (
             <RootNavigator services={services} />
           ) : (
             <OnboardingScreen
