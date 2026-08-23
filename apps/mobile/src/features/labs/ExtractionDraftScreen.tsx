@@ -363,7 +363,7 @@ export function ExtractionDraftScreen() {
                   <AppText style={styles.muted}>{t('labs.extractionEditorSubtitle')}</AppText>
                 </View>
                 <AppButton
-                  label={t('labs.reportPreviewClose')}
+                  label={t('labs.extractionEditorClose')}
                   onPress={() => setSelectedRowId(null)}
                   tone="quiet"
                 />

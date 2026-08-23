@@ -149,6 +149,7 @@
     "extractionSource": "Original source",
     "extractionLocation": "Source location (page · normalized position)",
     "extractionSourcePreview": "Preview source page and region",
+    "extractionEditorClose": "Close",
     "extractionQueue": "Review queue",
     "extractionUnmapped": "Unmapped source result",
     "extractionEditorSubtitle": "Correct the proposed result, then choose how to keep it.",
