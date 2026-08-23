@@ -140,11 +140,22 @@ export function AppButton({
 export function StatusPill({
   children,
   tone = 'neutral',
-}: PropsWithChildren<{ readonly tone?: StatusTone }>) {
+  subtle = false,
+}: PropsWithChildren<{ readonly tone?: StatusTone; readonly subtle?: boolean }>) {
   const status = statusColors[tone];
   return (
-    <View accessibilityRole="text" style={[styles.pill, { backgroundColor: status.fill }]}>
-      <AppText variant="caption" style={[styles.pillText, { color: status.ink }]}>
+    <View
+      accessibilityRole="text"
+      style={[
+        styles.pill,
+        subtle && styles.subtlePill,
+        { backgroundColor: subtle ? colors.accentSoft : status.fill },
+      ]}
+    >
+      <AppText
+        variant="caption"
+        style={[styles.pillText, { color: subtle ? colors.ink : status.ink }]}
+      >
         {children}
       </AppText>
     </View>
@@ -266,6 +277,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
+  subtlePill: { borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth },
   pillText: { fontWeight: '600' },
   groupedRow: {
     alignItems: 'center',

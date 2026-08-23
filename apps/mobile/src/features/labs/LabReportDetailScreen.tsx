@@ -28,6 +28,7 @@ import {
 import { colors, screenStyles, spacing } from '../../theme';
 import { LabReportImportError, type PasswordRequest } from './report-service';
 import type { LabReportPreview } from './report-service';
+import { formatReportPageCount } from './report-detail-model';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
 type DetailRoute = RouteProp<LabsStackParamList, 'LabReportDetail'>;
@@ -229,8 +230,12 @@ export function LabReportDetailScreen() {
       <AppSurface style={styles.metaSection}>
         <DetailRow label={t('labs.reportSourceType')} value={sourceLabel(report)} />
         <DetailRow
-          label={t('labs.reportPageCount')}
-          value={String(report.pageCount ?? t('labs.reportUnknown'))}
+          label={formatReportPageCount(
+            t('labs.reportPageCount'),
+            report.pageCount,
+            t('labs.reportUnknown'),
+          )}
+          value=""
         />
         <DetailRow label={t('labs.reportSize')} value={formatBytes(report.byteSize)} />
         <DetailRow

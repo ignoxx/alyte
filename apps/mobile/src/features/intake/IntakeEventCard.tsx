@@ -193,7 +193,9 @@ export function IntakeEventCard({
             </View>
             <View style={styles.compactMeta}>
               <AppText style={styles.muted}>{intakeEventTypeLabel(event.eventType)}</AppText>
-              <StatusPill tone={eventProvenance.tone}>{compactProvenanceLabel}</StatusPill>
+              <StatusPill subtle tone={eventProvenance.tone}>
+                {compactProvenanceLabel}
+              </StatusPill>
               {event.analysisInclusion === 'excluded' && (
                 <StatusPill tone="excluded">{t('intake.excluded')}</StatusPill>
               )}
