@@ -2,9 +2,10 @@
 
 ## Product
 
-Alyte is a private, local-first laboratory-history and intake-awareness app. It helps adults
-organize measured biomarker history and view logged intake beside carefully sourced general
-relationships. It does not diagnose, prescribe, or determine what caused a result.
+Alyte is a private, local-first laboratory-history app with a later cloud-backed intake-awareness
+slice. It helps adults organize measured biomarker history and, after the local journey is accepted,
+view logged intake beside carefully sourced general relationships. It does not diagnose, prescribe,
+or determine what caused a result.
 
 The first public iOS release must qualify for Shipaton by September 30, 2026. Protect the complete
 account-free two-report journey before expanding optional cloud breadth.
@@ -46,8 +47,9 @@ source of truth rather than repeating the same rule here.
    does not decide that it caused or probably contributed to that trend.
 4. **Clinical decisions stay clinical.** The product does not diagnose, recommend treatment, alter
    medication, calculate doses, or label a person deficient or diseased.
-5. **Local mode is a complete product.** Lab import, review, history, explanations, trends, manual
-   intake, export, and deletion do not require an account.
+5. **Local mode is a complete product.** Lab import, privacy review, focused extraction review,
+   history, explanations, trends, export, and deletion do not require an account. Cloud and intake
+   breadth may enhance it only after this journey is complete.
 6. **Cloud exposure is explicit and minimal.** Show the exact artifact and purpose before first
    upload. Send only what the selected operation requires and keep no durable cloud health record.
 7. **The user controls the record.** Corrections preserve source provenance. Inclusion is reversible.
@@ -113,6 +115,9 @@ agreement.
 
 - Treat every provider response as untrusted input and decode it with versioned runtime and semantic
   schemas.
+- Raw PDF/OCR observations remain internal provenance. Only measurement-shaped candidates enter a
+  draft; an optional on-device model may select source IDs or propose mappings but never author
+  authoritative values, units, conversions, or medical explanations.
 - Store provider, model, prompt/schema, and catalogue versions with derived output; keep user health
   payloads out of logs and durable backend metadata.
 - Recognition identifies visible components, label facts, broad amount ranges, and up to five open
@@ -165,8 +170,13 @@ Use fixtures and wording guards to keep the hard-guardrail patterns out of user-
 
 - First launch enters local mode after short onboarding; authentication appears only at the first
   paid cloud action.
-- Snap saves an Intake Event and image before returning to the day view. Upload/analysis continues
-  asynchronously and resumes after suspension or network failure.
+- Until the local laboratory gate passes, the native tab bar contains Home, Labs, and Settings;
+  incomplete Snap, Log, account, and paywall surfaces stay hidden while their later code remains.
+- Report import is a full-screen task above the tabs. The privacy workspace shows one aspect-correct,
+  zoomable page at a time; the draft review shows credible Measurements and genuine exceptions, not
+  every OCR line.
+- In the later cloud/intake slice, Snap saves an Intake Event and image before returning promptly.
+  Upload/analysis continues asynchronously and resumes after suspension or network failure.
 - Every durable workflow reaches an observable success, review, actionable failure, expiry, or safe
   retry state. Preserve user edits through failure.
 - Packaging may identify a supplement or medication and printed strength. Consumed amount/dose stays

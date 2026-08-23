@@ -15,8 +15,9 @@ Build one complete vertical path before adding breadth:
 > Two real reports → local extraction → correction → comparable trend → clear explanation, with no
 > account and no cloud.
 
-That path is the release. Snap, cloud recognition, purchases, and wider catalogue coverage are added
-only while it stays green.
+That path is the release. Current implementation stays entirely on this local path until it passes
+physical-device acceptance. Snap, cloud recognition, purchases, and wider catalogue coverage remain
+required later slices, but none runs in parallel with a broken or visually unaccepted local journey.
 
 Agent scheduling, worktree isolation, delegated execution, and Sol integration follow
 `docs/agents/SOL-LUNA-ORCHESTRATION.md`. Planning artifacts alone do not authorize implementation.
@@ -48,8 +49,9 @@ Completion criteria:
 
 Fallbacks:
 
-- If reliable structured table extraction is weak, preserve OCR rows for guided manual mapping
-  rather than silently trusting them.
+- If reliable structured table extraction is weak, preserve the raw observations internally and
+  offer guided manual mapping only for measurement-shaped candidates. Never turn every OCR line
+  into mandatory review work.
 - If the selected chart library fails performance or accessibility, use a simpler native or SVG
   point/line renderer behind the same chart model.
 - If PDF reconstruction cannot meet the redaction verification gate, cloud report upload does not
@@ -59,18 +61,26 @@ Fallbacks:
 
 Build:
 
+- three native iOS peer tabs—Home, Labs, and Settings—with no incomplete Snap/Log/cloud affordance;
+- a reference-backed UI variant lab for Home's empty and first-populated hierarchy, followed by
+  promotion of the maintainer-selected direction;
 - local database schema and repositories;
-- Files/Photos import, password prompt, protected storage, page selection, crop/rotation/redaction;
-- OCR grouping, locale parsing, alias mapping, unit normalization, and all-result preservation;
-- editable Extraction Draft with row-level review reasons;
+- Files/Photos import, password prompt, protected storage, and a full-screen PDFKit privacy
+  workspace for page selection, zoom, pan, crop, rotation, and direct redaction;
+- verified Sanitized Report creation before extraction;
+- Vision document/table recognition, measurement-candidate filtering, locale parsing, alias mapping,
+  unit normalization, and preservation of every credible result;
+- English, German, and Lithuanian fixtures first, followed by the remaining declared languages;
+- compact grouped Extraction Draft review with exception-level reasons and source-page inspection;
 - Lab Report library, Lab Record detail, complete Measurement list, deletion, and manual entry; and
-- first comparable catalogue fixtures for English and German, then the remaining declared launch
-  report languages.
+- first comparable catalogue fixtures.
 
 Completion criteria:
 
 - two synthetic and two developer-held real reports can complete the success journey in under five
   minutes without an account;
+- the app presents no serial review of unrelated OCR text and the common path requires decisions
+  only for genuine ambiguities;
 - originals remain unchanged and sanitized derivatives pass recovery checks;
 - every imported value retains source provenance and can be corrected;
 - unknown markers and incompatible units remain visible but cannot enter a false trend; and
@@ -97,7 +107,10 @@ Completion criteria:
 - source range, General Guidance, and no-range states are visually distinct; and
 - wording fixtures contain no diagnosis, treatment, universal-optimal-range, or causal claim.
 
-### September 9–13: fast intake and local timeline
+### After local Gate A: fast intake and cloud-backed timeline
+
+This milestone does not start until the local two-report journey is accepted. Existing intake code
+and persistence remain intact while Snap and Log stay hidden from the local laboratory shell.
 
 Build:
 
@@ -115,7 +128,11 @@ Completion criteria:
 - correction and exclusion invalidate/recompute dependent local output; and
 - packaging never becomes a confirmed consumed dose without user confirmation.
 
-### September 9–16: cloud path, in parallel at the code-workstream level
+### After local Gate A: cloud path
+
+Cloud remains required; it is sequenced after the local core rather than discarded. Backend-only
+preparation may continue only when it cannot consume the product-application owner or destabilize
+the local acceptance path.
 
 Build:
 
@@ -234,7 +251,8 @@ cost plus infrastructure, StoreKit commission, taxes, support, and safety margin
 
 ### Gate A — local core, September 2
 
-If the no-account two-report journey is not reliable, stop cloud feature work and finish it.
+If the no-account two-report journey is not reliable, understandable, visually accepted, and
+complete in under five minutes, do not dispatch cloud or intake implementation. Finish it first.
 
 ### Gate B — evidence, September 8
 
@@ -258,24 +276,29 @@ Cut in this order when unfinished:
 6. wider Evidence Relationship breadth.
 
 Protect Files/Photos lab import, correction, measured trends, privacy/redaction, ordinary Full
-Export, manual intake, Snap with Cloud Plus when Gate C passes, onboarding, and support.
+Export, onboarding, and support first. Protect manual intake and Snap only after Gate A passes and
+Cloud Plus passes Gate C.
 
 ## MVP backlog by vertical slice
 
-1. **App shell** — variants, navigation, theme, localization resources, service container.
+1. **Accepted local shell** — three native tabs, variant-lab selection, neutral semantic visual
+   foundation, localization resources, service container.
 2. **Protected persistence** — migrations, repositories, protected files, deletion verification.
 3. **Import source** — Files/Photos, password, page model, original retention.
-4. **Sanitization** — crop/rotation/redaction, exact artifact preview, verification.
-5. **Extraction** — Vision OCR, row grouping, locale parsing, editable draft.
-6. **Laboratory history** — Reports, Records, Measurements, manual entry, provenance.
+4. **Privacy workspace** — full-screen PDFKit viewing, crop/rotation/direct redaction, exact artifact
+   preview, verification.
+5. **Candidate extraction** — Vision document/tables, measurement filtering, locale parsing,
+   Lithuanian fixtures, deterministic validation, optional local semantic mapping.
+6. **Laboratory history and review** — compact draft, Reports, Records, Measurements, manual entry,
+   source inspection, correction, provenance.
 7. **Comparison** — canonical aliases, units, trends, missing/incompatible behavior.
 8. **Education** — explanations, ranges/guidance, sources, signed catalogue.
-9. **Intake core** — Home day, Log, Snap, manual entry, correction, inclusion.
+9. **Local control** — export, deletion, app lock, support, privacy dashboard.
 10. **Cloud transport** — outbox, auth, consent, upload, status, result envelope.
 11. **Cloud intelligence** — intake recognition, report fallback, candidate validation.
-12. **Commerce** — products, entitlements, usage ledger, warnings, restore.
-13. **Relationships** — Potential Relationships and locally derived interval context.
-14. **Control** — export, deletion, app lock, support, privacy dashboard.
+12. **Intake core** — cloud-useful capture, Log, Snap, manual entry, correction, inclusion.
+13. **Commerce** — products, entitlements, usage ledger, warnings, restore.
+14. **Relationships** — Potential Relationships and locally derived interval context.
 15. **Release** — fixtures, screenshots, metadata, device matrix, TestFlight, submission.
 
 Each slice is complete when its material reverse and failure states, privacy behavior, highest-risk

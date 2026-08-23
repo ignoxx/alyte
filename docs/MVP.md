@@ -20,6 +20,12 @@ Intake awareness is a supporting part of the product: people can record what the
 bodies and explore evidence-based ways those inputs might relate to biomarkers. It must not weaken
 the completeness or reliability of the laboratory-history experience.
 
+Delivery is sequential. Alyte first ships internally as an excellent account-free laboratory-
+history product. Intake capture and optional cloud intelligence remain required product slices,
+but their interface is introduced only after the complete local two-report journey passes its
+device acceptance gate. The local phase does not expose incomplete Snap, Log, account, or paywall
+surfaces merely to reserve their future position.
+
 The first-release intake slice is deliberately narrow:
 
 - quick structured logging for food, drinks, supplements, and medications;
@@ -71,30 +77,29 @@ supported Biomarkers, and understand Measured Trends across multiple Lab Records
 
 ## Primary navigation and empty state
 
-The first release has four top-level destinations:
+The account-free laboratory phase has three native iOS peer destinations:
 
-- `Home` provides the current overview and high-priority quick actions;
-- `Labs` owns Lab Reports, Lab Records, Measurements, and Biomarker history;
-- `Log` owns the intake timeline and creation of Intake Events; and
-- `Settings` owns privacy, cloud account, subscription, export, protection, support, and app
-  preferences.
+- `Home` summarizes the person's laboratory history and the next useful action;
+- `Labs` owns Lab Reports, Lab Records, Measurements, and Biomarker history; and
+- `Settings` owns local privacy, export, deletion, protection, support, preferences, and—only after
+  the cloud slice is enabled—cloud account and subscription controls.
 
 Insights are embedded beside the records and trends that produced them rather than separated into a
-fifth destination. After onboarding, an empty app leads with `Import your first lab report` while
-keeping `Log something` immediately available.
+fourth destination. After onboarding, an empty app contains one obvious primary action:
+`Import Lab Report`. It does not advertise intake capture that cannot yet produce useful analysis.
 
-Once activity exists, Home is primarily a day view: it shows what was logged today, the state of
-any analysis still running, items that may need correction, and concise daily context. A prominent
-center-bottom `Snap` action remains reachable throughout the primary app so a person can photograph
-food, a drink, supplement, medication, package, or label with minimal interruption.
+Once reports exist, Home shows the latest report, unfinished import or review work, at most a few
+important measured changes since the previous compatible record, and recent reports. It is not a
+day log, global health score, warning dashboard, or predicted-biomarker surface.
 
-The Snap action opens the camera immediately. Capturing an image saves and queues it asynchronously
-without forcing the person to remain on a result screen. Photos and manual logging remain secondary
-actions available from the camera flow.
+The later cloud/intake slice must integrate with this accepted shell without making the local
+product incomplete or unexpectedly rearranging navigation at sign-in. Its final capture placement
+is decided and device-tested when that slice begins; the current phase does not reserve a dead Snap
+or Log tab.
 
-The central Snap action means `I consumed this now`. For medication or supplement packaging, that
-intent can create an Intake Event while its amount or dose remains unknown. A separate
-`Analyze label/reference` action can inspect packaging without recording consumption.
+When cloud intake is enabled, a Snap means `I consumed this now`. It opens the camera immediately,
+saves durably, queues analysis, and returns without forcing the person to remain on a result screen.
+A separate `Analyze label/reference` action can inspect packaging without recording consumption.
 
 The expected engaged-use case is approximately 8–10 Snaps per day: three meals, snacks, drinks,
 supplements, medications, or other relevant inputs. Subscription allowances and backend capacity
@@ -117,9 +122,10 @@ headroom rather than treating it as abuse.
   post-MVP. The internal backend boundary may remain provider-neutral without exposing credentials
   or routing controls to users at launch.
 - Core local functionality does not require Apple Intelligence or an on-device generative model.
-  Local OCR, deterministic parsing, charts, reviewed content, redaction, record management, and
-  export have the same functional contract on every supported device, allowing only reasonable
-  performance differences.
+  PDFKit, Vision document recognition, deterministic parsing, charts, reviewed content, redaction,
+  record management, and export have the same functional contract on every supported device,
+  allowing only reasonable performance differences. A supported on-device model may improve
+  candidate mapping or translation, but its absence cannot collapse the account-free product.
 
 ## Laboratory-history model
 
@@ -190,11 +196,16 @@ Biomarker is not currently included in the person's comparable laboratory trends
 - A user can create a laboratory record and its Measurements manually without attaching a Lab
   Report.
 - A user can correct every extracted date, name, value, unit, and reference interval before saving.
-- OCR attempts Latin-script reports without restricting import to a declared language. Recognition
-  of a specific Biomarker still depends on the supported alias catalogue; an unrecognized row is
-  preserved for review rather than silently mapped.
-- Launch parsing fixtures cover English, German, French, Spanish, Italian, Portuguese, Dutch, and
-  Polish. Other US and EU report languages are best effort locally and may use paid cloud fallback.
+- Vision document recognition reads the rendered Sanitized Report and preserves text plus page
+  geometry. Raw text observations remain
+  internal provenance; only table rows or other measurement-shaped candidates enter an Extraction
+  Draft. Headers, addresses, licences, footers, and unrelated prose do not become user review work.
+- Recognition of a specific Biomarker depends on the supported alias catalogue and semantic
+  validators. An unknown measurement-shaped result is preserved with its original label and shown
+  as unsupported; an arbitrary OCR line is not treated as a result merely to avoid dropping it.
+- Launch parsing fixtures prioritize English, German, and Lithuanian, then French, Spanish, Italian,
+  Portuguese, Dutch, and Polish. Other US and EU report languages are best effort locally and may
+  use paid cloud fallback.
   When a label maps safely, the interface shows its canonical
   English Biomarker name while retaining the exact original label beside it and in provenance.
   Translation never replaces source text. Multilingual model support does not replace fixtures for
@@ -207,8 +218,10 @@ Biomarker is not currently included in the person's comparable laboratory trends
 - A record with no specimen-collection date may be saved as `date missing`, but it remains outside
   chronological comparisons until the user supplies the date. A report-issued date is never used
   silently as its collection date.
-- Local extraction always opens as an editable draft. Uncertain fields and rows are highlighted
-  individually and nothing becomes confirmed history until the user reviews it.
+- Local extraction always opens as an editable draft. Structurally and semantically valid
+  Measurements are included by default; genuine ambiguities are highlighted individually. The
+  person reviews a compact grouped table, can inspect or edit any candidate, and resolves only the
+  exceptions before confirmation. Nothing becomes confirmed history until that review completes.
 - When local extraction is incomplete or unusable, the person can retry selected pages, enter the
   results manually, or explicitly request paid cloud extraction. The source report itself remains
   locally available even when no structured result can be recovered.
@@ -303,10 +316,17 @@ relationship between them. Alyte cannot determine why your result changed.`
 
 ## Redaction
 
-- On-device OCR proposes regions that may contain names, addresses, identifiers, dates, or other
-  personal information.
-- The user reviews, adds, adjusts, or removes redactions before cloud submission or export.
-- The app shows the exact Sanitized Report that will leave the device.
+- Report import includes a focused privacy workspace before structured extraction. It presents one
+  aspect-correct full-resolution page at a time with native zoom, pan, page navigation, direct
+  redaction, undo, and compact page-transform controls. It does not render tiny pages inside a
+  scrolling form.
+- On-device recognition may propose regions that contain names, addresses, identifiers, dates, or
+  other personal information. The person reviews, adds, adjusts, or removes them.
+- Before a derivative exists the action is `Sanitize Report`. After creation the actions are
+  `View Sanitized Report` and `Edit Redactions`.
+- The Original Report remains immutable and separately accessible. The Sanitized Report becomes the
+  working document for extraction, exact preview, export, and any later cloud submission.
+- The app shows the exact Sanitized Report that a later export or cloud operation would use.
 - Sanitization creates a newly rendered, flattened artifact with selected content, hidden text,
   annotations, and recoverable metadata removed. A removable rectangle is not a redaction.
 
@@ -600,13 +620,15 @@ The product decisions are settled, but implementation must still validate:
 
 ## Deadline cut order
 
-The first release protects local laboratory history, Files/Photos import, extraction review and
-correction, Measured Trends, irreversible redaction, ordinary Full Export, fast editable Snaps,
-curated intake-to-biomarker relationships, onboarding, support, and Cloud Plus.
+The first release first protects local laboratory history, Files/Photos import, compact extraction
+review and correction, Measured Trends, irreversible redaction, ordinary Full Export, onboarding,
+and support. Cloud Plus, enhanced report extraction, Snaps, and intake-to-biomarker relationships
+remain planned launch slices only after the local acceptance gate stays green.
 
 If schedule risk requires cuts, remove or defer in this order:
 
 1. Cloud Max launch support;
-2. integrated camera scanning for Lab Reports;
-3. granular Insight Feedback categories while retaining basic correction and dismissal; and
-4. password-encrypted Full Export while retaining the complete ordinary export and its warning.
+2. wider intake relationship breadth;
+3. integrated camera scanning for Lab Reports;
+4. granular Insight Feedback categories while retaining basic correction and dismissal; and
+5. password-encrypted Full Export while retaining the complete ordinary export and its warning.

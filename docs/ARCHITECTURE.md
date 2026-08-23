@@ -101,7 +101,7 @@ from tracked Expo modules and config plugins.
 
 ### Navigation
 
-The root structure is:
+The accepted account-free laboratory structure is:
 
 ```text
 Root stack
@@ -109,19 +109,23 @@ Root stack
 ├── main tabs
 │   ├── Home stack
 │   ├── Labs stack
-│   ├── center Snap action
-│   ├── Log stack
 │   └── Settings stack
-└── full-screen and form-sheet flows
-    ├── report import and review
-    ├── redaction editor and exact-upload preview
-    ├── intake correction
-    ├── cloud consent and paywall
-    └── export, account deletion, and support
+├── full-screen report-import task
+│   ├── source selection / password
+│   ├── privacy and redaction workspace
+│   ├── extraction progress
+│   ├── compact draft review
+│   └── completion
+└── full-screen and form-sheet support flows
+    ├── measurement correction and source preview
+    ├── export, deletion, protection, and support
+    └── later cloud consent, paywall, and intake correction
 ```
 
-Use native stacks for pushes and sheets. Keep the center Snap action a navigation action, not a
-fifth data destination.
+Use UIKit-owned native tabs, stacks, headers, full-screen modals, menus, and sheets. The report
+import task sits above the tabs so the tab bar cannot cover document or confirmation controls.
+Snap and Log remain dormant feature code until the later cloud/intake slice has useful analysis and
+an accepted navigation design; local sign-in state must not unexpectedly rearrange peer tabs.
 
 ### Native modules
 
@@ -130,8 +134,9 @@ Build narrow, typed modules rather than one general native bridge.
 `AlyteVision`:
 
 - accepts protected local image paths and orientation metadata;
-- returns Vision text observations with text, normalized bounding boxes, candidate alternatives,
-  and internal recognition confidence;
+- uses iOS 26 Vision document recognition over rendered Sanitized Report pages;
+- returns document regions, tables, rows, cells, text, normalized bounding boxes, candidate
+  alternatives, and internal recognition confidence;
 - supports explicit recognition-language hints while allowing automatic detection; and
 - never logs recognized content.
 
@@ -139,6 +144,8 @@ Build narrow, typed modules rather than one general native bridge.
 
 - inspects page count, dimensions, encryption state, metadata, and text-layer presence;
 - unlocks a password-protected PDF for the current import session;
+- exposes a native PDFKit viewer surface with aspect-correct page layout, zoom, pan, page navigation,
+  and coordinate transforms for direct redaction editing;
 - renders selected pages to images with stable transforms;
 - applies crop and rotation transforms;
 - burns redactions into newly rendered pages;
@@ -231,8 +238,9 @@ file service owns creation, protection, backup exclusion, reference counting, an
 database and filesystem state cannot drift silently.
 
 The Original Report is immutable. Crop, rotation, and redaction remain reversible editing recipes
-until export or upload. The Sanitized Report is a newly rendered derivative and is never allowed to
-overwrite the original.
+until the person finishes the privacy workspace. The Sanitized Report is a newly rendered
+derivative, never overwrites the original, and becomes the working document for extraction, exact
+preview, export, and any later cloud upload.
 
 ## Local import pipeline
 
@@ -240,13 +248,15 @@ overwrite the original.
 Files/Photos selection
   → copy into protected app storage
   → inspect PDF / ask for password when required
-  → choose pages and optional crop/rotation/redaction
-  → render pages
-  → Vision OCR
-  → deterministic block/row parser
+  → full-screen privacy workspace and page transforms
+  → render and verify Sanitized Report
+  → Vision document/table recognition over sanitized pages
+  → measurement-candidate filtering
+  → optional schema-constrained local semantic mapping when available
   → locale-aware alias and unit mapper
-  → editable Extraction Draft
-  → user review
+  → deterministic semantic validation
+  → compact editable Extraction Draft
+  → exception-focused user review
   → atomic Lab Report + Lab Record + Measurement save
 ```
 
@@ -255,17 +265,35 @@ needs review and why; they do not see a medical-looking confidence percentage.
 
 Parsing occurs in layers:
 
-1. native OCR returns source observations;
-2. deterministic layout logic groups observations into rows and panels;
+1. Vision returns immutable source observations with page geometry from the Sanitized Report;
+2. Vision document structure and deterministic layout logic identify tables, rows, panels, and
+   other measurement-shaped candidates;
 3. locale parsers recognize dates, decimals, comparators, intervals, and units;
-4. the alias catalogue proposes canonical Biomarker IDs;
-5. semantic validators reject incompatible specimen, value-type, or unit mappings; and
-6. the user confirms the draft.
+4. the multilingual alias catalogue proposes canonical Biomarker IDs;
+5. where the device and input language are supported, an on-device model may select source cell IDs
+   and propose semantic roles or canonical candidates through a versioned schema;
+6. deterministic validators copy exact source values, reject invented cell IDs and incompatible
+   specimen/value/unit mappings, and decide which fields genuinely need review; and
+7. the user inspects a grouped table, resolves the exceptions, and confirms the draft.
+
+Raw OCR or PDF text observations are retained only as internal provenance. They do not each become
+a draft row. Unknown measurement-shaped results remain preserved even when they cannot be mapped;
+unrelated headers, addresses, licences, and prose do not become user review work.
+
+The iOS 26 Foundation Models framework is an optional accelerator, not the local contract. It does
+not directly inspect PDFs or images on this deployment target, is unavailable on some supported
+devices, and does not officially support every report language, including Lithuanian. Chunk any
+supported semantic request by table/page, accept only source identifiers that exist, and never let
+the model author authoritative numbers, units, ranges, conversions, or medical explanations.
 
 Cloud report extraction is a fallback for selected, sanitized pages. It produces another editable
 Extraction Draft and never bypasses review.
 
 ## Intake pipeline
+
+This pipeline belongs to the cloud/intake implementation slice after the local laboratory gate. Its
+code and persistence remain part of the architecture while its incomplete UI stays out of the
+account-free laboratory phase.
 
 Snap must complete its foreground work quickly:
 
