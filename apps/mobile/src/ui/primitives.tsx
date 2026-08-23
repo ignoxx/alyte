@@ -1,5 +1,6 @@
 import { useContext, type PropsWithChildren, type ReactNode } from 'react';
 import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
+import { Image } from 'expo-image';
 import {
   Pressable,
   ScrollView,
@@ -151,19 +152,33 @@ export function StatusPill({
 }
 
 export type AppIconName =
-  'home' | 'labs' | 'snap' | 'log' | 'settings' | 'chevronRight' | 'ellipsis';
+  | 'home'
+  | 'labs'
+  | 'snap'
+  | 'log'
+  | 'settings'
+  | 'chevronRight'
+  | 'ellipsis'
+  | 'plus'
+  | 'doc'
+  | 'eye'
+  | 'shield';
 
-const iconGlyphs: Record<AppIconName, string> = {
-  home: '⌂',
-  labs: '⚗',
-  snap: '◉',
-  log: '≡',
-  settings: '⚙',
-  chevronRight: '›',
-  ellipsis: '…',
+const iconSymbols: Record<AppIconName, string> = {
+  home: 'house',
+  labs: 'testtube.2',
+  snap: 'camera',
+  log: 'list.bullet',
+  settings: 'gearshape',
+  chevronRight: 'chevron.right',
+  ellipsis: 'ellipsis',
+  plus: 'plus',
+  doc: 'doc.text',
+  eye: 'eye',
+  shield: 'shield',
 };
 
-/** Small cross-platform icon seam for inline controls; navigation uses native SF Symbols directly. */
+/** Small SF Symbol seam for inline controls; navigation uses native SF Symbols directly. */
 export function AppIcon({
   name,
   size = 20,
@@ -176,14 +191,12 @@ export function AppIcon({
   readonly accessibilityLabel?: string;
 }) {
   return (
-    <Text
-      accessible={accessibilityLabel !== undefined}
-      accessibilityLabel={accessibilityLabel}
+    <Image
       accessibilityRole="image"
-      style={{ color, fontSize: size, lineHeight: size + 4, textAlign: 'center', width: size + 8 }}
-    >
-      {iconGlyphs[name]}
-    </Text>
+      source={`sf:${iconSymbols[name]}`}
+      style={{ color, height: size, width: size }}
+      {...(accessibilityLabel === undefined ? {} : { accessibilityLabel, accessible: true })}
+    />
   );
 }
 
@@ -225,14 +238,16 @@ const styles = StyleSheet.create({
   surface: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: 20,
+    borderCurve: 'continuous',
+    borderRadius: 14,
     borderWidth: StyleSheet.hairlineWidth,
     padding: spacing.lg,
   },
   softSurface: { backgroundColor: colors.accentSoft, borderColor: colors.accentSoft },
   button: {
     alignItems: 'center',
-    borderRadius: 14,
+    borderCurve: 'continuous',
+    borderRadius: 12,
     minHeight: 48,
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,

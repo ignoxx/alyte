@@ -72,6 +72,7 @@ test('Home menu keeps destructive and uncommon actions out of the row', () => {
   const record = event('with-image', '2026-08-22', '2026-08-22T09:00:00.000Z', '/protected/image');
 
   assert.deepEqual(intakeEventMenuActions(record, queuedJob), [
+    'edit',
     'cancel-analysis',
     'toggle-inclusion',
     'remove-image',
@@ -79,6 +80,6 @@ test('Home menu keeps destructive and uncommon actions out of the row', () => {
   ]);
   assert.deepEqual(
     intakeEventMenuActions(event('plain', '2026-08-22', '2026-08-22T09:00:00.000Z'), null),
-    ['toggle-inclusion', 'delete'],
+    ['edit', 'toggle-inclusion', 'delete'],
   );
 });

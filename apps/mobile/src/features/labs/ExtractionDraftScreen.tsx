@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Image, Modal, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import {
+  Alert,
+  FlatList,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  View,
+} from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
@@ -13,8 +24,8 @@ import type { LabReportPreview } from './report-service';
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
-import { colors, screenStyles, spacing } from '../../theme';
+import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
+import { colors, spacing } from '../../theme';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
 type DraftRoute = RouteProp<LabsStackParamList, 'ExtractionDraft'>;
@@ -50,19 +61,35 @@ function editFrom(row: ExtractionDraftRow): RowEdit {
   };
 }
 
+function decisionLabel(row: ExtractionDraftRow): string {
+  if (row.decision === 'preserve') return t('labs.extractionKept');
+  if (row.decision === 'skip') return t('labs.extractionSkipped');
+  if (row.decision === 'resolve') return t('labs.extractionResolved');
+  return t('labs.extractionDecisionPending');
+}
+
+function reviewTone(row: ExtractionDraftRow) {
+  if (row.decision === 'skip') return 'excluded' as const;
+  if (row.decision === 'resolve') return 'measured' as const;
+  if (row.decision === 'preserve') return 'extracted' as const;
+  return row.reviewState === 'needs-review' ? ('reviewNeeded' as const) : ('neutral' as const);
+}
+
 export function ExtractionDraftScreen() {
   const navigation = useNavigation<Navigation>();
   const route = useRoute<DraftRoute>();
   const { reports } = useServices();
+  const insets = useSafeAreaInsets();
   const [draft, setDraft] = useState<ExtractionDraft | null>(null);
   const [edits, setEdits] = useState<Record<string, RowEdit>>({});
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
+  const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [sourcePreview, setSourcePreview] = useState<{
     readonly preview: LabReportPreview;
     readonly row: ExtractionDraftRow;
   } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
 
   const load = useCallback(async () => {
@@ -70,8 +97,9 @@ export function ExtractionDraftScreen() {
     try {
       const next = await reports.getExtractionDraft(route.params.draftId);
       setDraft(next);
-      if (next !== null)
+      if (next !== null) {
         setEdits(Object.fromEntries(next.rows.map((row) => [row.id, editFrom(row)])));
+      }
       setError(false);
     } catch {
       setError(true);
@@ -84,18 +112,18 @@ export function ExtractionDraftScreen() {
     void load();
   }, [load]);
 
-  async function saveRow(row: ExtractionDraftRow) {
+  async function saveRow(row: ExtractionDraftRow): Promise<boolean> {
     const edit = edits[row.id];
-    if (edit === undefined) return;
+    if (edit === undefined) return false;
     const parsed = parseComparatorValue(edit.value);
     const date = edit.date.trim() ? parseLabDate(edit.date, locale) : { kind: 'missing' as const };
     if (parsed === null) {
       Alert.alert(t('labs.extractionEditErrorTitle'), t('labs.extractionEditValueError'));
-      return;
+      return false;
     }
     if (edit.date.trim() && date === null) {
       Alert.alert(t('labs.extractionEditErrorTitle'), t('labs.invalidDate'));
-      return;
+      return false;
     }
     setBusy(true);
     try {
@@ -116,29 +144,20 @@ export function ExtractionDraftScreen() {
               ),
             },
       );
+      setError(false);
+      return true;
     } catch {
       setError(true);
+      return false;
     } finally {
       setBusy(false);
     }
   }
 
-  async function confirm() {
-    if (draft === null) return;
-    setBusy(true);
-    try {
-      const records = await reports.confirmExtraction(draft.id);
-      const first = records[0];
-      if (first === undefined) throw new Error('No Lab Record was created');
-      navigation.replace('LabRecordDetail', { recordId: first.id });
-    } catch {
-      setError(true);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function decide(row: ExtractionDraftRow, decision: 'preserve' | 'skip' | 'resolve') {
+  async function decide(
+    row: ExtractionDraftRow,
+    decision: 'preserve' | 'skip' | 'resolve',
+  ): Promise<void> {
     setBusy(true);
     try {
       const updated = await reports.updateExtractionRow(row.id, { decision });
@@ -152,6 +171,9 @@ export function ExtractionDraftScreen() {
               ),
             },
       );
+      setSelectedRowId(null);
+      setSourcePreview(null);
+      setError(false);
     } catch {
       setError(true);
     } finally {
@@ -172,6 +194,21 @@ export function ExtractionDraftScreen() {
     }
   }
 
+  async function confirm() {
+    if (draft === null || draft.rows.some((row) => row.decision === 'unresolved')) return;
+    setBusy(true);
+    try {
+      const records = await reports.confirmExtraction(draft.id);
+      const first = records[0];
+      if (first === undefined) throw new Error('No Lab Record was created');
+      navigation.replace('LabRecordDetail', { recordId: first.id });
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (loading) return <AppText>{t('labs.loading')}</AppText>;
   if (error || draft === null) {
     return (
@@ -182,218 +219,384 @@ export function ExtractionDraftScreen() {
     );
   }
 
-  const needsReview = draft.rows.filter((row) => row.reviewState === 'needs-review').length;
   const unresolved = draft.rows.filter((row) => row.decision === 'unresolved').length;
+  const resolved = draft.rows.length - unresolved;
+  const selectedRow = draft.rows.find((row) => row.id === selectedRowId) ?? null;
+  const selectedEdit =
+    selectedRow === null ? null : (edits[selectedRow.id] ?? editFrom(selectedRow));
+
   return (
-    <ScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
-      <AppText style={styles.intro}>{t('labs.extractionIntro')}</AppText>
-      <AppSurface tone="soft" style={styles.notice}>
-        <AppText>{t('labs.extractionSourceNotice')}</AppText>
-        {draft.collectionDate.kind === 'missing' && (
-          <AppText style={styles.warning}>{t('labs.extractionDateMissing')}</AppText>
-        )}
-        <AppText style={styles.muted}>
-          {t('labs.extractionReviewCount').replace('{count}', String(needsReview))}
-        </AppText>
-      </AppSurface>
-      {draft.rows.map((row) => {
-        const edit = edits[row.id] ?? editFrom(row);
-        return (
-          <AppSurface key={row.id} style={styles.row}>
-            <View style={styles.rowHeading}>
-              <AppText variant="heading">{`${t('labs.extractionRow')} ${row.order + 1}`}</AppText>
-              <StatusPill tone={row.reviewState === 'needs-review' ? 'reviewNeeded' : 'extracted'}>
-                {row.reviewState === 'needs-review'
-                  ? t('labs.extractionNeedsReview')
-                  : t('labs.extractionReady')}
-              </StatusPill>
-            </View>
-            <AppText
-              style={styles.source}
-            >{`${t('labs.extractionSource')}: ${row.sourceText}`}</AppText>
-            <AppText
-              style={styles.source}
-            >{`${t('labs.extractionLocation')}: ${row.source.pageIndex + 1} · x ${row.source.boundingBox.x.toFixed(3)}, y ${row.source.boundingBox.y.toFixed(3)}`}</AppText>
-            <AppButton
-              disabled={busy}
-              label={t('labs.extractionSourcePreview')}
-              onPress={() => void openSource(row)}
-              tone="quiet"
-            />
-            {row.reviewReasons.length > 0 && (
-              <AppText style={styles.warning}>
-                {row.reviewReasons
-                  .map((reason) => t(`labs.extractionReason.${reason}`))
-                  .join(' · ')}
-              </AppText>
-            )}
-            <TextInput
-              accessibilityLabel={t('labs.measurementLabel')}
-              onChangeText={(value) =>
-                setEdits((current) => ({ ...current, [row.id]: { ...edit, label: value } }))
-              }
-              placeholder={t('labs.measurementLabel')}
-              style={styles.input}
-              value={edit.label}
-            />
-            <TextInput
-              accessibilityLabel={t('labs.measurementValue')}
-              onChangeText={(value) =>
-                setEdits((current) => ({ ...current, [row.id]: { ...edit, value } }))
-              }
-              placeholder={t('labs.measurementValue')}
-              style={styles.input}
-              value={edit.value}
-            />
-            <TextInput
-              accessibilityLabel={t('labs.measurementUnit')}
-              onChangeText={(value) =>
-                setEdits((current) => ({ ...current, [row.id]: { ...edit, unit: value } }))
-              }
-              placeholder={t('labs.measurementUnit')}
-              style={styles.input}
-              value={edit.unit}
-            />
-            <TextInput
-              accessibilityLabel={t('labs.measurementReference')}
-              onChangeText={(value) =>
-                setEdits((current) => ({ ...current, [row.id]: { ...edit, reference: value } }))
-              }
-              placeholder={t('labs.measurementReference')}
-              style={styles.input}
-              value={edit.reference}
-            />
-            <TextInput
-              accessibilityLabel={t('labs.recordDateLabel')}
-              onChangeText={(value) =>
-                setEdits((current) => ({ ...current, [row.id]: { ...edit, date: value } }))
-              }
-              placeholder={t('labs.recordDatePlaceholder')}
-              style={styles.input}
-              value={edit.date}
-            />
-            <AppButton
-              disabled={busy}
-              label={t('labs.extractionSaveRow')}
-              onPress={() => void saveRow(row)}
-              tone="secondary"
-            />
-            <View style={styles.decisionRow}>
-              <AppButton
-                disabled={busy}
-                label={t('labs.extractionPreserve')}
-                onPress={() => void decide(row, 'preserve')}
-                tone={row.decision === 'preserve' ? 'primary' : 'secondary'}
-              />
-              <AppButton
-                disabled={busy}
-                label={t('labs.extractionSkip')}
-                onPress={() => void decide(row, 'skip')}
-                tone={row.decision === 'skip' ? 'primary' : 'secondary'}
-              />
-              {row.reviewState === 'ready' && (
-                <AppButton
-                  disabled={busy}
-                  label={t('labs.extractionResolve')}
-                  onPress={() => void decide(row, 'resolve')}
-                  tone={row.decision === 'resolve' ? 'primary' : 'secondary'}
-                />
+    <SafeAreaView edges={['left', 'right', 'bottom']} style={styles.safe}>
+      <FlatList
+        contentContainerStyle={styles.queueContent}
+        contentInsetAdjustmentBehavior="automatic"
+        data={draft.rows}
+        keyExtractor={(row) => row.id}
+        ListHeaderComponent={
+          <View style={styles.queueHeader}>
+            <AppText style={styles.intro}>{t('labs.extractionIntro')}</AppText>
+            <AppSurface tone="soft" style={styles.notice}>
+              <AppText>{t('labs.extractionSourceNotice')}</AppText>
+              {draft.collectionDate.kind === 'missing' && (
+                <AppText style={styles.warning}>{t('labs.extractionDateMissing')}</AppText>
               )}
+              <AppText style={styles.muted}>
+                {t('labs.extractionReviewCount').replace(
+                  '{count}',
+                  String(draft.rows.filter((row) => row.reviewState === 'needs-review').length),
+                )}
+              </AppText>
+            </AppSurface>
+            <AppText variant="label" style={styles.queueLabel}>
+              {t('labs.extractionQueue')}
+            </AppText>
+          </View>
+        }
+        renderItem={({ item: row }) => (
+          <Pressable
+            accessibilityLabel={`${t('labs.extractionRow')} ${row.order + 1}: ${row.proposedLabel}`}
+            accessibilityRole="button"
+            onPress={() => setSelectedRowId(row.id)}
+            style={({ pressed }) => [styles.queueRow, pressed && styles.rowPressed]}
+          >
+            <AppIcon name="doc" size={21} />
+            <View style={styles.rowBody}>
+              <View style={styles.rowTopline}>
+                <AppText numberOfLines={1} style={styles.sourceLabel}>
+                  {row.sourceText}
+                </AppText>
+                <StatusPill tone={reviewTone(row)}>{decisionLabel(row)}</StatusPill>
+              </View>
+              <AppText numberOfLines={1} variant="heading">
+                {row.proposedLabel || t('labs.extractionUnmapped')}
+              </AppText>
+              <AppText numberOfLines={1} style={styles.muted}>
+                {`${valueText(row)}${row.proposedUnit === null ? '' : ` ${row.proposedUnit}`} · ${dateText(row.collectionDate) || t('labs.recordDateMissing')}`}
+              </AppText>
             </View>
-          </AppSurface>
-        );
-      })}
-      <AppButton
-        disabled={busy || unresolved > 0}
-        label={t('labs.extractionConfirm')}
-        onPress={() => void confirm()}
+            <AppIcon name="chevronRight" size={16} />
+          </Pressable>
+        )}
+        showsVerticalScrollIndicator
+        style={styles.list}
       />
-      {unresolved > 0 && (
-        <AppText style={styles.warning}>
-          {t('labs.extractionDecisionRequired').replace('{count}', String(unresolved))}
-        </AppText>
-      )}
-      <AppButton
-        disabled={busy}
-        label={t('labs.recordCancel')}
-        onPress={() => navigation.goBack()}
-        tone="quiet"
-      />
+
+      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
+        <View style={styles.progressCopy}>
+          <AppText variant="label">{t('labs.extractionProgress')}</AppText>
+          <AppText style={styles.muted}>
+            {t('labs.extractionProgressCount')
+              .replace('{resolved}', String(resolved))
+              .replace('{total}', String(draft.rows.length))}
+          </AppText>
+        </View>
+        <AppButton
+          disabled={busy || unresolved > 0}
+          label={t('labs.extractionConfirm')}
+          onPress={() => void confirm()}
+          style={styles.confirmButton}
+        />
+      </View>
+
       <Modal
         accessibilityViewIsModal
         animationType="slide"
-        onRequestClose={() => setSourcePreview(null)}
-        visible={sourcePreview !== null}
+        onRequestClose={() => {
+          setSelectedRowId(null);
+          setSourcePreview(null);
+        }}
+        presentationStyle="pageSheet"
+        visible={selectedRow !== null}
       >
-        <View style={styles.previewModal}>
-          <AppText variant="heading">{t('labs.extractionSourcePreviewTitle')}</AppText>
-          <AppButton
-            label={t('labs.reportPreviewClose')}
-            onPress={() => setSourcePreview(null)}
-            tone="quiet"
-          />
-          <ScrollView contentContainerStyle={styles.previewPages}>
-            {sourcePreview !== null && (
-              <View
-                accessible
-                accessibilityLabel={`${t('labs.extractionSourceRegionLabel')} ${sourcePreview.row.source.pageIndex + 1}`}
-                style={styles.previewPage}
-              >
-                <Image
-                  accessibilityLabel={`${t('labs.reportPreviewImageLabel')} ${sourcePreview.row.source.pageIndex + 1}`}
-                  resizeMode="contain"
-                  source={{ uri: sourcePreview.preview.uris[sourcePreview.row.source.pageIndex] }}
-                  style={styles.previewImage}
+        <SafeAreaView edges={['top', 'bottom']} style={styles.editorSafe}>
+          {selectedRow !== null && selectedEdit !== null && sourcePreview === null && (
+            <>
+              <View style={styles.editorHeader}>
+                <View style={styles.editorTitle}>
+                  <AppText variant="heading">
+                    {`${t('labs.extractionRow')} ${selectedRow.order + 1}`}
+                  </AppText>
+                  <AppText style={styles.muted}>{t('labs.extractionEditorSubtitle')}</AppText>
+                </View>
+                <AppButton
+                  label={t('labs.reportPreviewClose')}
+                  onPress={() => setSelectedRowId(null)}
+                  tone="quiet"
                 />
-                <View
-                  pointerEvents="none"
-                  style={[
-                    styles.sourceRegion,
-                    {
-                      height: `${sourcePreview.row.source.boundingBox.height * 100}%`,
-                      left: `${sourcePreview.row.source.boundingBox.x * 100}%`,
-                      top: `${sourcePreview.row.source.boundingBox.y * 100}%`,
-                      width: `${sourcePreview.row.source.boundingBox.width * 100}%`,
-                    },
-                  ]}
-                />
-                <AppText style={styles.sourceRegionText}>
-                  {t('labs.extractionSourceRegion')
-                    .replace('{page}', String(sourcePreview.row.source.pageIndex + 1))
-                    .replace('{x}', sourcePreview.row.source.boundingBox.x.toFixed(3))
-                    .replace('{y}', sourcePreview.row.source.boundingBox.y.toFixed(3))}
-                </AppText>
               </View>
-            )}
-          </ScrollView>
-        </View>
+              <ScrollView
+                contentContainerStyle={styles.editorContent}
+                keyboardShouldPersistTaps="handled"
+              >
+                <AppSurface tone="soft" style={styles.sourceCard}>
+                  <AppText variant="label">{t('labs.extractionSource')}</AppText>
+                  <AppText selectable>{selectedRow.sourceText}</AppText>
+                  <AppText style={styles.muted}>
+                    {`${t('labs.extractionLocation')}: ${selectedRow.source.pageIndex + 1} · x ${selectedRow.source.boundingBox.x.toFixed(3)}, y ${selectedRow.source.boundingBox.y.toFixed(3)}`}
+                  </AppText>
+                  {selectedRow.reviewReasons.length > 0 && (
+                    <AppText style={styles.warning}>
+                      {selectedRow.reviewReasons
+                        .map((reason) => t(`labs.extractionReason.${reason}`))
+                        .join(' · ')}
+                    </AppText>
+                  )}
+                  <AppButton
+                    disabled={busy}
+                    label={t('labs.extractionViewInReport')}
+                    onPress={() => void openSource(selectedRow)}
+                    tone="quiet"
+                  />
+                </AppSurface>
+
+                <View style={styles.formSection}>
+                  <AppText variant="label">{t('labs.extractionProposedValues')}</AppText>
+                  <Field
+                    accessibilityLabel={t('labs.measurementLabel')}
+                    label={t('labs.measurementLabel')}
+                    onChangeText={(value) =>
+                      setEdits((current) => ({
+                        ...current,
+                        [selectedRow.id]: { ...selectedEdit, label: value },
+                      }))
+                    }
+                    value={selectedEdit.label}
+                  />
+                  <Field
+                    accessibilityLabel={t('labs.measurementValue')}
+                    keyboardType="numeric"
+                    label={t('labs.measurementValue')}
+                    onChangeText={(value) =>
+                      setEdits((current) => ({
+                        ...current,
+                        [selectedRow.id]: { ...selectedEdit, value },
+                      }))
+                    }
+                    value={selectedEdit.value}
+                  />
+                  <Field
+                    accessibilityLabel={t('labs.measurementUnit')}
+                    label={t('labs.measurementUnit')}
+                    onChangeText={(value) =>
+                      setEdits((current) => ({
+                        ...current,
+                        [selectedRow.id]: { ...selectedEdit, unit: value },
+                      }))
+                    }
+                    value={selectedEdit.unit}
+                  />
+                  <Field
+                    accessibilityLabel={t('labs.measurementReference')}
+                    label={t('labs.measurementReference')}
+                    onChangeText={(value) =>
+                      setEdits((current) => ({
+                        ...current,
+                        [selectedRow.id]: { ...selectedEdit, reference: value },
+                      }))
+                    }
+                    value={selectedEdit.reference}
+                  />
+                  <Field
+                    accessibilityLabel={t('labs.recordDateLabel')}
+                    label={t('labs.recordDateLabel')}
+                    onChangeText={(value) =>
+                      setEdits((current) => ({
+                        ...current,
+                        [selectedRow.id]: { ...selectedEdit, date: value },
+                      }))
+                    }
+                    value={selectedEdit.date}
+                  />
+                  <AppButton
+                    disabled={busy}
+                    label={t('labs.extractionSaveRow')}
+                    onPress={() => void saveRow(selectedRow)}
+                    tone="secondary"
+                  />
+                </View>
+              </ScrollView>
+              <View style={styles.editorFooter}>
+                <AppText variant="label">{t('labs.extractionDecision')}</AppText>
+                <View style={styles.decisionRow}>
+                  <AppButton
+                    disabled={busy}
+                    label={t('labs.extractionKeep')}
+                    onPress={() => void decide(selectedRow, 'preserve')}
+                    tone={selectedRow.decision === 'preserve' ? 'primary' : 'secondary'}
+                  />
+                  <AppButton
+                    disabled={busy}
+                    label={t('labs.extractionSkip')}
+                    onPress={() => void decide(selectedRow, 'skip')}
+                    tone={selectedRow.decision === 'skip' ? 'primary' : 'secondary'}
+                  />
+                  {selectedRow.reviewState === 'ready' && (
+                    <AppButton
+                      disabled={busy}
+                      label={t('labs.extractionResolve')}
+                      onPress={() => void decide(selectedRow, 'resolve')}
+                      tone={selectedRow.decision === 'resolve' ? 'primary' : 'secondary'}
+                    />
+                  )}
+                </View>
+              </View>
+            </>
+          )}
+          {sourcePreview !== null && (
+            <>
+              <View style={styles.editorHeader}>
+                <AppText variant="heading">{t('labs.extractionSourcePreviewTitle')}</AppText>
+                <AppButton
+                  label={t('labs.extractionBackToRow')}
+                  onPress={() => setSourcePreview(null)}
+                  tone="quiet"
+                />
+              </View>
+              <ScrollView contentContainerStyle={styles.previewPages}>
+                <View
+                  accessible
+                  accessibilityLabel={`${t('labs.extractionSourceRegionLabel')} ${sourcePreview.row.source.pageIndex + 1}`}
+                  style={styles.previewPage}
+                >
+                  <Image
+                    accessibilityLabel={`${t('labs.reportPreviewImageLabel')} ${sourcePreview.row.source.pageIndex + 1}`}
+                    resizeMode="contain"
+                    source={{ uri: sourcePreview.preview.uris[sourcePreview.row.source.pageIndex] }}
+                    style={styles.previewImage}
+                  />
+                  <View
+                    pointerEvents="none"
+                    style={[
+                      styles.sourceRegion,
+                      {
+                        height: `${sourcePreview.row.source.boundingBox.height * 100}%`,
+                        left: `${sourcePreview.row.source.boundingBox.x * 100}%`,
+                        top: `${sourcePreview.row.source.boundingBox.y * 100}%`,
+                        width: `${sourcePreview.row.source.boundingBox.width * 100}%`,
+                      },
+                    ]}
+                  />
+                  <AppText style={styles.sourceRegionText}>
+                    {t('labs.extractionSourceRegion')
+                      .replace('{page}', String(sourcePreview.row.source.pageIndex + 1))
+                      .replace('{x}', sourcePreview.row.source.boundingBox.x.toFixed(3))
+                      .replace('{y}', sourcePreview.row.source.boundingBox.y.toFixed(3))}
+                  </AppText>
+                </View>
+              </ScrollView>
+            </>
+          )}
+        </SafeAreaView>
       </Modal>
-    </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function Field({
+  accessibilityLabel,
+  keyboardType,
+  label,
+  onChangeText,
+  value,
+}: {
+  readonly accessibilityLabel: string;
+  readonly keyboardType?: 'default' | 'numeric';
+  readonly label: string;
+  readonly onChangeText: (value: string) => void;
+  readonly value: string;
+}) {
+  return (
+    <View style={styles.field}>
+      <AppText style={styles.fieldLabel}>{label}</AppText>
+      <TextInput
+        accessibilityLabel={accessibilityLabel}
+        autoCapitalize="sentences"
+        keyboardType={keyboardType}
+        onChangeText={onChangeText}
+        style={styles.input}
+        value={value}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  center: { alignItems: 'center', gap: spacing.md, justifyContent: 'center', padding: spacing.lg },
-  intro: { color: colors.mutedInk, marginBottom: spacing.md },
-  notice: { gap: spacing.xs, marginBottom: spacing.md },
-  row: { gap: spacing.sm, marginBottom: spacing.md },
-  rowHeading: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
-  source: { color: colors.mutedInk },
+  safe: { backgroundColor: colors.canvas, flex: 1 },
+  list: { flex: 1 },
+  queueContent: { paddingHorizontal: spacing.lg },
+  queueHeader: { gap: spacing.sm, paddingBottom: spacing.sm, paddingTop: spacing.md },
+  intro: { color: colors.mutedInk },
+  notice: { gap: spacing.xs },
+  queueLabel: { color: colors.mutedInk, marginTop: spacing.sm, textTransform: 'uppercase' },
+  queueRow: {
+    alignItems: 'center',
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: 82,
+    paddingVertical: spacing.sm,
+  },
+  rowPressed: { backgroundColor: colors.accentSoft },
+  rowBody: { flex: 1, gap: spacing.xs, minWidth: 0 },
+  rowTopline: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
+  sourceLabel: { color: colors.mutedInk, flex: 1 },
   muted: { color: colors.mutedInk },
   warning: { color: colors.danger },
+  footer: {
+    alignItems: 'center',
+    backgroundColor: colors.elevatedSurface,
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+  },
+  progressCopy: { flex: 1, gap: spacing.xs },
+  confirmButton: { minWidth: 150 },
+  editorSafe: { backgroundColor: colors.canvas, flex: 1 },
+  editorHeader: {
+    alignItems: 'center',
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 56,
+    paddingHorizontal: spacing.lg,
+  },
+  editorTitle: { flex: 1, gap: spacing.xs },
+  editorContent: { gap: spacing.md, padding: spacing.lg, paddingBottom: spacing.xl },
+  sourceCard: { gap: spacing.xs },
+  formSection: { gap: spacing.sm },
+  field: { gap: spacing.xs },
+  fieldLabel: { color: colors.mutedInk },
   input: {
-    backgroundColor: colors.canvas,
+    backgroundColor: colors.elevatedSurface,
     borderColor: colors.border,
+    borderCurve: 'continuous',
     borderRadius: 10,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     color: colors.ink,
-    minHeight: 44,
+    minHeight: 46,
     paddingHorizontal: spacing.sm,
   },
-  decisionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
-  previewModal: { backgroundColor: colors.canvas, flex: 1, padding: spacing.lg },
+  editorFooter: {
+    backgroundColor: colors.elevatedSurface,
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: spacing.xs,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+  },
+  decisionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    paddingBottom: spacing.xs,
+  },
+  previewPages: { gap: spacing.md, padding: spacing.lg },
   previewPage: { minHeight: 560, position: 'relative', width: '100%' },
-  previewPages: { gap: spacing.md, paddingVertical: spacing.md },
   previewImage: { height: 520, width: '100%' },
   sourceRegion: {
     borderColor: colors.danger,
@@ -402,4 +605,5 @@ const styles = StyleSheet.create({
     position: 'absolute',
   },
   sourceRegionText: { color: colors.danger, marginTop: spacing.xs },
+  center: { alignItems: 'center', gap: spacing.md, justifyContent: 'center', padding: spacing.lg },
 });

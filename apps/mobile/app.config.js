@@ -49,6 +49,6 @@ module.exports = ({ config }) => {
       apiEnvironment: variant === 'production' ? 'production' : 'none',
       showcaseAllowed: variant !== 'production',
     },
-    plugins: variant === 'development' ? ['expo-dev-client'] : [],
+    plugins: ['expo-image', ...(variant === 'development' ? ['expo-dev-client'] : [])],
   };
 };

@@ -31,10 +31,11 @@ type MainTabNavigatorProps = RootNavigatorProps & {
 const stackScreenOptions = {
   contentStyle: { backgroundColor: colors.canvas },
   headerBackButtonDisplayMode: 'minimal' as const,
+  headerLargeTitle: false,
+  headerTransparent: true,
   headerShadowVisible: false,
   // native-stack's headerStyle typing predates RN's opaque semantic color type; UIKit accepts it
   // at runtime and resolves it against the current appearance.
-  headerStyle: { backgroundColor: colors.canvas as string },
   headerTintColor: colors.accent,
   headerTitleAlign: 'left' as const,
 };
@@ -121,7 +122,8 @@ function MainTabNavigator({ services: _services, extensions = [], onSnap }: Main
         // scrolling until content-inset behavior is proven on every supported device.
         tabBarMinimizeBehavior: 'none',
         tabBarControllerMode: 'tabBar',
-        tabBarBlurEffect: 'systemMaterial',
+        // Do not force a legacy blur. On iOS 26 UIKit owns the Liquid Glass material and adapts it
+        // to scroll-edge and accessibility settings when no blur effect is supplied.
         overrideScrollViewContentInsetAdjustmentBehavior: true,
       }}
     >

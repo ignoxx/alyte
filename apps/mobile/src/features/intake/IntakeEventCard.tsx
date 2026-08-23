@@ -57,6 +57,10 @@ function menuActionLabel(action: IntakeEventMenuAction, event: IntakeEvent): str
       return t('intake.removeImage');
     case 'delete':
       return t('intake.delete');
+    case 'edit':
+      return t('intake.edit');
+    case 'log-again':
+      return t('intake.logAgain');
   }
 }
 
@@ -98,6 +102,12 @@ export function IntakeEventCard({
       case 'delete':
         onDelete?.();
         return;
+      case 'edit':
+        onEdit?.();
+        return;
+      case 'log-again':
+        onLogAgain?.();
+        return;
     }
   }
 
@@ -131,6 +141,53 @@ export function IntakeEventCard({
       })),
       { text: t('intake.cancel'), style: 'cancel' },
     ]);
+  }
+
+  if (compact) {
+    return (
+      <Pressable
+        accessibilityLabel={`${event.components.map((component) => component.name).join(', ')} · ${time}`}
+        accessibilityRole="button"
+        onPress={onEdit}
+        style={({ pressed }) => [styles.compactRow, pressed && styles.rowPressed]}
+      >
+        <AppIcon name="snap" size={21} />
+        <View style={styles.compactBody}>
+          <View style={styles.compactTitleRow}>
+            <AppText numberOfLines={1} variant="heading" style={styles.compactTitle}>
+              {event.components.map((component) => component.name).join(', ')}
+            </AppText>
+            <AppText style={styles.muted}>{time}</AppText>
+          </View>
+          <View style={styles.compactMeta}>
+            <AppText numberOfLines={1} style={styles.muted}>
+              {intakeEventTypeLabel(event.eventType)}
+            </AppText>
+            {event.analysisInclusion === 'excluded' && (
+              <StatusPill tone="excluded">{t('intake.excluded')}</StatusPill>
+            )}
+            {event.reviewState === 'needs-review' && (
+              <StatusPill tone="reviewNeeded">{t('intake.checkThis')}</StatusPill>
+            )}
+            {cloudJob !== undefined && cloudJob !== null && (
+              <StatusPill>{cloudJobLabel(cloudJob)}</StatusPill>
+            )}
+          </View>
+        </View>
+        <Pressable
+          accessibilityLabel={t('intake.moreActions')}
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={(event) => {
+            event.stopPropagation();
+            openMenu();
+          }}
+          style={({ pressed }) => [styles.moreButton, pressed && styles.morePressed]}
+        >
+          <AppIcon name="ellipsis" size={20} />
+        </Pressable>
+      </Pressable>
+    );
   }
 
   const content = (
@@ -211,11 +268,7 @@ export function IntakeEventCard({
     </View>
   );
 
-  return compact ? (
-    <View style={styles.compactRow}>{content}</View>
-  ) : (
-    <AppSurface style={styles.surface}>{content}</AppSurface>
-  );
+  return <AppSurface style={styles.surface}>{content}</AppSurface>;
 }
 
 const styles = StyleSheet.create({
@@ -224,8 +277,17 @@ const styles = StyleSheet.create({
   compactRow: {
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    padding: spacing.md,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: 72,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
+  compactBody: { flex: 1, gap: spacing.xs, minWidth: 0 },
+  compactTitle: { flex: 1 },
+  compactTitleRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
+  compactMeta: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  rowPressed: { backgroundColor: colors.accentSoft },
   header: { alignItems: 'flex-start', flexDirection: 'row', gap: spacing.sm },
   heading: { flex: 1, gap: spacing.xs },
   meta: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },

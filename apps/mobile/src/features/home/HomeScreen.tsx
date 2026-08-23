@@ -132,26 +132,15 @@ export function HomeScreen() {
                 }
               />
             )}
-            <View style={styles.secondaryActions}>
-              <AppButton
-                label={t('home.snapAction')}
-                tone="secondary"
-                onPress={() =>
-                  dispatchHomeQuickActionFromStack(navigation, {
-                    kind: 'snap',
-                  })
-                }
-              />
-              <AppButton
-                label={hasLocalHistory ? t('home.importAnotherAction') : t('home.logAction')}
-                tone="quiet"
-                onPress={() =>
-                  dispatchHomeQuickActionFromStack(navigation, {
-                    kind: hasLocalHistory ? 'import-report' : 'log-intake',
-                  })
-                }
-              />
-            </View>
+            <AppButton
+              label={hasLocalHistory ? t('home.importAnotherAction') : t('home.logAction')}
+              tone="quiet"
+              onPress={() =>
+                dispatchHomeQuickActionFromStack(navigation, {
+                  kind: hasLocalHistory ? 'import-report' : 'log-intake',
+                })
+              }
+            />
           </View>
         )}
         {!loading && !error && events.length > 0 && (
@@ -218,7 +207,6 @@ export function HomeScreen() {
 
 const styles = StyleSheet.create({
   emptyState: { gap: spacing.md, paddingTop: spacing.lg },
-  secondaryActions: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
   timeline: { gap: spacing.md, paddingTop: spacing.sm },
   summary: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
   summaryLarge: { alignItems: 'flex-start', flexDirection: 'column', gap: spacing.sm },

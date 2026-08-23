@@ -23,7 +23,7 @@ export function intakeProvenanceDescriptor(
 }
 
 export type IntakeEventMenuAction =
-  'cancel-analysis' | 'toggle-inclusion' | 'remove-image' | 'delete';
+  'cancel-analysis' | 'toggle-inclusion' | 'remove-image' | 'delete' | 'edit' | 'log-again';
 
 /** Actions that are uncommon or destructive and should stay behind the row's ellipsis menu. */
 export function intakeEventMenuActions(
@@ -31,6 +31,8 @@ export function intakeEventMenuActions(
   cloudJob: IntakeCloudJob | null | undefined,
 ): readonly IntakeEventMenuAction[] {
   const actions: IntakeEventMenuAction[] = [];
+  actions.push('edit');
+  if (event.components.length > 0) actions.push('log-again');
   if (cloudJob?.state === 'queued') actions.push('cancel-analysis');
   actions.push('toggle-inclusion');
   if (event.sourceMediaPath !== null) actions.push('remove-image');

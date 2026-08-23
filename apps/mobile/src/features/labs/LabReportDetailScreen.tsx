@@ -1,12 +1,30 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Alert, Image, Modal, ScrollView, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import {
+  ActionSheetIOS,
+  Alert,
+  Image,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { LabReport } from '@alyte/domain';
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppSurface, AppText, ScreenScrollView, StatusPill } from '../../ui/primitives';
+import {
+  AppButton,
+  AppIcon,
+  AppSurface,
+  AppText,
+  ScreenScrollView,
+  StatusPill,
+} from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { LabReportImportError, type PasswordRequest } from './report-service';
 import type { LabReportPreview } from './report-service';
@@ -71,6 +89,25 @@ export function LabReportDetailScreen() {
     void load();
   }, [load]);
 
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight:
+        report === null || report.importState === 'deleted'
+          ? () => null
+          : () => (
+              <Pressable
+                accessibilityLabel={t('labs.reportMoreActions')}
+                accessibilityRole="button"
+                hitSlop={10}
+                onPress={openMoreMenu}
+                style={({ pressed }) => [styles.headerAction, pressed && styles.pressed]}
+              >
+                <AppIcon color={colors.accent} name="ellipsis" size={20} />
+              </Pressable>
+            ),
+    });
+  }, [busy, navigation, report]);
+
   function promptPassword(): PasswordRequest {
     return ({ report: passwordReport }) =>
       new Promise<string | null>((resolve) => {
@@ -128,6 +165,28 @@ export function LabReportDetailScreen() {
     }
   }
 
+  function openMoreMenu() {
+    const showDelete = () => confirmDelete();
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          cancelButtonIndex: 1,
+          destructiveButtonIndex: 0,
+          options: [t('labs.reportDelete'), t('intake.cancel')],
+          title: t('labs.reportMoreActions'),
+        },
+        (index) => {
+          if (index === 0) showDelete();
+        },
+      );
+      return;
+    }
+    Alert.alert(t('labs.reportMoreActions'), undefined, [
+      { text: t('labs.reportDelete'), onPress: showDelete, style: 'destructive' },
+      { text: t('intake.cancel'), style: 'cancel' },
+    ]);
+  }
+
   function confirmDelete() {
     if (report === null) return;
     Alert.alert(t('labs.reportDelete'), t('labs.reportDeleteConfirm'), [
@@ -165,45 +224,55 @@ export function LabReportDetailScreen() {
 
   return (
     <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
-      <View style={styles.header}>
-        <AppButton
-          disabled={busy || report.importState === 'deleted'}
-          label={t('labs.reportDelete')}
-          onPress={confirmDelete}
-          tone="secondary"
-        />
-      </View>
       <AppText variant="heading">{report.originalFilename}</AppText>
       <StatusPill>{stateLabel(report.importState)}</StatusPill>
-      <AppSurface style={styles.meta}>
-        <AppText>{`${t('labs.reportSourceType')}: ${sourceLabel(report)}`}</AppText>
-        <AppText>
-          {t('labs.reportPageCount').replace(
-            '{count}',
-            String(report.pageCount ?? t('labs.reportUnknown')),
-          )}
-        </AppText>
-        <AppText>{`${t('labs.reportSize')}: ${formatBytes(report.byteSize)}`}</AppText>
-        <AppText>{`${t('labs.reportIntegrity')}: ${t(`labs.reportIntegrity${integrity[0]?.toUpperCase() ?? ''}${integrity.slice(1)}`)}`}</AppText>
+      <AppSurface style={styles.metaSection}>
+        <DetailRow label={t('labs.reportSourceType')} value={sourceLabel(report)} />
+        <DetailRow
+          label={t('labs.reportPageCount')}
+          value={String(report.pageCount ?? t('labs.reportUnknown'))}
+        />
+        <DetailRow label={t('labs.reportSize')} value={formatBytes(report.byteSize)} />
+        <DetailRow
+          label={t('labs.reportIntegrity')}
+          value={t(`labs.reportIntegrity${integrity[0]?.toUpperCase() ?? ''}${integrity.slice(1)}`)}
+        />
       </AppSurface>
       {report.importState !== 'deleted' && integrity === 'verified' && (
-        <AppSurface tone="soft" style={styles.previewSurface}>
-          <AppText>{t('labs.reportPreviewBody')}</AppText>
-          <AppButton
+        <AppSurface style={styles.actionSection}>
+          <AppText variant="label" style={styles.sectionLabel}>
+            {t('labs.reportActions')}
+          </AppText>
+          <Pressable
+            accessibilityRole="button"
             disabled={busy}
-            label={t('labs.reportPreview')}
             onPress={() => void openPreview()}
-          />
+            style={({ pressed }) => [styles.actionRow, pressed && styles.actionPressed]}
+          >
+            <AppIcon name="eye" size={20} />
+            <View style={styles.actionBody}>
+              <AppText variant="heading">{t('labs.reportPreview')}</AppText>
+              <AppText style={styles.body}>{t('labs.reportPreviewBody')}</AppText>
+            </View>
+            <AppIcon name="chevronRight" size={16} />
+          </Pressable>
           {previewError && (
             <AppText style={styles.errorText}>{t('labs.reportPreviewError')}</AppText>
           )}
           {report.sourceType === 'pdf' && (
-            <AppButton
+            <Pressable
+              accessibilityRole="button"
               disabled={busy}
-              label={t('labs.sanitizedEditorOpen')}
               onPress={() => navigation.navigate('SanitizedReportEditor', { reportId: report.id })}
-              tone="secondary"
-            />
+              style={({ pressed }) => [styles.actionRow, pressed && styles.actionPressed]}
+            >
+              <AppIcon name="shield" size={20} />
+              <View style={styles.actionBody}>
+                <AppText variant="heading">{t('labs.sanitizedEditorOpen')}</AppText>
+                <AppText style={styles.body}>{t('labs.sanitizedEditorBody')}</AppText>
+              </View>
+              <AppIcon name="chevronRight" size={16} />
+            </Pressable>
           )}
         </AppSurface>
       )}
@@ -241,9 +310,10 @@ export function LabReportDetailScreen() {
         accessibilityViewIsModal
         animationType="slide"
         onRequestClose={() => setPreview(null)}
+        presentationStyle="pageSheet"
         visible={preview !== null}
       >
-        <View style={styles.previewModal}>
+        <SafeAreaView edges={['top', 'bottom']} style={styles.previewModal}>
           <View style={styles.previewHeader}>
             <AppText variant="heading">{t('labs.reportPreviewTitle')}</AppText>
             <AppButton
@@ -267,9 +337,20 @@ export function LabReportDetailScreen() {
               />
             ))}
           </ScrollView>
-        </View>
+        </SafeAreaView>
       </Modal>
     </ScreenScrollView>
+  );
+}
+
+function DetailRow({ label, value }: { readonly label: string; readonly value: string }) {
+  return (
+    <View style={styles.detailRow}>
+      <AppText style={styles.detailLabel}>{label}</AppText>
+      <AppText selectable style={styles.detailValue}>
+        {value}
+      </AppText>
+    </View>
   );
 }
 
@@ -277,9 +358,34 @@ const styles = StyleSheet.create({
   body: { color: colors.mutedInk, marginTop: spacing.md },
   center: { alignItems: 'center', gap: spacing.md, justifyContent: 'center', padding: spacing.lg },
   error: { gap: spacing.sm, marginTop: spacing.md },
-  header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
-  meta: { gap: spacing.xs, marginTop: spacing.md },
-  previewSurface: { gap: spacing.sm, marginTop: spacing.md },
+  headerAction: { alignItems: 'center', justifyContent: 'center', minHeight: 44, minWidth: 44 },
+  pressed: { opacity: 0.6 },
+  metaSection: { gap: 0, marginTop: spacing.md, padding: 0 },
+  detailRow: {
+    alignItems: 'center',
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 48,
+    paddingHorizontal: spacing.md,
+  },
+  detailLabel: { color: colors.mutedInk },
+  detailValue: { color: colors.ink, flexShrink: 1, marginLeft: spacing.md, textAlign: 'right' },
+  actionSection: { gap: spacing.xs, marginTop: spacing.md, padding: 0 },
+  sectionLabel: { color: colors.mutedInk, paddingHorizontal: spacing.md, paddingTop: spacing.md },
+  actionRow: {
+    alignItems: 'center',
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: 68,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  actionPressed: { backgroundColor: colors.accentSoft },
+  actionBody: { flex: 1 },
   errorText: { color: colors.danger },
   previewModal: { backgroundColor: colors.canvas, flex: 1, padding: spacing.lg },
   previewHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
