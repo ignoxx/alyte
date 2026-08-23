@@ -1,4 +1,4 @@
-import { useContext, type PropsWithChildren, type ReactNode } from 'react';
+import { forwardRef, useContext, type PropsWithChildren, type ReactNode } from 'react';
 import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import { Image } from 'expo-image';
 import {
@@ -6,7 +6,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  useWindowDimensions,
   View,
   type ColorValue,
   type PressableProps,
@@ -28,30 +27,13 @@ export function AppText({
   maxFontSizeMultiplier,
   ...props
 }: AppTextProps) {
-  const { fontScale } = useWindowDimensions();
   const baseStyle = typography[variant];
-  // React Native scales the glyphs for Dynamic Type, but an explicit lineHeight remains in the
-  // unscaled design-token coordinate space on iOS. Scale that line box with the same system factor
-  // so accessibility-sized glyphs get a content-sized line instead of being vertically clipped.
-  // At the default size this is exactly the existing design-system value, preserving the normal
-  // visual rhythm. Keeping allowFontScaling enabled is important: this only grows the line box.
-  const dynamicTypeStyle =
-    allowFontScaling && typeof baseStyle.lineHeight === 'number'
-      ? {
-          lineHeight: Math.ceil(
-            baseStyle.lineHeight *
-              (maxFontSizeMultiplier == null
-                ? fontScale
-                : Math.min(fontScale, maxFontSizeMultiplier)),
-          ),
-        }
-      : undefined;
 
   return (
     <Text
       allowFontScaling={allowFontScaling}
       maxFontSizeMultiplier={maxFontSizeMultiplier}
-      style={[baseStyle, dynamicTypeStyle, styles.text, style]}
+      style={[baseStyle, styles.text, style]}
       {...props}
     />
   );
@@ -80,36 +62,35 @@ type ScreenScrollViewProps = Omit<
   | 'contentInsetAdjustmentBehavior'
 >;
 
-export function ScreenScrollView({
-  contentInset,
-  scrollIndicatorInsets,
-  ...props
-}: ScreenScrollViewProps) {
-  const tabBarHeight = useContext(BottomTabBarHeightContext);
-  const safeAreaInsets = useSafeAreaInsets();
-  // Native bottom tabs render outside the JS tree and currently do not provide the React
-  // Navigation height context. Their propagated bottom safe-area inset is the dynamic fallback;
-  // regular bottom tabs use their authoritative measured height instead.
-  const bottomInset = tabBarHeight ?? safeAreaInsets.bottom;
+export const ScreenScrollView = forwardRef<ScrollView, ScreenScrollViewProps>(
+  function ScreenScrollView({ contentInset, scrollIndicatorInsets, ...props }, ref) {
+    const tabBarHeight = useContext(BottomTabBarHeightContext);
+    const safeAreaInsets = useSafeAreaInsets();
+    // Native bottom tabs render outside the JS tree and currently do not provide the React
+    // Navigation height context. Their propagated bottom safe-area inset is the dynamic fallback;
+    // regular bottom tabs use their authoritative measured height instead.
+    const bottomInset = tabBarHeight ?? safeAreaInsets.bottom;
 
-  return (
-    <ScrollView
-      {...props}
-      automaticallyAdjustContentInsets
-      automaticallyAdjustKeyboardInsets
-      automaticallyAdjustsScrollIndicatorInsets
-      contentInsetAdjustmentBehavior="automatic"
-      contentInset={{
-        ...contentInset,
-        bottom: (contentInset?.bottom ?? 0) + bottomInset,
-      }}
-      scrollIndicatorInsets={{
-        ...scrollIndicatorInsets,
-        bottom: (scrollIndicatorInsets?.bottom ?? 0) + bottomInset,
-      }}
-    />
-  );
-}
+    return (
+      <ScrollView
+        ref={ref}
+        {...props}
+        automaticallyAdjustContentInsets
+        automaticallyAdjustKeyboardInsets
+        automaticallyAdjustsScrollIndicatorInsets
+        contentInsetAdjustmentBehavior="automatic"
+        contentInset={{
+          ...contentInset,
+          bottom: (contentInset?.bottom ?? 0) + bottomInset,
+        }}
+        scrollIndicatorInsets={{
+          ...scrollIndicatorInsets,
+          bottom: (scrollIndicatorInsets?.bottom ?? 0) + bottomInset,
+        }}
+      />
+    );
+  },
+);
 
 type AppButtonProps = Omit<PressableProps, 'children'> & {
   label: string;
@@ -192,6 +173,12 @@ export type AppIconName =
   | 'ellipsis'
   | 'plus'
   | 'doc'
+  | 'clock'
+  | 'library'
+  | 'phone'
+  | 'folder'
+  | 'photos'
+  | 'addDocument'
   | 'eye'
   | 'shield';
 
@@ -205,6 +192,12 @@ const iconSymbols: Record<AppIconName, string> = {
   ellipsis: 'ellipsis',
   plus: 'plus',
   doc: 'doc.text',
+  clock: 'clock',
+  library: 'books.vertical',
+  phone: 'iphone',
+  folder: 'folder',
+  photos: 'photo.on.rectangle',
+  addDocument: 'doc.badge.plus',
   eye: 'eye',
   shield: 'shield',
 };

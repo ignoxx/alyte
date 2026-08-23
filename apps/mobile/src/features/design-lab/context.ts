@@ -6,4 +6,11 @@ export const DesignLabContext = createContext<{
   state: DesignLabState;
   setDirection: (direction: DesignLabDirection) => void;
   setState: (state: DesignLabState) => void;
-}>({ direction: 'quiet', state: 'empty', setDirection: () => {}, setState: () => {} });
+  automationScrollKey: number;
+}>({
+  direction: 'quiet',
+  state: 'empty',
+  setDirection: () => {},
+  setState: () => {},
+  automationScrollKey: 0,
+});

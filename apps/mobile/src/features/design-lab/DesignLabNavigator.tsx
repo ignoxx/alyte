@@ -1,8 +1,16 @@
-import { DarkTheme, DefaultTheme, NavigationContainer } from '@react-navigation/native';
+import {
+  DarkTheme,
+  DefaultTheme,
+  NavigationContainer,
+  createNavigationContainerRef,
+  type NavigatorScreenParams,
+} from '@react-navigation/native';
 import { createNativeBottomTabNavigator } from '@react-navigation/bottom-tabs/unstable';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useColorScheme } from 'react-native';
+import { t } from '../../localization';
+import { colors } from '../../theme';
 import { DesignLabContext } from './context';
 import {
   DesignLabHomeScreen,
@@ -11,65 +19,98 @@ import {
   DesignLabSettingsScreen,
 } from './DesignLabScreens';
 import type { DesignLabDirection, DesignLabState } from './model';
-import { labAccents, labColors } from './theme';
+import { labAccents } from './theme';
 
-const Tabs = createNativeBottomTabNavigator();
-const Stack = createNativeStackNavigator();
+type LabTabParamList = {
+  LabHome: undefined;
+  LabLabs: undefined;
+  LabSettings: undefined;
+};
+
+type LabRootParamList = {
+  DesignLabTabs: NavigatorScreenParams<LabTabParamList> | undefined;
+  DesignLabImport: undefined;
+};
+
+type LabFeatureStackParamList = {
+  HomeRoot: undefined;
+  LabsRoot: undefined;
+  SettingsRoot: undefined;
+};
+
+const Tabs = createNativeBottomTabNavigator<LabTabParamList>();
+const Stack = createNativeStackNavigator<LabRootParamList>();
+const FeatureStack = createNativeStackNavigator<LabFeatureStackParamList>();
+const navigationRef = createNavigationContainerRef<LabRootParamList>();
 
 function HomeStack({ openImport }: { openImport: () => void }) {
   return (
-    <Stack.Navigator>
-      <Stack.Screen name="HomeRoot" options={{ title: 'Home', headerLargeTitle: true }}>
+    <FeatureStack.Navigator>
+      <FeatureStack.Screen
+        name="HomeRoot"
+        options={{ title: t('navigation.home'), headerLargeTitle: true }}
+      >
         {() => <DesignLabHomeScreen onImport={openImport} />}
-      </Stack.Screen>
-    </Stack.Navigator>
+      </FeatureStack.Screen>
+    </FeatureStack.Navigator>
   );
 }
 
 function LabsStack({ openImport }: { openImport: () => void }) {
   return (
-    <Stack.Navigator>
-      <Stack.Screen name="LabsRoot" options={{ title: 'Labs', headerLargeTitle: true }}>
+    <FeatureStack.Navigator>
+      <FeatureStack.Screen
+        name="LabsRoot"
+        options={{ title: t('navigation.labs'), headerLargeTitle: true }}
+      >
         {() => <DesignLabLabsScreen onImport={openImport} />}
-      </Stack.Screen>
-    </Stack.Navigator>
+      </FeatureStack.Screen>
+    </FeatureStack.Navigator>
   );
 }
 
 function SettingsStack() {
   return (
-    <Stack.Navigator>
-      <Stack.Screen
+    <FeatureStack.Navigator>
+      <FeatureStack.Screen
         name="SettingsRoot"
         component={DesignLabSettingsScreen}
-        options={{ title: 'Settings', headerLargeTitle: true }}
+        options={{ title: t('navigation.settings'), headerLargeTitle: true }}
       />
-    </Stack.Navigator>
+    </FeatureStack.Navigator>
   );
 }
 
-function LabTabs({ openImport }: { openImport: () => void }) {
-  const initialDirection = process.env.EXPO_PUBLIC_ALYTE_DESIGN_LAB_DIRECTION;
-  const initialState = process.env.EXPO_PUBLIC_ALYTE_DESIGN_LAB_STATE;
-  const [direction, setDirection] = useState<DesignLabDirection>(
-    initialDirection === 'timeline' || initialDirection === 'library' ? initialDirection : 'quiet',
-  );
-  const [state, setState] = useState<DesignLabState>(
-    initialState === 'two-reports' ? 'two-reports' : 'empty',
-  );
+function LabTabs({
+  openImport,
+  direction,
+  state,
+  setDirection,
+  setState,
+  automationScrollKey,
+}: {
+  openImport: () => void;
+  direction: DesignLabDirection;
+  state: DesignLabState;
+  setDirection: (direction: DesignLabDirection) => void;
+  setState: (state: DesignLabState) => void;
+  automationScrollKey: number;
+}) {
   const icon = (name: 'house' | 'house.fill' | 'testtube.2' | 'gearshape' | 'gearshape.fill') => ({
     type: 'sfSymbol' as const,
     name,
   });
   return (
-    <DesignLabContext.Provider value={{ direction, state, setDirection, setState }}>
+    <DesignLabContext.Provider
+      value={{ direction, state, setDirection, setState, automationScrollKey }}
+    >
       <Tabs.Navigator
         initialRouteName={
           process.env.EXPO_PUBLIC_ALYTE_DESIGN_LAB_TAB === 'labs' ? 'LabLabs' : 'LabHome'
         }
         screenOptions={{
           tabBarActiveTintColor: labAccents[direction],
-          tabBarInactiveTintColor: labColors.secondary,
+          tabBarInactiveTintColor: colors.mutedInk,
           tabBarControllerMode: 'tabBar',
           tabBarMinimizeBehavior: 'none',
           overrideScrollViewContentInsetAdjustmentBehavior: true,
@@ -78,8 +119,8 @@ function LabTabs({ openImport }: { openImport: () => void }) {
         <Tabs.Screen
           name="LabHome"
           options={{
-            title: 'Home',
-            tabBarLabel: 'Home',
+            title: t('navigation.home'),
+            tabBarLabel: t('navigation.home'),
             tabBarIcon: ({ focused }) => icon(focused ? 'house.fill' : 'house'),
           }}
         >
@@ -87,7 +128,11 @@ function LabTabs({ openImport }: { openImport: () => void }) {
         </Tabs.Screen>
         <Tabs.Screen
           name="LabLabs"
-          options={{ title: 'Labs', tabBarLabel: 'Labs', tabBarIcon: () => icon('testtube.2') }}
+          options={{
+            title: t('navigation.labs'),
+            tabBarLabel: t('navigation.labs'),
+            tabBarIcon: () => icon('testtube.2'),
+          }}
         >
           {() => <LabsStack openImport={openImport} />}
         </Tabs.Screen>
@@ -95,8 +140,8 @@ function LabTabs({ openImport }: { openImport: () => void }) {
           name="LabSettings"
           component={SettingsStack}
           options={{
-            title: 'Settings',
-            tabBarLabel: 'Settings',
+            title: t('navigation.settings'),
+            tabBarLabel: t('navigation.settings'),
             tabBarIcon: ({ focused }) => icon(focused ? 'gearshape.fill' : 'gearshape'),
           }}
         />
@@ -106,16 +151,43 @@ function LabTabs({ openImport }: { openImport: () => void }) {
 }
 
 export function DesignLabNavigator() {
+  const initialDirection = process.env.EXPO_PUBLIC_ALYTE_DESIGN_LAB_DIRECTION;
+  const initialState = process.env.EXPO_PUBLIC_ALYTE_DESIGN_LAB_STATE;
+  const [direction, setDirection] = useState<DesignLabDirection>(
+    initialDirection === 'timeline' || initialDirection === 'library' ? initialDirection : 'quiet',
+  );
+  const [state, setState] = useState<DesignLabState>(
+    initialState === 'two-reports' ? 'two-reports' : 'empty',
+  );
+  const [automationScrollKey, setAutomationScrollKey] = useState(0);
   const dark = useColorScheme() === 'dark';
   const base = dark ? DarkTheme : DefaultTheme;
+
+  useEffect(() => {
+    if (process.env.EXPO_PUBLIC_ALYTE_DESIGN_LAB_AUTOMATE !== '1') return;
+    const steps = [
+      setTimeout(() => setState('two-reports'), 2_000),
+      setTimeout(() => setDirection('timeline'), 4_000),
+      setTimeout(() => setDirection('library'), 6_000),
+      setTimeout(() => navigationRef.navigate('DesignLabTabs', { screen: 'LabLabs' }), 8_000),
+      setTimeout(() => setAutomationScrollKey((value) => value + 1), 10_000),
+      setTimeout(() => navigationRef.navigate('DesignLabTabs', { screen: 'LabSettings' }), 12_000),
+      setTimeout(() => navigationRef.navigate('DesignLabTabs', { screen: 'LabHome' }), 14_000),
+      setTimeout(() => setAutomationScrollKey((value) => value + 1), 16_000),
+      setTimeout(() => navigationRef.navigate('DesignLabImport'), 18_000),
+    ];
+    return () => steps.forEach(clearTimeout);
+  }, []);
+
   return (
     <NavigationContainer
+      ref={navigationRef}
       theme={{
         ...base,
         colors: {
           ...base.colors,
-          background: labColors.background as string,
-          card: labColors.surface as string,
+          background: colors.canvas as string,
+          card: colors.surface as string,
         },
       }}
     >
@@ -129,7 +201,14 @@ export function DesignLabNavigator() {
       >
         <Stack.Screen name="DesignLabTabs">
           {({ navigation }) => (
-            <LabTabs openImport={() => navigation.navigate('DesignLabImport')} />
+            <LabTabs
+              automationScrollKey={automationScrollKey}
+              direction={direction}
+              openImport={() => navigation.navigate('DesignLabImport')}
+              setDirection={setDirection}
+              setState={setState}
+              state={state}
+            />
           )}
         </Stack.Screen>
         <Stack.Screen

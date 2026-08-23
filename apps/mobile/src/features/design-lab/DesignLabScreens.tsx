@@ -1,103 +1,93 @@
-import { Image } from 'expo-image';
-import { useContext } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import SegmentedControl from '@expo/ui/community/segmented-control';
+import { useContext, useEffect, useRef, type ReactNode } from 'react';
+import {
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  useWindowDimensions,
+  View,
+  type ScrollView as ScrollViewType,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { t } from '../../localization';
+import { colors, spacing, typography } from '../../theme';
+import { AppIcon, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
 import { DesignLabContext } from './context';
 import {
-  designLabDirectionNames,
   designLabDirections,
+  formatSyntheticDate,
+  formatSyntheticMeasurement,
+  formatSyntheticNumber,
   syntheticMeasuredChanges,
   syntheticReports,
 } from './model';
-import { labAccents, labColors, labRadius, labSpacing } from './theme';
+import { labAccents } from './theme';
 
-const symbol = (name: string, size = 18) => (
-  <Image
-    source={`sf:${name}`}
-    style={{ width: size, height: size }}
-    tintColor={labColors.secondary as string}
-  />
-);
-
-function LabSwitcher() {
-  const lab = useContext(DesignLabContext);
-  return (
-    <View accessibilityLabel="Design lab controls" style={styles.switcher}>
-      <View style={styles.segmentRow}>
-        {designLabDirections.map((direction) => (
-          <Pressable
-            key={direction}
-            accessibilityRole="button"
-            accessibilityState={{ selected: lab.direction === direction }}
-            onPress={() => lab.setDirection(direction)}
-            style={({ pressed }) => [
-              styles.segment,
-              lab.direction === direction && styles.selectedSegment,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Text
-              maxFontSizeMultiplier={1.3}
-              style={[
-                styles.segmentText,
-                lab.direction === direction && styles.selectedSegmentText,
-              ]}
-            >
-              {designLabDirectionNames[direction]}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-      <View style={styles.stateRow}>
-        <Text maxFontSizeMultiplier={1.2} style={styles.harnessLabel}>
-          SHOWCASE DATA
-        </Text>
-        {(['empty', 'two-reports'] as const).map((state) => (
-          <Pressable
-            key={state}
-            accessibilityRole="button"
-            accessibilityState={{ selected: lab.state === state }}
-            onPress={() => lab.setState(state)}
-            style={styles.stateTarget}
-          >
-            <Text
-              maxFontSizeMultiplier={1.3}
-              style={{
-                color: lab.state === state ? labAccents[lab.direction] : labColors.secondary,
-                fontSize: 13,
-                fontWeight: lab.state === state ? '700' : '500',
-                textAlign: 'center',
-              }}
-            >
-              {state === 'empty' ? 'Empty' : 'Two reports'}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-    </View>
+function message(
+  key: string,
+  replacements: Readonly<Record<string, string | number>> = {},
+): string {
+  return Object.entries(replacements).reduce(
+    (value, [name, replacement]) => value.replace(`{${name}}`, String(replacement)),
+    t(key),
   );
 }
 
-function ImportButton({
-  onPress,
-  label = 'Import a Lab Report',
-}: {
-  onPress: () => void;
-  label?: string;
-}) {
+const directionLabels = () => [
+  t('designLab.directionQuiet'),
+  t('designLab.directionTimeline'),
+  t('designLab.directionLibrary'),
+];
+
+function LabSwitcher() {
+  const lab = useContext(DesignLabContext);
+  const directionIndex = designLabDirections.indexOf(lab.direction);
+  const stateIndex = lab.state === 'empty' ? 0 : 1;
+  return (
+    <AppSurface accessibilityLabel={t('designLab.controls')} style={styles.switcher}>
+      <SegmentedControl
+        onChange={({ nativeEvent }) => {
+          const direction = designLabDirections[nativeEvent.selectedSegmentIndex];
+          if (direction !== undefined) lab.setDirection(direction);
+        }}
+        selectedIndex={directionIndex}
+        style={styles.nativeControl}
+        testID="design-lab-direction"
+        values={directionLabels()}
+      />
+      <AppText style={styles.harnessLabel} variant="caption">
+        {t('designLab.showcaseData')}
+      </AppText>
+      <SegmentedControl
+        onChange={({ nativeEvent }) => {
+          lab.setState(nativeEvent.selectedSegmentIndex === 0 ? 'empty' : 'two-reports');
+        }}
+        selectedIndex={stateIndex}
+        style={styles.nativeControl}
+        testID="design-lab-state"
+        values={[t('designLab.stateEmpty'), t('designLab.stateTwoReports')]}
+      />
+    </AppSurface>
+  );
+}
+
+function ImportButton({ onPress, label }: { onPress: () => void; label?: string }) {
   const { direction } = useContext(DesignLabContext);
+  const resolvedLabel = label ?? t('designLab.importReport');
   return (
     <Pressable
+      accessibilityLabel={resolvedLabel}
       accessibilityRole="button"
-      accessibilityLabel={label}
       onPress={onPress}
       style={({ pressed }) => [
         styles.importButton,
         { backgroundColor: labAccents[direction], opacity: pressed ? 0.72 : 1 },
       ]}
+      testID="design-lab-import"
     >
-      {symbol('plus', 17)}
-      <Text style={styles.importText}>{label}</Text>
+      <AppIcon color={colors.onAccent} name="plus" size={17} />
+      <AppText style={styles.importText}>{resolvedLabel}</AppText>
     </Pressable>
   );
 }
@@ -107,83 +97,115 @@ function ReportRow({
 }: {
   report?: (typeof syntheticReports)[number];
 }) {
+  const { fontScale } = useWindowDimensions();
+  const collected = formatSyntheticDate(report.collectedOn);
+  const measurementCount = formatSyntheticNumber(report.measurements);
   return (
     <View
-      accessibilityLabel={`${report.laboratory}, collected ${report.collected}, ${report.measurements} Measurements`}
-      style={styles.reportRow}
+      accessibilityLabel={message('designLab.sourceReportAccessibility', {
+        laboratory: report.laboratory,
+        date: collected,
+        count: measurementCount,
+      })}
+      style={[styles.reportRow, fontScale >= 1.6 && styles.largeTypeRow]}
     >
-      {symbol('doc.text')}
+      <AppIcon name="doc" />
       <View style={styles.grow}>
-        <Text style={styles.rowTitle}>{report.laboratory}</Text>
-        <Text style={styles.secondary}>
-          {report.collected} · {report.measurements} Measurements
-        </Text>
+        <AppText variant="heading">{report.laboratory}</AppText>
+        <AppText style={styles.secondary}>
+          {collected} · {message('designLab.measurementsCount', { count: measurementCount })}
+        </AppText>
       </View>
-      {symbol('chevron.right', 13)}
+      {fontScale < 1.6 && <AppIcon name="chevronRight" size={13} />}
     </View>
   );
 }
 
 function EmptyHome({ onImport }: { onImport: () => void }) {
   const { direction } = useContext(DesignLabContext);
-  const copy =
-    direction === 'quiet'
-      ? [
-          'Your laboratory history, in one place.',
-          'Import a report to begin a private history on this iPhone.',
-        ]
-      : direction === 'timeline'
-        ? [
-            'Your timeline starts with a report.',
-            'Each collection date will take its place in your measured history.',
-          ]
-        : [
-            'Build your biomarker library.',
-            'Add a report to organize Measurements by biomarker and source.',
-          ];
+  const titleKey = `designLab.${direction}EmptyTitle`;
+  const bodyKey = `designLab.${direction}EmptyBody`;
+  const icon = direction === 'library' ? 'library' : direction === 'timeline' ? 'clock' : 'doc';
   return (
     <View style={styles.empty}>
-      <View style={[styles.heroSymbol, { backgroundColor: labColors.fill }]}>
-        {symbol(
-          direction === 'library'
-            ? 'books.vertical'
-            : direction === 'timeline'
-              ? 'clock'
-              : 'doc.text',
-          30,
-        )}
+      <View style={styles.heroSymbol}>
+        <AppIcon name={icon} size={30} />
       </View>
-      <Text style={styles.emptyTitle}>{copy[0]}</Text>
-      <Text style={styles.emptyBody}>{copy[1]}</Text>
+      <AppText style={styles.emptyTitle} variant="title">
+        {t(titleKey)}
+      </AppText>
+      <AppText style={styles.emptyBody}>{t(bodyKey)}</AppText>
       <ImportButton onPress={onImport} />
     </View>
   );
 }
 
+function ChangeRows({ compact = false }: { compact?: boolean }) {
+  const { fontScale } = useWindowDimensions();
+  return syntheticMeasuredChanges.map((change) => {
+    const unitLabel = t('designLab.unitMillimolesPerLiter');
+    const latest = formatSyntheticMeasurement(change.latest, unitLabel);
+    const previous = formatSyntheticMeasurement(change.previous, unitLabel);
+    const direction = t(
+      `designLab.direction${change.direction === 'increased' ? 'Increased' : 'Decreased'}`,
+    );
+    return (
+      <View
+        key={change.biomarkerKey}
+        style={[
+          compact ? styles.compactRow : styles.changeRow,
+          compact && fontScale >= 1.6 && styles.largeTypeRow,
+        ]}
+      >
+        <View style={styles.grow}>
+          <AppText variant="heading">{t(change.biomarkerKey)}</AppText>
+          {compact && (
+            <AppText style={styles.secondary}>
+              {message('designLab.compatibleMeasurements', {
+                count: formatSyntheticNumber(syntheticReports.length),
+              })}
+            </AppText>
+          )}
+        </View>
+        <View style={[styles.valueColumn, fontScale >= 1.6 && styles.largeTypeValue]}>
+          <AppText selectable style={styles.value}>
+            {latest}
+          </AppText>
+          <AppText style={styles.secondary}>
+            {compact
+              ? direction
+              : message('designLab.fromValueDirection', { value: previous, direction })}
+          </AppText>
+        </View>
+      </View>
+    );
+  });
+}
+
 function QuietHome({ onImport }: { onImport: () => void }) {
+  const latest = syntheticReports[0]!;
   return (
     <View style={styles.sections}>
-      <Text style={styles.eyebrow}>LATEST REPORT</Text>
-      <Text style={styles.heroDate}>18 August</Text>
-      <Text style={styles.secondary}>Northstar Laboratory · 12 Measurements</Text>
+      <AppText style={styles.eyebrow} variant="caption">
+        {t('designLab.latestReport')}
+      </AppText>
+      <AppText style={styles.heroDate} variant="display">
+        {formatSyntheticDate(latest.collectedOn, undefined, 'long')}
+      </AppText>
+      <AppText style={styles.secondary}>
+        {latest.laboratory} ·{' '}
+        {message('designLab.measurementsCount', {
+          count: formatSyntheticNumber(latest.measurements),
+        })}
+      </AppText>
       <View style={styles.rule} />
-      <Text style={styles.sectionTitle}>Measured changes</Text>
-      {syntheticMeasuredChanges.map((change) => (
-        <View key={change.biomarker} style={styles.changeRow}>
-          <Text style={styles.rowTitle}>{change.biomarker}</Text>
-          <Text selectable style={styles.value}>
-            {change.latest}
-          </Text>
-          <Text style={styles.secondary}>
-            From {change.previous} · {change.direction}
-          </Text>
-        </View>
-      ))}
-      <Text style={styles.sectionTitle}>Recent reports</Text>
+      <AppText variant="title">{t('designLab.measuredChanges')}</AppText>
+      <ChangeRows />
+      <AppText variant="title">{t('designLab.recentReports')}</AppText>
       {syntheticReports.map((report) => (
         <ReportRow key={report.id} report={report} />
       ))}
-      <ImportButton label="Import another report" onPress={onImport} />
+      <ImportButton label={t('designLab.importAnother')} onPress={onImport} />
     </View>
   );
 }
@@ -192,79 +214,97 @@ function TimelineHome({ onImport }: { onImport: () => void }) {
   const accent = labAccents.timeline;
   return (
     <View style={styles.sections}>
-      <Text style={styles.lede}>Two collection dates form your measured history.</Text>
+      <AppText style={styles.lede} variant="title">
+        {message('designLab.timelineSummary', {
+          count: formatSyntheticNumber(syntheticReports.length),
+        })}
+      </AppText>
       {syntheticReports.map((report, index) => (
         <View key={report.id} style={styles.timelineRow}>
           <View style={styles.timelineRail}>
             <View style={[styles.timelineDot, { backgroundColor: accent }]} />
-            {index === 0 && (
-              <View style={[styles.timelineLine, { backgroundColor: labColors.separator }]} />
-            )}
+            {index === 0 && <View style={styles.timelineLine} />}
           </View>
           <View style={styles.timelineContent}>
-            <Text style={styles.eyebrow}>
-              {index === 0 ? 'LATEST · 18 AUG 2026' : '12 FEB 2026'}
-            </Text>
-            <Text style={styles.sectionTitle}>{report.laboratory}</Text>
-            <Text style={styles.secondary}>{report.measurements} measured results</Text>
-            {index === 0 &&
-              syntheticMeasuredChanges.map((change) => (
-                <View key={change.biomarker} style={styles.inlineChange}>
-                  <Text style={styles.rowTitle}>{change.biomarker}</Text>
-                  <Text selectable style={styles.value}>
-                    {change.previous} → {change.latest}
-                  </Text>
-                </View>
-              ))}
+            <AppText style={styles.eyebrow} variant="caption">
+              {index === 0 ? `${t('designLab.latest')} · ` : ''}
+              {formatSyntheticDate(report.collectedOn)}
+            </AppText>
+            <AppText variant="title">{report.laboratory}</AppText>
+            <AppText style={styles.secondary}>
+              {message('designLab.measuredResultsCount', {
+                count: formatSyntheticNumber(report.measurements),
+              })}
+            </AppText>
+            {index === 0 && <ChangeRows />}
           </View>
         </View>
       ))}
-      <ImportButton label="Add to timeline" onPress={onImport} />
+      <ImportButton label={t('designLab.addToTimeline')} onPress={onImport} />
     </View>
   );
 }
 
 function LibraryHome({ onImport }: { onImport: () => void }) {
+  const latest = syntheticReports[0]!;
   return (
     <View style={styles.sections}>
-      <View style={styles.librarySummary}>
-        <View>
-          <Text style={styles.libraryNumber}>3</Text>
-          <Text style={styles.secondary}>comparable biomarkers</Text>
+      <AppSurface style={styles.librarySummary}>
+        <View style={styles.summaryItem}>
+          <AppText style={styles.libraryNumber} variant="display">
+            {formatSyntheticNumber(syntheticMeasuredChanges.length)}
+          </AppText>
+          <AppText style={styles.secondary}>{t('designLab.comparableBiomarkers')}</AppText>
         </View>
-        <View>
-          <Text style={styles.libraryNumber}>2</Text>
-          <Text style={styles.secondary}>Lab Reports</Text>
+        <View style={styles.summaryItem}>
+          <AppText style={styles.libraryNumber} variant="display">
+            {formatSyntheticNumber(syntheticReports.length)}
+          </AppText>
+          <AppText style={styles.secondary}>{t('designLab.labReports')}</AppText>
         </View>
-      </View>
-      <Text style={styles.eyebrow}>BIOMARKER INDEX</Text>
-      {syntheticMeasuredChanges.map((change) => (
-        <View key={change.biomarker} style={styles.compactRow}>
-          <View style={styles.grow}>
-            <Text style={styles.rowTitle}>{change.biomarker}</Text>
-            <Text style={styles.secondary}>2 compatible Measurements</Text>
-          </View>
-          <View style={styles.valueColumn}>
-            <Text selectable style={styles.value}>
-              {change.latest}
-            </Text>
-            <Text style={styles.secondary}>{change.direction}</Text>
-          </View>
-        </View>
-      ))}
-      <Text style={styles.eyebrow}>SOURCE REPORTS</Text>
+      </AppSurface>
+      <AppText style={styles.eyebrow} variant="caption">
+        {t('designLab.latestReport')}
+      </AppText>
+      <ReportRow report={latest} />
+      <AppText style={styles.eyebrow} variant="caption">
+        {t('designLab.biomarkerIndex')}
+      </AppText>
+      <ChangeRows compact />
+      <AppText style={styles.eyebrow} variant="caption">
+        {t('designLab.sourceReports')}
+      </AppText>
       {syntheticReports.map((report) => (
         <ReportRow key={report.id} report={report} />
       ))}
-      <ImportButton label="Import report" onPress={onImport} />
+      <ImportButton onPress={onImport} />
     </View>
+  );
+}
+
+function useAutomatedScroll(ref: React.RefObject<ScrollViewType | null>) {
+  const { automationScrollKey } = useContext(DesignLabContext);
+  useEffect(() => {
+    if (automationScrollKey === 0) return;
+    const timer = setTimeout(() => ref.current?.scrollTo({ y: 520, animated: true }), 200);
+    return () => clearTimeout(timer);
+  }, [automationScrollKey, ref]);
+}
+
+function LabScreenScroll({ children }: { children: ReactNode }) {
+  const ref = useRef<ScrollViewType>(null);
+  useAutomatedScroll(ref);
+  return (
+    <ScreenScrollView ref={ref} contentContainerStyle={styles.content} style={styles.scroll}>
+      {children}
+    </ScreenScrollView>
   );
 }
 
 export function DesignLabHomeScreen({ onImport }: { onImport: () => void }) {
   const lab = useContext(DesignLabContext);
   return (
-    <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content}>
+    <LabScreenScroll>
       <LabSwitcher />
       {lab.state === 'empty' ? (
         <EmptyHome onImport={onImport} />
@@ -275,112 +315,132 @@ export function DesignLabHomeScreen({ onImport }: { onImport: () => void }) {
       ) : (
         <LibraryHome onImport={onImport} />
       )}
-    </ScrollView>
+    </LabScreenScroll>
   );
 }
 
 export function DesignLabLabsScreen({ onImport }: { onImport: () => void }) {
   const lab = useContext(DesignLabContext);
+  const { fontScale } = useWindowDimensions();
   return (
-    <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content}>
+    <LabScreenScroll>
       <LabSwitcher />
       <View style={styles.sections}>
         <ImportButton onPress={onImport} />
         {lab.state === 'empty' ? (
           <View style={styles.labsEmpty}>
-            {symbol('doc.badge.plus', 32)}
-            <Text style={styles.sectionTitle}>No Lab Reports</Text>
-            <Text style={styles.emptyBody}>
-              Imported source documents will appear here, separate from their Measurements.
-            </Text>
+            <AppIcon name="addDocument" size={32} />
+            <AppText variant="title">{t('designLab.noReports')}</AppText>
+            <AppText style={styles.emptyBody}>{t('designLab.noReportsBody')}</AppText>
           </View>
         ) : (
           <>
-            <Text style={styles.eyebrow}>LAB REPORTS · 2</Text>
+            <AppText style={styles.eyebrow} variant="caption">
+              {message('designLab.labReportsCount', {
+                count: formatSyntheticNumber(syntheticReports.length),
+              })}
+            </AppText>
             {syntheticReports.map((report) => (
               <ReportRow key={report.id} report={report} />
             ))}
-            <Text style={styles.eyebrow}>COLLECTIONS</Text>
+            <AppText style={styles.eyebrow} variant="caption">
+              {t('designLab.collections')}
+            </AppText>
             {syntheticReports.map((report) => (
-              <View key={`record-${report.id}`} style={styles.compactRow}>
-                <View>
-                  <Text style={styles.rowTitle}>{report.collected}</Text>
-                  <Text style={styles.secondary}>{report.measurements} Measurements · blood</Text>
+              <View
+                key={`record-${report.id}`}
+                style={[styles.compactRow, fontScale >= 1.6 && styles.largeTypeRow]}
+              >
+                <View style={styles.grow}>
+                  <AppText variant="heading">{formatSyntheticDate(report.collectedOn)}</AppText>
+                  <AppText style={styles.secondary}>
+                    {message('designLab.bloodMeasurements', {
+                      count: formatSyntheticNumber(report.measurements),
+                    })}
+                  </AppText>
                 </View>
               </View>
             ))}
           </>
         )}
       </View>
-    </ScrollView>
+    </LabScreenScroll>
   );
 }
 
 export function DesignLabSettingsScreen() {
   return (
-    <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content}>
+    <LabScreenScroll>
       <LabSwitcher />
-      <View style={styles.settingsGroup}>
-        <Text style={styles.eyebrow}>DESIGN LAB</Text>
+      <View>
+        <AppText style={styles.eyebrow} variant="caption">
+          {t('designLab.settingsSection')}
+        </AppText>
         <View style={styles.reportRow}>
-          {symbol('iphone')}
+          <AppIcon name="phone" />
           <View style={styles.grow}>
-            <Text style={styles.rowTitle}>Local showcase only</Text>
-            <Text style={styles.secondary}>Synthetic data is not saved.</Text>
+            <AppText variant="heading">{t('designLab.localShowcase')}</AppText>
+            <AppText style={styles.secondary}>{t('designLab.localShowcaseBody')}</AppText>
           </View>
         </View>
         <View style={styles.reportRow}>
-          {symbol('hand.raised')}
+          <AppIcon name="shield" />
           <View style={styles.grow}>
-            <Text style={styles.rowTitle}>Account-free</Text>
-            <Text style={styles.secondary}>No network or sign-in is used.</Text>
+            <AppText variant="heading">{t('designLab.accountFree')}</AppText>
+            <AppText style={styles.secondary}>{t('designLab.accountFreeBody')}</AppText>
           </View>
         </View>
       </View>
-    </ScrollView>
+    </LabScreenScroll>
   );
 }
 
 export function DesignLabImportScreen({ onClose }: { onClose: () => void }) {
   const insets = useSafeAreaInsets();
   return (
-    <View
-      style={[
-        styles.modal,
-        { paddingTop: insets.top + labSpacing.sm, paddingBottom: insets.bottom + labSpacing.lg },
-      ]}
-    >
+    <View style={[styles.modal, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       <View style={styles.modalHeader}>
         <Pressable accessibilityRole="button" onPress={onClose} style={styles.headerTarget}>
-          <Text style={styles.headerAction}>Cancel</Text>
+          <AppText style={styles.headerAction}>{t('designLab.cancel')}</AppText>
         </Pressable>
-        <Text style={styles.modalTitle}>Import Lab Report</Text>
+        <AppText style={styles.modalTitle} variant="heading">
+          {t('designLab.importTitle')}
+        </AppText>
         <View style={styles.headerTarget} />
       </View>
-      <ScrollView keyboardDismissMode="interactive" contentContainerStyle={styles.modalContent}>
-        <Text style={styles.lede}>
-          Choose a synthetic source path to judge the native task presentation. Nothing is imported.
-        </Text>
-        <Pressable accessibilityRole="button" style={styles.sourceChoice}>
-          {symbol('folder')}
-          <View>
-            <Text style={styles.rowTitle}>Choose a PDF from Files</Text>
-            <Text style={styles.secondary}>Native document picker in production</Text>
+      <ScrollView
+        automaticallyAdjustKeyboardInsets
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={styles.modalContent}
+        keyboardDismissMode="interactive"
+      >
+        <AppText style={styles.lede} variant="title">
+          {t('designLab.importIntro')}
+        </AppText>
+        <AppSurface style={styles.sourceChoice}>
+          <AppIcon name="folder" />
+          <View style={styles.grow}>
+            <AppText variant="heading">{t('designLab.choosePdf')}</AppText>
+            <AppText style={styles.secondary}>{t('designLab.choosePdfBody')}</AppText>
           </View>
-        </Pressable>
-        <Pressable accessibilityRole="button" style={styles.sourceChoice}>
-          {symbol('photo.on.rectangle')}
-          <View>
-            <Text style={styles.rowTitle}>Choose images from Photos</Text>
-            <Text style={styles.secondary}>Native photo picker in production</Text>
+        </AppSurface>
+        <AppSurface style={styles.sourceChoice}>
+          <AppIcon name="photos" />
+          <View style={styles.grow}>
+            <AppText variant="heading">{t('designLab.chooseImages')}</AppText>
+            <AppText style={styles.secondary}>{t('designLab.chooseImagesBody')}</AppText>
           </View>
-        </Pressable>
-        <Text style={styles.eyebrow}>HARNESS NOTE</Text>
+        </AppSurface>
+        <AppText style={styles.eyebrow} variant="caption">
+          {t('designLab.harnessNote')}
+        </AppText>
         <TextInput
-          accessibilityLabel="Synthetic report label"
-          placeholder="Synthetic report label"
-          placeholderTextColor={labColors.tertiary}
+          accessibilityLabel={t('designLab.syntheticLabel')}
+          autoFocus={process.env.EXPO_PUBLIC_ALYTE_DESIGN_LAB_AUTOMATE === '1'}
+          placeholder={t('designLab.syntheticLabel')}
+          placeholderTextColor={colors.mutedInk}
           style={styles.input}
+          testID="design-lab-input"
         />
       </ScrollView>
     </View>
@@ -388,174 +448,129 @@ export function DesignLabImportScreen({ onClose }: { onClose: () => void }) {
 }
 
 const styles = StyleSheet.create({
-  content: { flexGrow: 1, padding: labSpacing.lg, paddingBottom: 120, gap: labSpacing.xl },
-  switcher: {
-    backgroundColor: labColors.surface,
-    borderRadius: labRadius.md,
-    borderCurve: 'continuous',
-    padding: labSpacing.xs,
-    gap: labSpacing.xs,
-  },
-  segmentRow: { flexDirection: 'row', gap: labSpacing.xs },
-  segment: {
-    flex: 1,
-    minHeight: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: labRadius.sm,
-    borderCurve: 'continuous',
-  },
-  selectedSegment: { backgroundColor: labColors.fill },
-  pressed: { opacity: 0.55 },
-  segmentText: { color: labColors.secondary, fontSize: 13, fontWeight: '600' },
-  selectedSegmentText: { color: labColors.label, fontWeight: '700' },
-  stateRow: {
-    minHeight: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: labSpacing.sm,
-    gap: labSpacing.xs,
-  },
-  stateTarget: { flex: 1, minHeight: 44, justifyContent: 'center' },
+  scroll: { flex: 1, backgroundColor: colors.canvas },
+  content: { flexGrow: 1, padding: spacing.lg, paddingBottom: 120, gap: spacing.xl },
+  switcher: { gap: spacing.sm, padding: spacing.sm },
+  nativeControl: { minHeight: 44, width: '100%' },
   harnessLabel: {
-    width: 104,
-    color: labColors.tertiary,
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.5,
+    color: colors.mutedInk,
+    paddingHorizontal: spacing.xs,
+    textTransform: 'uppercase',
   },
-  sections: { gap: labSpacing.lg },
+  sections: { gap: spacing.lg },
   empty: {
     flex: 1,
-    minHeight: 430,
+    minHeight: 360,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: labSpacing.md,
-    paddingHorizontal: labSpacing.lg,
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
   },
   heroSymbol: {
     width: 64,
-    height: 64,
-    borderRadius: 20,
+    minHeight: 64,
+    borderRadius: 14,
     borderCurve: 'continuous',
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: colors.disabledFill,
   },
-  emptyTitle: {
-    color: labColors.label,
-    fontSize: 28,
-    lineHeight: 34,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  emptyBody: { color: labColors.secondary, fontSize: 17, lineHeight: 23, textAlign: 'center' },
+  emptyTitle: { textAlign: 'center' },
+  emptyBody: { color: colors.mutedInk, textAlign: 'center' },
   importButton: {
     minHeight: 50,
-    borderRadius: labRadius.md,
+    borderRadius: 12,
     borderCurve: 'continuous',
-    paddingHorizontal: labSpacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
     flexDirection: 'row',
-    gap: labSpacing.sm,
+    flexWrap: 'wrap',
+    gap: spacing.sm,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  importText: { color: '#FFFFFF', fontSize: 17, fontWeight: '700' },
-  eyebrow: { color: labColors.secondary, fontSize: 12, fontWeight: '700', letterSpacing: 0.7 },
-  heroDate: { color: labColors.label, fontSize: 40, fontWeight: '700' },
-  secondary: { color: labColors.secondary, fontSize: 15, lineHeight: 20 },
-  rule: { height: StyleSheet.hairlineWidth, backgroundColor: labColors.separator },
-  sectionTitle: { color: labColors.label, fontSize: 21, lineHeight: 26, fontWeight: '700' },
-  rowTitle: { color: labColors.label, fontSize: 17, lineHeight: 22, fontWeight: '600' },
-  value: { color: labColors.label, fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  changeRow: { paddingVertical: labSpacing.sm, gap: labSpacing.xs },
+  importText: { color: colors.onAccent, fontWeight: '700', textAlign: 'center' },
+  eyebrow: {
+    color: colors.mutedInk,
+    fontWeight: '700',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  heroDate: { color: colors.ink },
+  secondary: { color: colors.mutedInk },
+  rule: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
+  changeRow: { paddingVertical: spacing.sm, gap: spacing.xs },
   reportRow: {
     minHeight: 64,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: labSpacing.md,
+    gap: spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: labColors.separator,
+    borderBottomColor: colors.border,
+    paddingVertical: spacing.sm,
   },
-  grow: { flex: 1, gap: 2 },
-  lede: { color: labColors.label, fontSize: 22, lineHeight: 29, fontWeight: '600' },
-  timelineRow: { flexDirection: 'row', gap: labSpacing.md },
+  largeTypeRow: { alignItems: 'flex-start', flexDirection: 'column' },
+  grow: { flex: 1, minWidth: 0, gap: spacing.xs },
+  value: { fontWeight: '600', fontVariant: ['tabular-nums'] },
+  valueColumn: { alignItems: 'flex-end', gap: spacing.xs },
+  largeTypeValue: { alignItems: 'flex-start' },
+  lede: { color: colors.ink },
+  timelineRow: { flexDirection: 'row', gap: spacing.md },
   timelineRail: { width: 18, alignItems: 'center' },
-  timelineDot: { width: 12, height: 12, borderRadius: 6, marginTop: 3 },
-  timelineLine: { width: 2, flex: 1, marginTop: labSpacing.xs },
-  timelineContent: { flex: 1, paddingBottom: labSpacing.xl, gap: labSpacing.xs },
-  inlineChange: {
-    paddingVertical: labSpacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: labColors.separator,
-    gap: 2,
-  },
+  timelineDot: { width: 12, height: 12, borderRadius: 6, marginTop: spacing.xs },
+  timelineLine: { width: 2, flex: 1, marginTop: spacing.xs, backgroundColor: colors.border },
+  timelineContent: { flex: 1, paddingBottom: spacing.xl, gap: spacing.xs },
   librarySummary: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xl,
     justifyContent: 'space-around',
-    backgroundColor: labColors.surface,
-    padding: labSpacing.xl,
-    borderRadius: labRadius.lg,
-    borderCurve: 'continuous',
   },
-  libraryNumber: {
-    color: labColors.label,
-    fontSize: 32,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
+  summaryItem: { flex: 1, minWidth: 120 },
+  libraryNumber: { fontVariant: ['tabular-nums'] },
   compactRow: {
     minHeight: 64,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: labSpacing.sm,
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: labColors.separator,
+    borderBottomColor: colors.border,
   },
-  valueColumn: { alignItems: 'flex-end', gap: 2 },
   labsEmpty: {
-    minHeight: 330,
+    minHeight: 300,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: labSpacing.sm,
-    paddingHorizontal: labSpacing.xl,
+    gap: spacing.sm,
+    paddingHorizontal: spacing.xl,
   },
-  settingsGroup: { gap: 0 },
-  modal: { flex: 1, backgroundColor: labColors.background },
+  modal: { flex: 1, backgroundColor: colors.canvas },
   modalHeader: {
     minHeight: 52,
-    paddingHorizontal: labSpacing.sm,
+    paddingHorizontal: spacing.sm,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: labColors.separator,
+    borderBottomColor: colors.border,
   },
   headerTarget: {
     minWidth: 70,
     minHeight: 44,
     justifyContent: 'center',
-    paddingHorizontal: labSpacing.sm,
+    paddingHorizontal: spacing.sm,
   },
-  headerAction: { color: '#007AFF', fontSize: 17 },
-  modalTitle: { color: labColors.label, fontSize: 17, fontWeight: '600' },
-  modalContent: { padding: labSpacing.lg, gap: labSpacing.xl },
-  sourceChoice: {
-    minHeight: 72,
-    padding: labSpacing.lg,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: labSpacing.md,
-    backgroundColor: labColors.surface,
-    borderRadius: labRadius.md,
-    borderCurve: 'continuous',
-  },
+  headerAction: { color: colors.accent },
+  modalTitle: { flexShrink: 1, textAlign: 'center' },
+  modalContent: { padding: spacing.lg, gap: spacing.xl },
+  sourceChoice: { minHeight: 72, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   input: {
     minHeight: 50,
-    color: labColors.label,
-    backgroundColor: labColors.surface,
-    borderRadius: labRadius.sm,
+    color: colors.ink,
+    backgroundColor: colors.surface,
+    borderRadius: 12,
     borderCurve: 'continuous',
-    paddingHorizontal: labSpacing.md,
-    fontSize: 17,
+    paddingHorizontal: spacing.md,
+    ...typography.body,
   },
 });
