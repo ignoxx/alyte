@@ -21,6 +21,18 @@ account-free two-report journey before expanding optional cloud breadth.
 - **CalorieMate or T3 Code inspiration:** read
   [`docs/REFERENCE-REPOS.md`](docs/REFERENCE-REPOS.md); their design and complexity are not defaults.
 
+## Agent skills
+
+### Issue tracker
+
+Implementation tickets and specs live in GitHub Issues. See
+[`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
+
+### Domain docs
+
+Alyte uses the root `CONTEXT.md` plus system-wide ADRs under `docs/adr/`. See
+[`docs/agents/domain.md`](docs/agents/domain.md).
+
 When one of these documents changes, update every now-inconsistent pointer or decision. Keep one
 source of truth rather than repeating the same rule here.
 
