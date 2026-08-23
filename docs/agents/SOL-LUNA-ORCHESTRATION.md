@@ -78,13 +78,16 @@ surfaces, and required reading. It tells Luna to:
 
 1. read the active agent instructions, domain glossary, relevant ADRs, MVP spec, and assigned ticket;
 2. invoke Matt Pocock's `implement` skill for the ticket;
-3. use TDD where practical for non-trivial or costly failure modes at the ticket's pre-agreed highest
+3. for Expo/EAS or mobile-app work, invoke official `expo-overview` first and every applicable leaf
+   skill it selects before planning or editing; for mobile UI, also invoke
+   `appllama-app-design-skill` and complete its reference-study and Simulator loop;
+4. use TDD where practical for non-trivial or costly failure modes at the ticket's pre-agreed highest
    seam, without pursuing a coverage percentage or testing obvious low-risk wiring;
-4. preserve unrelated work and remain inside the ticket boundary;
-5. run typechecking and risk-focused tests throughout, then the complete existing suite once at the
+5. preserve unrelated work and remain inside the ticket boundary;
+6. run typechecking and risk-focused tests throughout, then the complete existing suite once at the
    end; running it does not require expanding coverage beyond the ticket's worthwhile risks;
-6. commit the complete implementation to the assigned branch; and
-7. report the commit hash, tests run, acceptance criteria satisfied, residual risks, and any shared
+7. commit the complete implementation to the assigned branch; and
+8. report the commit hash, tests run, acceptance criteria satisfied, residual risks, and any shared
    contract or migration introduced.
 
 Luna stops and reports when a missing product decision would alter the spec, a required shared

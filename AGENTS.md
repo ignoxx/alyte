@@ -175,6 +175,16 @@ all code changes. Delegated implementation uses GPT-5.6 Luna at xhigh reasoning 
 worktree when parallel, and every Luna invokes Matt Pocock's `implement` skill. Follow the review
 and remediation sequence in `docs/agents/SOL-LUNA-ORCHESTRATION.md`.
 
+For every Expo/EAS or mobile-app task, invoke the official Expo skills: start with `expo-overview`,
+then load every leaf skill it routes the task to before planning or changing code. Apply the skills
+to Alyte's existing architecture; a framework migration or native-fingerprint change still requires
+an explicit ticket need and maintainer agreement.
+
+For every mobile UI task, also invoke `appllama-app-design-skill`. Use the pinned T3 Code mobile app
+as Alyte's concrete benchmark, extract patterns rather than pixels, and complete the skill's
+Simulator inspection loop before calling the interface done. Expo's official skill guidance decides
+SDK-compatible component and package choices when the two skill sets overlap.
+
 Optimize in this order: make the smallest complete experience work, validate that people use and
 pay for it, then improve it. Prefer shipping evidence over speculative abstraction, polish, or test
 coverage. There is no numeric coverage target.
