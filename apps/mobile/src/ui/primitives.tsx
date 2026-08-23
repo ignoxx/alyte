@@ -29,12 +29,15 @@ export function AppText({
 }: AppTextProps) {
   const { fontScale } = useWindowDimensions();
   const baseStyle = typography[variant];
-  // At standard and larger-but-non-accessibility sizes, keep the app's deliberate type rhythm.
-  // At the accessibility-size threshold, clear the explicit line box so the native text renderer
-  // can size each line around its scaled glyphs instead of clipping them or applying a second,
-  // oversized font-scale multiplier.
+  // React Native scales the glyphs for Dynamic Type, but an explicit lineHeight remains in the
+  // unscaled design-token coordinate space on iOS. Scale that line box with the same system factor
+  // so accessibility-sized glyphs get a content-sized line instead of being vertically clipped.
+  // At the default size this is exactly the existing design-system value, preserving the normal
+  // visual rhythm. Keeping allowFontScaling enabled is important: this only grows the line box.
   const dynamicTypeStyle =
-    allowFontScaling && fontScale >= 1.3 ? { lineHeight: undefined } : undefined;
+    allowFontScaling && typeof baseStyle.lineHeight === 'number'
+      ? { lineHeight: Math.ceil(baseStyle.lineHeight * fontScale) }
+      : undefined;
 
   return (
     <Text

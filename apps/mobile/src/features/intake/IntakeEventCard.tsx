@@ -170,7 +170,11 @@ export function IntakeEventCard({
           accessibilityLabel={`${componentNames} · ${time} · ${compactProvenanceLabel}`}
           accessibilityRole="button"
           onPress={onEdit}
-          style={({ pressed }) => [styles.compactMain, pressed && styles.rowPressed]}
+          style={({ pressed }) => [
+            styles.compactMain,
+            usesAccessibilityTextSize && styles.accessibilityCompactMain,
+            pressed && styles.rowPressed,
+          ]}
         >
           <AppIcon name="snap" size={21} />
           <View style={styles.compactBody}>
@@ -326,6 +330,7 @@ const styles = StyleSheet.create({
   compactBody: { flex: 1, gap: spacing.xs, minWidth: 0 },
   compactTitle: { flex: 1 },
   compactTitleRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
+  accessibilityCompactMain: { alignItems: 'flex-start' },
   accessibilityTitle: { flex: 0 },
   accessibilityTitleRow: { alignItems: 'flex-start', flexDirection: 'column' },
   compactMeta: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
