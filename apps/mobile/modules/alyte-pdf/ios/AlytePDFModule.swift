@@ -470,7 +470,7 @@ public final class AlytePDFModule: Module {
       Prop("accessibilityLabels") { (view: AlytePDFWorkspaceView, labels: [String: String]) in
         view.setAccessibilityLabels(labels)
       }
-      Events("onRedactionsChange", "onPageChange", "onReady", "onFailure")
+      Events("onRedactionsChange", "onPageChange", "onReady", "onFailure", "onSelectionChange")
       AsyncFunction("undo") { (view: AlytePDFWorkspaceView) in view.undoEdit() }
       AsyncFunction("redo") { (view: AlytePDFWorkspaceView) in view.redoEdit() }
       AsyncFunction("clearSelection") { (view: AlytePDFWorkspaceView) in view.clearSelection() }

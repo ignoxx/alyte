@@ -22,6 +22,7 @@ type Props = ViewProps & {
   readonly onPageChange?: (event: { nativeEvent: { readonly pageIndex: number } }) => void;
   readonly onReady?: (event: { nativeEvent: { readonly pageCount: number } }) => void;
   readonly onFailure?: (event: { nativeEvent: { readonly message: string } }) => void;
+  readonly onSelectionChange?: (event: { nativeEvent: { readonly selected: boolean } }) => void;
 };
 
 const NativeWorkspace = requireNativeView<Props>('AlytePDF');

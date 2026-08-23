@@ -20,6 +20,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   let onPageChange = EventDispatcher()
   let onReady = EventDispatcher()
   let onFailure = EventDispatcher()
+  let onSelectionChange = EventDispatcher()
 
   private let pdfView = PDFView()
   private let overlay = RedactionOverlayView()
@@ -29,8 +30,10 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   private var history: [[WorkspaceRedaction]] = []
   private var future: [[WorkspaceRedaction]] = []
   private var startRegions: [WorkspaceRedaction] = []
-  private var startPoint = CGPoint.zero
   private var labels: [String: String] = [:]
+  private var activeGestureID: String?
+  private var deferredRegions: [WorkspaceRedaction]?
+  private var deferredLabels: [String: String]?
 
   var sourcePath: String = "" { didSet { if oldValue != sourcePath { load() } } }
   var pageIndex: Int = 0 { didSet { if oldValue != pageIndex { showPage() } } }
@@ -77,7 +80,12 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
             let height = (rect["height"] as? NSNumber)?.doubleValue else { return nil }
       return WorkspaceRedaction(id: id, rect: CGRect(x: x, y: y, width: width, height: height))
     }
-    if next != regions { regions = next; selectedID = nil; history.removeAll(); future.removeAll(); layoutRegions() }
+    guard next != regions else { return }
+    if activeGestureID != nil {
+      deferredRegions = next
+      return
+    }
+    regions = next; selectedID = nil; history.removeAll(); future.removeAll(); layoutRegions()
   }
 
   func setCrop(_ value: [String: Any]?) {
@@ -90,16 +98,21 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     if next != crop { crop = next; showPage() }
   }
 
-  func setAccessibilityLabels(_ value: [String: String]) { labels = value; layoutRegions() }
+  func setAccessibilityLabels(_ value: [String: String]) {
+    guard value != labels else { return }
+    if activeGestureID != nil { deferredLabels = value; return }
+    labels = value; layoutRegions()
+  }
 
   func undoEdit() { guard let previous = history.popLast() else { return }; future.append(regions); regions = previous; emit(); layoutRegions() }
   func redoEdit() { guard let next = future.popLast() else { return }; history.append(regions); regions = next; emit(); layoutRegions() }
-  func clearSelection() { selectedID = nil; layoutRegions() }
+  func clearSelection() { selectedID = nil; onSelectionChange(["selected": false]); layoutRegions() }
   func removeSelected() {
     guard let selectedID, regions.contains(where: { $0.id == selectedID }) else { return }
     history.append(regions); future.removeAll()
     regions.removeAll { $0.id == selectedID }
     self.selectedID = nil
+    onSelectionChange(["selected": false])
     emit(); layoutRegions()
   }
 
@@ -152,6 +165,10 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   }
 
   private func layoutRegions() {
+    if let activeGestureID {
+      layoutActiveRegion(id: activeGestureID)
+      return
+    }
     overlay.subviews.forEach { $0.removeFromSuperview() }
     for region in regions {
       guard let frame = pageRect(region.rect) else { continue }
@@ -165,6 +182,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
       if selectedID == region.id { view.accessibilityTraits.insert(.selected) }
       view.accessibilityCustomActions = accessibilityActions(for: region.id)
       let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
+      pan.name = region.id
       view.addGestureRecognizer(pan)
       view.accessibilityIdentifier = region.id
       overlay.addSubview(view)
@@ -175,6 +193,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
         knob.backgroundColor = .systemYellow; knob.layer.cornerRadius = 8; handle.addSubview(knob)
         handle.accessibilityIdentifier = region.id
         let resize = UIPanGestureRecognizer(target: self, action: #selector(resized(_:)))
+        resize.name = region.id
         handle.addGestureRecognizer(resize); overlay.addSubview(handle)
       }
     }
@@ -217,6 +236,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
       let id = "user-redaction-\(UUID().uuidString)"
       regions.append(WorkspaceRedaction(id: id, rect: rect)); selectedID = id; emit()
     } else { selectedID = nil }
+    onSelectionChange(["selected": selectedID != nil])
     layoutRegions()
   }
 
@@ -224,22 +244,60 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   @objc private func resized(_ gesture: UIPanGestureRecognizer) { manipulate(gesture, resize: true) }
 
   private func manipulate(_ gesture: UIPanGestureRecognizer, resize: Bool) {
-    guard let id = gesture.view?.accessibilityIdentifier,
+    guard let id = gesture.name,
           let index = regions.firstIndex(where: { $0.id == id }) else { return }
-    if gesture.state == .began { selectedID = id; startRegions = regions; startPoint = gesture.location(in: overlay) }
-    let translation = gesture.translation(in: overlay)
-    guard let originalFrame = pageRect(startRegions[index].rect) else { return }
-    var frame = originalFrame
-    if resize { frame.size.width = max(24, originalFrame.width + translation.x); frame.size.height = max(24, originalFrame.height + translation.y) }
-    else { frame.origin.x += translation.x; frame.origin.y += translation.y }
-    frame.origin.x = max(0, min(bounds.width - frame.width, frame.origin.x))
-    frame.origin.y = max(0, min(bounds.height - frame.height, frame.origin.y))
-    guard let normalized = normalizedRect(frame) else { return }
-    regions[index].rect = normalized
-    layoutRegions()
-    if gesture.state == .ended || gesture.state == .cancelled {
-      history.append(startRegions); future.removeAll(); emit()
+    if gesture.state == .began {
+      activeGestureID = id
+      selectedID = id
+      onSelectionChange(["selected": true])
+      startRegions = regions
+      deferredRegions = nil
+      layoutActiveRegion(id: id)
     }
+    guard activeGestureID == id,
+          let original = startRegions.first(where: { $0.id == id }),
+          let pageFrame = pageRect(CGRect(x: 0, y: 0, width: 1, height: 1)) else { return }
+    let translation = gesture.translation(in: overlay)
+    regions[index].rect = AlytePDFWorkspaceGeometry.manipulated(
+      original: original.rect,
+      translation: translation,
+      pageFrame: pageFrame,
+      resize: resize
+    )
+    layoutActiveRegion(id: id)
+    if gesture.state == .ended {
+      if regions != startRegions { history.append(startRegions); future.removeAll() }
+      finishGesture(applyDeferredRegions: false)
+      emit()
+    } else if gesture.state == .cancelled || gesture.state == .failed {
+      regions = startRegions
+      finishGesture(applyDeferredRegions: true)
+    }
+  }
+
+  /// Keeps the recognizer's view in the hierarchy for the entire UIKit gesture lifecycle.
+  private func layoutActiveRegion(id: String) {
+    guard let region = regions.first(where: { $0.id == id }),
+          let frame = pageRect(region.rect) else { return }
+    let regionView = overlay.subviews.first {
+      $0.accessibilityIdentifier == id && $0.gestureRecognizers?.contains(where: { $0 is UIPanGestureRecognizer }) == true
+    }
+    regionView?.frame = frame
+    regionView?.backgroundColor = UIColor.black.withAlphaComponent(0.72)
+    regionView?.layer.borderWidth = 2
+    let handle = overlay.subviews.first {
+      $0 !== regionView && $0.gestureRecognizers?.contains(where: { $0.name == id }) == true
+    }
+    handle?.frame = CGRect(x: frame.maxX - 22, y: frame.maxY - 22, width: 44, height: 44)
+  }
+
+  private func finishGesture(applyDeferredRegions: Bool) {
+    activeGestureID = nil
+    if applyDeferredRegions, let deferredRegions { regions = deferredRegions }
+    deferredRegions = nil
+    if let deferredLabels { labels = deferredLabels }
+    deferredLabels = nil
+    layoutRegions()
   }
 
   @objc private func doubleTapped(_ gesture: UITapGestureRecognizer) {

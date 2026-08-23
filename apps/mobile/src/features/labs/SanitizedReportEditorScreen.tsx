@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Image, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
+import { Alert, Image, Modal, Pressable, StyleSheet, View, type ColorValue } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   useNavigation,
   usePreventRemove,
@@ -48,6 +50,7 @@ function passwordRequest(): PasswordRequest {
 }
 
 export function SanitizedReportEditorScreen() {
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation<EditorNavigation>();
   const route = useRoute<EditorRoute>();
   const { reports } = useServices();
@@ -59,6 +62,7 @@ export function SanitizedReportEditorScreen() {
   const [redactMode, setRedactMode] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  const [hasSelection, setHasSelection] = useState(false);
   const [pagesOpen, setPagesOpen] = useState(false);
   const [preview, setPreview] = useState<SanitizedReportPreview | null>(null);
   const [busy, setBusy] = useState(false);
@@ -252,6 +256,7 @@ export function SanitizedReportEditorScreen() {
           remove: t('labs.sanitizedEditorRemove'),
         }}
         onRedactionsChange={(event) => applyNativeRedactions(event.nativeEvent)}
+        onSelectionChange={(event) => setHasSelection(event.nativeEvent.selected)}
         onFailure={() => setError(t('labs.sanitizedEditorLoadError'))}
         accessibilityLabel={
           preview === null ? t('labs.sanitizedOriginalCanvas') : t('labs.sanitizedExactCanvas')
@@ -262,39 +267,46 @@ export function SanitizedReportEditorScreen() {
           <AppText>{t('labs.sanitizedEditorVerified')}</AppText>
         </View>
       )}
-      <View style={styles.toolbar} accessibilityRole="toolbar">
+      <View
+        style={[styles.toolbar, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}
+        accessibilityRole="toolbar"
+      >
         {preview === null ? (
           <>
-            <AppButton
-              label={t('labs.sanitizedRedact')}
-              onPress={() => {
-                setRedactMode((value) => !value);
-                void viewer.current?.clearSelection();
-              }}
-              tone={redactMode ? 'secondary' : 'quiet'}
-            />
-            <AppButton
-              disabled={!canUndo}
-              label={t('labs.sanitizedUndo')}
-              onPress={() => void viewer.current?.undo()}
-              tone="quiet"
-            />
-            <AppButton
-              disabled={!canRedo}
-              label={t('labs.sanitizedRedo')}
-              onPress={() => void viewer.current?.redo()}
-              tone="quiet"
-            />
-            <AppButton
-              label={t('labs.sanitizedEditorRemove')}
-              onPress={() => void viewer.current?.removeSelected()}
-              tone="quiet"
-            />
-            <AppButton
-              label={`${t('labs.sanitizedPages')} ${pageIndex + 1}/${recipe.pages.length}`}
-              onPress={() => setPagesOpen(true)}
-              tone="quiet"
-            />
+            <View style={styles.editingTools}>
+              <ToolbarAction
+                symbol="rectangle.dashed"
+                label={t('labs.sanitizedRedact')}
+                onPress={() => {
+                  setRedactMode((value) => !value);
+                  void viewer.current?.clearSelection();
+                }}
+                selected={redactMode}
+              />
+              <ToolbarAction
+                symbol="arrow.uturn.backward"
+                disabled={!canUndo}
+                label={t('labs.sanitizedUndo')}
+                onPress={() => void viewer.current?.undo()}
+              />
+              <ToolbarAction
+                symbol="arrow.uturn.forward"
+                disabled={!canRedo}
+                label={t('labs.sanitizedRedo')}
+                onPress={() => void viewer.current?.redo()}
+              />
+              <ToolbarAction
+                symbol="trash"
+                disabled={!hasSelection}
+                label={t('labs.sanitizedEditorRemove')}
+                onPress={() => void viewer.current?.removeSelected()}
+              />
+              <ToolbarAction
+                symbol="square.grid.2x2"
+                label={`${t('labs.sanitizedPages')} ${pageIndex + 1}/${recipe.pages.length}`}
+                onPress={() => setPagesOpen(true)}
+              />
+            </View>
             <AppButton
               disabled={busy}
               label={
@@ -450,14 +462,34 @@ const styles = StyleSheet.create({
   pageThumbnailExcluded: { opacity: 0.4 },
   root: { backgroundColor: colors.canvas, flex: 1 },
   toolbar: {
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-    justifyContent: 'center',
-    padding: spacing.sm,
+    backgroundColor: colors.elevatedSurface,
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
   },
+  editingTools: {
+    alignItems: 'stretch',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  toolbarAction: {
+    alignItems: 'center',
+    borderCurve: 'continuous',
+    borderRadius: 10,
+    flex: 1,
+    gap: 2,
+    justifyContent: 'center',
+    minHeight: 48,
+    minWidth: 44,
+    paddingHorizontal: 2,
+  },
+  toolbarActionPressed: { backgroundColor: colors.accentSoft },
+  toolbarActionSelected: { backgroundColor: colors.accentSoft },
+  toolbarActionDisabled: { opacity: 0.38 },
+  toolbarActionLabel: { color: colors.mutedInk, fontSize: 11, lineHeight: 14 },
+  toolbarActionLabelSelected: { color: colors.accent, fontWeight: '700' },
   verified: {
     backgroundColor: colors.surface,
     paddingHorizontal: spacing.md,
@@ -465,3 +497,45 @@ const styles = StyleSheet.create({
   },
   viewer: { flex: 1 },
 });
+
+function ToolbarAction({
+  symbol,
+  label,
+  disabled = false,
+  selected = false,
+  onPress,
+}: {
+  readonly symbol: string;
+  readonly label: string;
+  readonly disabled?: boolean;
+  readonly selected?: boolean;
+  readonly onPress: () => void;
+}) {
+  const tint: ColorValue = selected ? colors.accent : colors.mutedInk;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled, selected }}
+      disabled={disabled}
+      hitSlop={2}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.toolbarAction,
+        selected && styles.toolbarActionSelected,
+        pressed && !disabled && styles.toolbarActionPressed,
+        disabled && styles.toolbarActionDisabled,
+      ]}
+    >
+      <ExpoImage source={`sf:${symbol}`} style={{ color: tint, height: 18, width: 18 }} />
+      <AppText
+        maxFontSizeMultiplier={1.35}
+        numberOfLines={1}
+        style={[styles.toolbarActionLabel, selected && styles.toolbarActionLabelSelected]}
+        variant="caption"
+      >
+        {label}
+      </AppText>
+    </Pressable>
+  );
+}
