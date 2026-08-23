@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import {
   useNavigation,
@@ -7,6 +7,7 @@ import {
   type NavigationProp,
   type RouteProp,
 } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { parseComparatorValue, type ExtractionDraftRow } from '@alyte/domain';
 import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
@@ -16,7 +17,10 @@ import { colors, spacing } from '../../theme';
 import { extractionNeedsResolution, sourceRegionPresentation } from './extraction-ui-model';
 
 type EditorRoute = RouteProp<LabsStackParamList, 'ExtractionMeasurementEditor'>;
-type EditorNavigation = NavigationProp<LabsStackParamList>;
+type EditorNavigation = NativeStackNavigationProp<
+  LabsStackParamList,
+  'ExtractionMeasurementEditor'
+>;
 
 type RowEdit = {
   readonly label: string;
@@ -24,6 +28,8 @@ type RowEdit = {
   readonly unit: string;
   readonly reference: string;
 };
+
+type SourcePreviewParams = RootStackParamList['SanitizedSourcePreview'];
 
 function valueText(row: ExtractionDraftRow): string {
   const value = row.proposedValue;
@@ -52,6 +58,8 @@ export function ExtractionMeasurementEditorScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [allowRemove, setAllowRemove] = useState(false);
+  const [pendingPreview, setPendingPreview] = useState<SourcePreviewParams | null>(null);
+  const previewRequestPending = useRef(false);
   const initialEdit = useMemo(() => (row === null ? null : editFrom(row)), [row]);
   const dirty =
     edit !== null && initialEdit !== null && JSON.stringify(edit) !== JSON.stringify(initialEdit);
@@ -94,6 +102,19 @@ export function ExtractionMeasurementEditorScreen() {
       ),
     });
   }, [navigation]);
+
+  useEffect(() => {
+    if (pendingPreview === null) return;
+    navigation.popTo(
+      'ExtractionDraft',
+      {
+        reportId: route.params.reportId,
+        draftId: route.params.draftId,
+        sourcePreview: pendingPreview,
+      },
+      { merge: true },
+    );
+  }, [navigation, pendingPreview, route.params.draftId, route.params.reportId]);
 
   async function save(): Promise<ExtractionDraftRow | null> {
     if (row === null || edit === null) return null;
@@ -142,19 +163,19 @@ export function ExtractionMeasurementEditorScreen() {
   }
 
   async function viewInReport() {
+    if (previewRequestPending.current) return;
+    previewRequestPending.current = true;
     const saved = dirty ? await save() : row;
-    if (saved === null) return;
+    if (saved === null) {
+      previewRequestPending.current = false;
+      return;
+    }
     const target = sourceRegionPresentation(saved);
-    const root = navigation.getParent()?.getParent<NavigationProp<RootStackParamList>>();
-    if (root === undefined) return;
     setAllowRemove(true);
-    navigation.goBack();
-    requestAnimationFrame(() => {
-      root.navigate('SanitizedSourcePreview', {
-        reportId: route.params.reportId,
-        pageIndex: target.pageIndex,
-        boundingBox: target.boundingBox,
-      });
+    setPendingPreview({
+      reportId: route.params.reportId,
+      pageIndex: target.pageIndex,
+      boundingBox: target.boundingBox,
     });
   }
 

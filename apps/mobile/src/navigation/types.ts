@@ -19,7 +19,11 @@ export type MainTabParamList = {
 export type LabsStackParamList = {
   LabsRoot: undefined;
   LabReportDetail: { readonly reportId: string };
-  ExtractionDraft: { readonly reportId: string; readonly draftId: string };
+  ExtractionDraft: {
+    readonly reportId: string;
+    readonly draftId: string;
+    readonly sourcePreview?: RootStackParamList['SanitizedSourcePreview'];
+  };
   ExtractionMeasurementEditor: {
     readonly reportId: string;
     readonly draftId: string;
