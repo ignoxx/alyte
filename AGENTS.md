@@ -182,10 +182,11 @@ Use fixtures and wording guards to keep the hard-guardrail patterns out of user-
 When implementing an MVP ticket, read its complete GitHub issue, `docs/MVP.md`, and
 `docs/agents/SOL-LUNA-ORCHESTRATION.md`. GitHub Issues is the ticket source of truth; local scratch
 generation artifacts are not authoritative. Sol owns dependency-frontier scheduling and
-integration, including the single post-implementation review and its remediation brief; Luna owns
-all code changes. Delegated implementation uses GPT-5.6 Luna at xhigh reasoning in an isolated
-worktree when parallel, and every Luna invokes Matt Pocock's `implement` skill. Follow the review
-and remediation sequence in `docs/agents/SOL-LUNA-ORCHESTRATION.md`.
+integration, including the single post-implementation review and its remediation brief;
+implementation subagents own all code changes. Delegated implementation uses GPT-5.6 Sol at light
+reasoning in an isolated worktree when parallel, and every implementation subagent invokes Matt
+Pocock's `implement` skill. Follow the review and remediation sequence in
+`docs/agents/SOL-LUNA-ORCHESTRATION.md`.
 
 For every Expo/EAS or mobile-app task, invoke the official Expo skills: start with `expo-overview`,
 then load every leaf skill it routes the task to before planning or changing code. Apply the skills

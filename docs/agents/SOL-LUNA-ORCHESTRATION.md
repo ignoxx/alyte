@@ -1,4 +1,4 @@
-# Sol/Luna ticket orchestration
+# Sol ticket orchestration
 
 Use this runbook when implementation work is delegated from an Alyte ticket. It governs scheduling,
 isolation, review, and integration; product behavior remains authoritative in the MVP spec and ADRs.
@@ -10,10 +10,11 @@ risk, creates worktrees, writes the complete assignment prompt, owns the one pos
 review, turns accepted findings into a remediation brief, integrates commits, runs cross-ticket
 verification, and updates ticket status. Sol does not implement ticket code.
 
-**Luna is the implementer.** Every implementation assignment uses model `gpt-5.6-luna` with
-reasoning effort `xhigh`. Luna receives one ticket sized for a fresh context, works only in the
-assigned branch and worktree, invokes Matt Pocock's `implement` skill, and returns an implementation
-commit for Sol's review. Luna also owns every remediation code change Sol requests.
+**The implementation subagent is the implementer.** Every implementation assignment uses model
+`gpt-5.6-sol` with reasoning effort `low`. The subagent receives one ticket sized for a fresh
+context, works only in the assigned branch and worktree, invokes Matt Pocock's `implement` skill,
+and returns an implementation commit for Sol's review. The subagent also owns every remediation
+code change Sol requests.
 
 Project-wide architecture, dependency scheduling, shared-interface ownership, and integration stay
 with Sol.
@@ -30,8 +31,8 @@ Sol dispatches a ticket only when:
 5. the base branch is green; and
 6. the assignment fits one fresh agent context.
 
-Sol splits a ticket that exceeds the context bound before dispatch. A running Luna stays within the
-assigned scope.
+Sol splits a ticket that exceeds the context bound before dispatch. A running implementation
+subagent stays within the assigned scope.
 
 ## Frontier and collision lanes
 
@@ -52,14 +53,14 @@ At most one active ticket owns a lane. A ticket may consume stable interfaces fr
 without owning it. A shared file makes tickets collision-prone even when their feature names differ;
 Sol schedules those tickets sequentially or first lands an extension point.
 
-The collaboration limit permits Sol plus three Luna agents. Three is a ceiling, not a target:
-dispatch only the conflict-free subset of the frontier.
+The collaboration limit permits Sol plus three implementation subagents. Three is a ceiling, not a
+target: dispatch only the conflict-free subset of the frontier.
 
 ## Worktrees and exclusive resources
 
 Ticket 01 establishes the repository and first green commit in the primary worktree. After that,
-every parallel Luna receives a branch named `agent/<ticket>-<slug>` and a dedicated sibling
-worktree. The primary worktree remains Sol's integration surface.
+every parallel implementation subagent receives a branch named `agent/<ticket>-<slug>` and a
+dedicated sibling worktree. The primary worktree remains Sol's integration surface.
 
 Sol records the base commit before dispatch. Agents do not switch branches in another worktree,
 edit the primary worktree, rewrite shared history, merge the manager branch, or delete worktrees.
@@ -71,10 +72,10 @@ catalogue identifiers, root navigation registration, and generated native projec
 resources. Sol grants one ticket explicit ownership or lands the shared change before consumers
 start.
 
-## Luna assignment contract
+## Implementation-subagent contract
 
-Every Luna prompt states the ticket number, worktree, base commit, owned lane, permitted shared
-surfaces, and required reading. It tells Luna to:
+Every implementation prompt states the ticket number, worktree, base commit, owned lane, permitted
+shared surfaces, and required reading. It tells the subagent to:
 
 1. read the active agent instructions, domain glossary, relevant ADRs, MVP spec, and assigned ticket;
 2. invoke Matt Pocock's `implement` skill for the ticket;
@@ -90,8 +91,8 @@ surfaces, and required reading. It tells Luna to:
 8. report the commit hash, tests run, acceptance criteria satisfied, residual risks, and any shared
    contract or migration introduced.
 
-Luna stops and reports when a missing product decision would alter the spec, a required shared
-surface belongs to another active agent, or real health data would be required.
+The implementation subagent stops and reports when a missing product decision would alter the spec,
+a required shared surface belongs to another active agent, or real health data would be required.
 
 ## Sol integration contract
 
@@ -100,10 +101,12 @@ For each returned branch, Sol:
 1. confirms the commit is based on the recorded base and contains only the assigned slice;
 2. invokes Matt Pocock's `code-review` skill exactly once against the recorded base and assigned
    GitHub issue; the skill's internal Standards and Spec reviewers together count as that one pass;
-3. filters the findings against the ticket boundary and sends Luna one consolidated, high-level
-   remediation brief containing every accepted change, rather than prescribing line edits;
-4. has Luna implement and commit the accepted remediation, then checks only that the named findings
-   are resolved and the affected tests pass—Sol does not run a second review skill pass or edit code;
+3. filters the findings against the ticket boundary and sends the implementation subagent one
+   consolidated, high-level remediation brief containing every accepted change, rather than
+   prescribing line edits;
+4. has the implementation subagent implement and commit the accepted remediation, then checks only
+   that the named findings are resolved and the affected tests pass—Sol does not run a second review
+   skill pass or edit code;
 5. reruns focused tests and integration checks affected by already-merged tickets;
 6. integrates one branch at a time and resolves no semantic conflict without rechecking both tickets;
 7. runs combined typechecking and relevant tests after each integration;

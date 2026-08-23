@@ -18,7 +18,7 @@ Build one complete vertical path before adding breadth:
 That path is the release. Snap, cloud recognition, purchases, and wider catalogue coverage are added
 only while it stays green.
 
-Agent scheduling, worktree isolation, Luna execution, and Sol integration follow
+Agent scheduling, worktree isolation, delegated execution, and Sol integration follow
 `docs/agents/SOL-LUNA-ORCHESTRATION.md`. Planning artifacts alone do not authorize implementation.
 
 Delivery priorities are sequential: first make the smallest complete product work; then validate
