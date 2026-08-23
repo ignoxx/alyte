@@ -15,11 +15,15 @@ import {
 import {
   groupObservationsIntoRows,
   parseLabDate,
+  revalidateExtractionRow,
+  validateSemanticProposals,
   type ExtractionAliasEntry,
   type ExtractionDraft,
   type ExtractionDraftRow,
   type ExtractionDraftRowPatch,
   type ExtractionDateContext,
+  type ExtractionSemanticMapper,
+  type ExtractionSemanticProposal,
   type VisionTextObservation,
   type VisionOCRResult,
   type SpecimenType,
@@ -142,6 +146,7 @@ export type LabReportsServiceOptions = {
   readonly passwordRequest?: PasswordRequest;
   readonly visionOCR?: VisionOCR;
   readonly extractionAliases?: readonly ExtractionAliasEntry[];
+  readonly semanticMapper?: ExtractionSemanticMapper;
 };
 
 type ImportOutcome = { readonly report: LabReport; readonly duplicate: boolean };
@@ -254,6 +259,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       specimens: entry.specimens,
       units: entry.units,
     }));
+  const semanticMapper = options.semanticMapper;
   const now = options.now ?? isoNow;
   const makeId = options.idGenerator ?? ((prefix: string) => createSortableOpaqueId(prefix));
   const sanitizationSessions = new Map<string, Awaited<ReturnType<PdfInspector['unlock']>>>();
@@ -1100,9 +1106,60 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     return 'unknown';
   }
 
+  async function applySemanticMappings(
+    rows: readonly ExtractionDraftRow[],
+    observations: readonly VisionTextObservation[],
+  ): Promise<readonly ExtractionDraftRow[]> {
+    if (semanticMapper === undefined) return rows;
+    const chunks = new Map<string, VisionTextObservation[]>();
+    for (const observation of observations) {
+      const table = observation.structure?.tableId ?? 'page';
+      const key = `${observation.pageIndex}:${table}`;
+      const chunk = chunks.get(key) ?? [];
+      chunk.push(observation);
+      chunks.set(key, chunk);
+    }
+    const proposals: ExtractionSemanticProposal[] = [];
+    for (const chunk of chunks.values()) {
+      const locale = chunk[0]?.recognition.language ?? null;
+      if (!semanticMapper.supports(locale)) continue;
+      const input = { pageIndex: chunk[0]?.pageIndex ?? 0, observations: chunk };
+      proposals.push(
+        ...validateSemanticProposals(await semanticMapper.map(input), chunk, extractionAliases),
+      );
+    }
+    return rows.map((row) => {
+      const proposal = proposals.find((item) =>
+        item.sourceObservationIds.every((id) => row.source.observationIds.includes(id)),
+      );
+      if (proposal === undefined || proposal.proposedBiomarkerId === null) return row;
+      const next = revalidateExtractionRow(
+        row,
+        { proposedBiomarkerId: proposal.proposedBiomarkerId },
+        extractionAliases,
+      );
+      if (
+        next.reviewReasons.includes('incompatible-unit') ||
+        next.reviewReasons.includes('incompatible-specimen')
+      )
+        return row;
+      return {
+        ...next,
+        source: {
+          ...row.source,
+          semantic: {
+            adapterVersion: semanticMapper.adapterVersion,
+            schemaVersion: semanticMapper.schemaVersion,
+            sourceObservationIds: proposal.sourceObservationIds,
+          },
+        },
+      };
+    });
+  }
+
   async function startExtraction(
     id: string,
-    passwordRequest?: PasswordRequest,
+    _passwordRequest?: PasswordRequest,
   ): Promise<ExtractionDraft> {
     return serialized(async () => {
       await ensureInitialized();
@@ -1114,58 +1171,27 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       }
       const existingDraft = await repo.getExtractionDraftForReport(id);
       if (existingDraft !== null) return existingDraft;
-      const integrity = await verifySource(id);
-      if (integrity !== 'verified')
-        throw new Error('Original Report integrity could not be verified');
-      // Database paths are portable container-independent URIs. Resolve and validate ownership
-      // once at the adapter boundary before passing the current absolute path to PDFKit/Vision.
-      const sanitized = await repo.getSanitizedReport(id);
-      const extractionPath =
-        sanitized?.verificationState === 'verified' && sanitized.artifactPath !== null
-          ? sanitized.artifactPath
-          : report.originalPath;
-      // Once a verified Sanitized Report exists it is the only artifact Vision receives. The
-      // original remains a compatibility fallback for image imports and pre-sanitization drafts.
-      const sourcePath = await nativePath(extractionPath);
-      let password: string | null = null;
-      if (report.sourceType === 'pdf') {
-        const inspection = await pdfInspector.inspect(sourcePath);
-        if (inspection.locked) {
-          const request = passwordRequest ?? options.passwordRequest;
-          if (request === undefined) {
-            throw new LabReportImportError(
-              report,
-              'wrong-password',
-              'A password is required to extract this PDF',
-            );
-          }
-          const entered = await request({ report, attempt: 1 });
-          if (entered === null || entered.length === 0) {
-            throw new LabReportImportError(report, 'cancelled', 'Password entry was cancelled');
-          }
-          password = entered;
-        }
-      }
+      const sanitized = await previewSanitizedReport(id);
+      const sourcePath = sanitized.artifactPath;
       try {
         const results: VisionOCRResult[] = [];
-        const pages = report.pages.length > 0 ? report.pages : [{ pageIndex: 0, rotation: 0 }];
+        const pages = sanitized.uris.map((_, pageIndex) => ({ pageIndex, rotation: 0 }));
         for (const page of pages) {
-          results.push(
-            await visionOCR.recognize(sourcePath, page.pageIndex, page.rotation, password),
-          );
+          results.push(await visionOCR.recognize(sourcePath, page.pageIndex, page.rotation, null));
         }
         const dateContext = dateContextFromOCR(results);
         const observations = results
           .flatMap((result) => result.observations)
           .filter((observation) => !dateContext.excludedObservationIds.has(observation.id));
         const specimenType = specimenTypeFromOCR(results);
-        const rows = groupObservationsIntoRows(observations, {
+        const deterministicRows = groupObservationsIntoRows(observations, {
           locale: Intl.DateTimeFormat().resolvedOptions().locale,
           collectionDate: dateContext.collectionDate,
           collectionDateContexts: dateContext.contexts,
           specimenType,
           aliases: extractionAliases,
         });
+        const rows = await applySemanticMappings(deterministicRows, observations);
         if (rows.length === 0) throw new Error('Local OCR found no reviewable source rows');
         return repo.createExtractionDraft({
           reportId: id,
@@ -1173,9 +1199,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           rows,
         });
       } finally {
-        // Keep the PDF password in memory only for the current OCR session. It is never passed to
-        // persistence, diagnostics, or a cloud operation.
-        password = null;
+        // The verified Sanitized Report is already flattened and unlocked; no source password is
+        // passed to Vision or retained by extraction.
       }
     });
   }

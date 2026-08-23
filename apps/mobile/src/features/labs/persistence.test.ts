@@ -91,7 +91,7 @@ function createRepository(databasePath = temporaryDatabase(), databaseProtection
 
 describe('protected manual Lab Record persistence', () => {
   test('Extraction Draft preserves source locations and confirms atomically/idempotently', async () => {
-    const { repository, database } = createRepository();
+    const { repository, database, databasePath } = createRepository();
     await repository.createReport({
       id: 'report-extraction',
       sourceType: 'image',
@@ -114,12 +114,13 @@ describe('protected manual Lab Record persistence', () => {
       [
         {
           id: 'source-row-1',
-          text: 'LDL-C 3,8 mmol/L',
-          alternatives: [],
+          text: ' LDL-C 3,8 mmol/L ',
+          alternatives: ['LDL-C 3.6 mmol/L'],
           boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
           pageIndex: 0,
           orientation: 0,
           recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+          structure: { kind: 'table-cell', tableId: 'table-0', rowIndex: 1, columnIndex: 0 },
         },
       ],
       { aliases, collectionDate: { kind: 'missing' }, specimenType: 'blood' },
@@ -131,23 +132,33 @@ describe('protected manual Lab Record persistence', () => {
       rows: rows.map((row) => ({ ...row, decision: 'preserve' as const })),
     });
     assert.equal(draft.rows[0]?.source.pageIndex, 0);
-    const records = await repository.confirmExtractionDraft(draft.id);
+    assert.equal(draft.rows[0]?.source.observations?.[0]?.text, ' LDL-C 3,8 mmol/L ');
+    assert.equal(draft.rows[0]?.source.observations?.[0]?.structure?.tableId, 'table-0');
+    await database.closeAsync();
+    const relaunched = createRepository(databasePath);
+    const reopened = await relaunched.repository.getExtractionDraft(draft.id);
+    assert.equal(reopened?.rows[0]?.source.observations?.[0]?.text, ' LDL-C 3,8 mmol/L ');
+    const records = await relaunched.repository.confirmExtractionDraft(draft.id);
     assert.equal(records.length, 1);
     assert.equal(records[0]?.collectionDate.kind, 'missing');
     assert.equal(records[0]?.specimenType, 'blood');
     assert.equal(records[0]?.measurements[0]?.source?.boundingBox.x, 0.1);
     assert.deepEqual(records[0]?.measurements[0]?.source?.observationIds, ['source-row-1']);
+    assert.equal(
+      records[0]?.measurements[0]?.source?.observations?.[0]?.text,
+      ' LDL-C 3,8 mmol/L ',
+    );
     assert.equal(records[0]?.measurements[0]?.original.valueString, '3,8');
     assert.equal(records[0]?.measurements[0]?.original.value.kind, 'numeric');
     assert.equal(records[0]?.measurements[0]?.current.valueString, '3.8');
-    const repeated = await repository.confirmExtractionDraft(draft.id);
+    const repeated = await relaunched.repository.confirmExtractionDraft(draft.id);
     assert.deepEqual(
       repeated.map((record) => record.id),
       records.map((record) => record.id),
     );
     assert.equal(
       (
-        await database.getAllAsync(
+        await relaunched.database.getAllAsync(
           'SELECT id FROM lab_records WHERE lab_report_id = ?',
           'report-extraction',
         )
@@ -156,16 +167,16 @@ describe('protected manual Lab Record persistence', () => {
     );
     assert.equal(
       (
-        await database.getAllAsync(
+        await relaunched.database.getAllAsync(
           'SELECT id FROM measurements WHERE lab_record_id = ?',
           records[0]?.id,
         )
       ).length,
       1,
     );
-    const preservedDraft = await repository.getExtractionDraft(draft.id);
+    const preservedDraft = await relaunched.repository.getExtractionDraft(draft.id);
     assert.equal(preservedDraft?.rows[0]?.sourceText, 'LDL-C 3,8 mmol/L');
-    await repository.close();
+    await relaunched.repository.close();
   });
 
   test('enforces explicit extraction decisions and keeps source provenance through correction', async () => {

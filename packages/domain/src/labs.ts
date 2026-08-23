@@ -34,6 +34,22 @@ export type MeasurementSourceLocation = {
   readonly orientation: number;
   /** OCR observations contributing to this source region, when extracted. */
   readonly observationIds?: readonly string[];
+  readonly observations?: readonly {
+    readonly id: string;
+    readonly text: string;
+    readonly pageIndex: number;
+    readonly boundingBox: {
+      readonly x: number;
+      readonly y: number;
+      readonly width: number;
+      readonly height: number;
+    };
+  }[];
+  readonly semantic?: {
+    readonly adapterVersion: string;
+    readonly schemaVersion: 'alyte.semantic-mapper.v1';
+    readonly sourceObservationIds: readonly string[];
+  } | null;
 };
 
 export type MeasurementCorrection = {

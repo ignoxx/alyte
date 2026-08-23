@@ -418,6 +418,13 @@ describe('local extraction domain', () => {
         { sourceObservationIds: ['source-1'], proposedBiomarkerId: 'biomarker.ldl_c' as never },
         { sourceObservationIds: ['invented'], proposedBiomarkerId: 'biomarker.ldl_c' as never },
         { sourceObservationIds: ['source-1'], proposedBiomarkerId: 'biomarker.invented' as never },
+        {
+          sourceObservationIds: ['source-1'],
+          proposedBiomarkerId: 'biomarker.ldl_c',
+          value: '4.2',
+          unit: 'mg/dL',
+          medicalCopy: 'invented explanation',
+        },
       ],
       [observation],
       aliases,

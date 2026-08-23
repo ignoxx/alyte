@@ -20,6 +20,7 @@ import {
 } from '@alyte/domain';
 import {
   buildExtractionConfirmationPlan,
+  decodeVisionOCRResult,
   EXTRACTION_PARSER_VERSION,
   VISION_OCR_CONTRACT_VERSION,
   proposeBiomarkerId,
@@ -249,11 +250,48 @@ function sourceLocationFromUnknown(row: {
     typeof box.observationIds === 'object' && Array.isArray(box.observationIds)
       ? box.observationIds.filter((value): value is string => typeof value === 'string')
       : [];
+  const observations = decodeStoredObservations(
+    box.observations,
+    row.source_page_index,
+    row.source_orientation,
+  );
   return {
     pageIndex: row.source_page_index,
     boundingBox,
     orientation: row.source_orientation,
     observationIds,
+    observations,
+    semantic: decodeStoredSemantic(box.semantic),
+  };
+}
+
+function decodeStoredObservations(value: unknown, pageIndex: number, orientation: number) {
+  if (value === undefined) return [];
+  return decodeVisionOCRResult({
+    contractVersion: VISION_OCR_CONTRACT_VERSION,
+    pageIndex,
+    orientation,
+    observations: value,
+  }).observations;
+}
+
+function decodeStoredSemantic(
+  value: unknown,
+): NonNullable<ExtractionDraftRow['source']['semantic']> | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object') throw new Error('Invalid extraction semantic provenance');
+  const item = value as Record<string, unknown>;
+  if (
+    typeof item.adapterVersion !== 'string' ||
+    item.schemaVersion !== 'alyte.semantic-mapper.v1' ||
+    !Array.isArray(item.sourceObservationIds) ||
+    item.sourceObservationIds.some((id) => typeof id !== 'string')
+  )
+    throw new Error('Invalid extraction semantic provenance');
+  return {
+    adapterVersion: item.adapterVersion,
+    schemaVersion: item.schemaVersion,
+    sourceObservationIds: item.sourceObservationIds as string[],
   };
 }
 
@@ -268,6 +306,8 @@ function sourceLocationValue(value: unknown): Measurement['source'] {
         ? candidate.boundingBox
         : {}),
       observationIds: candidate.observationIds,
+      observations: candidate.observations,
+      semantic: candidate.semantic,
     }),
     source_orientation: candidate.orientation,
   });
@@ -339,6 +379,7 @@ function extractionRowFromDb(row: ExtractionDraftRowDb): ExtractionDraftRow {
           (candidate): candidate is string => typeof candidate === 'string',
         )
       : [];
+  const observations = decodeStoredObservations(sourceBox.observations, pageIndex, orientation);
   return {
     id: requiredString(row.id, 'extraction row id'),
     order: typeof row.row_order === 'number' ? row.row_order : Number(row.row_order),
@@ -353,7 +394,14 @@ function extractionRowFromDb(row: ExtractionDraftRowDb): ExtractionDraftRow {
       'extraction source reference interval',
     ),
     sourceFlag: nullableString(row.source_flag, 'extraction source flag'),
-    source: { pageIndex, boundingBox, orientation, observationIds },
+    source: {
+      pageIndex,
+      boundingBox,
+      orientation,
+      observationIds,
+      observations,
+      semantic: decodeStoredSemantic(sourceBox.semantic),
+    },
     collectionDateContext: dateContext,
     proposedLabel: requiredString(row.proposed_label, 'extraction proposed label'),
     proposedValue: value,
@@ -766,6 +814,8 @@ export function createLabRepository(
             : JSON.stringify({
                 ...measurementInput.source.boundingBox,
                 observationIds: measurementInput.source.observationIds ?? [],
+                observations: measurementInput.source.observations ?? [],
+                semantic: measurementInput.source.semantic ?? null,
               }),
           measurementInput.source?.orientation ?? null,
           provenance,
@@ -907,12 +957,16 @@ export function createLabRepository(
             : JSON.stringify({
                 ...existing.source.boundingBox,
                 observationIds: existing.source.observationIds ?? [],
+                observations: existing.source.observations ?? [],
+                semantic: existing.source.semantic ?? null,
               })
           : input.source === null
             ? null
             : JSON.stringify({
                 ...input.source.boundingBox,
                 observationIds: input.source.observationIds ?? [],
+                observations: input.source.observations ?? [],
+                semantic: input.source.semantic ?? null,
               }),
         input.source === undefined
           ? (existing.source?.orientation ?? null)
@@ -1058,7 +1112,12 @@ export function createLabRepository(
           row.sourceReferenceInterval,
           row.sourceFlag,
           row.source.pageIndex,
-          JSON.stringify({ ...row.source.boundingBox, observationIds: row.source.observationIds }),
+          JSON.stringify({
+            ...row.source.boundingBox,
+            observationIds: row.source.observationIds,
+            observations: row.source.observations ?? [],
+            semantic: row.source.semantic ?? null,
+          }),
           row.source.orientation,
           row.proposedLabel,
           JSON.stringify(row.proposedValue),
@@ -1212,6 +1271,8 @@ export function createLabRepository(
             JSON.stringify({
               ...measurement.source.boundingBox,
               observationIds: measurement.source.observationIds,
+              observations: measurement.source.observations ?? [],
+              semantic: measurement.source.semantic ?? null,
             }),
             measurement.source.orientation,
             measurement.provenance,

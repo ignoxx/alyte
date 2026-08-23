@@ -30,7 +30,7 @@ final class AlyteVisionModuleTests: XCTestCase {
     XCTAssertThrowsError(try alyteRotatedPDFImage(image, orientation: 45))
   }
 
-  func testPDFKitRasterProducesVisionObservationsForSyntheticLabText() throws {
+  func testPDFKitRasterProducesStructuredDocumentObservationsForSyntheticLabText() async throws {
     let source = UIGraphicsImageRenderer(size: CGSize(width: 596, height: 842)).image { context in
       UIColor.white.setFill()
       context.fill(CGRect(x: 0, y: 0, width: 596, height: 842))
@@ -38,7 +38,7 @@ final class AlyteVisionModuleTests: XCTestCase {
         .font: UIFont.systemFont(ofSize: 18),
         .foregroundColor: UIColor.black,
       ]
-      NSString(string: "Collection date 20.08.2026\nLDL cholesterol 118 mg/dL < 115")
+      NSString(string: "Synthetic Laboratory\nCollection date 20.08.2026\nLDL cholesterol       118 mg/dL       < 115\nLicence 0000")
         .draw(at: CGPoint(x: 48, y: 80), withAttributes: attributes)
     }
     let document = PDFDocument()
@@ -49,10 +49,14 @@ final class AlyteVisionModuleTests: XCTestCase {
     XCTAssertTrue(document.write(to: url))
 
     let image = try renderedImage(path: url.path, pageIndex: 0, orientation: 0, password: nil)
-    let request = VNRecognizeTextRequest()
-    request.recognitionLevel = .accurate
-    try VNImageRequestHandler(cgImage: image, orientation: .up).perform([request])
+    var request = RecognizeDocumentsRequest()
+    request.textRecognitionOptions.automaticallyDetectLanguage = true
+    request.textRecognitionOptions.maximumCandidateCount = 5
+    let documents = try await request.perform(on: image, orientation: .up)
 
-    XCTAssertFalse(request.results?.isEmpty ?? true)
+    XCTAssertFalse(documents.isEmpty)
+    XCTAssertTrue(documents.flatMap { $0.document.text.lines }.contains {
+      $0.transcript.contains("LDL")
+    })
   }
 }

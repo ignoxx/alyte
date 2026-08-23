@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { LabReportSourceIntegrity, VisionOCRResult } from '@alyte/domain';
+import type {
+  ExtractionSemanticMapper,
+  LabReportSourceIntegrity,
+  VisionOCRResult,
+} from '@alyte/domain';
 import { createLabRepository, type LabRepository, type SqliteDatabase } from './persistence';
 import {
   type LabSourceSelection,
@@ -18,6 +22,9 @@ import type { PdfSanitizedVerification } from './pdf';
 import type { VisionOCR } from './vision';
 import type { DatabaseProtection } from './protection';
 import { addRedaction } from '@alyte/domain';
+import { groupObservationsIntoRows } from '@alyte/domain';
+import { comparableBiomarkers } from '@alyte/catalogue';
+import { multilingualLabTableFixtures } from '@alyte/fixtures';
 
 class NodeSqliteDatabase implements SqliteDatabase {
   readonly databasePath: string;
@@ -300,12 +307,14 @@ function createService(
   files: FakeFiles,
   pdf: PdfInspector = new FakePdf(),
   visionOCR?: VisionOCR,
+  semanticMapper?: ExtractionSemanticMapper,
 ): LabReportsService {
   return createLabReportsService({
     repositoryFactory: async () => repository,
     fileService: files,
     pdfInspector: pdf,
     ...(visionOCR === undefined ? {} : { visionOCR }),
+    ...(semanticMapper === undefined ? {} : { semanticMapper }),
     idGenerator: (() => {
       let count = 0;
       return (prefix: string) => `${prefix}-fixed-${++count}`;
@@ -313,7 +322,42 @@ function createService(
   });
 }
 
+async function prepareSanitizedExtraction(service: LabReportsService, reportId: string) {
+  const editor = await service.openSanitizationEditor(reportId);
+  await service.saveSanitizedReport(reportId, editor.recipe);
+}
+
+function sanitizingPdf(files: FakeFiles): SanitizingPdf {
+  const pdf = new SanitizingPdf();
+  pdf.files = files;
+  return pdf;
+}
+
 describe('protected Lab Report import lifecycle', () => {
+  test('exercises the synthetic Lithuanian, English, and German extraction fixtures', () => {
+    const aliases = comparableBiomarkers.map((entry) => ({
+      id: entry.id,
+      aliases: entry.aliases,
+      specimens: entry.specimens,
+      units: entry.units,
+    }));
+    const counts = Object.fromEntries(
+      Object.entries(multilingualLabTableFixtures).map(([locale, lines]) => {
+        const observations = lines.map((text, index) => ({
+          id: `${locale}-${index}`,
+          text,
+          alternatives: [],
+          pageIndex: 0,
+          orientation: 0,
+          boundingBox: { x: 0.05, y: 0.05 + index * 0.12, width: 0.9, height: 0.04 },
+          recognition: { level: 'accurate' as const, language: locale, internalConfidence: null },
+        }));
+        return [locale, groupObservationsIntoRows(observations, { aliases }).length];
+      }),
+    );
+    assert.deepEqual(counts, { lt: 2, en: 1, de: 1 });
+  });
+
   test('local extraction creates an editable draft from untrusted OCR with source provenance', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
@@ -337,8 +381,9 @@ describe('protected Lab Report import lifecycle', () => {
         };
       },
     };
-    const service = createService(repository, files, new FakePdf(), ocr);
-    const report = (await service.importImages([source('extraction-image', 'image')]))[0]!.report;
+    const service = createService(repository, files, sanitizingPdf(files), ocr);
+    const report = (await service.importPdf(source('extraction-pdf')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
     const draft = await service.startExtraction(report.id);
     assert.equal(draft.rows.length, 1);
     assert.equal(draft.rows[0]?.source.pageIndex, 0);
@@ -354,6 +399,121 @@ describe('protected Lab Report import lifecycle', () => {
     const records = await service.confirmExtraction(draft.id);
     assert.equal(records.length, 1);
     assert.equal(records[0]?.measurements[0]?.original.valueString, '3,8');
+  });
+
+  test('refuses extraction before a current Sanitized Report is verified', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    let recognitionCalls = 0;
+    const service = createService(repository, files, new FakePdf(), {
+      async recognize() {
+        recognitionCalls += 1;
+        throw new Error('Vision must not receive an Original Report');
+      },
+    });
+    const report = (await service.importImages([source('unsanitized', 'image')]))[0]!.report;
+    await assert.rejects(service.startExtraction(report.id), /Sanitized Report is not verified/);
+    assert.equal(recognitionCalls, 0);
+  });
+
+  test('uses an optional supported semantic mapper and persists its versioned source selection', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const ocr: VisionOCR = {
+      async recognize() {
+        return {
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'semantic-source',
+              text: 'Sintetinis žymuo 3,8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.6, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate' as const, language: 'en', internalConfidence: 0.8 },
+            },
+            {
+              id: 'incompatible-source',
+              text: 'Kitas žymuo 2,1 µg/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.4, width: 0.6, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate' as const, language: 'en', internalConfidence: 0.8 },
+            },
+          ],
+        };
+      },
+    };
+    const mapper: ExtractionSemanticMapper = {
+      adapterVersion: 'synthetic.mapper.v1',
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      supports: (locale) => locale === 'en',
+      async map() {
+        return [
+          { sourceObservationIds: ['semantic-source'], proposedBiomarkerId: 'biomarker.ldl_c' },
+          {
+            sourceObservationIds: ['incompatible-source'],
+            proposedBiomarkerId: 'biomarker.ldl_c',
+          },
+        ];
+      },
+    };
+    const service = createService(repository, files, sanitizingPdf(files), ocr, mapper);
+    const report = (await service.importPdf(source('semantic')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+    const draft = await service.startExtraction(report.id);
+    assert.equal(draft.rows[0]?.proposedBiomarkerId, 'biomarker.ldl_c');
+    assert.deepEqual(draft.rows[0]?.source.semantic, {
+      adapterVersion: 'synthetic.mapper.v1',
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      sourceObservationIds: ['semantic-source'],
+    });
+    assert.equal(draft.rows[0]?.source.observations?.[0]?.text, 'Sintetinis žymuo 3,8 mmol/L');
+    assert.equal(draft.rows[1]?.proposedBiomarkerId, null);
+    assert.equal(draft.rows[1]?.source.semantic, null);
+  });
+
+  test('keeps deterministic extraction when the semantic mapper does not support the language', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const ocr: VisionOCR = {
+      async recognize() {
+        return {
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'fallback-source',
+              text: 'LDL-C 3,8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate' as const, language: 'lt', internalConfidence: null },
+            },
+          ],
+        };
+      },
+    };
+    const mapper: ExtractionSemanticMapper = {
+      adapterVersion: 'unsupported.mapper.v1',
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      supports: () => false,
+      async map() {
+        throw new Error('unsupported mapper must not run');
+      },
+    };
+    const service = createService(repository, files, sanitizingPdf(files), ocr, mapper);
+    const report = (await service.importPdf(source('fallback')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+    const draft = await service.startExtraction(report.id);
+    assert.equal(draft.rows[0]?.proposedBiomarkerId, 'biomarker.ldl_c');
+    assert.equal(draft.rows[0]?.source.semantic, null);
   });
 
   test('uses contextual collection dates, keeps ambiguity reviewable, and groups events', async () => {
@@ -424,8 +584,9 @@ describe('protected Lab Report import lifecycle', () => {
         };
       },
     };
-    const service = createService(repository, files, new FakePdf(), ocr);
-    const report = (await service.importImages([source('contextual-date', 'image')]))[0]!.report;
+    const service = createService(repository, files, sanitizingPdf(files), ocr);
+    const report = (await service.importPdf(source('contextual-date')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
     const draft = await service.startExtraction(report.id);
     assert.equal(draft.rows.length, 3);
     assert.deepEqual(
@@ -493,9 +654,9 @@ describe('protected Lab Report import lifecycle', () => {
         };
       },
     };
-    const service = createService(repository, files, new FakePdf(), ocr);
-    const report = (await service.importImages([source('locale-date-boundary', 'image')]))[0]!
-      .report;
+    const service = createService(repository, files, sanitizingPdf(files), ocr);
+    const report = (await service.importPdf(source('locale-date-boundary')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
     const draft = await service.startExtraction(report.id);
     assert.deepEqual(
       draft.rows.map((row) => row.collectionDate),
@@ -619,7 +780,7 @@ describe('protected Lab Report import lifecycle', () => {
     const repository = createRepository();
     const files = new RelocatingFiles();
     files.files.set(files.currentPath, { hash: 'relocated-hash', size: 42 });
-    const pdf = new FakePdf();
+    const pdf = sanitizingPdf(files);
     const nativePaths: string[] = [];
     const ocr: VisionOCR = {
       async recognize(path): Promise<VisionOCRResult> {
@@ -655,6 +816,7 @@ describe('protected Lab Report import lifecycle', () => {
       importedAt: '2026-08-22T10:00:00.000Z',
     });
     const service = createService(repository, files, pdf, ocr);
+    await prepareSanitizedExtraction(service, report.id);
 
     const draft = await service.startExtraction(report.id);
 
@@ -663,7 +825,7 @@ describe('protected Lab Report import lifecycle', () => {
       'protected://original-reports/relocated.pdf',
     );
     assert.deepEqual(pdf.inspectedPaths, [files.currentPath]);
-    assert.deepEqual(nativePaths, [files.currentPath]);
+    assert.deepEqual(nativePaths, pdf.sanitizedPaths);
     assert.equal(draft.rows[0]?.sourceValueString, '3.8');
     assert.equal(
       await repository.getExtractionDraftForReport(report.id).then((value) => value !== null),

@@ -50,6 +50,12 @@ export type ExtractionSourceLocation = {
   readonly boundingBox: NormalizedBoundingBox;
   readonly orientation: number;
   readonly observationIds: readonly string[];
+  readonly observations?: readonly VisionTextObservation[];
+  readonly semantic?: {
+    readonly adapterVersion: string;
+    readonly schemaVersion: 'alyte.semantic-mapper.v1';
+    readonly sourceObservationIds: readonly string[];
+  } | null;
 };
 
 export type ExtractionDateContext = {
@@ -134,23 +140,42 @@ export interface ExtractionSemanticMapper {
   map(input: {
     readonly pageIndex: number;
     readonly observations: readonly VisionTextObservation[];
-  }): Promise<readonly ExtractionSemanticProposal[]>;
+  }): Promise<unknown>;
 }
 
 /** Rejects model output unless it refers only to exact local observations and known catalogue IDs. */
 export function validateSemanticProposals(
-  proposals: readonly ExtractionSemanticProposal[],
+  input: unknown,
   observations: readonly VisionTextObservation[],
   aliases: readonly ExtractionAliasEntry[],
 ): readonly ExtractionSemanticProposal[] {
+  if (!Array.isArray(input)) return [];
   const sourceIds = new Set(observations.map((item) => item.id));
   const biomarkerIds = new Set(aliases.map((item) => item.id));
-  return proposals.filter(
-    (proposal) =>
-      proposal.sourceObservationIds.length > 0 &&
+  return input.flatMap((item) => {
+    if (typeof item !== 'object' || item === null) return [];
+    const value = item as Record<string, unknown>;
+    if (!Array.isArray(value.sourceObservationIds)) return [];
+    const proposal: ExtractionSemanticProposal = {
+      sourceObservationIds: value.sourceObservationIds.filter(
+        (id): id is string => typeof id === 'string',
+      ),
+      proposedBiomarkerId:
+        value.proposedBiomarkerId === null
+          ? null
+          : typeof value.proposedBiomarkerId === 'string'
+            ? (value.proposedBiomarkerId as CanonicalId)
+            : null,
+    };
+    return proposal.sourceObservationIds.length > 0 &&
       proposal.sourceObservationIds.every((id) => sourceIds.has(id)) &&
-      (proposal.proposedBiomarkerId === null || biomarkerIds.has(proposal.proposedBiomarkerId)),
-  );
+      (proposal.proposedBiomarkerId === null || biomarkerIds.has(proposal.proposedBiomarkerId)) &&
+      Object.keys(value).every(
+        (key) => key === 'sourceObservationIds' || key === 'proposedBiomarkerId',
+      )
+      ? [proposal]
+      : [];
+  });
 }
 
 export type ExtractionRowInput = {
@@ -252,8 +277,8 @@ function decodeObservation(
   if (typeof input !== 'object' || input === null)
     throw new Error(`Vision OCR observation ${index} is not an object`);
   const value = input as Record<string, unknown>;
-  const text = typeof value.text === 'string' ? value.text.trim() : '';
-  if (text.length === 0) throw new Error(`Vision OCR observation ${index} has no text`);
+  const text = typeof value.text === 'string' ? value.text : '';
+  if (text.trim().length === 0) throw new Error(`Vision OCR observation ${index} has no text`);
   const rawBox = value.boundingBox;
   if (typeof rawBox !== 'object' || rawBox === null)
     throw new Error(`Vision OCR observation ${index} has no bounding box`);
@@ -277,8 +302,7 @@ function decodeObservation(
   const alternatives = Array.isArray(value.alternatives)
     ? value.alternatives
         .filter((candidate): candidate is string => typeof candidate === 'string')
-        .map((candidate) => candidate.trim())
-        .filter(Boolean)
+        .filter((candidate) => candidate.trim().length > 0)
         .slice(0, 5)
     : [];
   const rawRecognition =
@@ -618,6 +642,8 @@ function parseSourceRow(
     pageIndex: first?.pageIndex ?? 0,
     orientation: first?.orientation ?? 0,
     observationIds: group.map((item) => item.id),
+    observations: [...group],
+    semantic: null,
     boundingBox: group.slice(1).reduce(
       (box, item) => ({
         x: Math.min(box.x, item.boundingBox.x),
