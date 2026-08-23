@@ -3,7 +3,7 @@ import { Alert, StyleSheet } from 'react-native';
 import type { LabReport } from '@alyte/domain';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { LabsStackParamList } from '../../navigation/types';
+import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
@@ -48,8 +48,12 @@ export function LabReportImportScreen() {
     try {
       const result = await reports.importPdf(undefined, passwordRequest());
       if (result !== null) {
+        const root = navigation
+          .getParent<NativeStackNavigationProp<RootStackParamList>>()
+          ?.getParent<NativeStackNavigationProp<RootStackParamList>>();
         setLastReport(result.report);
         navigation.replace('LabReportDetail', { reportId: result.report.id });
+        root?.navigate('PrivacyWorkspace', { reportId: result.report.id });
       }
     } catch (caught) {
       setError(errorMessage(caught));
@@ -66,8 +70,12 @@ export function LabReportImportScreen() {
       const results = await reports.importImages(undefined, passwordRequest());
       const first = results[0];
       if (first !== undefined) {
+        const root = navigation
+          .getParent<NativeStackNavigationProp<RootStackParamList>>()
+          ?.getParent<NativeStackNavigationProp<RootStackParamList>>();
         setLastReport(first.report);
         navigation.replace('LabReportDetail', { reportId: first.report.id });
+        root?.navigate('PrivacyWorkspace', { reportId: first.report.id });
       }
     } catch (caught) {
       setError(errorMessage(caught));

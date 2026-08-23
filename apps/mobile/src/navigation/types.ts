@@ -21,7 +21,6 @@ export type LabsStackParamList = {
   LabReportImport: undefined;
   LabReportDetail: { readonly reportId: string };
   ExtractionDraft: { readonly reportId: string; readonly draftId: string };
-  SanitizedReportEditor: { readonly reportId: string };
   LabRecordForm: { readonly recordId?: string } | undefined;
   LabRecordDetail: { readonly recordId: string };
 };
@@ -34,4 +33,5 @@ export type LogStackParamList = {
 export type RootStackParamList = {
   MainTabs: NavigatorScreenParams<MainTabParamList> | undefined;
   SnapCapture: undefined;
+  PrivacyWorkspace: { readonly reportId: string };
 };

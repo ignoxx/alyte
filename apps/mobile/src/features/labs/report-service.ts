@@ -72,6 +72,8 @@ export type SanitizedReportPreview = {
 
 export type SanitizationEditorState = {
   readonly report: LabReport;
+  /** Resolved protected source path used only by the native PDFKit workspace. */
+  readonly sourcePath: string;
   readonly recipe: SanitizationRecipe;
   readonly suggestions: readonly SensitiveRegionSuggestion[];
   readonly pagePreviewUris: readonly string[];
@@ -780,7 +782,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       : pdfInspector.suggestSensitiveRegions === undefined
         ? []
         : await pdfInspector.suggestSensitiveRegions(path);
-    return { report, recipe, suggestions, pagePreviewUris, current };
+    return { report, sourcePath: path, recipe, suggestions, pagePreviewUris, current };
   }
 
   async function closeSanitizationEditor(id: string): Promise<void> {

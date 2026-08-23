@@ -14,6 +14,7 @@ import type { FeatureTarget, NavigationFeature } from './registry-model';
 import { featureStackRootName, snapActionDestination } from './registry-model';
 import type { MainTabParamList, RootStackParamList } from './types';
 import { SnapScreen } from '../features/intake/SnapScreen';
+import { SanitizedReportEditorRoute } from '../features/labs/SanitizedReportEditorRoute';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const MainTabs = createNativeBottomTabNavigator<MainTabParamList>();
@@ -228,6 +229,11 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
           name="SnapCapture"
           component={SnapScreen}
           options={{ presentation: 'fullScreenModal', headerShown: false }}
+        />
+        <RootStack.Screen
+          name="PrivacyWorkspace"
+          component={SanitizedReportEditorRoute}
+          options={{ presentation: 'fullScreenModal', headerShown: true }}
         />
       </RootStack.Navigator>
     </NavigationContainer>

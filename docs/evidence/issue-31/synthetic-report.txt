@@ -1,0 +1,10 @@
+SYNTHETIC LABORATORY REPORT — DE-IDENTIFIED
+
+Collection date: 2026-08-20
+Specimen: Serum
+
+LDL-C                   3.8 mmol/L      Reference 0.0–3.0
+HDL-C                   1.4 mmol/L      Reference 1.0–2.0
+Triglycerides           1.2 mmol/L      Reference 0.0–1.7
+
+Synthetic fixture for Alyte privacy-workspace verification only.

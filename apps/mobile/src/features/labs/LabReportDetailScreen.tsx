@@ -14,7 +14,7 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { LabReport } from '@alyte/domain';
-import type { LabsStackParamList } from '../../navigation/types';
+import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import {
@@ -276,7 +276,12 @@ export function LabReportDetailScreen() {
             <Pressable
               accessibilityRole="button"
               disabled={busy}
-              onPress={() => navigation.navigate('SanitizedReportEditor', { reportId: report.id })}
+              onPress={() =>
+                navigation
+                  .getParent<NativeStackNavigationProp<RootStackParamList>>()
+                  ?.getParent<NativeStackNavigationProp<RootStackParamList>>()
+                  ?.navigate('PrivacyWorkspace', { reportId: report.id })
+              }
               style={({ pressed }) => [styles.actionRow, pressed && styles.actionPressed]}
             >
               <AppIcon name="shield" size={20} />

@@ -448,6 +448,31 @@ public final class AlytePDFModule: Module {
   public func definition() -> ModuleDefinition {
     Name("AlytePDF")
 
+    View(AlytePDFWorkspaceView.self) {
+      Prop("sourcePath") { (view: AlytePDFWorkspaceView, path: String) in
+        view.sourcePath = alytePDFFilePath(path)
+      }
+      Prop("pageIndex") { (view: AlytePDFWorkspaceView, pageIndex: Int) in
+        view.pageIndex = pageIndex
+      }
+      Prop("redactMode") { (view: AlytePDFWorkspaceView, enabled: Bool) in
+        view.redactMode = enabled
+      }
+      Prop("rotation") { (view: AlytePDFWorkspaceView, rotation: Int) in
+        view.rotation = rotation
+      }
+      Prop("crop") { (view: AlytePDFWorkspaceView, crop: [String: Any]?) in
+        view.setCrop(crop)
+      }
+      Prop("redactions") { (view: AlytePDFWorkspaceView, redactions: [[String: Any]]) in
+        view.setRedactions(redactions)
+      }
+      Events("onRedactionsChange", "onPageChange", "onReady", "onFailure")
+      AsyncFunction("undo") { (view: AlytePDFWorkspaceView) in view.undoEdit() }
+      AsyncFunction("redo") { (view: AlytePDFWorkspaceView) in view.redoEdit() }
+      AsyncFunction("clearSelection") { (view: AlytePDFWorkspaceView) in view.clearSelection() }
+    }
+
     AsyncFunction("inspect") { (path: String) throws -> [String: Any] in
       guard let document = PDFDocument(url: URL(fileURLWithPath: alytePDFFilePath(path))) else { throw AlytePDFError.unreadable }
       return inspection(document)
