@@ -1,4 +1,8 @@
-import type { ExtractionDraftRow, ExtractionRowDecision } from '@alyte/domain';
+import {
+  extractionReviewBlocksConfirmation,
+  type ExtractionDraftRow,
+  type ExtractionRowDecision,
+} from '@alyte/domain';
 
 export type ExtractionReviewFilter = 'all' | 'needs-review';
 
@@ -12,20 +16,10 @@ export type ExtractionReviewSection = {
   }[];
 };
 
-const REQUIRED_REVIEW_REASONS = new Set<ExtractionDraftRow['reviewReasons'][number]>([
-  'missing-label',
-  'missing-value',
-  'unparseable-value',
-  'unsupported-layout',
-]);
-
 export function extractionNeedsResolution(
   row: Pick<ExtractionDraftRow, 'decision' | 'reviewReasons'>,
 ): boolean {
-  return (
-    row.decision === 'unresolved' &&
-    row.reviewReasons.some((reason) => REQUIRED_REVIEW_REASONS.has(reason))
-  );
+  return extractionReviewBlocksConfirmation(row);
 }
 
 export type ExtractionDecisionPresentation = {

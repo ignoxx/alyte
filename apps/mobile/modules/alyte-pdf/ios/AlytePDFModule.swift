@@ -59,7 +59,8 @@ private func bridgeInteger(_ value: Any?) -> Int? {
   guard let number = bridgeNumber(value) else { return nil }
   let result = number.doubleValue
   guard result.isFinite, result.rounded(.towardZero) == result,
-        result >= Double(Int.min), result <= Double(Int.max) else { return nil }
+    result >= Double(Int.min), result <= Double(Int.max)
+  else { return nil }
   return Int(result)
 }
 
@@ -93,20 +94,24 @@ private enum AlytePDFError: LocalizedError {
 
 private func normalizedRect(_ value: Any?) throws -> AlyteNormalizedRect {
   guard let dictionary = bridgeDictionary(value),
-        let x = bridgeDouble(dictionary["x"]),
-        let y = bridgeDouble(dictionary["y"]),
-        let width = bridgeDouble(dictionary["width"]),
-        let height = bridgeDouble(dictionary["height"]),
-        x >= 0, y >= 0, width > 0, height > 0, x + width <= 1, y + height <= 1
+    let x = bridgeDouble(dictionary["x"]),
+    let y = bridgeDouble(dictionary["y"]),
+    let width = bridgeDouble(dictionary["width"]),
+    let height = bridgeDouble(dictionary["height"]),
+    x >= 0, y >= 0, width > 0, height > 0, x + width <= 1, y + height <= 1
   else { throw AlytePDFError.malformedRecipe }
-  return AlyteNormalizedRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height))
+  return AlyteNormalizedRect(
+    x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height))
 }
 
-private func transformedRect(_ rect: AlyteNormalizedRect, crop: AlyteNormalizedRect?, rotation: Int) throws -> AlyteNormalizedRect {
+private func transformedRect(_ rect: AlyteNormalizedRect, crop: AlyteNormalizedRect?, rotation: Int)
+  throws -> AlyteNormalizedRect
+{
   let area = crop ?? AlyteNormalizedRect(x: 0, y: 0, width: 1, height: 1)
   guard rect.x >= area.x, rect.y >= area.y,
-        rect.x + rect.width <= area.x + area.width,
-        rect.y + rect.height <= area.y + area.height else { throw AlytePDFError.malformedRecipe }
+    rect.x + rect.width <= area.x + area.width,
+    rect.y + rect.height <= area.y + area.height
+  else { throw AlytePDFError.malformedRecipe }
   let local = AlyteNormalizedRect(
     x: (rect.x - area.x) / area.width,
     y: (rect.y - area.y) / area.height,
@@ -115,9 +120,16 @@ private func transformedRect(_ rect: AlyteNormalizedRect, crop: AlyteNormalizedR
   )
   switch ((rotation % 360) + 360) % 360 {
   case 0: return local
-  case 90: return AlyteNormalizedRect(x: 1 - local.y - local.height, y: local.x, width: local.height, height: local.width)
-  case 180: return AlyteNormalizedRect(x: 1 - local.x - local.width, y: 1 - local.y - local.height, width: local.width, height: local.height)
-  case 270: return AlyteNormalizedRect(x: local.y, y: 1 - local.x - local.width, width: local.height, height: local.width)
+  case 90:
+    return AlyteNormalizedRect(
+      x: 1 - local.y - local.height, y: local.x, width: local.height, height: local.width)
+  case 180:
+    return AlyteNormalizedRect(
+      x: 1 - local.x - local.width, y: 1 - local.y - local.height, width: local.width,
+      height: local.height)
+  case 270:
+    return AlyteNormalizedRect(
+      x: local.y, y: 1 - local.x - local.width, width: local.height, height: local.width)
   default: throw AlytePDFError.malformedRecipe
   }
 }
@@ -126,7 +138,8 @@ private func imageRotated(_ image: UIImage, degrees: Int) -> UIImage {
   let normalized = ((degrees % 360) + 360) % 360
   guard normalized != 0 else { return image }
   let sourceSize = image.size
-  let targetSize = normalized == 90 || normalized == 270
+  let targetSize =
+    normalized == 90 || normalized == 270
     ? CGSize(width: sourceSize.height, height: sourceSize.width)
     : sourceSize
   let format = UIGraphicsImageRendererFormat()
@@ -156,8 +169,9 @@ private func recipePages(_ recipe: [String: Any]) throws -> [[String: Any]] {
   }
   let pages = try pageValues.map { pageValue -> [String: Any] in
     guard let page = bridgeDictionary(pageValue),
-          bridgeInteger(page["pageIndex"]) != nil,
-          bridgeBoolean(page["selected"]) != nil else {
+      bridgeInteger(page["pageIndex"]) != nil,
+      bridgeBoolean(page["selected"]) != nil
+    else {
       throw AlytePDFError.malformedRecipe
     }
     return page
@@ -203,12 +217,16 @@ private func inspection(_ document: PDFDocument) -> [String: Any] {
 }
 
 private func loadDocument(_ path: String) throws -> PDFDocument {
-  guard let document = PDFDocument(url: URL(fileURLWithPath: alytePDFFilePath(path))) else { throw AlytePDFError.unreadable }
+  guard let document = PDFDocument(url: URL(fileURLWithPath: alytePDFFilePath(path))) else {
+    throw AlytePDFError.unreadable
+  }
   guard !document.isLocked else { throw AlytePDFError.locked }
   return document
 }
 
-private func renderImage(page: PDFPage, crop: AlyteNormalizedRect?, rotation: Int, redactions: [[String: Any]]) throws -> UIImage {
+private func renderImage(
+  page: PDFPage, crop: AlyteNormalizedRect?, rotation: Int, redactions: [[String: Any]]
+) throws -> UIImage {
   let bounds = page.bounds(for: .mediaBox)
   let scale: CGFloat = 2
   let sourceSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
@@ -263,22 +281,26 @@ private func renderImage(page: PDFPage, crop: AlyteNormalizedRect?, rotation: In
     image.draw(in: CGRect(origin: .zero, size: image.size))
     for rect in outputRects {
       context.cgContext.setFillColor(UIColor.black.cgColor)
-      context.cgContext.fill(CGRect(
-        x: rect.x * image.size.width,
-        y: rect.y * image.size.height,
-        width: rect.width * image.size.width,
-        height: rect.height * image.size.height
-      ))
+      context.cgContext.fill(
+        CGRect(
+          x: rect.x * image.size.width,
+          y: rect.y * image.size.height,
+          width: rect.width * image.size.width,
+          height: rect.height * image.size.height
+        ))
     }
   }
 }
 
-private func byteMarkers(_ data: Data) -> (text: Bool, annotations: Bool, attachments: Bool, metadata: Bool) {
+private func byteMarkers(_ data: Data) -> (
+  text: Bool, annotations: Bool, attachments: Bool, metadata: Bool
+) {
   let source = String(data: data, encoding: .isoLatin1) ?? ""
   return (
     source.contains("/ActualText") || source.contains("/ToUnicode"),
     source.contains("/Annots"),
-    source.contains("/EmbeddedFile") || source.contains("/Filespec") || source.contains("/FileAttachment"),
+    source.contains("/EmbeddedFile") || source.contains("/Filespec")
+      || source.contains("/FileAttachment"),
     // PDFKit may add a generated /Info dictionary. XMP /Metadata is not emitted by the
     // image-only writer and is therefore still a meaningful failure marker.
     source.contains("/Metadata")
@@ -297,7 +319,9 @@ private func sourceEvidence(_ document: PDFDocument) -> AlyteSourceEvidence {
   }.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
   let metadata: [String] = (document.documentAttributes ?? [:]).compactMap { entry -> String? in
     let key = String(describing: entry.key)
-    guard !["CreationDate", "ModDate", "Producer", "Creator", "Trapped"].contains(key) else { return nil }
+    guard !["CreationDate", "ModDate", "Producer", "Creator", "Trapped"].contains(key) else {
+      return nil
+    }
     let value = entry.value
     let string = String(describing: value)
     return string.isEmpty ? nil : string
@@ -309,7 +333,10 @@ private func sourceEvidence(_ document: PDFDocument) -> AlyteSourceEvidence {
 }
 
 private func permittedGeneratedMetadataKey(_ key: String) -> Bool {
-  ["CreationDate", "ModDate", "Producer", "Creator", "Title", "Subject", "Author", "Keywords", "Trapped"].contains(key)
+  [
+    "CreationDate", "ModDate", "Producer", "Creator", "Title", "Subject", "Author", "Keywords",
+    "Trapped",
+  ].contains(key)
 }
 
 private func verifySanitizedData(
@@ -317,27 +344,33 @@ private func verifySanitizedData(
   forbiddenStrings: [String] = [],
   evidence: AlyteSourceEvidence? = nil
 ) throws -> [String: Any] {
-  guard let document = PDFDocument(data: data), document.pageCount > 0 else { throw AlytePDFError.verificationFailed }
+  guard let document = PDFDocument(data: data), document.pageCount > 0 else {
+    throw AlytePDFError.verificationFailed
+  }
   let markers = byteMarkers(data)
   let seededContent = forbiddenStrings.contains { needle in
     let bytes = data.range(of: Data(needle.utf8)) != nil
     return bytes || (document.string?.localizedCaseInsensitiveContains(needle) == true)
   }
   let selectableText = seededContent || document.string?.isEmpty == false || markers.text
-  let annotations = (0..<document.pageCount).contains { document.page(at: $0)?.annotations.isEmpty == false } || markers.annotations
+  let annotations =
+    (0..<document.pageCount).contains { document.page(at: $0)?.annotations.isEmpty == false }
+    || markers.annotations
   let attachments = markers.attachments
-  let metadata = stringMetadata(document).contains { key, _ in !permittedGeneratedMetadataKey(key) } || markers.metadata
+  let metadata =
+    stringMetadata(document).contains { key, _ in !permittedGeneratedMetadataKey(key) }
+    || markers.metadata
   let removableRedactions = annotations
   let reloadChecked = PDFDocument(data: data)?.pageCount == document.pageCount
   let sourceStrings = (evidence?.text ?? []) + (evidence?.metadata ?? []) + forbiddenStrings
   let sourceValueSurvived = sourceStrings.contains { needle in
     let utf16Bytes = needle.utf16.flatMap { [UInt8($0 & 0xff), UInt8($0 >> 8)] }
-    return data.range(of: Data(needle.utf8)) != nil ||
-      data.range(of: Data(utf16Bytes)) != nil ||
-      document.string?.localizedCaseInsensitiveContains(needle) == true
+    return data.range(of: Data(needle.utf8)) != nil || data.range(of: Data(utf16Bytes)) != nil
+      || document.string?.localizedCaseInsensitiveContains(needle) == true
   }
   let sourceObjectsRemoved = (evidence?.annotationCount ?? 0) == 0 || !annotations
-  let sourceContentRemoved = evidence != nil && !sourceValueSurvived && sourceObjectsRemoved && !attachments && !metadata
+  let sourceContentRemoved =
+    evidence != nil && !sourceValueSurvived && sourceObjectsRemoved && !attachments && !metadata
   let sourceAwareChecked = evidence != nil && sourceContentRemoved
   let failureReasons = [
     selectableText ? "selectable-source-text" : nil,
@@ -364,12 +397,17 @@ private func verifySanitizedData(
 }
 
 private func sensitiveVisionRegions(_ document: PDFDocument) throws -> [[String: Any]] {
-  let terms = ["name", "address", "dob", "date of birth", "phone", "email", "patient", "member", "identifier", "medical record", "mrn"]
+  let terms = [
+    "name", "address", "dob", "date of birth", "phone", "email", "patient", "member", "identifier",
+    "medical record", "mrn",
+  ]
   var result: [[String: Any]] = []
   for pageIndex in 0..<document.pageCount {
     guard let page = document.page(at: pageIndex) else { continue }
     let bounds = page.bounds(for: .mediaBox)
-    let thumbnail = page.thumbnail(of: CGSize(width: max(320, bounds.width * 2), height: max(320, bounds.height * 2)), for: .mediaBox)
+    let thumbnail = page.thumbnail(
+      of: CGSize(width: max(320, bounds.width * 2), height: max(320, bounds.height * 2)),
+      for: .mediaBox)
     guard let cgImage = thumbnail.cgImage else { continue }
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = .accurate
@@ -378,7 +416,8 @@ private func sensitiveVisionRegions(_ document: PDFDocument) throws -> [[String:
     try handler.perform([request])
     for (index, observation) in (request.results ?? []).enumerated() {
       guard let candidate = observation.topCandidates(1).first,
-            terms.contains(where: { candidate.string.lowercased().contains($0) }) else { continue }
+        terms.contains(where: { candidate.string.lowercased().contains($0) })
+      else { continue }
       let box = observation.boundingBox
       let x = max(0, min(1, box.minX))
       let y = max(0, min(1, 1 - box.maxY))
@@ -395,21 +434,29 @@ private func sensitiveVisionRegions(_ document: PDFDocument) throws -> [[String:
   return result
 }
 
-private func sanitizePDF(document: PDFDocument, destinationPath: String, recipe: [String: Any]) throws -> [String: Any] {
+private func sanitizePDF(document: PDFDocument, destinationPath: String, recipe: [String: Any])
+  throws -> [String: Any]
+{
   let pages = try recipePages(recipe)
   let destinationURL = URL(fileURLWithPath: alytePDFFilePath(destinationPath))
-  try FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+  try FileManager.default.createDirectory(
+    at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
   try? FileManager.default.removeItem(at: destinationURL)
   let outputDocument = PDFDocument()
   var outputCount = 0
   for pageRecipe in pages {
     guard let pageIndex = bridgeInteger(pageRecipe["pageIndex"]),
-          pageIndex >= 0, pageIndex < document.pageCount,
-          let page = document.page(at: pageIndex) else { throw AlytePDFError.malformedRecipe }
-    let crop = try pageRecipe["crop"] == nil || pageRecipe["crop"] is NSNull ? nil : normalizedRect(pageRecipe["crop"])
+      pageIndex >= 0, pageIndex < document.pageCount,
+      let page = document.page(at: pageIndex)
+    else { throw AlytePDFError.malformedRecipe }
+    let crop =
+      try pageRecipe["crop"] == nil || pageRecipe["crop"] is NSNull
+      ? nil : normalizedRect(pageRecipe["crop"])
     let rotation: Int
     if let rotationValue = pageRecipe["rotation"] {
-      guard let decodedRotation = bridgeInteger(rotationValue) else { throw AlytePDFError.malformedRecipe }
+      guard let decodedRotation = bridgeInteger(rotationValue) else {
+        throw AlytePDFError.malformedRecipe
+      }
       rotation = decodedRotation
     } else {
       rotation = 0
@@ -417,7 +464,9 @@ private func sanitizePDF(document: PDFDocument, destinationPath: String, recipe:
     guard [0, 90, 180, 270].contains(rotation) else { throw AlytePDFError.malformedRecipe }
     let redactions: [[String: Any]]
     if let redactionValue = pageRecipe["redactions"] {
-      guard let redactionValues = bridgeArray(redactionValue) else { throw AlytePDFError.malformedRecipe }
+      guard let redactionValues = bridgeArray(redactionValue) else {
+        throw AlytePDFError.malformedRecipe
+      }
       redactions = try redactionValues.map { redactionValue in
         guard let redaction = bridgeDictionary(redactionValue), redaction["rect"] != nil else {
           throw AlytePDFError.malformedRecipe
@@ -438,7 +487,9 @@ private func sanitizePDF(document: PDFDocument, destinationPath: String, recipe:
   guard outputDocument.write(to: destinationURL) else { throw AlytePDFError.renderFailed }
   let evidence = sourceEvidence(document)
   let verification = try verifySanitizedData(Data(contentsOf: destinationURL), evidence: evidence)
-  return ["destinationPath": destinationPath, "pageCount": outputCount, "verification": verification]
+  return [
+    "destinationPath": destinationPath, "pageCount": outputCount, "verification": verification,
+  ]
 }
 
 public final class AlytePDFModule: Module {
@@ -470,6 +521,12 @@ public final class AlytePDFModule: Module {
       Prop("accessibilityLabels") { (view: AlytePDFWorkspaceView, labels: [String: String]) in
         view.setAccessibilityLabels(labels)
       }
+      Prop("focusRegion") { (view: AlytePDFWorkspaceView, region: [String: Any]?) in
+        view.setFocusRegion(region)
+      }
+      Prop("inspectionMode") { (view: AlytePDFWorkspaceView, enabled: Bool) in
+        view.inspectionMode = enabled
+      }
       Events("onRedactionsChange", "onPageChange", "onReady", "onFailure", "onSelectionChange")
       AsyncFunction("undo") { (view: AlytePDFWorkspaceView) in view.undoEdit() }
       AsyncFunction("redo") { (view: AlytePDFWorkspaceView) in view.redoEdit() }
@@ -478,12 +535,16 @@ public final class AlytePDFModule: Module {
     }
 
     AsyncFunction("inspect") { (path: String) throws -> [String: Any] in
-      guard let document = PDFDocument(url: URL(fileURLWithPath: alytePDFFilePath(path))) else { throw AlytePDFError.unreadable }
+      guard let document = PDFDocument(url: URL(fileURLWithPath: alytePDFFilePath(path))) else {
+        throw AlytePDFError.unreadable
+      }
       return inspection(document)
     }
 
     AsyncFunction("unlock") { (path: String, password: String) throws -> [String: Any] in
-      guard let document = PDFDocument(url: URL(fileURLWithPath: alytePDFFilePath(path))), document.unlock(withPassword: password) else {
+      guard let document = PDFDocument(url: URL(fileURLWithPath: alytePDFFilePath(path))),
+        document.unlock(withPassword: password)
+      else {
         throw AlytePDFError.locked
       }
       let sessionId = UUID().uuidString
@@ -512,7 +573,9 @@ public final class AlytePDFModule: Module {
       self.sessionLock.lock()
       let document = self.sessions[sessionId]
       self.sessionLock.unlock()
-      guard let document, document.write(to: URL(fileURLWithPath: alytePDFFilePath(destinationPath))) else {
+      guard let document,
+        document.write(to: URL(fileURLWithPath: alytePDFFilePath(destinationPath)))
+      else {
         throw AlytePDFError.unreadable
       }
     }
@@ -523,7 +586,9 @@ public final class AlytePDFModule: Module {
       self.sessionLock.unlock()
     }
 
-    AsyncFunction("sanitize") { (sourcePath: String, destinationPath: String, recipe: [String: Any]) throws -> [String: Any] in
+    AsyncFunction("sanitize") {
+      (sourcePath: String, destinationPath: String, recipe: [String: Any]) throws -> [String: Any]
+      in
       let document = try loadDocument(sourcePath)
       return try self.sanitize(document: document, destinationPath: destinationPath, recipe: recipe)
     }
@@ -533,7 +598,8 @@ public final class AlytePDFModule: Module {
       return try verifySanitizedData(data)
     }
 
-    AsyncFunction("sanitizeSession") { (sessionId: String, destinationPath: String, recipe: [String: Any]) throws -> [String: Any] in
+    AsyncFunction("sanitizeSession") {
+      (sessionId: String, destinationPath: String, recipe: [String: Any]) throws -> [String: Any] in
       self.sessionLock.lock()
       let document = self.sessions[sessionId]
       self.sessionLock.unlock()
@@ -541,7 +607,8 @@ public final class AlytePDFModule: Module {
       return try self.sanitize(document: document, destinationPath: destinationPath, recipe: recipe)
     }
 
-    AsyncFunction("suggestSensitiveRegionsSession") { (sessionId: String) throws -> [[String: Any]] in
+    AsyncFunction("suggestSensitiveRegionsSession") {
+      (sessionId: String) throws -> [[String: Any]] in
       self.sessionLock.lock()
       let document = self.sessions[sessionId]
       self.sessionLock.unlock()
@@ -554,7 +621,9 @@ public final class AlytePDFModule: Module {
     }
   }
 
-  fileprivate func sanitize(document: PDFDocument, destinationPath: String, recipe: [String: Any]) throws -> [String: Any] {
+  fileprivate func sanitize(document: PDFDocument, destinationPath: String, recipe: [String: Any])
+    throws -> [String: Any]
+  {
     try sanitizePDF(document: document, destinationPath: destinationPath, recipe: recipe)
   }
 
@@ -563,7 +632,8 @@ public final class AlytePDFModule: Module {
     for index in 0..<document.pageCount {
       guard let page = document.page(at: index) else { continue }
       let bounds = page.bounds(for: .mediaBox)
-      let image = page.thumbnail(of: CGSize(width: bounds.width * 2, height: bounds.height * 2), for: .mediaBox)
+      let image = page.thumbnail(
+        of: CGSize(width: bounds.width * 2, height: bounds.height * 2), for: .mediaBox)
       guard let data = image.pngData() else { throw AlytePDFError.renderFailed }
       output.append("data:image/png;base64,\(data.base64EncodedString())")
     }
@@ -575,7 +645,9 @@ public final class AlytePDFModule: Module {
 /// functions. It accepts synthetic forbidden source strings to make hidden-text recovery checks
 /// adversarial rather than a nominal page-count parse.
 public enum AlytePDFSanitizationTestSupport {
-  public static func render(document: PDFDocument, destinationURL: URL, recipe: [String: Any]) throws -> [String: Any] {
+  public static func render(document: PDFDocument, destinationURL: URL, recipe: [String: Any])
+    throws -> [String: Any]
+  {
     return try sanitizePDF(document: document, destinationPath: destinationURL.path, recipe: recipe)
   }
 

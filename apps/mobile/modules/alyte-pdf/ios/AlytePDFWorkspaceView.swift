@@ -36,6 +36,8 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   private var activeGestureID: String?
   private var deferredRegions: [WorkspaceRedaction]?
   private var deferredLabels: [String: String]?
+  private var focusRegion: CGRect?
+  var inspectionMode = false { didSet { if oldValue != inspectionMode { layoutRegions() } } }
 
   var sourcePath: String = "" { didSet { if oldValue != sourcePath { load() } } }
   var pageIndex: Int = 0 {
@@ -139,6 +141,20 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     layoutRegions()
   }
 
+  func setFocusRegion(_ value: [String: Any]?) {
+    guard let value,
+      let x = (value["x"] as? NSNumber)?.doubleValue,
+      let y = (value["y"] as? NSNumber)?.doubleValue,
+      let width = (value["width"] as? NSNumber)?.doubleValue,
+      let height = (value["height"] as? NSNumber)?.doubleValue
+    else {
+      focusRegion = nil
+      return
+    }
+    focusRegion = CGRect(x: x, y: y, width: width, height: height)
+    focusStoredRegion()
+  }
+
   func undoEdit() {
     guard let previous = history.popLast() else { return }
     future.append(regions)
@@ -201,6 +217,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     pdfView.go(to: page)
     pdfView.autoScales = true
     layoutRegions()
+    focusStoredRegion()
     onPageChange(["pageIndex": pageIndex])
   }
 
@@ -236,14 +253,19 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     for region in regions {
       guard let frame = pageRect(region.rect) else { continue }
       let view = UIView(frame: frame)
-      view.backgroundColor = UIColor.black.withAlphaComponent(selectedID == region.id ? 0.72 : 0.55)
-      view.layer.borderColor = UIColor.systemYellow.cgColor
-      view.layer.borderWidth = selectedID == region.id ? 2 : 0
+      view.backgroundColor =
+        inspectionMode
+        ? UIColor.systemTeal.withAlphaComponent(0.14)
+        : UIColor.black.withAlphaComponent(selectedID == region.id ? 0.72 : 0.55)
+      view.layer.borderColor = (inspectionMode ? UIColor.systemTeal : UIColor.systemYellow).cgColor
+      view.layer.borderWidth = inspectionMode || selectedID == region.id ? 3 : 0
       view.accessibilityLabel = labels["redaction"] ?? "Redaction"
       view.isAccessibilityElement = true
-      view.accessibilityTraits = .adjustable
-      if selectedID == region.id { view.accessibilityTraits.insert(.selected) }
-      view.accessibilityCustomActions = accessibilityActions(for: region.id)
+      view.accessibilityTraits = inspectionMode ? .image : .adjustable
+      if !inspectionMode {
+        if selectedID == region.id { view.accessibilityTraits.insert(.selected) }
+        view.accessibilityCustomActions = accessibilityActions(for: region.id)
+      }
       let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
       pan.name = region.id
       view.addGestureRecognizer(pan)
@@ -264,6 +286,20 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
         overlay.addSubview(handle)
       }
     }
+  }
+
+  private func focusStoredRegion() {
+    guard let focusRegion,
+      let page = document?.page(at: pageIndex)
+    else { return }
+    let box = page.bounds(for: .mediaBox)
+    let expanded = AlytePDFWorkspaceGeometry.focusRect(normalized: focusRegion)
+    let target = CGRect(
+      x: box.minX + expanded.minX * box.width,
+      y: box.maxY - expanded.maxY * box.height,
+      width: expanded.width * box.width,
+      height: expanded.height * box.height)
+    DispatchQueue.main.async { [weak self] in self?.pdfView.go(to: target, on: page) }
   }
 
   private func accessibilityActions(for id: String) -> [UIAccessibilityCustomAction] {

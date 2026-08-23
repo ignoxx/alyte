@@ -81,6 +81,29 @@ test('Extraction confirmation includes valid rows by default and gates only true
     ]),
     true,
   );
+  for (const reason of [
+    'missing-label',
+    'missing-value',
+    'unparseable-value',
+    'unsupported-layout',
+  ] as const) {
+    assert.equal(
+      extractionNeedsResolution(
+        row({ decision: 'unresolved', reviewReasons: [reason], reviewState: 'needs-review' }),
+      ),
+      true,
+    );
+  }
+  assert.equal(
+    extractionNeedsResolution(
+      row({
+        decision: 'unresolved',
+        reviewReasons: ['unsupported-alias'],
+        reviewState: 'needs-review',
+      }),
+    ),
+    false,
+  );
 });
 
 test('groups compact rows by Lab Record and panel while keeping date and specimen in headers', () => {

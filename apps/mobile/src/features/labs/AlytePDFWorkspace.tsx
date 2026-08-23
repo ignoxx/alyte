@@ -18,6 +18,8 @@ type Props = ViewProps & {
   readonly crop: RedactionRegion['rect'] | null;
   readonly redactions: readonly RedactionRegion[];
   readonly accessibilityLabels: Readonly<Record<string, string>>;
+  readonly focusRegion?: RedactionRegion['rect'] | null;
+  readonly inspectionMode?: boolean;
   readonly onRedactionsChange?: (event: { nativeEvent: NativeRedactionChange }) => void;
   readonly onPageChange?: (event: { nativeEvent: { readonly pageIndex: number } }) => void;
   readonly onReady?: (event: { nativeEvent: { readonly pageCount: number } }) => void;

@@ -141,4 +141,25 @@ final class AlytePDFWorkspaceTests: XCTestCase {
     XCTAssertTrue(restored.shouldEmit)
     XCTAssertTrue(restored.isSelected)
   }
+
+  func testFocusedSourceRegionUsesAspectFitAndTransformedPageCoordinates() {
+    let source = CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.08)
+    let portraitFrame = CGRect(x: 24, y: 80, width: 342, height: 484)
+    let focused = AlytePDFWorkspaceGeometry.focusRect(normalized: source)
+    let view = AlytePDFWorkspaceGeometry.viewRect(normalized: focused, pageFrame: portraitFrame)
+    XCTAssertEqual(view.minX, 30.84, accuracy: 0.000_001)
+    XCTAssertEqual(view.minY, 99.36, accuracy: 0.000_001)
+
+    let cropped = CGRect(x: 0.05, y: 0.1, width: 0.8, height: 0.7)
+    let withinCrop = CGRect(
+      x: (source.minX - cropped.minX) / cropped.width,
+      y: (source.minY - cropped.minY) / cropped.height,
+      width: source.width / cropped.width,
+      height: source.height / cropped.height)
+    let rotated = AlytePDFWorkspaceGeometry.rotated(withinCrop, degrees: 90)
+    XCTAssertEqual(rotated.minX, 0.742857142857, accuracy: 0.000_001)
+    XCTAssertEqual(rotated.minY, 0.0625, accuracy: 0.000_001)
+    XCTAssertEqual(rotated.width, 0.114285714286, accuracy: 0.000_001)
+    XCTAssertEqual(rotated.height, 0.375, accuracy: 0.000_001)
+  }
 }

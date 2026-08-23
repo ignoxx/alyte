@@ -93,6 +93,14 @@ enum WorkspaceGeometryHarness {
     precondition(abs(shrunk.height - (24 / 1440)) < 0.000_001)
     precondition(
       AlytePDFWorkspaceGeometry.reconciledSelection("region", regionIDs: ["replacement"]) == nil)
+    let focused = AlytePDFWorkspaceGeometry.focusRect(
+      normalized: CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.08))
+    precondition(approximatelyEqual(focused, CGRect(x: 0, y: 0.04, width: 0.7, height: 0.4)))
+    let cropped = CGRect(x: 0.0625, y: 0.142857142857, width: 0.375, height: 0.114285714286)
+    precondition(
+      approximatelyEqual(
+        AlytePDFWorkspaceGeometry.rotated(cropped, degrees: 90),
+        CGRect(x: 0.742857142857, y: 0.0625, width: 0.114285714286, height: 0.375)))
     print("PDFKit workspace geometry checks passed")
   }
 }

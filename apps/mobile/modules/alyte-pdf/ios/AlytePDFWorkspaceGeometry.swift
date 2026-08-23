@@ -73,6 +73,13 @@ public enum AlytePDFWorkspaceGeometry {
     let selectedID = reconciledSelection(requested, regionIDs: regionIDs)
     return (selectedID, selectedID != current, selectedID != nil)
   }
+
+  public static func focusRect(normalized rect: CGRect) -> CGRect {
+    let marginX = max(rect.width, 0.08)
+    let marginY = max(rect.height * 2, 0.08)
+    return rect.insetBy(dx: -marginX, dy: -marginY)
+      .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+  }
 }
 
 /// Testable state machine for the UIKit recognizer lifecycle. Controlled React props are deferred
