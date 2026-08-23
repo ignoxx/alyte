@@ -82,6 +82,32 @@ export type ExtractionReviewReason =
   | 'ambiguous-date'
   | 'unsupported-layout';
 
+const REQUIRED_EXTRACTION_REVIEW_REASONS = new Set<ExtractionReviewReason>([
+  'missing-label',
+  'missing-value',
+  'unparseable-value',
+  'unsupported-layout',
+]);
+
+export function extractionReviewBlocksConfirmation(
+  row: Pick<ExtractionDraftRow, 'decision' | 'reviewReasons'>,
+): boolean {
+  return (
+    row.decision === 'unresolved' &&
+    row.reviewReasons.some((reason) => REQUIRED_EXTRACTION_REVIEW_REASONS.has(reason))
+  );
+}
+
+function defaultExtractionDecision(
+  reasons: readonly ExtractionReviewReason[],
+): ExtractionRowDecision {
+  return reasons.some((reason) => REQUIRED_EXTRACTION_REVIEW_REASONS.has(reason))
+    ? 'unresolved'
+    : reasons.length === 0
+      ? 'resolve'
+      : 'preserve';
+}
+
 export type ExtractionDraftRow = {
   readonly id: string;
   readonly order: number;
@@ -788,7 +814,7 @@ function parseSourceRow(
     collectionDate: effectiveDate,
     reviewReasons: [...new Set(reasons)],
     reviewState: reasons.length === 0 ? 'ready' : 'needs-review',
-    decision: 'unresolved',
+    decision: defaultExtractionDecision([...new Set(reasons)]),
   };
 }
 
@@ -814,15 +840,14 @@ export function revalidateExtractionRow(
     if (parseReferenceInterval(next.proposedReferenceInterval) === null)
       reasons.add('unparseable-reference-interval');
   }
+  const reviewReasons = [...reasons];
+  const wasExplicitlySkipped = row.decision === 'skip' && patch.decision === undefined;
   return {
     ...next,
-    reviewReasons: [...reasons],
+    reviewReasons,
     reviewState: reasons.size === 0 ? 'ready' : 'needs-review',
     decision:
-      patch.decision ??
-      (patch.proposedLabel !== undefined || patch.proposedValue !== undefined
-        ? 'unresolved'
-        : row.decision),
+      patch.decision ?? (wasExplicitlySkipped ? 'skip' : defaultExtractionDecision(reviewReasons)),
   };
 }
 
@@ -842,7 +867,8 @@ export function buildExtractionConfirmationPlan(
   };
   const groups = new Map<string, PlannedRecord>();
   for (const row of draft.rows) {
-    if (row.decision === 'unresolved') throw new Error('Every extraction row requires a decision');
+    if (extractionReviewBlocksConfirmation(row))
+      throw new Error('An extraction row has unresolved required fields');
     if (row.decision === 'skip') continue;
     const key = `${row.collectionDate.kind === 'known' ? row.collectionDate.value : 'missing'}|${row.proposedSpecimenType}`;
     let group = groups.get(key);
@@ -879,15 +905,13 @@ export function buildExtractionConfirmationPlan(
         flag: row.sourceFlag,
       },
       sourceRowId: row.id,
-      reviewState:
-        row.decision === 'resolve' && row.reviewState === 'ready' ? 'confirmed' : 'needs-review',
+      reviewState: row.reviewState === 'ready' ? 'confirmed' : 'needs-review',
       provenance:
-        row.decision === 'resolve' &&
-        (row.proposedLabel !== row.sourceLabel ||
-          JSON.stringify(row.proposedValue) !== JSON.stringify(row.sourceValue) ||
-          row.proposedUnit !== row.sourceUnit ||
-          row.proposedReferenceInterval !== row.sourceReferenceInterval ||
-          row.proposedFlag !== row.sourceFlag)
+        row.proposedLabel !== row.sourceLabel ||
+        JSON.stringify(row.proposedValue) !== JSON.stringify(row.sourceValue) ||
+        row.proposedUnit !== row.sourceUnit ||
+        row.proposedReferenceInterval !== row.sourceReferenceInterval ||
+        row.proposedFlag !== row.sourceFlag
           ? 'user-corrected'
           : 'extracted',
     });

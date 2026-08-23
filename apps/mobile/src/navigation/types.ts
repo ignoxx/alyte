@@ -20,6 +20,11 @@ export type LabsStackParamList = {
   LabsRoot: undefined;
   LabReportDetail: { readonly reportId: string };
   ExtractionDraft: { readonly reportId: string; readonly draftId: string };
+  ExtractionMeasurementEditor: {
+    readonly reportId: string;
+    readonly draftId: string;
+    readonly rowId: string;
+  };
   LabRecordForm: { readonly recordId?: string } | undefined;
   LabRecordDetail: { readonly recordId: string };
 };
@@ -34,4 +39,14 @@ export type RootStackParamList = {
   ReportImport: undefined;
   SnapCapture: undefined;
   PrivacyWorkspace: { readonly reportId: string };
+  SanitizedSourcePreview: {
+    readonly reportId: string;
+    readonly pageIndex: number;
+    readonly boundingBox: {
+      readonly x: number;
+      readonly y: number;
+      readonly width: number;
+      readonly height: number;
+    };
+  };
 };

@@ -146,7 +146,7 @@ describe('local extraction domain', () => {
     assert.ok(Math.abs((rows[0]?.source.boundingBox.height ?? 0) - 0.04) < 0.000001);
   });
 
-  it('requires an explicit decision and preserves unresolved rows as needs-review', () => {
+  it('includes credible unmapped rows by default while preserving them as needs-review', () => {
     const rows = groupObservationsIntoRows(
       [
         {
@@ -173,10 +173,12 @@ describe('local extraction domain', () => {
       updatedAt: '2026-08-22T00:00:00.000Z',
       confirmedAt: null,
     };
-    assert.throws(
-      () => buildExtractionConfirmationPlan(base, { record: () => 'r', measurement: () => 'm' }),
-      /requires a decision/,
-    );
+    assert.equal(rows[0]?.decision, 'preserve');
+    const defaultPlan = buildExtractionConfirmationPlan(base, {
+      record: () => 'r',
+      measurement: () => 'm',
+    });
+    assert.equal(defaultPlan.records[0]?.measurements[0]?.reviewState, 'needs-review');
     const plan = buildExtractionConfirmationPlan(
       { ...base, rows: rows.map((row) => ({ ...row, decision: 'preserve' as const })) },
       { record: () => 'r', measurement: () => 'm' },
@@ -267,6 +269,26 @@ describe('local extraction domain', () => {
     assert.equal(row?.proposedBiomarkerId, 'biomarker.ldl_c');
     assert.ok(row?.reviewReasons.includes('unsupported-layout'));
     assert.equal(row?.proposedValue.kind, 'free_text');
+    assert.equal(row?.decision, 'unresolved');
+    assert.throws(
+      () =>
+        buildExtractionConfirmationPlan(
+          {
+            id: 'ambiguous-draft',
+            reportId: 'synthetic-report',
+            state: 'draft',
+            ocrContractVersion: 'alyte.vision.document.v2',
+            parserVersion: 'alyte.local-parser.v2',
+            collectionDate: { kind: 'known', value: '2026-08-20' },
+            rows: row === undefined ? [] : [row],
+            createdAt: '2026-08-20T00:00:00.000Z',
+            updatedAt: '2026-08-20T00:00:00.000Z',
+            confirmedAt: null,
+          },
+          { record: () => 'record', measurement: () => 'measurement' },
+        ),
+      /unresolved required fields/,
+    );
   });
 
   it('keeps a bounded result when no separate scalar result is present', () => {

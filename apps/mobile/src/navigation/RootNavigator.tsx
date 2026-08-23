@@ -12,6 +12,7 @@ import type { MainTabParamList, RootStackParamList } from './types';
 import { SnapScreen } from '../features/intake/SnapScreen';
 import { SanitizedReportEditorRoute } from '../features/labs/SanitizedReportEditorRoute';
 import { LabReportImportRoute } from '../features/labs/LabReportImportRoute';
+import { SanitizedSourcePreviewScreen } from '../features/labs/SanitizedSourcePreviewScreen';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const MainTabs = createNativeBottomTabNavigator<MainTabParamList>();
@@ -77,7 +78,7 @@ function FeatureStackNavigator({
           key={feature.name}
           name={feature.name}
           component={feature.component}
-          options={{ title: t(feature.titleKey) }}
+          options={{ title: t(feature.titleKey), ...feature.options }}
         />
       ))}
     </FeatureStack.Navigator>
@@ -194,6 +195,15 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
           name="PrivacyWorkspace"
           component={SanitizedReportEditorRoute}
           options={{ presentation: 'fullScreenModal', headerShown: true }}
+        />
+        <RootStack.Screen
+          name="SanitizedSourcePreview"
+          component={SanitizedSourcePreviewScreen}
+          options={{
+            presentation: 'fullScreenModal',
+            headerShown: true,
+            title: t('labs.extractionSourcePreviewTitle'),
+          }}
         />
       </RootStack.Navigator>
     </NavigationContainer>

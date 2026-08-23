@@ -162,7 +162,15 @@ describe('protected manual Lab Record persistence', () => {
       id: 'draft-extraction',
       reportId: 'report-extraction',
       collectionDate: { kind: 'missing' },
-      rows: rows.map((row) => ({ ...row, decision: 'preserve' as const })),
+      rows: [
+        ...rows.map((row) => ({ ...row, decision: 'preserve' as const })),
+        ...rows.map((row) => ({
+          ...row,
+          id: `${row.id}-skipped`,
+          order: row.order + 1,
+          decision: 'skip' as const,
+        })),
+      ],
     });
     assert.equal(draft.rows[0]?.source.pageIndex, 0);
     assert.equal(draft.rows[0]?.source.observations?.[0]?.text, ' LDL-C 3,8 mmol/L ');
@@ -209,10 +217,12 @@ describe('protected manual Lab Record persistence', () => {
     );
     const preservedDraft = await relaunched.repository.getExtractionDraft(draft.id);
     assert.equal(preservedDraft?.rows[0]?.sourceText, 'LDL-C 3,8 mmol/L');
+    assert.equal(preservedDraft?.rows[1]?.decision, 'skip');
+    assert.equal(preservedDraft?.rows[1]?.sourceText, 'LDL-C 3,8 mmol/L');
     await relaunched.repository.close();
   });
 
-  test('enforces explicit extraction decisions and keeps source provenance through correction', async () => {
+  test('includes valid extraction by default and keeps source provenance through correction', async () => {
     const { repository } = createRepository();
     await repository.createReport({
       id: 'report-decision',
@@ -256,7 +266,7 @@ describe('protected manual Lab Record persistence', () => {
       collectionDate: { kind: 'known', value: '2026-08-22' },
       rows,
     });
-    await assert.rejects(repository.confirmExtractionDraft(draft.id), /explicitly resolved/);
+    assert.equal(draft.rows[0]?.decision, 'resolve');
     const invalidReference = await repository.updateExtractionDraftRow(
       rows[0]!.id,
       { proposedReferenceInterval: 'not-a-range' },

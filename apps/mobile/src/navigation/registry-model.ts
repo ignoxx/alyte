@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import type { NativeStackNavigationOptions } from '@react-navigation/native-stack';
 
 export type FeatureTarget = 'home' | 'labs' | 'log' | 'settings';
 
@@ -7,6 +8,7 @@ export type NavigationFeature = {
   readonly target: FeatureTarget;
   readonly component: ComponentType<any>;
   readonly titleKey: string;
+  readonly options?: NativeStackNavigationOptions;
 };
 
 export type CoreNavigationFeatures = {

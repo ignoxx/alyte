@@ -24,6 +24,7 @@ import {
   buildExtractionConfirmationPlan,
   decodeVisionOCRResult,
   EXTRACTION_PARSER_VERSION,
+  extractionReviewBlocksConfirmation,
   VISION_OCR_CONTRACT_VERSION,
   proposeBiomarkerId,
   revalidateExtractionRow,
@@ -1215,9 +1216,9 @@ export function createLabRepository(
         return;
       }
       if (draft.state !== 'draft') throw new Error('Extraction Draft cannot be confirmed');
-      const unresolved = draft.rows.filter((row) => row.decision === 'unresolved');
+      const unresolved = draft.rows.filter(extractionReviewBlocksConfirmation);
       if (unresolved.length > 0)
-        throw new Error('Every extraction row must be explicitly resolved, preserved, or skipped');
+        throw new Error('Extraction rows still have unresolved required fields');
       const invalidResolved = draft.rows.filter(
         (row) => row.decision === 'resolve' && row.reviewState !== 'ready',
       );

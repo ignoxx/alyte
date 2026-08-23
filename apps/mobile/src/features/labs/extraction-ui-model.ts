@@ -1,5 +1,33 @@
 import type { ExtractionDraftRow, ExtractionRowDecision } from '@alyte/domain';
 
+export type ExtractionReviewFilter = 'all' | 'needs-review';
+
+export type ExtractionReviewSection = {
+  readonly key: string;
+  readonly collectionDateLabel: string | null;
+  readonly specimenType: ExtractionDraftRow['proposedSpecimenType'];
+  readonly panels: readonly {
+    readonly label: string | null;
+    readonly rows: readonly ExtractionDraftRow[];
+  }[];
+};
+
+const REQUIRED_REVIEW_REASONS = new Set<ExtractionDraftRow['reviewReasons'][number]>([
+  'missing-label',
+  'missing-value',
+  'unparseable-value',
+  'unsupported-layout',
+]);
+
+export function extractionNeedsResolution(
+  row: Pick<ExtractionDraftRow, 'decision' | 'reviewReasons'>,
+): boolean {
+  return (
+    row.decision === 'unresolved' &&
+    row.reviewReasons.some((reason) => REQUIRED_REVIEW_REASONS.has(reason))
+  );
+}
+
 export type ExtractionDecisionPresentation = {
   readonly label: 'kept' | 'skipped' | 'resolved' | 'needs-decision';
   /** Review decisions stay visually neutral; they are not provenance or inclusion states. */
@@ -22,7 +50,74 @@ export function extractionDecisionPresentation(
 }
 
 export function canConfirmExtraction(
-  rows: readonly Pick<ExtractionDraftRow, 'decision'>[],
+  rows: readonly Pick<ExtractionDraftRow, 'decision' | 'reviewReasons'>[],
 ): boolean {
-  return rows.length > 0 && rows.every((row) => row.decision !== 'unresolved');
+  return (
+    rows.some((row) => row.decision !== 'skip') &&
+    rows.every((row) => !extractionNeedsResolution(row))
+  );
+}
+
+export function filterExtractionRows(
+  rows: readonly ExtractionDraftRow[],
+  search: string,
+  filter: ExtractionReviewFilter,
+): readonly ExtractionDraftRow[] {
+  const query = search.trim().toLocaleLowerCase();
+  return rows.filter((row) => {
+    if (filter === 'needs-review' && !extractionNeedsResolution(row)) return false;
+    if (!query) return true;
+    const value = row.proposedValue;
+    const proposedValue =
+      value.kind === 'numeric'
+        ? String(value.value)
+        : value.kind === 'bounded'
+          ? `${value.comparator}${value.value}`
+          : value.value;
+    return [
+      row.proposedLabel,
+      row.sourceLabel,
+      row.sourceText,
+      proposedValue,
+      row.sourceValueString,
+      row.proposedUnit,
+      row.proposedReferenceInterval,
+      row.proposedFlag,
+      row.panelLabel,
+    ]
+      .filter((value): value is string => value !== null)
+      .some((value) => value.toLocaleLowerCase().includes(query));
+  });
+}
+
+export function buildExtractionReviewSections(
+  rows: readonly ExtractionDraftRow[],
+): readonly ExtractionReviewSection[] {
+  const records = new Map<string, ExtractionReviewSection>();
+  for (const row of rows) {
+    const collectionDateLabel =
+      row.collectionDate.kind === 'known' ? row.collectionDate.value : null;
+    const key = `${collectionDateLabel ?? 'missing'}|${row.proposedSpecimenType}`;
+    let record = records.get(key);
+    if (record === undefined) {
+      record = { key, collectionDateLabel, specimenType: row.proposedSpecimenType, panels: [] };
+      records.set(key, record);
+    }
+    const panels = [...record.panels];
+    const panelIndex = panels.findIndex((panel) => panel.label === row.panelLabel);
+    if (panelIndex < 0) panels.push({ label: row.panelLabel, rows: [row] });
+    else {
+      const panel = panels[panelIndex]!;
+      panels[panelIndex] = { ...panel, rows: [...panel.rows, row] };
+    }
+    records.set(key, { ...record, panels });
+  }
+  return [...records.values()];
+}
+
+export function sourceRegionPresentation(row: Pick<ExtractionDraftRow, 'source'>) {
+  return {
+    pageIndex: row.source.pageIndex,
+    boundingBox: row.source.boundingBox,
+  } as const;
 }
