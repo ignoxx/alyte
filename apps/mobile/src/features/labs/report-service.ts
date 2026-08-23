@@ -105,6 +105,18 @@ export class LabReportSanitizationError extends Error {
   }
 }
 
+export class LabReportExtractionError extends Error {
+  override readonly name = 'LabReportExtractionError';
+
+  constructor(
+    readonly reason: 'sanitized-source' | 'recognition' | 'no-reviewable-measurements',
+    message: string,
+    options?: { readonly cause?: unknown },
+  ) {
+    super(message, options);
+  }
+}
+
 export type LabReportsService = {
   listReports(): Promise<readonly LabReport[]>;
   getReport(id: string): Promise<LabReport | null>;
@@ -1171,13 +1183,30 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       }
       const existingDraft = await repo.getExtractionDraftForReport(id);
       if (existingDraft !== null) return existingDraft;
-      const sanitized = await previewSanitizedReport(id);
+      let sanitized: SanitizedReportPreview;
+      try {
+        sanitized = await previewSanitizedReport(id);
+      } catch (error) {
+        throw new LabReportExtractionError(
+          'sanitized-source',
+          'The verified Sanitized Report is unavailable for local extraction',
+          { cause: error },
+        );
+      }
       const sourcePath = sanitized.artifactPath;
       try {
         const results: VisionOCRResult[] = [];
         const pages = sanitized.uris.map((_, pageIndex) => ({ pageIndex, rotation: 0 }));
         for (const page of pages) {
-          results.push(await visionOCR.recognize(sourcePath, page.pageIndex, page.rotation, null));
+          try {
+            results.push(
+              await visionOCR.recognize(sourcePath, page.pageIndex, page.rotation, null),
+            );
+          } catch (error) {
+            throw new LabReportExtractionError('recognition', 'Local document recognition failed', {
+              cause: error,
+            });
+          }
         }
         const dateContext = dateContextFromOCR(results);
         const observations = results
@@ -1192,7 +1221,12 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           aliases: extractionAliases,
         });
         const rows = await applySemanticMappings(deterministicRows, observations);
-        if (rows.length === 0) throw new Error('Local OCR found no reviewable source rows');
+        if (rows.length === 0) {
+          throw new LabReportExtractionError(
+            'no-reviewable-measurements',
+            'Local OCR found no reviewable Measurements',
+          );
+        }
         return repo.createExtractionDraft({
           reportId: id,
           collectionDate: dateContext.collectionDate,

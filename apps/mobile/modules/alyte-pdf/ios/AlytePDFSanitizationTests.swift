@@ -1,11 +1,42 @@
 import Foundation
 import PDFKit
 import UIKit
+import Vision
 import XCTest
 
 /// Production-path XCTest specs. The CI host has no iOS SDK/runtime, so these compile as the
 /// module's test target and execute in the simulator/device lane when an iOS runtime is present.
 final class AlytePDFSanitizationTests: XCTestCase {
+  func testSanitizedRasterRemainsReadableToLocalOCRInDarkAppearance() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("alyte-sanitize-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = try syntheticSourceDocument(in: directory)
+    let output = directory.appendingPathComponent("ocr-readable.pdf")
+    let recipe: [String: Any] = ["pages": [["pageIndex": 0, "selected": true, "crop": NSNull(), "rotation": 0, "redactions": []]]]
+
+    var recognized: [String] = []
+    try UITraitCollection(userInterfaceStyle: .dark).performAsCurrent {
+      _ = try AlytePDFSanitizationTestSupport.render(document: source, destinationURL: output, recipe: recipe)
+      let derivative = try XCTUnwrap(PDFDocument(url: output))
+      let page = try XCTUnwrap(derivative.page(at: 0))
+      let bounds = page.bounds(for: .mediaBox)
+      let image = page.thumbnail(of: CGSize(width: bounds.width * 2, height: bounds.height * 2), for: .mediaBox)
+      let cgImage = try XCTUnwrap(image.cgImage)
+      let corner = try XCTUnwrap(rgbaPixel(in: cgImage, x: 4, y: 4))
+      XCTAssertGreaterThan(corner.red, 240)
+      XCTAssertGreaterThan(corner.green, 240)
+      XCTAssertGreaterThan(corner.blue, 240)
+      let request = VNRecognizeTextRequest()
+      request.recognitionLevel = .accurate
+      try VNImageRequestHandler(cgImage: cgImage, orientation: .up).perform([request])
+      recognized = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+    }
+
+    XCTAssertTrue(recognized.contains { $0.contains("SYNTHETIC-VISIBLE-TEXT") })
+    XCTAssertTrue(recognized.contains { $0.contains("LDL") && $0.contains("118") })
+  }
+
   func testImageOnlyRendererRemovesSourceStructureAndReloads() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("alyte-sanitize-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -130,6 +161,7 @@ final class AlytePDFSanitizationTests: XCTestCase {
     UIGraphicsBeginPDFContextToFile(sourceURL.path, CGRect(x: 0, y: 0, width: 600, height: 800), nil)
     UIGraphicsBeginPDFPage()
     ("SYNTHETIC-VISIBLE-TEXT" as NSString).draw(at: CGPoint(x: 40, y: 60), withAttributes: [.font: UIFont.systemFont(ofSize: 18)])
+    ("LDL cholesterol 118 mg/dL" as NSString).draw(at: CGPoint(x: 40, y: 92), withAttributes: [.font: UIFont.systemFont(ofSize: 18)])
     let hidden = NSMutableParagraphStyle(); hidden.alignment = .left
     ("SYNTHETIC-HIDDEN-TEXT" as NSString).draw(at: CGPoint(x: 40, y: 120), withAttributes: [.font: UIFont.systemFont(ofSize: 14), .foregroundColor: UIColor.clear, .paragraphStyle: hidden])
     UIGraphicsEndPDFContext()
@@ -155,6 +187,23 @@ final class AlytePDFSanitizationTests: XCTestCase {
     ))
     return source
   }
+}
+
+private func rgbaPixel(in image: CGImage, x: Int, y: Int) -> (red: UInt8, green: UInt8, blue: UInt8)? {
+  guard x >= 0, y >= 0, x < image.width, y < image.height else { return nil }
+  var pixel = [UInt8](repeating: 0, count: 4)
+  guard let context = CGContext(
+    data: &pixel,
+    width: 1,
+    height: 1,
+    bitsPerComponent: 8,
+    bytesPerRow: 4,
+    space: CGColorSpaceCreateDeviceRGB(),
+    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+  ) else { return nil }
+  context.translateBy(x: CGFloat(-x), y: CGFloat(y - image.height + 1))
+  context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+  return (pixel[0], pixel[1], pixel[2])
 }
 
 private extension UIImage {

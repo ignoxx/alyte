@@ -26,7 +26,11 @@ import {
   StatusPill,
 } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
-import { LabReportImportError, type PasswordRequest } from './report-service';
+import {
+  LabReportExtractionError,
+  LabReportImportError,
+  type PasswordRequest,
+} from './report-service';
 import type { LabReportPreview } from './report-service';
 import { formatReportPageCount } from './report-detail-model';
 
@@ -68,7 +72,9 @@ export function LabReportDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
-  const [extractionError, setExtractionError] = useState(false);
+  const [extractionError, setExtractionError] = useState<LabReportExtractionError['reason'] | null>(
+    null,
+  );
   const [preview, setPreview] = useState<LabReportPreview | null>(null);
   const [previewError, setPreviewError] = useState(false);
 
@@ -155,12 +161,14 @@ export function LabReportDetailScreen() {
     if (report === null) return;
     setBusy(true);
     setError(false);
-    setExtractionError(false);
+    setExtractionError(null);
     try {
       const draft = await reports.startExtraction(report.id, promptPassword());
       navigation.navigate('ExtractionDraft', { reportId: report.id, draftId: draft.id });
-    } catch {
-      setExtractionError(true);
+    } catch (caught) {
+      setExtractionError(
+        caught instanceof LabReportExtractionError ? caught.reason : 'recognition',
+      );
     } finally {
       setBusy(false);
     }
@@ -289,8 +297,16 @@ export function LabReportDetailScreen() {
                 onPress={() => void extractLocally()}
                 style={styles.extractButton}
               />
-              {extractionError && (
-                <AppText style={styles.errorText}>{t('labs.extractionStartError')}</AppText>
+              {extractionError !== null && (
+                <AppText style={styles.errorText}>
+                  {t(
+                    extractionError === 'sanitized-source'
+                      ? 'labs.extractionSourceError'
+                      : extractionError === 'no-reviewable-measurements'
+                        ? 'labs.extractionNoMeasurementsError'
+                        : 'labs.extractionRecognitionError',
+                  )}
+                </AppText>
               )}
             </View>
           )}

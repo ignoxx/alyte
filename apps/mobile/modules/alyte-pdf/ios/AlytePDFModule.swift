@@ -217,8 +217,15 @@ private func renderImage(page: PDFPage, crop: AlyteNormalizedRect?, rotation: In
   sourceFormat.opaque = true
   let sourceRenderer = UIGraphicsImageRenderer(size: sourceSize, format: sourceFormat)
   let full = sourceRenderer.image { context in
+    // A PDF page uses a bottom-left origin while UIGraphicsImageRenderer uses UIKit's top-left
+    // coordinates. Fill the opaque canvas explicitly and bridge those coordinate systems before
+    // flattening; otherwise dark appearance can produce black-on-black content and the derivative
+    // is vertically mirrored even though its PDF structure still verifies.
+    UIColor.white.setFill()
+    context.fill(CGRect(origin: .zero, size: sourceSize))
     context.cgContext.saveGState()
-    context.cgContext.scaleBy(x: scale, y: scale)
+    context.cgContext.translateBy(x: 0, y: sourceSize.height)
+    context.cgContext.scaleBy(x: scale, y: -scale)
     page.draw(with: .mediaBox, to: context.cgContext)
     context.cgContext.restoreGState()
   }

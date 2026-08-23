@@ -15,7 +15,11 @@ import {
   type ProtectedCopy,
   type ProtectedReportFileService,
 } from './file-service';
-import { createLabReportsService, type LabReportsService } from './report-service';
+import {
+  createLabReportsService,
+  LabReportExtractionError,
+  type LabReportsService,
+} from './report-service';
 import type { LabReportImportError } from './report-service';
 import type { PdfInspection, PdfInspectionSession, PdfInspector } from './pdf';
 import type { PdfSanitizedVerification } from './pdf';
@@ -401,6 +405,39 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(records[0]?.measurements[0]?.original.valueString, '3,8');
   });
 
+  test('classifies a readable report with no plausible Measurements separately from source failure', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const service = createService(repository, files, sanitizingPdf(files), {
+      async recognize(): Promise<VisionOCRResult> {
+        return {
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'prose-only',
+              text: 'Synthetic laboratory contact details',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.6, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        };
+      },
+    });
+    const report = (await service.importPdf(source('no-measurements')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+
+    await assert.rejects(service.startExtraction(report.id), (error: unknown) => {
+      assert.ok(error instanceof LabReportExtractionError);
+      assert.equal(error.reason, 'no-reviewable-measurements');
+      return true;
+    });
+  });
+
   test('refuses extraction before a current Sanitized Report is verified', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
@@ -412,7 +449,11 @@ describe('protected Lab Report import lifecycle', () => {
       },
     });
     const report = (await service.importImages([source('unsanitized', 'image')]))[0]!.report;
-    await assert.rejects(service.startExtraction(report.id), /Sanitized Report is not verified/);
+    await assert.rejects(service.startExtraction(report.id), (error: unknown) => {
+      assert.ok(error instanceof LabReportExtractionError);
+      assert.equal(error.reason, 'sanitized-source');
+      return true;
+    });
     assert.equal(recognitionCalls, 0);
   });
 
