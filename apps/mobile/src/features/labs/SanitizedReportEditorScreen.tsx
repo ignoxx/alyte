@@ -9,7 +9,6 @@ import {
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   reorderSanitizationPages,
-  updateRedaction,
   updateSanitizationPage,
   type RedactionRegion,
   type SanitizationRecipe,
@@ -24,10 +23,29 @@ import {
   type AlytePDFWorkspaceHandle,
   type NativeRedactionChange,
 } from './AlytePDFWorkspace';
-import type { SanitizationEditorState, SanitizedReportPreview } from './report-service';
+import type {
+  PasswordRequest,
+  SanitizationEditorState,
+  SanitizedReportPreview,
+} from './report-service';
 
 type EditorRoute = RouteProp<RootStackParamList, 'PrivacyWorkspace'>;
 type EditorNavigation = NativeStackNavigationProp<RootStackParamList, 'PrivacyWorkspace'>;
+
+function passwordRequest(): PasswordRequest {
+  return ({ report }) =>
+    new Promise<string | null>((resolve) => {
+      Alert.prompt(
+        t('labs.reportPasswordTitle'),
+        t('labs.reportPasswordBody').replace('{filename}', report.originalFilename),
+        (value) => resolve(value),
+        'secure-text',
+        undefined,
+        undefined,
+        { onDismiss: () => resolve(null) },
+      );
+    });
+}
 
 export function SanitizedReportEditorScreen() {
   const navigation = useNavigation<EditorNavigation>();
@@ -49,7 +67,7 @@ export function SanitizedReportEditorScreen() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const next = await reports.openSanitizationEditor(route.params.reportId);
+      const next = await reports.openSanitizationEditor(route.params.reportId, passwordRequest());
       setState(next);
       setRecipe(next.recipe);
       setBaseline(JSON.stringify(next.recipe));
@@ -60,6 +78,13 @@ export function SanitizedReportEditorScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => {
+    if (recipe === null || JSON.stringify(recipe) === baseline) return;
+    const timer = setTimeout(() => {
+      void reports.saveSanitizationDraft(route.params.reportId, recipe);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [baseline, recipe, reports, route.params.reportId]);
   useEffect(
     () => () => {
       void reports.closeSanitizationEditor(route.params.reportId);
@@ -73,7 +98,11 @@ export function SanitizedReportEditorScreen() {
       {
         text: t('labs.sanitizedDiscard'),
         style: 'destructive',
-        onPress: () => navigation.dispatch(data.action),
+        onPress: () => {
+          void reports
+            .discardSanitizationDraft(route.params.reportId)
+            .then(() => navigation.dispatch(data.action));
+        },
       },
     ]),
   );
@@ -115,30 +144,25 @@ export function SanitizedReportEditorScreen() {
 
   function applyNativeRedactions(change: NativeRedactionChange) {
     if (recipe === null) return;
-    let next = recipe;
     const page = recipe.pages.find((item) => item.pageIndex === change.pageIndex);
     if (page === undefined) return;
-    for (const changed of change.redactions) {
+    const nextRegions: RedactionRegion[] = change.redactions.map((changed) => {
       const existing = page.redactions.find((item) => item.id === changed.id);
-      if (existing !== undefined)
-        next = updateRedaction(next, change.pageIndex, changed.id, changed.rect);
-      else {
-        const region: RedactionRegion = {
+      return {
+        ...(existing ?? {
           id: changed.id,
-          rect: changed.rect,
           origin: 'user',
           label: null,
-        };
-        next = {
-          ...next,
-          pages: next.pages.map((item) =>
-            item.pageIndex === change.pageIndex
-              ? { ...item, redactions: [...item.redactions, region] }
-              : item,
-          ),
-        };
-      }
-    }
+        }),
+        rect: changed.rect,
+      };
+    });
+    const next = {
+      ...recipe,
+      pages: recipe.pages.map((item) =>
+        item.pageIndex === change.pageIndex ? { ...item, redactions: nextRegions } : item,
+      ),
+    };
     setRecipe(next);
     setPreview(null);
     setCanUndo(change.canUndo);
@@ -162,6 +186,21 @@ export function SanitizedReportEditorScreen() {
     [order[from], order[to]] = [order[to]!, order[from]!];
     setRecipe(reorderSanitizationPages(recipe, order));
     setPreview(null);
+  }
+  function adjustCrop(target: number, inset: number) {
+    if (recipe === null) return;
+    const page = recipe.pages.find((item) => item.pageIndex === target);
+    if (page === undefined) return;
+    const current = page.crop ?? { x: 0, y: 0, width: 1, height: 1 };
+    const next = {
+      x: Math.max(0, current.x + inset),
+      y: Math.max(0, current.y + inset),
+      width: Math.min(1, current.width - inset * 2),
+      height: Math.min(1, current.height - inset * 2),
+    };
+    updatePageFor(target, {
+      crop: inset < 0 && next.width >= 1 && next.height >= 1 ? null : next,
+    });
   }
   async function sanitize() {
     if (recipe === null) return;
@@ -202,6 +241,16 @@ export function SanitizedReportEditorScreen() {
         rotation={preview === null ? currentPage.rotation : 0}
         crop={preview === null ? currentPage.crop : null}
         redactions={preview === null ? currentPage.redactions : []}
+        accessibilityLabels={{
+          redaction: t('labs.sanitizedEditorOverlayLabel'),
+          moveLeft: t('labs.sanitizedEditorMoveLeft'),
+          moveRight: t('labs.sanitizedEditorMoveRight'),
+          moveUp: t('labs.sanitizedEditorMoveUp'),
+          moveDown: t('labs.sanitizedEditorMoveDown'),
+          grow: t('labs.sanitizedEditorResize'),
+          shrink: t('labs.sanitizedEditorResizeSmaller'),
+          remove: t('labs.sanitizedEditorRemove'),
+        }}
         onRedactionsChange={(event) => applyNativeRedactions(event.nativeEvent)}
         onFailure={() => setError(t('labs.sanitizedEditorLoadError'))}
         accessibilityLabel={
@@ -237,6 +286,11 @@ export function SanitizedReportEditorScreen() {
               tone="quiet"
             />
             <AppButton
+              label={t('labs.sanitizedEditorRemove')}
+              onPress={() => void viewer.current?.removeSelected()}
+              tone="quiet"
+            />
+            <AppButton
               label={`${t('labs.sanitizedPages')} ${pageIndex + 1}/${recipe.pages.length}`}
               onPress={() => setPagesOpen(true)}
               tone="quiet"
@@ -250,14 +304,11 @@ export function SanitizedReportEditorScreen() {
             />
           </>
         ) : (
-          <>
-            <AppButton
-              label={t('labs.editRedactions')}
-              onPress={() => setPreview(null)}
-              tone="secondary"
-            />
-            <AppButton label={t('labs.viewSanitizedReport')} disabled />
-          </>
+          <AppButton
+            label={t('labs.editRedactions')}
+            onPress={() => setPreview(null)}
+            tone="secondary"
+          />
         )}
       </View>
       <Modal
@@ -319,13 +370,20 @@ export function SanitizedReportEditorScreen() {
                     tone="quiet"
                   />
                   <AppButton
-                    label={t('labs.sanitizedEditorCrop')}
-                    onPress={() =>
-                      updatePageFor(page.pageIndex, {
-                        crop:
-                          page.crop === null ? { x: 0.05, y: 0.05, width: 0.9, height: 0.9 } : null,
-                      })
-                    }
+                    label={t('labs.sanitizedEditorCropIn')}
+                    onPress={() => adjustCrop(page.pageIndex, 0.025)}
+                    tone="quiet"
+                  />
+                  <AppButton
+                    disabled={page.crop === null}
+                    label={t('labs.sanitizedEditorCropOut')}
+                    onPress={() => adjustCrop(page.pageIndex, -0.025)}
+                    tone="quiet"
+                  />
+                  <AppButton
+                    disabled={page.crop === null}
+                    label={t('labs.sanitizedEditorCropReset')}
+                    onPress={() => updatePageFor(page.pageIndex, { crop: null })}
                     tone="quiet"
                   />
                   <AppButton

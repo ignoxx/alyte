@@ -70,12 +70,8 @@ export function LabReportImportScreen() {
       const results = await reports.importImages(undefined, passwordRequest());
       const first = results[0];
       if (first !== undefined) {
-        const root = navigation
-          .getParent<NativeStackNavigationProp<RootStackParamList>>()
-          ?.getParent<NativeStackNavigationProp<RootStackParamList>>();
         setLastReport(first.report);
         navigation.replace('LabReportDetail', { reportId: first.report.id });
-        root?.navigate('PrivacyWorkspace', { reportId: first.report.id });
       }
     } catch (caught) {
       setError(errorMessage(caught));

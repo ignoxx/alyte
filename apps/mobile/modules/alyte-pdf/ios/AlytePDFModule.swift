@@ -467,10 +467,14 @@ public final class AlytePDFModule: Module {
       Prop("redactions") { (view: AlytePDFWorkspaceView, redactions: [[String: Any]]) in
         view.setRedactions(redactions)
       }
+      Prop("accessibilityLabels") { (view: AlytePDFWorkspaceView, labels: [String: String]) in
+        view.setAccessibilityLabels(labels)
+      }
       Events("onRedactionsChange", "onPageChange", "onReady", "onFailure")
       AsyncFunction("undo") { (view: AlytePDFWorkspaceView) in view.undoEdit() }
       AsyncFunction("redo") { (view: AlytePDFWorkspaceView) in view.redoEdit() }
       AsyncFunction("clearSelection") { (view: AlytePDFWorkspaceView) in view.clearSelection() }
+      AsyncFunction("removeSelected") { (view: AlytePDFWorkspaceView) in view.removeSelected() }
     }
 
     AsyncFunction("inspect") { (path: String) throws -> [String: Any] in
@@ -502,6 +506,15 @@ public final class AlytePDFModule: Module {
       self.sessionLock.unlock()
       guard let document else { throw AlytePDFError.unreadable }
       return try self.renderPreview(document)
+    }
+
+    AsyncFunction("exportUnlockedSession") { (sessionId: String, destinationPath: String) throws in
+      self.sessionLock.lock()
+      let document = self.sessions[sessionId]
+      self.sessionLock.unlock()
+      guard let document, document.write(to: URL(fileURLWithPath: alytePDFFilePath(destinationPath))) else {
+        throw AlytePDFError.unreadable
+      }
     }
 
     AsyncFunction("close") { (sessionId: String) in

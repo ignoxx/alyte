@@ -30,7 +30,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   private var future: [[WorkspaceRedaction]] = []
   private var startRegions: [WorkspaceRedaction] = []
   private var startPoint = CGPoint.zero
-  private var activeHandle: UIView?
+  private var labels: [String: String] = [:]
 
   var sourcePath: String = "" { didSet { if oldValue != sourcePath { load() } } }
   var pageIndex: Int = 0 { didSet { if oldValue != pageIndex { showPage() } } }
@@ -90,9 +90,18 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     if next != crop { crop = next; showPage() }
   }
 
+  func setAccessibilityLabels(_ value: [String: String]) { labels = value; layoutRegions() }
+
   func undoEdit() { guard let previous = history.popLast() else { return }; future.append(regions); regions = previous; emit(); layoutRegions() }
   func redoEdit() { guard let next = future.popLast() else { return }; history.append(regions); regions = next; emit(); layoutRegions() }
   func clearSelection() { selectedID = nil; layoutRegions() }
+  func removeSelected() {
+    guard let selectedID, regions.contains(where: { $0.id == selectedID }) else { return }
+    history.append(regions); future.removeAll()
+    regions.removeAll { $0.id == selectedID }
+    self.selectedID = nil
+    emit(); layoutRegions()
+  }
 
   private func load() {
     guard !sourcePath.isEmpty, let loaded = PDFDocument(url: URL(fileURLWithPath: sourcePath)), !loaded.isLocked else {
@@ -150,9 +159,11 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
       view.backgroundColor = UIColor.black.withAlphaComponent(selectedID == region.id ? 0.72 : 0.55)
       view.layer.borderColor = UIColor.systemYellow.cgColor
       view.layer.borderWidth = selectedID == region.id ? 2 : 0
-      view.accessibilityLabel = "Redaction"
+      view.accessibilityLabel = labels["redaction"] ?? "Redaction"
       view.isAccessibilityElement = true
       view.accessibilityTraits = .adjustable
+      if selectedID == region.id { view.accessibilityTraits.insert(.selected) }
+      view.accessibilityCustomActions = accessibilityActions(for: region.id)
       let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
       view.addGestureRecognizer(pan)
       view.accessibilityIdentifier = region.id
@@ -167,6 +178,33 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
         handle.addGestureRecognizer(resize); overlay.addSubview(handle)
       }
     }
+  }
+
+  private func accessibilityActions(for id: String) -> [UIAccessibilityCustomAction] {
+    func action(_ key: String, _ fallback: String, _ change: @escaping () -> Void) -> UIAccessibilityCustomAction {
+      UIAccessibilityCustomAction(name: labels[key] ?? fallback) { _ in change(); return true }
+    }
+    return [
+      action("moveLeft", "Move left") { self.adjust(id: id, dx: -0.01, dy: 0, size: 0) },
+      action("moveRight", "Move right") { self.adjust(id: id, dx: 0.01, dy: 0, size: 0) },
+      action("moveUp", "Move up") { self.adjust(id: id, dx: 0, dy: -0.01, size: 0) },
+      action("moveDown", "Move down") { self.adjust(id: id, dx: 0, dy: 0.01, size: 0) },
+      action("grow", "Grow") { self.adjust(id: id, dx: 0, dy: 0, size: 0.01) },
+      action("shrink", "Shrink") { self.adjust(id: id, dx: 0, dy: 0, size: -0.01) },
+      action("remove", "Remove") { self.selectedID = id; self.removeSelected() },
+    ]
+  }
+
+  private func adjust(id: String, dx: CGFloat, dy: CGFloat, size: CGFloat) {
+    guard let index = regions.firstIndex(where: { $0.id == id }) else { return }
+    history.append(regions); future.removeAll(); selectedID = id
+    var rect = regions[index].rect
+    rect.origin.x = max(0, min(1 - rect.width, rect.origin.x + dx))
+    rect.origin.y = max(0, min(1 - rect.height, rect.origin.y + dy))
+    rect.size.width = max(0.01, min(1 - rect.minX, rect.width + size))
+    rect.size.height = max(0.01, min(1 - rect.minY, rect.height + size))
+    regions[index].rect = rect
+    emit(); layoutRegions()
   }
 
   @objc private func tapped(_ gesture: UITapGestureRecognizer) {
@@ -216,21 +254,5 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     onRedactionsChange(["pageIndex": pageIndex, "redactions": regions.map {
       ["id": $0.id, "rect": ["x": $0.rect.minX, "y": $0.rect.minY, "width": $0.rect.width, "height": $0.rect.height]]
     }, "canUndo": !history.isEmpty, "canRedo": !future.isEmpty])
-  }
-}
-
-public enum AlytePDFWorkspaceTestSupport {
-  public static func viewRect(normalized: CGRect, pageFrame: CGRect) -> CGRect {
-    CGRect(x: pageFrame.minX + normalized.minX * pageFrame.width,
-           y: pageFrame.minY + normalized.minY * pageFrame.height,
-           width: normalized.width * pageFrame.width,
-           height: normalized.height * pageFrame.height)
-  }
-
-  public static func normalizedRect(viewRect: CGRect, pageFrame: CGRect) -> CGRect {
-    CGRect(x: (viewRect.minX - pageFrame.minX) / pageFrame.width,
-           y: (viewRect.minY - pageFrame.minY) / pageFrame.height,
-           width: viewRect.width / pageFrame.width,
-           height: viewRect.height / pageFrame.height)
   }
 }

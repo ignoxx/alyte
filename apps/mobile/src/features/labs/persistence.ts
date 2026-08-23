@@ -17,6 +17,8 @@ import {
   type ExtractionDraftRow,
   type ExtractionDraftRowPatch,
   type ExtractionDateContext,
+  type SanitizationRecipe,
+  createSanitizationRecipe,
 } from '@alyte/domain';
 import {
   buildExtractionConfirmationPlan,
@@ -667,6 +669,9 @@ export type LabRepository = {
     aliases: readonly ExtractionAliasEntry[],
   ): Promise<ExtractionDraftRow>;
   confirmExtractionDraft(id: string): Promise<readonly LabRecord[]>;
+  getSanitizationDraft(reportId: string): Promise<SanitizationRecipe | null>;
+  saveSanitizationDraft(reportId: string, recipe: SanitizationRecipe): Promise<void>;
+  clearSanitizationDraft(reportId: string): Promise<void>;
 } & LabReportRepository;
 
 export type LabRepositoryOptions = {
@@ -1308,6 +1313,41 @@ export function createLabRepository(
     idGenerator: makeId,
   });
 
+  const draftKey = (reportId: string) => `labs.sanitization-draft.${reportId}`;
+  async function getSanitizationDraft(reportId: string): Promise<SanitizationRecipe | null> {
+    await initialize();
+    const rows = await database.getAllAsync<{ value: unknown }>(
+      'SELECT value FROM app_preferences WHERE key = ?;',
+      draftKey(reportId),
+    );
+    if (typeof rows[0]?.value !== 'string') return null;
+    const value = JSON.parse(rows[0].value) as SanitizationRecipe;
+    return createSanitizationRecipe(value.reportId, value.pages);
+  }
+  async function saveSanitizationDraft(
+    reportId: string,
+    recipe: SanitizationRecipe,
+  ): Promise<void> {
+    if (recipe.reportId !== reportId)
+      throw new Error('Sanitization draft belongs to another report');
+    await initialize();
+    await withWrite(async () => {
+      await database.runAsync(
+        `INSERT INTO app_preferences (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`,
+        draftKey(reportId),
+        JSON.stringify(recipe),
+        now(),
+      );
+    });
+  }
+  async function clearSanitizationDraft(reportId: string): Promise<void> {
+    await initialize();
+    await withWrite(async () => {
+      await database.runAsync('DELETE FROM app_preferences WHERE key = ?;', draftKey(reportId));
+    });
+  }
+
   return {
     initialize,
     close,
@@ -1322,6 +1362,9 @@ export function createLabRepository(
     getExtractionDraftForReport,
     updateExtractionDraftRow,
     confirmExtractionDraft,
+    getSanitizationDraft,
+    saveSanitizationDraft,
+    clearSanitizationDraft,
     ...reportRepository,
   };
 }

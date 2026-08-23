@@ -16,6 +16,7 @@ export type PdfInspection = {
 export interface PdfInspectionSession {
   readonly inspection: PdfInspection;
   renderPreview(): Promise<readonly string[]>;
+  exportUnlocked(destinationPath: string): Promise<void>;
   sanitize?(destinationPath: string, recipe: SanitizationRecipe): Promise<PdfSanitizationResult>;
   suggestSensitiveRegions?(): Promise<readonly SensitiveRegionSuggestion[]>;
   close(): Promise<void>;
@@ -60,6 +61,7 @@ type NativePdfModule = {
   unlock(path: string, password: string): Promise<PdfInspection & { readonly sessionId: string }>;
   renderPreview(path: string): Promise<readonly string[]>;
   renderPreviewSession(sessionId: string): Promise<readonly string[]>;
+  exportUnlockedSession(sessionId: string, destinationPath: string): Promise<void>;
   close(sessionId: string): Promise<void>;
   sanitizeSession(
     sessionId: string,
@@ -93,6 +95,8 @@ export const nativePdfInspector: PdfInspector = {
     return {
       inspection: result,
       renderPreview: () => native.renderPreviewSession(result.sessionId),
+      exportUnlocked: (destinationPath) =>
+        native.exportUnlockedSession(result.sessionId, destinationPath),
       sanitize: (destinationPath, recipe) =>
         native.sanitizeSession(result.sessionId, destinationPath, recipe),
       suggestSensitiveRegions: () => native.suggestSensitiveRegionsSession(result.sessionId),

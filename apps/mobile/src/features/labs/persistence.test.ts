@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { canonicalId, groupObservationsIntoRows, type ExtractionAliasEntry } from '@alyte/domain';
+import {
+  canonicalId,
+  createSanitizationRecipe,
+  groupObservationsIntoRows,
+  type ExtractionAliasEntry,
+} from '@alyte/domain';
 import { CURRENT_SCHEMA_VERSION, createLabRepository, type SqliteDatabase } from './persistence';
 import { ProtectionError, type DatabaseProtection, type ProtectionOptions } from './protection';
 
@@ -90,6 +95,34 @@ function createRepository(databasePath = temporaryDatabase(), databaseProtection
 }
 
 describe('protected manual Lab Record persistence', () => {
+  test('sanitization draft survives relaunch without becoming a verified artifact', async () => {
+    const path = temporaryDatabase();
+    const first = createRepository(path);
+    const recipe = createSanitizationRecipe('report-draft', [
+      {
+        pageIndex: 0,
+        selected: true,
+        crop: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+        rotation: 270,
+        redactions: [
+          {
+            id: 'redaction-1',
+            rect: { x: 0.2, y: 0.3, width: 0.2, height: 0.1 },
+            origin: 'user',
+            label: null,
+          },
+        ],
+      },
+    ]);
+    await first.repository.saveSanitizationDraft('report-draft', recipe);
+    await first.repository.close();
+    const second = createRepository(path);
+    assert.deepEqual(await second.repository.getSanitizationDraft('report-draft'), recipe);
+    assert.equal(await second.repository.getSanitizedReport('report-draft'), null);
+    await second.repository.clearSanitizationDraft('report-draft');
+    assert.equal(await second.repository.getSanitizationDraft('report-draft'), null);
+    await second.repository.close();
+  });
   test('Extraction Draft preserves source locations and confirms atomically/idempotently', async () => {
     const { repository, database, databasePath } = createRepository();
     await repository.createReport({

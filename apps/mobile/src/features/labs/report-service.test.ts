@@ -245,6 +245,7 @@ class FakePdf implements PdfInspector {
     return {
       inspection: { ...pdfInspection, encrypted: true },
       renderPreview: async () => ['data:image/png;base64,synthetic-preview'],
+      exportUnlocked: async () => {},
       close: async () => {},
     };
   }

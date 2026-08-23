@@ -17,6 +17,7 @@ type Props = ViewProps & {
   readonly rotation: number;
   readonly crop: RedactionRegion['rect'] | null;
   readonly redactions: readonly RedactionRegion[];
+  readonly accessibilityLabels: Readonly<Record<string, string>>;
   readonly onRedactionsChange?: (event: { nativeEvent: NativeRedactionChange }) => void;
   readonly onPageChange?: (event: { nativeEvent: { readonly pageIndex: number } }) => void;
   readonly onReady?: (event: { nativeEvent: { readonly pageCount: number } }) => void;
@@ -28,6 +29,7 @@ export type AlytePDFWorkspaceHandle = {
   undo(): Promise<void>;
   redo(): Promise<void>;
   clearSelection(): Promise<void>;
+  removeSelected(): Promise<void>;
 };
 
 export function AlytePDFWorkspace(props: Props & { readonly ref?: Ref<AlytePDFWorkspaceHandle> }) {

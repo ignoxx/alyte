@@ -140,6 +140,8 @@ export type LabReportsService = {
   ): Promise<SanitizationEditorState>;
   closeSanitizationEditor(id: string): Promise<void>;
   saveSanitizedReport(id: string, recipe: SanitizationRecipe): Promise<SanitizedReport>;
+  saveSanitizationDraft(id: string, recipe: SanitizationRecipe): Promise<void>;
+  discardSanitizationDraft(id: string): Promise<void>;
   previewSanitizedReport(id: string): Promise<SanitizedReportPreview>;
   getSanitizedReport(id: string): Promise<SanitizedReport | null>;
   deleteSanitizedReport(id: string): Promise<void>;
@@ -277,6 +279,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   const now = options.now ?? isoNow;
   const makeId = options.idGenerator ?? ((prefix: string) => createSortableOpaqueId(prefix));
   const sanitizationSessions = new Map<string, Awaited<ReturnType<PdfInspector['unlock']>>>();
+  const sanitizationWorkspaceArtifacts = new Map<string, string>();
 
   function persistedPath(path: string): string {
     return fileService.portablePath === undefined ? path : fileService.portablePath(path);
@@ -748,7 +751,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }
     const path = await openOriginal(id);
     const current = await repo.getSanitizedReport(id);
-    const recipe = current?.recipe ?? recipeForReport(report);
+    const recipe =
+      (await repo.getSanitizationDraft(id)) ?? current?.recipe ?? recipeForReport(report);
     let session = sanitizationSessions.get(id) ?? null;
     if (session === null) {
       const inspection = await pdfInspector.inspect(path);
@@ -765,6 +769,16 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         try {
           session = await pdfInspector.unlock(path, password);
           sanitizationSessions.set(id, session);
+          if (
+            fileService.sanitizedDestination === undefined ||
+            fileService.protectArtifact === undefined
+          ) {
+            throw new Error('Protected workspace storage is unavailable');
+          }
+          const workspacePath = await fileService.sanitizedDestination(id, 'unlocked-workspace');
+          await session.exportUnlocked(workspacePath);
+          const protectedWorkspace = await fileService.protectArtifact(workspacePath);
+          sanitizationWorkspaceArtifacts.set(id, protectedWorkspace.path);
         } catch (error) {
           throw new LabReportSanitizationError(id, 'The PDF password was not accepted', {
             cause: error,
@@ -782,13 +796,36 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       : pdfInspector.suggestSensitiveRegions === undefined
         ? []
         : await pdfInspector.suggestSensitiveRegions(path);
-    return { report, sourcePath: path, recipe, suggestions, pagePreviewUris, current };
+    return {
+      report,
+      sourcePath: sanitizationWorkspaceArtifacts.get(id) ?? path,
+      recipe,
+      suggestions,
+      pagePreviewUris,
+      current,
+    };
   }
 
   async function closeSanitizationEditor(id: string): Promise<void> {
     const session = sanitizationSessions.get(id);
     sanitizationSessions.delete(id);
     if (session !== undefined) await session.close();
+    const workspaceArtifact = sanitizationWorkspaceArtifacts.get(id);
+    sanitizationWorkspaceArtifacts.delete(id);
+    if (workspaceArtifact !== undefined) await fileService.remove(workspaceArtifact);
+  }
+
+  async function saveSanitizationDraft(id: string, recipe: SanitizationRecipe): Promise<void> {
+    await serialized(async () => {
+      await ensureInitialized();
+      await (await repository()).saveSanitizationDraft(id, recipe);
+    });
+  }
+  async function discardSanitizationDraft(id: string): Promise<void> {
+    await serialized(async () => {
+      await ensureInitialized();
+      await (await repository()).clearSanitizationDraft(id);
+    });
   }
 
   async function saveSanitizedReport(
@@ -886,7 +923,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           throw new Error('Protected derivative storage is unavailable');
         }
         const protectedArtifact = await fileService.protectArtifact(destination);
-        return repo.updateSanitizedReport(pending.id, {
+        const verified = await repo.updateSanitizedReport(pending.id, {
           artifactPath: persistedPath(protectedArtifact.path),
           artifactHash: protectedArtifact.sourceHash,
           byteSize: protectedArtifact.byteSize,
@@ -895,6 +932,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           failureReason: null,
           deletedAt: null,
         });
+        await repo.clearSanitizationDraft(id);
+        return verified;
       } catch (error) {
         await fileService.remove(destination).catch(() => undefined);
         await repo.updateSanitizedReport(pending.id, {
@@ -1272,6 +1311,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     previewOriginal,
     openSanitizationEditor,
     closeSanitizationEditor,
+    saveSanitizationDraft,
+    discardSanitizationDraft,
     saveSanitizedReport,
     previewSanitizedReport,
     getSanitizedReport,
