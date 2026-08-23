@@ -96,7 +96,7 @@
     "reportPreviewError": "The protected source could not be previewed. It may be unavailable, corrupt, or no longer readable.",
     "reportActions": "Local actions",
     "reportMoreActions": "Report actions",
-    "sanitizedEditorOpen": "Review Sanitized Report",
+    "sanitizedEditorOpen": "Sanitize Report",
     "sanitizedEditorTitle": "Sanitize Report",
     "sanitizedEditorBody": "Choose pages and review every redaction before creating a new derivative. The Original Report stays unchanged on this iPhone.",
     "sanitizedEditorExactTitle": "Exact outgoing artifact",
