@@ -1026,6 +1026,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       pt: 'pt-PT',
       nl: 'nl-NL',
       pl: 'pl-PL',
+      lt: 'lt-LT',
       en: Intl.DateTimeFormat().resolvedOptions().locale,
     };
     return languageLocales[language ?? ''] ?? Intl.DateTimeFormat().resolvedOptions().locale;
@@ -1046,9 +1047,9 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     const contexts: ExtractionDateContext[] = [];
     const excludedObservationIds = new Set<string>();
     const collectionWords =
-      /\b(collection|collected|sample|specimen|date of collection|abnahme|entnahme|proben|prélèvement|prelevement|muestra|toma de muestra|prelievo|campione|colheita|amostra|afname|monster|pobranie|próbka)\b/iu;
+      /\b(collection|collected|sample|specimen|date of collection|abnahme|entnahme|proben|prélèvement|prelevement|muestra|toma de muestra|prelievo|campione|colheita|amostra|afname|monster|pobranie|próbka|paėmimo data|mėginys|ėminys|paimta)\b/iu;
     const nonCollectionWords =
-      /\b(issued|report date|birth|dob|date of birth|ausgestellt|geburt|naissance|nacimiento|nascita|nascimento|geboorte|urodzenia|wydania)\b/iu;
+      /\b(issued|report date|birth|dob|date of birth|ausgestellt|geburt|naissance|nacimiento|nascita|nascimento|geboorte|urodzenia|wydania|išdavimo data|gimimo data)\b/iu;
     for (const observation of observations) {
       const candidate = observation.text.match(/\b\d{1,4}[./-]\d{1,2}[./-]\d{1,4}\b/u)?.[0];
       if (candidate === undefined) continue;
@@ -1095,6 +1096,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     if (/\b(serum|sérum|serum)\b/u.test(text)) return 'serum';
     if (/\b(urine|urin|orina|urina|urine)\b/u.test(text)) return 'urine';
     if (/\b(blood|blut|sang|sangue|bloed|krew)\b/u.test(text)) return 'blood';
+    if (/\b(kraujas|kraujo)\b/u.test(text)) return 'blood';
     return 'unknown';
   }
 
@@ -1117,7 +1119,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         throw new Error('Original Report integrity could not be verified');
       // Database paths are portable container-independent URIs. Resolve and validate ownership
       // once at the adapter boundary before passing the current absolute path to PDFKit/Vision.
-      const sourcePath = await nativePath(report.originalPath);
+      const sanitized = await repo.getSanitizedReport(id);
+      const extractionPath =
+        sanitized?.verificationState === 'verified' && sanitized.artifactPath !== null
+          ? sanitized.artifactPath
+          : report.originalPath;
+      // Once a verified Sanitized Report exists it is the only artifact Vision receives. The
+      // original remains a compatibility fallback for image imports and pre-sanitization drafts.
+      const sourcePath = await nativePath(extractionPath);
       let password: string | null = null;
       if (report.sourceType === 'pdf') {
         const inspection = await pdfInspector.inspect(sourcePath);

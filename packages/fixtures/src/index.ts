@@ -59,3 +59,16 @@ export function loadShowcaseSnapshot(
 
   return SYNTHETIC_SNAPSHOT;
 }
+
+/** Synthetic document rows only; no fixture originates from a person's report. */
+export const multilingualLabTableFixtures = Object.freeze({
+  lt: Object.freeze([
+    'UAB Sintetinė laboratorija  Įmonės kodas 000000000',
+    'Mėginio paėmimo data 20.08.2026  Kraujo serumas',
+    'Mažo tankio lipoproteinų cholesterolis  3,8  mmol/L  <3,0  H',
+    'Nežinomas žymuo  <0,5  µg/L  0,1–0,7',
+    'Licencija Nr. 0000  synthetic.example',
+  ]),
+  en: Object.freeze(['Collection date 20.08.2026', 'LDL cholesterol 118 mg/dL <115 H']),
+  de: Object.freeze(['Probenentnahme 20.08.2026', 'LDL-Cholesterin 3,8 mmol/L <3,0 H']),
+});

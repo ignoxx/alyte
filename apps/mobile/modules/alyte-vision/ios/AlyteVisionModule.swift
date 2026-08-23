@@ -4,7 +4,7 @@ import PDFKit
 import UIKit
 import Vision
 
-private let alyteVisionContractVersion = "alyte.vision.ocr.v1"
+let alyteVisionContractVersion = "alyte.vision.document.v2"
 
 private enum AlyteVisionError: LocalizedError {
   case unreadable
@@ -96,43 +96,55 @@ public final class AlyteVisionModule: Module {
   public func definition() -> ModuleDefinition {
     Name("AlyteVision")
 
-    AsyncFunction("recognize") { (path: String, pageIndex: Int, orientation: Int, password: String?) throws -> [String: Any] in
+    AsyncFunction("recognize") { (path: String, pageIndex: Int, orientation: Int, password: String?) async throws -> [String: Any] in
       let image = try renderedImage(path: path, pageIndex: pageIndex, orientation: orientation, password: password)
-      let request = VNRecognizeTextRequest()
-      request.recognitionLevel = .accurate
-      request.usesLanguageCorrection = true
-      request.automaticallyDetectsLanguage = true
-      let handler = VNImageRequestHandler(cgImage: image, orientation: .up, options: [:])
-      try handler.perform([request])
-      let observations = (request.results ?? []).enumerated().compactMap { index, observation -> [String: Any]? in
-        guard let first = observation.topCandidates(5).first, !first.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        let box = observation.boundingBox
+      var request = RecognizeDocumentsRequest()
+      request.textRecognitionOptions.automaticallyDetectsLanguage = true
+      let documents = try await request.perform(on: image, orientation: .up)
+      var observations: [[String: Any]] = []
+      for (documentIndex, document) in documents.enumerated() {
+        for (tableIndex, table) in document.document.tables.enumerated() {
+          for (rowIndex, row) in table.rows.enumerated() {
+            for (columnIndex, cell) in row.enumerated() {
+              let text = cell.content.text.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+              guard !text.isEmpty else { continue }
+              observations.append(alyteDocumentObservation(
+                id: "document-\(pageIndex)-\(documentIndex)-table-\(tableIndex)-r\(rowIndex)-c\(columnIndex)",
+                text: text,
+                box: cell.content.boundingRegion.boundingBox.cgRect,
+                pageIndex: pageIndex,
+                orientation: orientation,
+                structure: ["kind": "table-cell", "tableId": "table-\(documentIndex)-\(tableIndex)", "rowIndex": rowIndex, "columnIndex": columnIndex]
+              ))
+            }
+          }
+        }
+        if document.document.tables.isEmpty {
+          for (lineIndex, line) in document.document.text.lines.enumerated() {
+            let text = line.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            observations.append(alyteDocumentObservation(
+              id: "document-\(pageIndex)-\(documentIndex)-line-\(lineIndex)", text: text,
+              box: line.boundingBox.cgRect, pageIndex: pageIndex, orientation: orientation,
+              structure: ["kind": "text", "tableId": NSNull(), "rowIndex": NSNull(), "columnIndex": NSNull()]
+            ))
+          }
+        }
+      }
+      return ["contractVersion": alyteVisionContractVersion, "pageIndex": pageIndex, "orientation": orientation, "observations": observations]
+    }
+  }
+}
+
+private func alyteDocumentObservation(id: String, text: String, box: CGRect, pageIndex: Int, orientation: Int, structure: [String: Any]) -> [String: Any] {
         let x = max(0, min(1, box.minX))
         let y = max(0, min(1, 1 - box.maxY))
         let width = max(0.0001, min(1 - x, box.width))
         let height = max(0.0001, min(1 - y, box.height))
         return [
-          "id": "vision-\(pageIndex)-\(index)",
-          "text": first.string,
-          "alternatives": observation.topCandidates(5).dropFirst().map(\.string),
+          "id": id, "text": text, "alternatives": [],
           "boundingBox": ["x": Double(x), "y": Double(y), "width": Double(width), "height": Double(height)],
-          "pageIndex": pageIndex,
-          "orientation": orientation,
-          "recognition": [
-            "level": "accurate",
-            // Vision does not expose a stable per-observation language on every supported iOS
-            // build; the contract keeps this nullable rather than guessing from the text.
-            "language": NSNull(),
-            "internalConfidence": Double(first.confidence),
-          ],
+          "pageIndex": pageIndex, "orientation": orientation, "structure": structure,
+          "recognition": ["level": "accurate", "language": NSNull(), "internalConfidence": NSNull()],
         ]
-      }
-      return [
-        "contractVersion": alyteVisionContractVersion,
-        "pageIndex": pageIndex,
-        "orientation": orientation,
-        "observations": observations,
-      ]
-    }
-  }
 }

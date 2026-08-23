@@ -2,8 +2,8 @@ import type { CanonicalId } from './index';
 import { parseLocaleDecimal } from './labs';
 import type { MeasurementValue, SpecimenType, LabDateState } from './labs';
 
-export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.ocr.v1' as const;
-export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v1' as const;
+export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.document.v2' as const;
+export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v2' as const;
 
 const NUMERIC_TOKEN_PATTERN =
   '[<>≤≥]?\\s*[+-]?(?:(?:\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)|(?:\\d+(?:[.,]\\d+)?)|(?:\\.\\d+))';
@@ -24,6 +24,12 @@ export type VisionTextObservation = {
   readonly boundingBox: NormalizedBoundingBox;
   readonly pageIndex: number;
   readonly orientation: number;
+  readonly structure?: {
+    readonly kind: 'text' | 'table-cell';
+    readonly tableId: string | null;
+    readonly rowIndex: number | null;
+    readonly columnIndex: number | null;
+  };
   /** Internal routing metadata. Never render this as a user-facing accuracy percentage. */
   readonly recognition: {
     readonly level: 'fast' | 'accurate';
@@ -115,6 +121,37 @@ export type ExtractionAliasEntry = {
   readonly specimens: readonly SpecimenType[];
   readonly units: readonly string[];
 };
+
+export type ExtractionSemanticProposal = {
+  readonly sourceObservationIds: readonly string[];
+  readonly proposedBiomarkerId: CanonicalId | null;
+};
+
+export interface ExtractionSemanticMapper {
+  readonly adapterVersion: string;
+  readonly schemaVersion: 'alyte.semantic-mapper.v1';
+  supports(locale: string | null): boolean;
+  map(input: {
+    readonly pageIndex: number;
+    readonly observations: readonly VisionTextObservation[];
+  }): Promise<readonly ExtractionSemanticProposal[]>;
+}
+
+/** Rejects model output unless it refers only to exact local observations and known catalogue IDs. */
+export function validateSemanticProposals(
+  proposals: readonly ExtractionSemanticProposal[],
+  observations: readonly VisionTextObservation[],
+  aliases: readonly ExtractionAliasEntry[],
+): readonly ExtractionSemanticProposal[] {
+  const sourceIds = new Set(observations.map((item) => item.id));
+  const biomarkerIds = new Set(aliases.map((item) => item.id));
+  return proposals.filter(
+    (proposal) =>
+      proposal.sourceObservationIds.length > 0 &&
+      proposal.sourceObservationIds.every((id) => sourceIds.has(id)) &&
+      (proposal.proposedBiomarkerId === null || biomarkerIds.has(proposal.proposedBiomarkerId)),
+  );
+}
 
 export type ExtractionRowInput = {
   readonly id: string;
@@ -275,8 +312,34 @@ function decodeObservation(
       value.orientation === undefined
         ? pageOrientation
         : finiteInteger(value.orientation, 'Vision OCR observation orientation', -360, 360),
+    structure: decodeObservationStructure(value.structure, index),
     recognition: { level, language, internalConfidence },
   };
+}
+
+function decodeObservationStructure(
+  input: unknown,
+  index: number,
+): NonNullable<VisionTextObservation['structure']> {
+  if (input === undefined)
+    return { kind: 'text', tableId: null, rowIndex: null, columnIndex: null };
+  if (typeof input !== 'object' || input === null)
+    throw new Error(`Vision OCR observation ${index} has invalid structure`);
+  const value = input as Record<string, unknown>;
+  const kind = value.kind === 'table-cell' ? 'table-cell' : value.kind === 'text' ? 'text' : null;
+  if (kind === null) throw new Error(`Vision OCR observation ${index} has invalid structure kind`);
+  const tableId = typeof value.tableId === 'string' && value.tableId ? value.tableId : null;
+  const rowIndex =
+    value.rowIndex === null || value.rowIndex === undefined
+      ? null
+      : finiteInteger(value.rowIndex, 'table row index', 0);
+  const columnIndex =
+    value.columnIndex === null || value.columnIndex === undefined
+      ? null
+      : finiteInteger(value.columnIndex, 'table column index', 0);
+  if (kind === 'table-cell' && (tableId === null || rowIndex === null || columnIndex === null))
+    throw new Error(`Vision OCR observation ${index} has incomplete table structure`);
+  return { kind, tableId, rowIndex, columnIndex };
 }
 
 export function normalizeAlias(value: string): string {
@@ -466,8 +529,27 @@ export function groupObservationsIntoRows(
         a.boundingBox.y + a.boundingBox.height / 2 - (b.boundingBox.y + b.boundingBox.height / 2) ||
         a.boundingBox.x - b.boundingBox.x,
     );
-  const groups: VisionTextObservation[][] = [];
+  const tableGroups = new Map<string, VisionTextObservation[]>();
+  const loose: VisionTextObservation[] = [];
   for (const observation of sorted) {
+    const structure = observation.structure ?? {
+      kind: 'text' as const,
+      tableId: null,
+      rowIndex: null,
+    };
+    if (
+      structure.kind === 'table-cell' &&
+      structure.tableId !== null &&
+      structure.rowIndex !== null
+    ) {
+      const key = `${observation.pageIndex}:${structure.tableId}:${structure.rowIndex}`;
+      const group = tableGroups.get(key) ?? [];
+      group.push(observation);
+      tableGroups.set(key, group);
+    } else loose.push(observation);
+  }
+  const groups: VisionTextObservation[][] = [...tableGroups.values()];
+  for (const observation of loose) {
     const center = observation.boundingBox.y + observation.boundingBox.height / 2;
     const prior = groups.at(-1);
     const priorObservation = prior?.[0];
@@ -485,16 +567,38 @@ export function groupObservationsIntoRows(
       prior.push(observation);
     else groups.push([observation]);
   }
-  return groups.map((group, order) =>
-    parseSourceRow(
-      group,
-      order,
-      options.locale ?? 'en-US',
-      options.collectionDate ?? { kind: 'missing' },
-      options.collectionDateContexts ?? [],
-      options.specimenType ?? 'unknown',
-      aliases,
-    ),
+  return groups
+    .map((group) => group.sort((a, b) => a.boundingBox.x - b.boundingBox.x))
+    .sort(
+      (a, b) =>
+        (a[0]?.pageIndex ?? 0) - (b[0]?.pageIndex ?? 0) ||
+        (a[0]?.boundingBox.y ?? 0) - (b[0]?.boundingBox.y ?? 0),
+    )
+    .map((group, order) =>
+      parseSourceRow(
+        group,
+        order,
+        options.locale ?? 'en-US',
+        options.collectionDate ?? { kind: 'missing' },
+        options.collectionDateContexts ?? [],
+        options.specimenType ?? 'unknown',
+        aliases,
+      ),
+    )
+    .filter(isMeasurementShapedRow);
+}
+
+function isMeasurementShapedRow(row: ExtractionDraftRow): boolean {
+  if (row.sourceLabel.trim().length < 2) return false;
+  if (row.proposedBiomarkerId !== null && /\d/u.test(row.sourceText)) return true;
+  if (row.sourceValueString.length === 0 || row.sourceValue.kind === 'free_text') return false;
+  // Unknown biomarkers are useful only when the row has laboratory shape. A numeric token in a
+  // phone number, address, licence, or footer is not enough to create review work.
+  return (
+    row.sourceValue.kind === 'categorical' ||
+    row.proposedBiomarkerId !== null ||
+    row.sourceUnit !== null ||
+    row.sourceReferenceInterval !== null
   );
 }
 
@@ -591,13 +695,19 @@ function parseSourceRow(
   );
   const valueCandidates = scalarCandidates.length > 0 ? scalarCandidates : boundedCandidates;
   const selectedValue = valueCandidates.length === 1 ? valueCandidates[0] : undefined;
-  const rawValue = selectedValue?.raw ?? '';
-  const valueStart = selectedValue?.start ?? -1;
+  const categoricalMatch =
+    selectedValue === undefined
+      ? /\b(not detected|positive|negative|detected|normal|abnormal|teigiamas|neigiamas|aptikta|neaptikta|positiv|negativ)\s*$/iu.exec(
+          sourceText,
+        )
+      : null;
+  const rawValue = selectedValue?.raw ?? categoricalMatch?.[1] ?? '';
+  const valueStart = selectedValue?.start ?? categoricalMatch?.index ?? -1;
   const rawLabel = valueStart > 0 ? sourceText.slice(0, valueStart).trim() : sourceText;
-  const proposedValue = parseComparatorValue(rawValue) ?? {
-    kind: 'free_text' as const,
-    value: sourceText,
-  };
+  const proposedValue =
+    categoricalMatch !== null
+      ? { kind: 'categorical' as const, value: rawValue }
+      : (parseComparatorValue(rawValue) ?? { kind: 'free_text' as const, value: sourceText });
   const unit = findUnitInText(sourceText);
   const effectiveReferences = referenceCandidates.filter(
     (reference) => !/^[<>≤≥]/u.test(reference.raw) || numericOutsideRange.length > 0,

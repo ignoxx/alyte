@@ -6,6 +6,7 @@ import {
   groupObservationsIntoRows,
   parseComparatorValue,
   parseLabDate,
+  validateSemanticProposals,
   type ExtractionAliasEntry,
 } from './extraction.js';
 
@@ -56,7 +57,7 @@ describe('local extraction domain', () => {
     assert.throws(
       () =>
         decodeVisionOCRResult({
-          contractVersion: 'alyte.vision.ocr.v1',
+          contractVersion: 'alyte.vision.document.v2',
           pageIndex: 0,
           orientation: 0,
           observations: [{ text: 'LDL-C', boundingBox: { x: 0.9, y: 0, width: 0.2, height: 0.1 } }],
@@ -164,8 +165,8 @@ describe('local extraction domain', () => {
       id: 'draft-decision',
       reportId: 'report-decision',
       state: 'draft' as const,
-      ocrContractVersion: 'alyte.vision.ocr.v1' as const,
-      parserVersion: 'alyte.local-parser.v1' as const,
+      ocrContractVersion: 'alyte.vision.document.v2' as const,
+      parserVersion: 'alyte.local-parser.v2' as const,
       collectionDate: { kind: 'missing' as const },
       rows,
       createdAt: '2026-08-22T00:00:00.000Z',
@@ -327,8 +328,8 @@ describe('local extraction domain', () => {
       id: 'draft-1',
       reportId: 'report-1',
       state: 'draft' as const,
-      ocrContractVersion: 'alyte.vision.ocr.v1' as const,
-      parserVersion: 'alyte.local-parser.v1' as const,
+      ocrContractVersion: 'alyte.vision.document.v2' as const,
+      parserVersion: 'alyte.local-parser.v2' as const,
       collectionDate: { kind: 'missing' as const },
       rows: rows.map((row) => ({ ...row, decision: 'preserve' as const })),
       createdAt: '2026-08-22T00:00:00.000Z',
@@ -342,5 +343,87 @@ describe('local extraction domain', () => {
     assert.equal(plan.records.length, 1);
     assert.equal(plan.records[0]?.collectionDate.kind, 'missing');
     assert.equal(plan.records[0]?.measurements[0]?.source.pageIndex, 0);
+  });
+
+  it('keeps only measurement-shaped Lithuanian table rows with exact cell provenance', () => {
+    const ltAliases: readonly ExtractionAliasEntry[] = [
+      {
+        id: 'biomarker.ldl_c',
+        aliases: ['Mažo tankio lipoproteinų cholesterolis'],
+        specimens: ['serum', 'unknown'],
+        units: ['mmol/L'],
+      },
+    ];
+    const texts = [
+      ['header', 'Sintetinė laboratorija  Įmonės kodas 000000000'],
+      ['ldl-label', 'Mažo tankio lipoproteinų cholesterolis'],
+      ['ldl-value', '3,8'],
+      ['ldl-unit', 'mmol/L'],
+      ['ldl-range', '<3,0'],
+      ['ldl-flag', 'H'],
+      ['unknown-label', 'Nežinomas žymuo'],
+      ['unknown-value', '<0,5'],
+      ['unknown-unit', 'µg/L'],
+      ['footer', 'Licencija Nr. 0000 synthetic.example'],
+    ] as const;
+    const observations = texts.map(([id, text], index) => ({
+      id,
+      text,
+      alternatives: [],
+      pageIndex: 0,
+      orientation: 0,
+      boundingBox: {
+        x: (index % 6) * 0.14,
+        y: index < 1 ? 0.05 : index < 6 ? 0.3 : index < 9 ? 0.4 : 0.9,
+        width: 0.13,
+        height: 0.03,
+      },
+      structure: {
+        kind: 'table-cell' as const,
+        tableId: 'results',
+        rowIndex: index < 1 ? 0 : index < 6 ? 1 : index < 9 ? 2 : 3,
+        columnIndex: index % 6,
+      },
+      recognition: { level: 'accurate' as const, language: 'lt', internalConfidence: null },
+    }));
+    const rows = groupObservationsIntoRows(observations, {
+      aliases: ltAliases,
+      specimenType: 'serum',
+    });
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0]?.sourceLabel, 'Mažo tankio lipoproteinų cholesterolis');
+    assert.equal(rows[0]?.sourceValueString, '3,8');
+    assert.deepEqual(rows[0]?.source.observationIds, [
+      'ldl-label',
+      'ldl-value',
+      'ldl-unit',
+      'ldl-range',
+      'ldl-flag',
+    ]);
+    assert.equal(rows[1]?.proposedBiomarkerId, null);
+  });
+
+  it('rejects semantic proposals that invent source IDs or catalogue mappings', () => {
+    const observation = {
+      id: 'source-1',
+      text: 'LDL 3.8 mmol/L',
+      alternatives: [],
+      pageIndex: 0,
+      orientation: 0,
+      boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    };
+    const valid = validateSemanticProposals(
+      [
+        { sourceObservationIds: ['source-1'], proposedBiomarkerId: 'biomarker.ldl_c' as never },
+        { sourceObservationIds: ['invented'], proposedBiomarkerId: 'biomarker.ldl_c' as never },
+        { sourceObservationIds: ['source-1'], proposedBiomarkerId: 'biomarker.invented' as never },
+      ],
+      [observation],
+      aliases,
+    );
+    assert.deepEqual(valid, [
+      { sourceObservationIds: ['source-1'], proposedBiomarkerId: 'biomarker.ldl_c' },
+    ]);
   });
 });

@@ -320,7 +320,7 @@ describe('protected Lab Report import lifecycle', () => {
     const ocr: VisionOCR = {
       async recognize(): Promise<VisionOCRResult> {
         return {
-          contractVersion: 'alyte.vision.ocr.v1',
+          contractVersion: 'alyte.vision.document.v2',
           pageIndex: 0,
           orientation: 0,
           observations: [
@@ -362,7 +362,7 @@ describe('protected Lab Report import lifecycle', () => {
     const ocr: VisionOCR = {
       async recognize(): Promise<VisionOCRResult> {
         return {
-          contractVersion: 'alyte.vision.ocr.v1',
+          contractVersion: 'alyte.vision.document.v2',
           pageIndex: 0,
           orientation: 0,
           observations: [
@@ -449,7 +449,7 @@ describe('protected Lab Report import lifecycle', () => {
     const ocr: VisionOCR = {
       async recognize(): Promise<VisionOCRResult> {
         return {
-          contractVersion: 'alyte.vision.ocr.v1',
+          contractVersion: 'alyte.vision.document.v2',
           pageIndex: 0,
           orientation: 0,
           observations: [
@@ -625,7 +625,7 @@ describe('protected Lab Report import lifecycle', () => {
       async recognize(path): Promise<VisionOCRResult> {
         nativePaths.push(path);
         return {
-          contractVersion: 'alyte.vision.ocr.v1',
+          contractVersion: 'alyte.vision.document.v2',
           pageIndex: 0,
           orientation: 0,
           observations: [
