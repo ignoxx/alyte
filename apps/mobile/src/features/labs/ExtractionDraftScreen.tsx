@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import {
   Alert,
   FlatList,
   Image,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -220,7 +221,7 @@ export function ExtractionDraftScreen() {
     }
   }
 
-  async function confirm() {
+  const confirm = useCallback(async () => {
     if (draft === null || !canConfirmExtraction(draft.rows)) return;
     setBusy(true);
     try {
@@ -233,7 +234,46 @@ export function ExtractionDraftScreen() {
     } finally {
       setBusy(false);
     }
-  }
+  }, [draft, navigation, reports]);
+
+  const unresolved = draft?.rows.filter((row) => row.decision === 'unresolved').length ?? 0;
+  const resolved = (draft?.rows.length ?? 0) - unresolved;
+  const canConfirm = draft !== null && canConfirmExtraction(draft.rows);
+  const usesNativeTabAccessory =
+    Platform.OS === 'ios' && Number.parseInt(String(Platform.Version), 10) >= 26;
+
+  useLayoutEffect(() => {
+    if (!usesNativeTabAccessory || draft === null) return;
+    const tabNavigation = navigation.getParent();
+    if (tabNavigation === undefined) return;
+
+    // iOS 26 owns this accessory's placement directly above Liquid Glass, including changes in
+    // tab-bar geometry. This is the only authoritative inset for a persistent non-scroll control.
+    tabNavigation.setOptions({
+      bottomAccessory: () => (
+        <ExtractionReviewFooter
+          busy={busy}
+          canConfirm={canConfirm}
+          constrainedByNativeAccessory
+          resolved={resolved}
+          total={draft.rows.length}
+          usesAccessibilityTextSize={usesAccessibilityTextSize}
+          onConfirm={() => void confirm()}
+        />
+      ),
+    });
+
+    return () => tabNavigation.setOptions({ bottomAccessory: undefined });
+  }, [
+    busy,
+    canConfirm,
+    confirm,
+    draft,
+    navigation,
+    resolved,
+    usesAccessibilityTextSize,
+    usesNativeTabAccessory,
+  ]);
 
   if (loading) return <AppText>{t('labs.loading')}</AppText>;
   if (error || draft === null) {
@@ -245,15 +285,15 @@ export function ExtractionDraftScreen() {
     );
   }
 
-  const unresolved = draft.rows.filter((row) => row.decision === 'unresolved').length;
-  const resolved = draft.rows.length - unresolved;
-  const canConfirm = canConfirmExtraction(draft.rows);
   const selectedRow = draft.rows.find((row) => row.id === selectedRowId) ?? null;
   const selectedEdit =
     selectedRow === null ? null : (edits[selectedRow.id] ?? editFrom(selectedRow));
 
   return (
-    <SafeAreaView edges={['left', 'right', 'bottom']} style={styles.safe}>
+    <SafeAreaView
+      edges={usesNativeTabAccessory ? ['left', 'right'] : ['left', 'right', 'bottom']}
+      style={styles.safe}
+    >
       <FlatList
         contentContainerStyle={styles.queueContent}
         contentInsetAdjustmentBehavior="automatic"
@@ -325,22 +365,17 @@ export function ExtractionDraftScreen() {
         style={styles.list}
       />
 
-      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
-        <View style={styles.progressCopy}>
-          <AppText variant="label">{t('labs.extractionProgress')}</AppText>
-          <AppText style={styles.muted}>
-            {t('labs.extractionProgressCount')
-              .replace('{resolved}', String(resolved))
-              .replace('{total}', String(draft.rows.length))}
-          </AppText>
-        </View>
-        <AppButton
-          disabled={busy || !canConfirm}
-          label={t('labs.extractionConfirm')}
-          onPress={() => void confirm()}
-          style={styles.confirmButton}
+      {!usesNativeTabAccessory && (
+        <ExtractionReviewFooter
+          busy={busy}
+          canConfirm={canConfirm}
+          onConfirm={() => void confirm()}
+          resolved={resolved}
+          safeAreaBottom={insets.bottom}
+          total={draft.rows.length}
+          usesAccessibilityTextSize={usesAccessibilityTextSize}
         />
-      </View>
+      )}
 
       <Modal
         accessibilityViewIsModal
@@ -536,6 +571,68 @@ export function ExtractionDraftScreen() {
   );
 }
 
+function ExtractionReviewFooter({
+  busy,
+  canConfirm,
+  constrainedByNativeAccessory = false,
+  onConfirm,
+  resolved,
+  safeAreaBottom = 0,
+  total,
+  usesAccessibilityTextSize,
+}: {
+  readonly busy: boolean;
+  readonly canConfirm: boolean;
+  readonly constrainedByNativeAccessory?: boolean;
+  readonly onConfirm: () => void;
+  readonly resolved: number;
+  readonly safeAreaBottom?: number;
+  readonly total: number;
+  readonly usesAccessibilityTextSize: boolean;
+}) {
+  return (
+    <View
+      style={[
+        styles.footer,
+        usesAccessibilityTextSize && !constrainedByNativeAccessory && styles.accessibilityFooter,
+        { paddingBottom: safeAreaBottom + spacing.sm },
+      ]}
+    >
+      <View style={styles.progressCopy}>
+        {!constrainedByNativeAccessory && (
+          <AppText variant="label">{t('labs.extractionProgress')}</AppText>
+        )}
+        <AppText
+          accessibilityLabel={t('labs.extractionProgressCount')
+            .replace('{resolved}', String(resolved))
+            .replace('{total}', String(total))}
+          maxFontSizeMultiplier={constrainedByNativeAccessory ? 1.3 : undefined}
+          numberOfLines={constrainedByNativeAccessory ? 1 : undefined}
+          style={styles.muted}
+        >
+          {constrainedByNativeAccessory
+            ? `${resolved} / ${total}`
+            : t('labs.extractionProgressCount')
+                .replace('{resolved}', String(resolved))
+                .replace('{total}', String(total))}
+        </AppText>
+      </View>
+      <AppButton
+        disabled={busy || !canConfirm}
+        label={t('labs.extractionConfirm')}
+        onPress={onConfirm}
+        style={[
+          styles.confirmButton,
+          usesAccessibilityTextSize &&
+            !constrainedByNativeAccessory &&
+            styles.accessibilityConfirmButton,
+        ]}
+        {...(constrainedByNativeAccessory ? { labelMaxFontSizeMultiplier: 1.3 } : {})}
+      />
+    </View>
+  );
+}
+
 function Field({
   accessibilityLabel,
   keyboardType,
@@ -599,8 +696,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
   },
+  accessibilityFooter: { alignItems: 'stretch', flexDirection: 'column' },
   progressCopy: { flex: 1, gap: spacing.xs },
   confirmButton: { minWidth: 150 },
+  accessibilityConfirmButton: { width: '100%' },
   editorSafe: { backgroundColor: colors.canvas, flex: 1 },
   editorHeader: {
     alignItems: 'center',

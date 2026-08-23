@@ -25,6 +25,7 @@ export function AppText({
   variant = 'body',
   style,
   allowFontScaling = true,
+  maxFontSizeMultiplier,
   ...props
 }: AppTextProps) {
   const { fontScale } = useWindowDimensions();
@@ -36,12 +37,20 @@ export function AppText({
   // visual rhythm. Keeping allowFontScaling enabled is important: this only grows the line box.
   const dynamicTypeStyle =
     allowFontScaling && typeof baseStyle.lineHeight === 'number'
-      ? { lineHeight: Math.ceil(baseStyle.lineHeight * fontScale) }
+      ? {
+          lineHeight: Math.ceil(
+            baseStyle.lineHeight *
+              (maxFontSizeMultiplier == null
+                ? fontScale
+                : Math.min(fontScale, maxFontSizeMultiplier)),
+          ),
+        }
       : undefined;
 
   return (
     <Text
       allowFontScaling={allowFontScaling}
+      maxFontSizeMultiplier={maxFontSizeMultiplier}
       style={[baseStyle, dynamicTypeStyle, styles.text, style]}
       {...props}
     />
@@ -105,12 +114,14 @@ export function ScreenScrollView({
 type AppButtonProps = Omit<PressableProps, 'children'> & {
   label: string;
   accessibilityLabel?: string;
+  labelMaxFontSizeMultiplier?: number;
   tone?: 'primary' | 'secondary' | 'quiet';
 };
 
 export function AppButton({
   label,
   accessibilityLabel = label,
+  labelMaxFontSizeMultiplier,
   tone = 'primary',
   style,
   ...props
@@ -125,14 +136,20 @@ export function AppButton({
         tone === 'primary' && styles.primaryButton,
         tone === 'secondary' && styles.secondaryButton,
         tone === 'quiet' && styles.quietButton,
-        pressed && styles.pressedButton,
+        props.disabled === true && styles.disabledButton,
+        pressed && props.disabled !== true && styles.pressedButton,
         typeof style === 'function' ? style({ pressed }) : style,
       ]}
       {...props}
     >
       <AppText
+        maxFontSizeMultiplier={labelMaxFontSizeMultiplier}
+        numberOfLines={labelMaxFontSizeMultiplier === undefined ? undefined : 1}
         variant="label"
-        style={tone === 'primary' ? styles.primaryLabel : styles.secondaryLabel}
+        style={[
+          tone === 'primary' ? styles.primaryLabel : styles.secondaryLabel,
+          props.disabled === true && styles.disabledLabel,
+        ]}
       >
         {label}
       </AppText>
@@ -269,6 +286,8 @@ const styles = StyleSheet.create({
   primaryButton: { backgroundColor: colors.accent },
   secondaryButton: { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1 },
   quietButton: { minHeight: 44, paddingHorizontal: spacing.sm },
+  disabledButton: { backgroundColor: colors.disabledFill, borderColor: colors.disabledFill },
+  disabledLabel: { color: colors.disabledInk },
   pressedButton: { opacity: 0.78 },
   primaryLabel: { color: colors.onAccent },
   secondaryLabel: { color: colors.accent },

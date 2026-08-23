@@ -19,6 +19,8 @@ export const colors = {
   accent: '#286B66',
   accentPressed: '#1F5652',
   accentSoft: systemColor('tertiarySystemFill', '#DDEDE8'),
+  disabledFill: systemColor('tertiarySystemFill', '#E1E6E4'),
+  disabledInk: systemColor('secondaryLabel', '#566260'),
   warm: '#E9B872',
   danger: systemColor('systemRed', '#A14E4E'),
 } as const;
