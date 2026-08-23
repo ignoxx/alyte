@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   featureStackRootName,
+  preGateTabNames,
+  reportImportDestination,
   registerNavigationFeatures,
   snapActionDestination,
   type CoreNavigationFeatures,
@@ -62,6 +64,14 @@ test('native stack roots do not shadow tab routes and Snap returns to Home', () 
   assert.deepEqual(snapActionDestination, { captureRoute: 'SnapCapture', returnTab: 'Home' });
 });
 
+test('pre-gate shell exposes three tabs and report import is a root full-screen task', () => {
+  assert.deepEqual(preGateTabNames, ['Home', 'Labs', 'Settings']);
+  assert.deepEqual(reportImportDestination, {
+    route: 'ReportImport',
+    presentation: 'fullScreenModal',
+  });
+});
+
 test('Home quick actions dispatch to sibling tabs and preserve the Log edit push', () => {
   const calls: unknown[][] = [];
   const navigation = {
@@ -75,7 +85,7 @@ test('Home quick actions dispatch to sibling tabs and preserve the Log edit push
   dispatchHomeQuickAction(navigation, { kind: 'edit-intake', eventId: 'event-42' });
 
   assert.deepEqual(calls, [
-    ['Labs', { screen: 'LabReportImport' }],
+    ['ReportImport'],
     ['Log', { screen: 'IntakeEntry' }],
     ['SnapCapture'],
     ['Log', { screen: 'IntakeEntry', params: { eventId: 'event-42' } }],

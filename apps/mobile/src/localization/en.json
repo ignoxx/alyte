@@ -25,9 +25,11 @@
   "home": {
     "title": "Today",
     "emptyTitle": "Your local history starts here",
-    "emptyBody": "Import your first Lab Report to begin. Your records stay on this iPhone; intake logging is ready whenever you are.",
+    "emptyBody": "Import your first Lab Report to begin. Your records stay on this iPhone.",
     "importAction": "Import your first lab report",
     "importAnotherAction": "Import another Lab Report",
+    "localHistoryTitle": "Your laboratory history is ready",
+    "localHistoryBody": "Your reports and measured history stay on this iPhone.",
     "noEventsTitle": "Nothing logged today",
     "noEventsBody": "Your local history is safe. Log an intake or import another Lab Report when you need to.",
     "snapAction": "Snap an intake",

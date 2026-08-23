@@ -1,16 +1,16 @@
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { Alert, StyleSheet } from 'react-native';
 import type { LabReport } from '@alyte/domain';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
+import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { LabReportImportError, type PasswordRequest } from './report-service';
 
-type Navigation = NativeStackNavigationProp<LabsStackParamList>;
+type Navigation = NativeStackNavigationProp<RootStackParamList, 'ReportImport'>;
 
 function passwordRequest(): PasswordRequest {
   return ({ report }) =>
@@ -42,18 +42,37 @@ export function LabReportImportScreen() {
   const [error, setError] = useState<string | null>(null);
   const [lastReport, setLastReport] = useState<LabReport | null>(null);
 
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerLeft: () => (
+        <AppButton
+          disabled={busy}
+          label={t('labs.recordCancel')}
+          onPress={() => navigation.goBack()}
+          tone="quiet"
+        />
+      ),
+    });
+  }, [busy, navigation]);
+
+  function showImportedReport(report: LabReport, openPrivacyWorkspace: boolean) {
+    navigation.navigate('MainTabs', {
+      screen: 'Labs',
+      params: { screen: 'LabReportDetail', params: { reportId: report.id } },
+    });
+    if (openPrivacyWorkspace) {
+      navigation.navigate('PrivacyWorkspace', { reportId: report.id });
+    }
+  }
+
   async function importPdf() {
     setBusy(true);
     setError(null);
     try {
       const result = await reports.importPdf(undefined, passwordRequest());
       if (result !== null) {
-        const root = navigation
-          .getParent<NativeStackNavigationProp<RootStackParamList>>()
-          ?.getParent<NativeStackNavigationProp<RootStackParamList>>();
         setLastReport(result.report);
-        navigation.replace('LabReportDetail', { reportId: result.report.id });
-        root?.navigate('PrivacyWorkspace', { reportId: result.report.id });
+        showImportedReport(result.report, true);
       }
     } catch (caught) {
       setError(errorMessage(caught));
@@ -71,7 +90,7 @@ export function LabReportImportScreen() {
       const first = results[0];
       if (first !== undefined) {
         setLastReport(first.report);
-        navigation.replace('LabReportDetail', { reportId: first.report.id });
+        showImportedReport(first.report, false);
       }
     } catch (caught) {
       setError(errorMessage(caught));
@@ -105,13 +124,12 @@ export function LabReportImportScreen() {
           {lastReport !== null && (
             <AppButton
               label={t('labs.reportViewFailed')}
-              onPress={() => navigation.replace('LabReportDetail', { reportId: lastReport.id })}
+              onPress={() => showImportedReport(lastReport, false)}
               tone="secondary"
             />
           )}
         </AppSurface>
       )}
-      <AppButton label={t('labs.recordCancel')} onPress={() => navigation.goBack()} tone="quiet" />
     </ScreenScrollView>
   );
 }

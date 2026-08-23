@@ -1,33 +1,29 @@
 import { DarkTheme, DefaultTheme, NavigationContainer, type Theme } from '@react-navigation/native';
-import {
-  createNativeBottomTabNavigator,
-  type NativeBottomTabScreenProps,
-} from '@react-navigation/bottom-tabs/unstable';
+import { createNativeBottomTabNavigator } from '@react-navigation/bottom-tabs/unstable';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import type { ComponentType } from 'react';
 import { useColorScheme } from 'react-native';
 import type { AlyteServices } from '../services';
 import { t } from '../localization';
 import { colors } from '../theme';
 import { createNavigationRegistry } from './registry';
 import type { FeatureTarget, NavigationFeature } from './registry-model';
-import { featureStackRootName, snapActionDestination } from './registry-model';
+import { featureStackRootName, preGateTabNames, reportImportDestination } from './registry-model';
 import type { MainTabParamList, RootStackParamList } from './types';
 import { SnapScreen } from '../features/intake/SnapScreen';
 import { SanitizedReportEditorRoute } from '../features/labs/SanitizedReportEditorRoute';
+import { LabReportImportRoute } from '../features/labs/LabReportImportRoute';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const MainTabs = createNativeBottomTabNavigator<MainTabParamList>();
 const FeatureStack = createNativeStackNavigator<Record<string, object | undefined>>();
+const [homeTabName, labsTabName, settingsTabName] = preGateTabNames;
 
 type RootNavigatorProps = {
   services: AlyteServices;
   extensions?: readonly NavigationFeature[] | undefined;
 };
 
-type MainTabNavigatorProps = RootNavigatorProps & {
-  readonly onSnap: () => void;
-};
+type MainTabNavigatorProps = RootNavigatorProps;
 
 const stackScreenOptions = {
   contentStyle: { backgroundColor: colors.canvas },
@@ -56,10 +52,6 @@ function navigationTheme(dark: boolean): Theme {
       text: colors.ink as string,
     },
   };
-}
-
-function SnapActionPlaceholder() {
-  return null;
 }
 
 function FeatureStackNavigator({
@@ -99,7 +91,7 @@ function stackExtensions(
   return extensions.filter((feature) => feature.target === target);
 }
 
-function MainTabNavigator({ services: _services, extensions = [], onSnap }: MainTabNavigatorProps) {
+function MainTabNavigator({ services: _services, extensions = [] }: MainTabNavigatorProps) {
   const registry = createNavigationRegistry(extensions);
   const tabIcon = (
     name:
@@ -115,7 +107,7 @@ function MainTabNavigator({ services: _services, extensions = [], onSnap }: Main
 
   return (
     <MainTabs.Navigator
-      initialRouteName="Home"
+      initialRouteName={homeTabName}
       screenOptions={{
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.mutedInk,
@@ -129,7 +121,7 @@ function MainTabNavigator({ services: _services, extensions = [], onSnap }: Main
       }}
     >
       <MainTabs.Screen
-        name="Home"
+        name={homeTabName}
         options={{
           tabBarIcon: ({ focused }) => tabIcon(focused ? 'house.fill' : 'house'),
           tabBarLabel: t(registry.home.titleKey),
@@ -143,7 +135,7 @@ function MainTabNavigator({ services: _services, extensions = [], onSnap }: Main
         )}
       </MainTabs.Screen>
       <MainTabs.Screen
-        name="Labs"
+        name={labsTabName}
         options={{
           tabBarIcon: () => tabIcon('testtube.2'),
           tabBarLabel: t(registry.labs.titleKey),
@@ -157,42 +149,7 @@ function MainTabNavigator({ services: _services, extensions = [], onSnap }: Main
         )}
       </MainTabs.Screen>
       <MainTabs.Screen
-        name="SnapAction"
-        component={
-          SnapActionPlaceholder as ComponentType<
-            NativeBottomTabScreenProps<MainTabParamList, 'SnapAction'>
-          >
-        }
-        listeners={({ navigation }) => ({
-          tabPress: () => {
-            // Snap is an action, not a fifth content destination. Return to Home underneath the
-            // full-screen capture route so completing or cancelling always lands on the day view.
-            navigation.navigate(snapActionDestination.returnTab);
-            onSnap();
-          },
-        })}
-        options={{
-          tabBarIcon: ({ focused }) => tabIcon(focused ? 'camera.fill' : 'camera'),
-          tabBarLabel: t(registry.snap.titleKey),
-          tabBarSelectionEnabled: false,
-        }}
-      />
-      <MainTabs.Screen
-        name="Log"
-        options={{
-          tabBarIcon: () => tabIcon('list.bullet'),
-          tabBarLabel: t(registry.log.titleKey),
-        }}
-      >
-        {() => (
-          <FeatureStackNavigator
-            root={registry.log}
-            extensions={stackExtensions(registry.extensions, 'log')}
-          />
-        )}
-      </MainTabs.Screen>
-      <MainTabs.Screen
-        name="Settings"
+        name={settingsTabName}
         options={{
           tabBarIcon: ({ focused }) => tabIcon(focused ? 'gearshape.fill' : 'gearshape'),
           tabBarLabel: t(registry.settings.titleKey),
@@ -217,14 +174,17 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
     <NavigationContainer theme={navigationTheme(dark)}>
       <RootStack.Navigator screenOptions={{ headerShown: false }}>
         <RootStack.Screen name="MainTabs">
-          {({ navigation }) => (
-            <MainTabNavigator
-              extensions={extensions}
-              onSnap={() => navigation.navigate(snapActionDestination.captureRoute)}
-              services={services}
-            />
-          )}
+          {() => <MainTabNavigator extensions={extensions} services={services} />}
         </RootStack.Screen>
+        <RootStack.Screen
+          name={reportImportDestination.route}
+          component={LabReportImportRoute}
+          options={{
+            presentation: reportImportDestination.presentation,
+            headerShown: true,
+            title: t('labs.reportImportTitle'),
+          }}
+        />
         <RootStack.Screen
           name="SnapCapture"
           component={SnapScreen}

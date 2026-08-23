@@ -28,6 +28,14 @@ export const snapActionDestination = {
   returnTab: 'Home',
 } as const;
 
+/** The current pre-cloud build intentionally ships before the local laboratory gate is passed. */
+export const preGateTabNames = ['Home', 'Labs', 'Settings'] as const;
+
+export const reportImportDestination = {
+  route: 'ReportImport',
+  presentation: 'fullScreenModal',
+} as const;
+
 export function featureStackRootName(tabName: string): string {
   return `${tabName}Root`;
 }

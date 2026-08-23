@@ -1,6 +1,6 @@
 import type { NavigationProp, ParamListBase } from '@react-navigation/native';
 import type { MainTabParamList, RootStackParamList } from './types';
-import { snapActionDestination } from './registry-model';
+import { reportImportDestination, snapActionDestination } from './registry-model';
 
 export type FeatureStackNavigation = NavigationProp<ParamListBase>;
 export type ParentTabNavigation = NavigationProp<MainTabParamList>;
@@ -27,7 +27,9 @@ export function dispatchHomeQuickAction(
 ): void {
   switch (action.kind) {
     case 'import-report':
-      navigation.navigate('Labs', { screen: 'LabReportImport' });
+      navigation
+        .getParent<NavigationProp<RootStackParamList>>()
+        ?.navigate(reportImportDestination.route);
       return;
     case 'log-intake':
       navigation.navigate('Log', { screen: 'IntakeEntry' });
@@ -47,6 +49,12 @@ export function dispatchHomeQuickAction(
       });
       return;
   }
+}
+
+export function openReportImportFromStack(navigation: FeatureStackNavigation): void {
+  const root = getParentTabNavigation(navigation).getParent<NavigationProp<RootStackParamList>>();
+  if (root === undefined) throw new Error('Report import requires the root navigator');
+  root.navigate(reportImportDestination.route);
 }
 
 export function dispatchHomeQuickActionFromStack(

@@ -16,6 +16,9 @@ import { homeHasLocalHistory, sortHomeTimeline } from './home-model';
 
 type HomeNavigation = NativeStackNavigationProp<HomeStackParamList, 'HomeRoot'>;
 
+// The production shell is still pre-gate; later intake code stays compiled but has no visible entry.
+const intakeSurfacesVisible = false;
+
 export function HomeScreen() {
   const navigation = useNavigation<HomeNavigation>();
   const { intake, reports, clock } = useServices();
@@ -105,45 +108,25 @@ export function HomeScreen() {
       <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
         {loading && <AppText style={styles.muted}>{t('home.loading')}</AppText>}
         {error && <AppText style={styles.error}>{t('home.error')}</AppText>}
-        {!loading && !error && events.length === 0 && (
+        {!loading && !error && (!intakeSurfacesVisible || events.length === 0) && (
           <View style={styles.emptyState}>
             <AppText variant="title">
-              {hasLocalHistory ? t('home.noEventsTitle') : t('home.emptyTitle')}
+              {hasLocalHistory ? t('home.localHistoryTitle') : t('home.emptyTitle')}
             </AppText>
             <AppText style={styles.muted}>
-              {hasLocalHistory ? t('home.noEventsBody') : t('home.emptyBody')}
+              {hasLocalHistory ? t('home.localHistoryBody') : t('home.emptyBody')}
             </AppText>
-            {hasLocalHistory ? (
-              <AppButton
-                label={t('home.logAction')}
-                onPress={() =>
-                  dispatchHomeQuickActionFromStack(navigation, {
-                    kind: 'log-intake',
-                  })
-                }
-              />
-            ) : (
-              <AppButton
-                label={t('home.importAction')}
-                onPress={() =>
-                  dispatchHomeQuickActionFromStack(navigation, {
-                    kind: 'import-report',
-                  })
-                }
-              />
-            )}
             <AppButton
-              label={hasLocalHistory ? t('home.importAnotherAction') : t('home.logAction')}
-              tone="quiet"
+              label={hasLocalHistory ? t('home.importAnotherAction') : t('home.importAction')}
               onPress={() =>
                 dispatchHomeQuickActionFromStack(navigation, {
-                  kind: hasLocalHistory ? 'import-report' : 'log-intake',
+                  kind: 'import-report',
                 })
               }
             />
           </View>
         )}
-        {!loading && !error && events.length > 0 && (
+        {intakeSurfacesVisible && !loading && !error && events.length > 0 && (
           <View style={styles.timeline}>
             <View style={[styles.summary, usesAccessibilityTextSize && styles.summaryLarge]}>
               <View>

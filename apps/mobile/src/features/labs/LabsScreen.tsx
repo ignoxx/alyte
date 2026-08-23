@@ -17,6 +17,7 @@ import {
 } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { labsShowsManualRecordAction } from './labs-ui-model';
+import { openReportImportFromStack } from '../../navigation/parent-tab';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
 
@@ -66,7 +67,7 @@ export function LabsScreen() {
               accessibilityLabel={t('labs.action')}
               accessibilityRole="button"
               hitSlop={10}
-              onPress={() => navigation.navigate('LabReportImport')}
+              onPress={() => openReportImportFromStack(navigation)}
               style={({ pressed }) => [styles.headerAction, pressed && styles.pressed]}
             >
               <AppIcon color={colors.accent} name="plus" size={20} />
@@ -120,7 +121,7 @@ export function LabsScreen() {
               <View style={styles.emptyActions}>
                 <AppButton
                   label={t('labs.action')}
-                  onPress={() => navigation.navigate('LabReportImport')}
+                  onPress={() => openReportImportFromStack(navigation)}
                   style={usesAccessibilityTextSize ? styles.fullWidthAction : undefined}
                 />
                 <AppButton

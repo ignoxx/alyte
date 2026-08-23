@@ -3,7 +3,6 @@ import { HomeScreen } from '../features/home/HomeScreen';
 import { LabsScreen } from '../features/labs/LabsScreen';
 import { LabRecordDetailRoute } from '../features/labs/LabRecordDetailRoute';
 import { LabRecordFormRoute } from '../features/labs/LabRecordFormRoute';
-import { LabReportImportRoute } from '../features/labs/LabReportImportRoute';
 import { LabReportDetailRoute } from '../features/labs/LabReportDetailRoute';
 import { ExtractionDraftScreen } from '../features/labs/ExtractionDraftScreen';
 import { LogScreen } from '../features/intake/LogScreen';
@@ -38,12 +37,6 @@ const coreFeatures = {
 } satisfies Omit<NavigationRegistry, 'extensions'>;
 
 const labsFeatures: readonly NavigationFeature[] = [
-  {
-    name: 'LabReportImport',
-    target: 'labs',
-    component: LabReportImportRoute,
-    titleKey: 'labs.reportImportTitle',
-  },
   {
     name: 'LabReportDetail',
     target: 'labs',
