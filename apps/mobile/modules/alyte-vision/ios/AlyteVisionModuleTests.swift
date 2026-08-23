@@ -1,5 +1,8 @@
 import XCTest
 import CoreGraphics
+import PDFKit
+import UIKit
+import Vision
 @testable import AlyteVision
 
 final class AlyteVisionModuleTests: XCTestCase {
@@ -9,21 +12,47 @@ final class AlyteVisionModuleTests: XCTestCase {
     XCTAssertEqual("alyte.vision.ocr.v1", "alyte.vision.ocr.v1")
   }
 
-  func testPDFTransformMapsBottomLeftToTopLeftWithoutMirroring() throws {
-    let page = CGRect(x: 10, y: 20, width: 100, height: 200)
-    let result = try alytePDFPageDrawingTransform(pageBounds: page, scale: 2, orientation: 0)
-    XCTAssertEqual(result.size, CGSize(width: 200, height: 400))
-    XCTAssertEqual(CGPoint(x: 10, y: 20).applying(result.transform), CGPoint(x: 0, y: 400))
-    XCTAssertEqual(CGPoint(x: 10, y: 220).applying(result.transform), CGPoint(x: 0, y: 0))
-    XCTAssertLessThan(result.transform.d, 0)
+  func testPDFImageKeepsPDFKitRenderingAtZeroOrientation() throws {
+    let image = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 200)).image { context in
+      UIColor.black.setFill()
+      context.fill(CGRect(x: 10, y: 20, width: 30, height: 40))
+    }
+    let result = try alyteRotatedPDFImage(image, orientation: 0)
+    XCTAssertTrue(result === image)
+    XCTAssertEqual(result.size, CGSize(width: 100, height: 200))
   }
 
-  func testPDFTransformHonorsRightAngleOrientation() throws {
-    let page = CGRect(x: 0, y: 0, width: 100, height: 200)
-    let result = try alytePDFPageDrawingTransform(pageBounds: page, scale: 1, orientation: 90)
-    XCTAssertEqual(result.size, CGSize(width: 200, height: 100))
-    XCTAssertEqual(CGPoint(x: 0, y: 0).applying(result.transform), CGPoint(x: 0, y: 0))
-    XCTAssertEqual(CGPoint(x: 100, y: 0).applying(result.transform), CGPoint(x: 0, y: 100))
-    XCTAssertEqual(CGPoint(x: 0, y: 200).applying(result.transform), CGPoint(x: 200, y: 0))
+  func testPDFImageHonorsRightAngleOrientation() throws {
+    let image = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 200)).image { _ in }
+    XCTAssertEqual(try alyteRotatedPDFImage(image, orientation: 90).size, CGSize(width: 200, height: 100))
+    XCTAssertEqual(try alyteRotatedPDFImage(image, orientation: 180).size, CGSize(width: 100, height: 200))
+    XCTAssertEqual(try alyteRotatedPDFImage(image, orientation: 270).size, CGSize(width: 200, height: 100))
+    XCTAssertThrowsError(try alyteRotatedPDFImage(image, orientation: 45))
+  }
+
+  func testPDFKitRasterProducesVisionObservationsForSyntheticLabText() throws {
+    let source = UIGraphicsImageRenderer(size: CGSize(width: 596, height: 842)).image { context in
+      UIColor.white.setFill()
+      context.fill(CGRect(x: 0, y: 0, width: 596, height: 842))
+      let attributes: [NSAttributedString.Key: Any] = [
+        .font: UIFont.systemFont(ofSize: 18),
+        .foregroundColor: UIColor.black,
+      ]
+      NSString(string: "Collection date 20.08.2026\nLDL cholesterol 118 mg/dL < 115")
+        .draw(at: CGPoint(x: 48, y: 80), withAttributes: attributes)
+    }
+    let document = PDFDocument()
+    document.insert(PDFPage(image: source)!, at: 0)
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("alyte-vision-synthetic-\(UUID().uuidString).pdf")
+    defer { try? FileManager.default.removeItem(at: url) }
+    XCTAssertTrue(document.write(to: url))
+
+    let image = try renderedImage(path: url.path, pageIndex: 0, orientation: 0, password: nil)
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .accurate
+    try VNImageRequestHandler(cgImage: image, orientation: .up).perform([request])
+
+    XCTAssertFalse(request.results?.isEmpty ?? true)
   }
 }
