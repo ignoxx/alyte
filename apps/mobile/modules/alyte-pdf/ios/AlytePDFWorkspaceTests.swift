@@ -1,5 +1,6 @@
 import CoreGraphics
 import XCTest
+
 @testable import AlytePDF
 
 final class AlytePDFWorkspaceTests: XCTestCase {
@@ -44,6 +45,54 @@ final class AlytePDFWorkspaceTests: XCTestCase {
     let result = session.end(cancelled: false)["region"]!
     XCTAssertEqual(result.minX, 0.27, accuracy: 0.000_001)
     XCTAssertEqual(result.minY, 0.49, accuracy: 0.000_001)
+    XCTAssertEqual(session.commitCount, 1)
+  }
+
+  func testMoveAndResizeAccumulateInDisplayedAxesForEveryRotation() {
+    let source = CGRect(x: 0.2, y: 0.25, width: 0.2, height: 0.1)
+    let page = CGRect(x: 20, y: 40, width: 400, height: 600)
+    for rotation in [0, 90, 180, 270] {
+      var move = AlytePDFWorkspaceGestureSession(regions: ["region": source])
+      move.begin(id: "region")
+      move.change(
+        translation: CGPoint(x: 20, y: 30), pageFrame: page, rotation: rotation, resize: false)
+      move.change(
+        translation: CGPoint(x: 40, y: 60), pageFrame: page, rotation: rotation, resize: false)
+      let moved = move.end(cancelled: false)["region"]!
+      let displayedMove = AlytePDFWorkspaceGeometry.rotated(moved, degrees: rotation)
+      let displayedSource = AlytePDFWorkspaceGeometry.rotated(source, degrees: rotation)
+      XCTAssertEqual(displayedMove.minX, displayedSource.minX + 0.1, accuracy: 0.000_001)
+      XCTAssertEqual(displayedMove.minY, displayedSource.minY + 0.1, accuracy: 0.000_001)
+      XCTAssertEqual(move.commitCount, 1)
+
+      var resize = AlytePDFWorkspaceGestureSession(regions: ["region": source])
+      resize.begin(id: "region")
+      resize.change(
+        translation: CGPoint(x: 20, y: 30), pageFrame: page, rotation: rotation, resize: true)
+      resize.change(
+        translation: CGPoint(x: 40, y: 60), pageFrame: page, rotation: rotation, resize: true)
+      let resized = resize.end(cancelled: false)["region"]!
+      let displayedResize = AlytePDFWorkspaceGeometry.rotated(resized, degrees: rotation)
+      XCTAssertEqual(displayedResize.minX, displayedSource.minX, accuracy: 0.000_001)
+      XCTAssertEqual(displayedResize.minY, displayedSource.minY, accuracy: 0.000_001)
+      XCTAssertEqual(displayedResize.width, displayedSource.width + 0.1, accuracy: 0.000_001)
+      XCTAssertEqual(displayedResize.height, displayedSource.height + 0.1, accuracy: 0.000_001)
+      XCTAssertEqual(resize.commitCount, 1)
+
+      let boundedMove = AlytePDFWorkspaceGeometry.manipulated(
+        original: source, translation: CGPoint(x: 4_000, y: 6_000), pageFrame: page,
+        rotation: rotation, resize: false)
+      let displayedBound = AlytePDFWorkspaceGeometry.rotated(boundedMove, degrees: rotation)
+      XCTAssertEqual(displayedBound.maxX, 1, accuracy: 0.000_001)
+      XCTAssertEqual(displayedBound.maxY, 1, accuracy: 0.000_001)
+
+      let minimumResize = AlytePDFWorkspaceGeometry.manipulated(
+        original: source, translation: CGPoint(x: -4_000, y: -6_000), pageFrame: page,
+        rotation: rotation, resize: true)
+      let displayedMinimum = AlytePDFWorkspaceGeometry.rotated(minimumResize, degrees: rotation)
+      XCTAssertEqual(displayedMinimum.width, 24 / page.width, accuracy: 0.000_001)
+      XCTAssertEqual(displayedMinimum.height, 24 / page.height, accuracy: 0.000_001)
+    }
   }
 
   func testMoveAndResizeStayWithinBoundsAndRespectMinimumViewSize() {
@@ -66,8 +115,30 @@ final class AlytePDFWorkspaceTests: XCTestCase {
     let controlled = CGRect(x: 0.3, y: 0.3, width: 0.2, height: 0.2)
     var session = AlytePDFWorkspaceGestureSession(regions: ["region": original])
     session.begin(id: "region")
-    session.change(translation: CGPoint(x: 80, y: 80), pageFrame: CGRect(x: 0, y: 0, width: 400, height: 400), resize: false)
+    session.change(
+      translation: CGPoint(x: 80, y: 80), pageFrame: CGRect(x: 0, y: 0, width: 400, height: 400),
+      resize: false)
     session.receiveControlled(["region": controlled])
     XCTAssertEqual(session.end(cancelled: true)["region"], controlled)
+    XCTAssertEqual(session.commitCount, 0)
+  }
+
+  func testSelectionReconcilesAfterControlledReplacementAndHistoryChanges() {
+    let retained = AlytePDFWorkspaceGeometry.selectionBridgeUpdate(
+      current: "selected", requested: "selected", regionIDs: ["selected"])
+    XCTAssertEqual(retained.selectedID, "selected")
+    XCTAssertFalse(retained.shouldEmit)
+
+    let replaced = AlytePDFWorkspaceGeometry.selectionBridgeUpdate(
+      current: "selected", requested: "selected", regionIDs: ["replacement"])
+    XCTAssertNil(replaced.selectedID)
+    XCTAssertTrue(replaced.shouldEmit)
+    XCTAssertFalse(replaced.isSelected)
+
+    let restored = AlytePDFWorkspaceGeometry.selectionBridgeUpdate(
+      current: nil, requested: "selected", regionIDs: ["selected"])
+    XCTAssertEqual(restored.selectedID, "selected")
+    XCTAssertTrue(restored.shouldEmit)
+    XCTAssertTrue(restored.isSelected)
   }
 }

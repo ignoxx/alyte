@@ -3,8 +3,8 @@ import CoreGraphics
 @main
 enum WorkspaceGeometryHarness {
   static func approximatelyEqual(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
-    abs(lhs.minX - rhs.minX) < 0.000_001 && abs(lhs.minY - rhs.minY) < 0.000_001 &&
-      abs(lhs.width - rhs.width) < 0.000_001 && abs(lhs.height - rhs.height) < 0.000_001
+    abs(lhs.minX - rhs.minX) < 0.000_001 && abs(lhs.minY - rhs.minY) < 0.000_001
+      && abs(lhs.width - rhs.width) < 0.000_001 && abs(lhs.height - rhs.height) < 0.000_001
   }
 
   static func main() {
@@ -15,7 +15,9 @@ enum WorkspaceGeometryHarness {
       CGRect(x: -900, y: 20, width: 1920, height: 2880),
     ] {
       let view = AlytePDFWorkspaceGeometry.viewRect(normalized: source, pageFrame: frame)
-      precondition(approximatelyEqual(AlytePDFWorkspaceGeometry.normalizedRect(viewRect: view, pageFrame: frame), source))
+      precondition(
+        approximatelyEqual(
+          AlytePDFWorkspaceGeometry.normalizedRect(viewRect: view, pageFrame: frame), source))
     }
     for rotation in [0, 90, 180, 270] {
       let transformed = AlytePDFWorkspaceGeometry.rotated(source, degrees: rotation)
@@ -31,19 +33,66 @@ enum WorkspaceGeometryHarness {
     move.receiveControlled(["region": source])
     let moved = move.end(cancelled: false)["region"]!
     precondition(approximatelyEqual(moved, CGRect(x: 0.27, y: 0.49, width: 0.46, height: 0.08)))
+    precondition(move.commitCount == 1)
 
-    var resize = AlytePDFWorkspaceGestureSession(regions: ["region": CGRect(x: 0.9, y: 0.9, width: 0.08, height: 0.08)])
+    let gestureSource = CGRect(x: 0.2, y: 0.25, width: 0.2, height: 0.1)
+    for rotation in [0, 90, 180, 270] {
+      let displayedSource = AlytePDFWorkspaceGeometry.rotated(gestureSource, degrees: rotation)
+      var rotatedMove = AlytePDFWorkspaceGestureSession(regions: ["region": gestureSource])
+      rotatedMove.begin(id: "region")
+      rotatedMove.change(
+        translation: CGPoint(x: 20, y: 30),
+        pageFrame: CGRect(x: 20, y: 40, width: 400, height: 600), rotation: rotation, resize: false)
+      rotatedMove.change(
+        translation: CGPoint(x: 40, y: 60),
+        pageFrame: CGRect(x: 20, y: 40, width: 400, height: 600), rotation: rotation, resize: false)
+      let displayedMove = AlytePDFWorkspaceGeometry.rotated(
+        rotatedMove.end(cancelled: false)["region"]!, degrees: rotation)
+      precondition(
+        approximatelyEqual(
+          displayedMove,
+          CGRect(
+            x: displayedSource.minX + 0.1, y: displayedSource.minY + 0.1,
+            width: displayedSource.width, height: displayedSource.height)))
+      precondition(rotatedMove.commitCount == 1)
+
+      var rotatedResize = AlytePDFWorkspaceGestureSession(regions: ["region": gestureSource])
+      rotatedResize.begin(id: "region")
+      rotatedResize.change(
+        translation: CGPoint(x: 20, y: 30),
+        pageFrame: CGRect(x: 20, y: 40, width: 400, height: 600), rotation: rotation, resize: true)
+      rotatedResize.change(
+        translation: CGPoint(x: 40, y: 60),
+        pageFrame: CGRect(x: 20, y: 40, width: 400, height: 600), rotation: rotation, resize: true)
+      let displayedResize = AlytePDFWorkspaceGeometry.rotated(
+        rotatedResize.end(cancelled: false)["region"]!, degrees: rotation)
+      precondition(
+        approximatelyEqual(
+          displayedResize,
+          CGRect(
+            x: displayedSource.minX, y: displayedSource.minY, width: displayedSource.width + 0.1,
+            height: displayedSource.height + 0.1)))
+      precondition(rotatedResize.commitCount == 1)
+    }
+
+    var resize = AlytePDFWorkspaceGestureSession(regions: [
+      "region": CGRect(x: 0.9, y: 0.9, width: 0.08, height: 0.08)
+    ])
     resize.begin(id: "region")
     resize.change(translation: CGPoint(x: 500, y: 500), pageFrame: page, resize: true)
     let grown = resize.end(cancelled: false)["region"]!
     precondition(approximatelyEqual(grown, CGRect(x: 0.9, y: 0.9, width: 0.1, height: 0.1)))
 
-    var minimum = AlytePDFWorkspaceGestureSession(regions: ["region": CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3)])
+    var minimum = AlytePDFWorkspaceGestureSession(regions: [
+      "region": CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3)
+    ])
     minimum.begin(id: "region")
     minimum.change(translation: CGPoint(x: -1000, y: -1000), pageFrame: page, resize: true)
     let shrunk = minimum.end(cancelled: false)["region"]!
     precondition(abs(shrunk.width - 0.025) < 0.000_001)
     precondition(abs(shrunk.height - (24 / 1440)) < 0.000_001)
+    precondition(
+      AlytePDFWorkspaceGeometry.reconciledSelection("region", regionIDs: ["replacement"]) == nil)
     print("PDFKit workspace geometry checks passed")
   }
 }
