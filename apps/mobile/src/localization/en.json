@@ -320,7 +320,68 @@
     "requiredField": "Enter a value to continue.",
     "invalidDate": "Use a real collection date, or choose date missing.",
     "invalidNumeric": "Enter a finite numeric value.",
-    "dateMissing": "Date missing"
+    "dateMissing": "Date missing",
+    "detailSummaryTitle": "Record facts",
+    "detailSummaryMeasurements": "{count} Measurements",
+    "detailSummaryFlags": "{count} laboratory flags",
+    "detailSummarySupport": "{supported} comparable · {preserved} preserved only",
+    "detailComparable": "Comparable Measurement",
+    "detailDeletionAction": "Delete…",
+    "detailNotProvided": "Not provided by the laboratory",
+    "detailSupport": "Support",
+    "detailSourceLocation": "Source location",
+    "detailPageRegion": "Stored region on page {page}",
+    "detailNoSourceLocation": "No stored source location",
+    "detailCorrection": "Correction",
+    "detailSourceUnavailable": "Source unavailable",
+    "detailSourceUnavailableBody": "The retained Sanitized Report and exact stored source region are unavailable. Alyte will not guess a location.",
+    "detailDeleteMeasurement": "Delete Measurement",
+    "detailCorrectionTitle": "Correct Measurement",
+    "detailCorrectionValidation": "Add a label and a valid value.",
+    "detailCorrectionPreserved": "The correction was not saved. Your entries remain here; try again.",
+    "detailSaving": "Saving…",
+    "detailDeletionPreview": "Review deletion",
+    "detailDeletionPlanError": "Alyte could not prepare the current deletion effects. Try again.",
+    "detailDeletionRetry": "Cleanup did not finish. The current state is preserved; retry to continue.",
+    "detailDeleting": "Deleting…",
+    "detailConfirmDeletion": "Confirm deletion",
+    "detailVerifiedSource": "Verified Sanitized Report · stored region on page {page}",
+    "sourceState": {
+      "manual": "Created manually; no source report",
+      "retained": "Source report retained",
+      "deletion_pending": "Source deletion pending",
+      "deletion_failed": "Source cleanup needs retry",
+      "deleted": "Source deleted by you"
+    },
+    "provenance": {
+      "user_entered": "User-entered",
+      "user_corrected": "User-corrected",
+      "extracted": "Extracted"
+    },
+    "supportReason": {
+      "unmapped": "Preserved only · not safely mapped",
+      "unsupported-canonical-id": "Preserved only · unsupported Biomarker",
+      "unconfirmed": "Preserved only · needs review",
+      "non-numeric-value": "Preserved only · non-numeric value",
+      "missing-unit": "Preserved only · unit missing",
+      "incompatible-unit": "Preserved only · incompatible unit",
+      "incompatible-specimen": "Preserved only · incompatible specimen"
+    },
+    "deletionScope": {
+      "measurement_only": "Measurement only",
+      "record_only": "Record only",
+      "source_only": "Source only",
+      "record_plus_source": "Record and source"
+    },
+    "deletionFact": {
+      "measurements_remain": "Measurements remain.",
+      "measurements_deleted": "{count} Measurement(s) will be deleted.",
+      "record_remains": "The Lab Record remains.",
+      "record_deleted": "The Lab Record will be deleted.",
+      "source_remains": "The source report remains.",
+      "source_deleted": "The source report will be deleted.",
+      "linked_records": "{count} other linked Lab Record(s) will remain with source marked deleted."
+    }
   },
   "log": {
     "title": "Log",

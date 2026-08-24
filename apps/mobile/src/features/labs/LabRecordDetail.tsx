@@ -1,411 +1,260 @@
 import { useState } from 'react';
-import { Alert, StyleSheet, TextInput, View } from 'react-native';
-import {
-  formatLocaleDate,
-  formatLocaleDecimal,
-  parseLocaleDecimal,
-  type LabRecord,
-  type Measurement,
-  type MeasurementReviewState,
-  type MeasurementValue,
-  type SpecimenType,
-} from '@alyte/domain';
+import { Pressable, SectionList, StyleSheet, View } from 'react-native';
+import { formatLocaleDate, type LabRecordDetail as Detail, type Measurement } from '@alyte/domain';
 import { t } from '../../localization';
-import { colors, screenStyles, spacing, type StatusTone } from '../../theme';
-import { AppButton, AppSurface, AppText, ScreenScrollView, StatusPill } from '../../ui/primitives';
-import type { LabsService } from './service';
+import { colors, spacing } from '../../theme';
+import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
+import { measurementValue, recordSections } from './record-detail-model';
 
-type LabRecordDetailProps = {
-  readonly record: LabRecord;
-  readonly service: LabsService;
+type Props = {
+  readonly detail: Detail;
+  readonly onCorrect: (id: string) => void;
+  readonly onDelete: (id?: string) => void;
   readonly onEditRecord: () => void;
-  readonly onChanged: (record: LabRecord) => void;
-  readonly onDeleted: () => void;
+  readonly onViewSource: (item: Measurement) => void;
 };
 
-type MeasurementDraft = {
-  label: string;
-  value: string;
-  kind: MeasurementValue['kind'];
-  comparator: '<' | '>';
-  unit: string;
-  referenceInterval: string;
-  flag: string;
-  specimenType: SpecimenType;
-  reviewState: MeasurementReviewState;
-};
-
-const specimenTypes: readonly SpecimenType[] = [
-  'unknown',
-  'blood',
-  'serum',
-  'plasma',
-  'urine',
-  'stool',
-  'saliva',
-];
-const valueKinds: readonly MeasurementValue['kind'][] = [
-  'numeric',
-  'bounded',
-  'categorical',
-  'free_text',
-];
-
-function specimenLabel(value: SpecimenType): string {
-  const suffix =
-    value === 'unknown' ? 'Unknown' : `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
-  return t(`labs.specimen${suffix}`);
-}
-
-function kindLabel(value: MeasurementValue['kind']): string {
-  return t(
-    value === 'numeric'
-      ? 'labs.measurementNumeric'
-      : value === 'bounded'
-        ? 'labs.measurementBounded'
-        : value === 'categorical'
-          ? 'labs.measurementCategorical'
-          : 'labs.measurementFreeText',
-  );
-}
-
-function provenanceLabel(value: Measurement['provenance']): string {
-  return t(
-    value === 'user-entered'
-      ? 'labs.provenanceUserEntered'
-      : value === 'user-corrected'
-        ? 'labs.provenanceUserCorrected'
-        : 'labs.provenanceExtracted',
-  );
-}
-
-function provenanceTone(value: Measurement['provenance']): StatusTone {
-  return value === 'extracted' ? 'extracted' : 'userEntered';
-}
-
-function displayValue(measurement: Measurement, locale: string): string {
-  const value = measurement.current.value;
-  if (value.kind === 'numeric') return formatLocaleDecimal(value.value, locale);
-  if (value.kind === 'bounded')
-    return `${value.comparator}${formatLocaleDecimal(value.value, locale)}`;
-  return value.value;
-}
-
-function draftFrom(measurement: Measurement): MeasurementDraft {
-  const value = measurement.current.value;
-  return {
-    label: measurement.current.label,
-    value: value.kind === 'numeric' || value.kind === 'bounded' ? String(value.value) : value.value,
-    kind: value.kind,
-    comparator: value.kind === 'bounded' ? value.comparator : '<',
-    unit: measurement.current.unit ?? '',
-    referenceInterval: measurement.current.referenceInterval ?? '',
-    flag: measurement.current.flag ?? '',
-    specimenType: measurement.specimenType,
-    reviewState: measurement.reviewState,
-  };
-}
-
-function valueFrom(draft: MeasurementDraft): MeasurementValue | null {
-  if (draft.kind === 'numeric' || draft.kind === 'bounded') {
-    const value = parseLocaleDecimal(draft.value);
-    if (value === null) return null;
-    return draft.kind === 'numeric'
-      ? { kind: 'numeric', value }
-      : { kind: 'bounded', comparator: draft.comparator, value };
-  }
-  const value = draft.value.trim();
-  return value.length === 0 ? null : { kind: draft.kind, value };
-}
+const supportReason = (item: Detail['measurements'][number]) =>
+  item.support.kind === 'comparable-supported'
+    ? t('labs.detailComparable')
+    : t(`labs.supportReason.${item.support.reason}`);
+const sourceLabel = (detail: Detail) =>
+  t(`labs.sourceState.${detail.source.kind.replaceAll('-', '_')}`);
 
 export function LabRecordDetail({
-  record,
-  service,
+  detail,
+  onCorrect,
+  onDelete,
   onEditRecord,
-  onChanged,
-  onDeleted,
-}: LabRecordDetailProps) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<MeasurementDraft | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  onViewSource,
+}: Props) {
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
-
-  function beginCorrection(measurement: Measurement) {
-    setEditingId(measurement.id);
-    setDraft(draftFrom(measurement));
-    setError(null);
-  }
-
-  async function saveCorrection(measurement: Measurement) {
-    if (draft === null) return;
-    setError(null);
-    const value = valueFrom(draft);
-    if (value === null) {
-      setError(t('labs.invalidNumeric'));
-      return;
-    }
-    setBusy(true);
-    try {
-      await service.correctMeasurement(measurement.id, {
-        biomarkerId: measurement.biomarkerId,
-        label: draft.label.trim(),
-        value,
-        unit: draft.unit.trim() || null,
-        referenceInterval: draft.referenceInterval.trim() || null,
-        flag: draft.flag.trim() || null,
-        specimenType: draft.specimenType,
-        reviewState: draft.reviewState,
-        reason: t('labs.correctionReason'),
-      });
-      const nextRecord = await service.getRecord(record.id);
-      if (nextRecord !== null) onChanged(nextRecord);
-      setEditingId(null);
-      setDraft(null);
-    } catch {
-      setError(t('labs.measurementCorrectionError'));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function confirmDelete() {
-    Alert.alert(t('labs.recordDelete'), t('labs.recordDeleteConfirm'), [
-      { text: t('labs.recordDeleteCancel'), style: 'cancel' },
-      {
-        text: t('labs.recordDeleteConfirmAction'),
-        style: 'destructive',
-        onPress: () => {
-          void (async () => {
-            setBusy(true);
-            try {
-              await service.deleteRecord(record.id);
-              onDeleted();
-            } catch {
-              setError(t('labs.recordDeleteError'));
-            } finally {
-              setBusy(false);
-            }
-          })();
-        },
-      },
-    ]);
-  }
-
-  const dateLabel =
-    record.collectionDate.kind === 'known'
-      ? formatLocaleDate(record.collectionDate.value, locale)
+  const date =
+    detail.collectionDate.kind === 'known'
+      ? formatLocaleDate(detail.collectionDate.value, locale)
       : t('labs.recordDateMissing');
   return (
-    <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
-      <View style={styles.header}>
-        <View style={styles.headerActions}>
-          <AppButton
-            disabled={busy}
-            label={t('labs.recordEditAction')}
-            onPress={onEditRecord}
-            tone="secondary"
-          />
-          <AppButton
-            disabled={busy}
-            label={t('labs.recordDelete')}
-            onPress={confirmDelete}
-            tone="secondary"
-          />
-        </View>
-      </View>
-      <AppText style={styles.date}>{dateLabel}</AppText>
-      <StatusPill>{specimenLabel(record.specimenType)}</StatusPill>
-      {record.laboratoryName !== null && <AppText>{record.laboratoryName}</AppText>}
-      {record.notes !== null && <AppText style={styles.notes}>{record.notes}</AppText>}
-      <AppText variant="heading">{t('labs.recordDetail')}</AppText>
-      {record.measurements.length === 0 && (
-        <AppText style={styles.date}>{t('labs.recordNoMeasurements')}</AppText>
-      )}
-      {record.measurements.map((measurement) => (
-        <AppSurface key={measurement.id} style={styles.measurement}>
-          <AppText variant="heading">{measurement.current.label}</AppText>
-          <AppText variant="title">
-            {displayValue(measurement, locale)}
-            {measurement.current.unit ? ` ${measurement.current.unit}` : ''}
+    <SectionList
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={styles.content}
+      sections={recordSections(detail)}
+      keyExtractor={(item) => item.id}
+      stickySectionHeadersEnabled={false}
+      ListHeaderComponent={
+        <View style={styles.header}>
+          <AppText selectable style={styles.secondary}>
+            {date}
           </AppText>
-          <AppText style={styles.source}>
-            {t('labs.measurementOriginal').replace('{value}', measurement.original.valueString)}
-          </AppText>
-          <StatusPill
-            tone={
-              measurement.reviewState === 'needs-review'
-                ? 'reviewNeeded'
-                : provenanceTone(measurement.provenance)
-            }
-          >
-            {provenanceLabel(measurement.provenance)}
-          </StatusPill>
-          <AppText
-            style={styles.meta}
-          >{`${t('labs.measurementSpecimen')}: ${specimenLabel(measurement.specimenType)}`}</AppText>
-          {measurement.current.referenceInterval !== null && (
-            <AppText>{measurement.current.referenceInterval}</AppText>
-          )}
-          {measurement.current.flag !== null && <AppText>{measurement.current.flag}</AppText>}
-          {editingId === measurement.id && draft !== null ? (
-            <MeasurementEditor
-              draft={draft}
-              setDraft={setDraft}
-              onCancel={() => {
-                setEditingId(null);
-                setDraft(null);
-              }}
-              onSave={() => void saveCorrection(measurement)}
-              busy={busy}
-            />
-          ) : (
+          {detail.laboratoryName && <AppText selectable>{detail.laboratoryName}</AppText>}
+          <AppSurface style={styles.summary}>
+            <AppText variant="heading">{t('labs.detailSummaryTitle')}</AppText>
+            <AppText selectable>
+              {t('labs.detailSummaryMeasurements').replace(
+                '{count}',
+                String(detail.summary.measurementCount),
+              )}
+            </AppText>
+            <AppText selectable>
+              {t('labs.detailSummaryFlags').replace('{count}', String(detail.summary.flaggedCount))}
+            </AppText>
+            <AppText selectable>
+              {t('labs.detailSummarySupport')
+                .replace('{supported}', String(detail.summary.comparableCount))
+                .replace('{preserved}', String(detail.summary.preservedOnlyCount))}
+            </AppText>
+            <AppText selectable style={styles.secondary}>
+              {sourceLabel(detail)}
+            </AppText>
+          </AppSurface>
+          <View style={styles.actions}>
+            <AppButton label={t('labs.recordEditAction')} onPress={onEditRecord} tone="secondary" />
             <AppButton
-              label={t('labs.measurementCorrect')}
-              onPress={() => beginCorrection(measurement)}
+              label={t('labs.detailDeletionAction')}
+              onPress={() => onDelete()}
               tone="secondary"
             />
+          </View>
+          {detail.measurements.length === 0 && (
+            <AppText style={styles.secondary}>{t('labs.recordNoMeasurements')}</AppText>
           )}
-        </AppSurface>
-      ))}
-      {error !== null && <AppText style={styles.error}>{error}</AppText>}
-    </ScreenScrollView>
+        </View>
+      }
+      renderSectionHeader={({ section }) =>
+        section.panel ? (
+          <AppText variant="label" style={styles.section}>
+            {section.panel}
+          </AppText>
+        ) : null
+      }
+      renderItem={({ item }) => {
+        const open = expanded.has(item.id);
+        const value = measurementValue(item, locale);
+        return (
+          <View style={styles.row}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ expanded: open }}
+              accessibilityLabel={`${item.current.label}, ${value}${item.current.unit ? ` ${item.current.unit}` : ''}`}
+              onPress={() =>
+                setExpanded((current) => {
+                  const next = new Set(current);
+                  open ? next.delete(item.id) : next.add(item.id);
+                  return next;
+                })
+              }
+              style={({ pressed }) => [styles.rowButton, pressed && styles.pressed]}
+            >
+              <View style={styles.rowCopy}>
+                <AppText selectable variant="heading">
+                  {item.current.label}
+                </AppText>
+                <AppText selectable style={styles.secondary}>
+                  {supportReason(item)}
+                </AppText>
+              </View>
+              <View style={styles.value}>
+                <AppText selectable variant="heading" style={styles.numerals}>
+                  {value}
+                </AppText>
+                {item.current.unit && (
+                  <AppText selectable style={styles.secondary}>
+                    {item.current.unit}
+                  </AppText>
+                )}
+              </View>
+            </Pressable>
+            {open && (
+              <MeasurementDetails
+                detail={detail}
+                measurement={item}
+                onCorrect={onCorrect}
+                onDelete={onDelete}
+                onViewSource={onViewSource}
+              />
+            )}
+          </View>
+        );
+      }}
+    />
   );
 }
 
-function MeasurementEditor({
-  draft,
-  setDraft,
-  onCancel,
-  onSave,
-  busy,
+function MeasurementDetails({
+  detail,
+  measurement,
+  onCorrect,
+  onDelete,
+  onViewSource,
 }: {
-  readonly draft: MeasurementDraft;
-  readonly setDraft: (draft: MeasurementDraft) => void;
-  readonly onCancel: () => void;
-  readonly onSave: () => void;
-  readonly busy: boolean;
+  detail: Detail;
+  measurement: Detail['measurements'][number];
+  onCorrect: (id: string) => void;
+  onDelete: (id: string) => void;
+  onViewSource: (item: Measurement) => void;
 }) {
+  const sourceAvailable = detail.source.kind === 'retained' && measurement.source !== null;
   return (
-    <View style={styles.correction}>
-      <AppText variant="label">{t('labs.correctionLabel')}</AppText>
-      <TextInput
-        accessibilityLabel={t('labs.measurementLabel')}
-        onChangeText={(label) => setDraft({ ...draft, label })}
-        style={styles.input}
-        value={draft.label}
+    <View style={styles.details}>
+      <StatusPill
+        tone={
+          measurement.provenance === 'extracted'
+            ? 'extracted'
+            : measurement.provenance === 'user-corrected'
+              ? 'userCorrected'
+              : 'userEntered'
+        }
+      >
+        {t(`labs.provenance.${measurement.provenance.replaceAll('-', '_')}`)}
+      </StatusPill>
+      <Fact
+        label={t('labs.measurementOriginal')}
+        value={`${measurement.original.valueString}${measurement.original.unit ? ` ${measurement.original.unit}` : ''}`}
       />
-      <AppText variant="label">{t('labs.measurementType')}</AppText>
-      <View style={styles.choiceRow}>
-        {valueKinds.map((kind) => (
-          <AppButton
-            key={kind}
-            accessibilityRole="radio"
-            accessibilityState={{ selected: draft.kind === kind }}
-            label={kindLabel(kind)}
-            onPress={() => setDraft({ ...draft, kind })}
-            tone={draft.kind === kind ? 'primary' : 'secondary'}
-          />
-        ))}
-      </View>
-      <View style={styles.valueRow}>
-        {draft.kind === 'bounded' && (
-          <AppButton
-            accessibilityLabel={t('labs.measurementComparator')}
-            accessibilityState={{ selected: true }}
-            label={draft.comparator}
-            onPress={() => setDraft({ ...draft, comparator: draft.comparator === '<' ? '>' : '<' })}
-            tone="secondary"
-          />
-        )}
-        <TextInput
-          accessibilityLabel={t('labs.measurementValue')}
-          keyboardType={
-            draft.kind === 'numeric' || draft.kind === 'bounded' ? 'decimal-pad' : 'default'
+      <Fact label={t('labs.measurementType')} value={measurement.current.value.kind} />
+      <Fact
+        label={t('labs.measurementReference')}
+        value={measurement.current.referenceInterval ?? t('labs.detailNotProvided')}
+      />
+      <Fact
+        label={t('labs.measurementFlag')}
+        value={measurement.current.flag ?? t('labs.detailNotProvided')}
+      />
+      <Fact label={t('labs.measurementSpecimen')} value={measurement.specimenType} />
+      <Fact label={t('labs.detailSupport')} value={supportReason(measurement)} />
+      <Fact
+        label={t('labs.detailSourceLocation')}
+        value={
+          measurement.source
+            ? t('labs.detailPageRegion').replace('{page}', String(measurement.source.pageIndex + 1))
+            : t('labs.detailNoSourceLocation')
+        }
+      />
+      {measurement.corrections.map((correction) => (
+        <Fact
+          key={correction.id}
+          label={t('labs.detailCorrection')}
+          value={`${correction.previous.snapshot.valueString} → ${correction.next.snapshot.valueString}`}
+        />
+      ))}
+      <View style={styles.actions}>
+        <AppButton
+          disabled={!sourceAvailable}
+          label={
+            sourceAvailable ? t('labs.extractionViewInReport') : t('labs.detailSourceUnavailable')
           }
-          onChangeText={(value) => setDraft({ ...draft, value })}
-          style={[styles.input, styles.valueInput]}
-          value={draft.value}
+          onPress={() => onViewSource(measurement)}
+          tone="secondary"
+        />
+        <AppButton
+          label={t('labs.measurementCorrect')}
+          onPress={() => onCorrect(measurement.id)}
+          tone="secondary"
+        />
+        <AppButton
+          label={t('labs.detailDeleteMeasurement')}
+          onPress={() => onDelete(measurement.id)}
+          tone="quiet"
         />
       </View>
-      <AppText variant="label">{t('labs.measurementUnit')}</AppText>
-      <TextInput
-        accessibilityLabel={t('labs.measurementUnit')}
-        onChangeText={(unit) => setDraft({ ...draft, unit })}
-        style={styles.input}
-        value={draft.unit}
-      />
-      <AppText variant="label">{t('labs.measurementReference')}</AppText>
-      <TextInput
-        accessibilityLabel={t('labs.measurementReference')}
-        onChangeText={(referenceInterval) => setDraft({ ...draft, referenceInterval })}
-        style={styles.input}
-        value={draft.referenceInterval}
-      />
-      <AppText variant="label">{t('labs.measurementFlag')}</AppText>
-      <TextInput
-        accessibilityLabel={t('labs.measurementFlag')}
-        onChangeText={(flag) => setDraft({ ...draft, flag })}
-        style={styles.input}
-        value={draft.flag}
-      />
-      <AppText variant="label">{t('labs.measurementSpecimen')}</AppText>
-      <View style={styles.choiceRow}>
-        {specimenTypes.map((specimenType) => (
-          <AppButton
-            key={specimenType}
-            accessibilityRole="radio"
-            accessibilityState={{ selected: draft.specimenType === specimenType }}
-            label={specimenLabel(specimenType)}
-            onPress={() => setDraft({ ...draft, specimenType })}
-            tone={draft.specimenType === specimenType ? 'primary' : 'secondary'}
-          />
-        ))}
-      </View>
-      <AppText variant="label">{t('labs.measurementReviewState')}</AppText>
-      <View style={styles.choiceRow}>
-        {(['confirmed', 'needs-review'] as const).map((reviewState) => (
-          <AppButton
-            key={reviewState}
-            accessibilityRole="radio"
-            accessibilityState={{ selected: draft.reviewState === reviewState }}
-            label={
-              reviewState === 'confirmed' ? t('labs.reviewConfirmed') : t('labs.reviewNeedsReview')
-            }
-            onPress={() => setDraft({ ...draft, reviewState })}
-            tone={draft.reviewState === reviewState ? 'primary' : 'secondary'}
-          />
-        ))}
-      </View>
-      <View style={styles.header}>
-        <AppButton label={t('labs.recordCancel')} onPress={onCancel} tone="quiet" />
-        <AppButton disabled={busy} label={t('labs.measurementSaveCorrection')} onPress={onSave} />
-      </View>
+    </View>
+  );
+}
+function Fact({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.fact}>
+      <AppText style={styles.secondary}>{label}</AppText>
+      <AppText selectable>{value}</AppText>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
-  headerActions: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
-  date: { color: colors.mutedInk },
-  notes: { color: colors.mutedInk, marginTop: spacing.sm },
-  measurement: { gap: spacing.sm },
-  source: { color: colors.mutedInk },
-  meta: { color: colors.mutedInk },
-  correction: { gap: spacing.sm },
-  choiceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
-  valueRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
-  valueInput: { flex: 1 },
-  input: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: 12,
-    borderWidth: 1,
-    color: colors.ink,
-    fontSize: 17,
-    minHeight: 48,
-    paddingHorizontal: spacing.sm,
+  content: { paddingHorizontal: spacing.lg, paddingBottom: 120 },
+  header: { gap: spacing.md, paddingVertical: spacing.lg },
+  summary: { gap: spacing.sm },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  secondary: { color: colors.mutedInk },
+  section: { color: colors.mutedInk, paddingBottom: spacing.sm, paddingTop: spacing.lg },
+  row: { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth },
+  rowButton: {
+    flexDirection: 'row',
+    minHeight: 64,
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
   },
-  error: { color: colors.danger, marginTop: spacing.md },
+  pressed: { backgroundColor: colors.accentSoft },
+  rowCopy: { flex: 1, gap: spacing.xs },
+  value: { alignItems: 'flex-end', maxWidth: '40%' },
+  numerals: { fontVariant: ['tabular-nums'], textAlign: 'right' },
+  details: {
+    backgroundColor: colors.surface,
+    borderCurve: 'continuous',
+    borderRadius: 16,
+    gap: spacing.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  fact: { gap: spacing.xs },
 });

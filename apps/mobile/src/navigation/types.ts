@@ -25,6 +25,7 @@ export type LabsStackParamList = {
   };
   LabRecordForm: { readonly recordId?: string } | undefined;
   LabRecordDetail: { readonly recordId: string };
+  MeasurementDetail: { readonly recordId: string; readonly measurementId: string };
 };
 
 export type LogStackParamList = {
@@ -52,4 +53,7 @@ export type RootStackParamList = {
       readonly height: number;
     };
   };
+  MeasurementCorrection: { readonly recordId: string; readonly measurementId: string };
+  LabDeletion: { readonly recordId: string; readonly measurementId?: string };
+  RecordSourcePreview: { readonly recordId: string; readonly measurementId: string };
 };

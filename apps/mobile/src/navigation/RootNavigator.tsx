@@ -15,6 +15,9 @@ import { LabReportImportRoute } from '../features/labs/LabReportImportRoute';
 import { SanitizedSourcePreviewScreen } from '../features/labs/SanitizedSourcePreviewScreen';
 import { ExtractionMeasurementEditorScreen } from '../features/labs/ExtractionMeasurementEditorScreen';
 import { extractionEditorDestination } from './registry-model';
+import { MeasurementCorrectionScreen } from '../features/labs/MeasurementCorrectionScreen';
+import { LabDeletionScreen } from '../features/labs/LabDeletionScreen';
+import { RecordSourcePreviewScreen } from '../features/labs/RecordSourcePreviewScreen';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const MainTabs = createNativeBottomTabNavigator<MainTabParamList>();
@@ -214,6 +217,37 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
         <RootStack.Screen
           name="SanitizedSourcePreview"
           component={SanitizedSourcePreviewScreen}
+          options={{
+            presentation: 'fullScreenModal',
+            headerShown: true,
+            title: t('labs.extractionSourcePreviewTitle'),
+          }}
+        />
+        <RootStack.Screen
+          name="MeasurementCorrection"
+          component={MeasurementCorrectionScreen}
+          options={{
+            presentation: 'formSheet',
+            sheetAllowedDetents: [0.92],
+            sheetGrabberVisible: true,
+            headerShown: true,
+            title: t('labs.detailCorrectionTitle'),
+          }}
+        />
+        <RootStack.Screen
+          name="LabDeletion"
+          component={LabDeletionScreen}
+          options={{
+            presentation: 'formSheet',
+            sheetAllowedDetents: [0.75, 0.92],
+            sheetGrabberVisible: true,
+            headerShown: true,
+            title: t('labs.detailDeletionPreview'),
+          }}
+        />
+        <RootStack.Screen
+          name="RecordSourcePreview"
+          component={RecordSourcePreviewScreen}
           options={{
             presentation: 'fullScreenModal',
             headerShown: true,

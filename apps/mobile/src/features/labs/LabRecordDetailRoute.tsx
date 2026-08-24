@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppText } from '../../ui/primitives';
 import { LabRecordDetail } from './LabRecordDetail';
-import type { LabRecord } from '@alyte/domain';
+import type { LabRecordDetail as Detail } from '@alyte/domain';
+import type { NavigationProp } from '@react-navigation/native';
+import type { RootStackParamList } from '../../navigation/types';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
 type DetailRoute = RouteProp<LabsStackParamList, 'LabRecordDetail'>;
@@ -15,14 +17,15 @@ export function LabRecordDetailRoute() {
   const navigation = useNavigation<Navigation>();
   const route = useRoute<DetailRoute>();
   const { labs } = useServices();
-  const [record, setRecord] = useState<LabRecord | null>(null);
+  const [record, setRecord] = useState<Detail | null>(null);
+  const root = navigation.getParent()?.getParent<NavigationProp<RootStackParamList>>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setRecord(await labs.getRecord(route.params.recordId));
+      setRecord(await labs.getRecordDetail(route.params.recordId));
       setError(false);
     } catch {
       setError(true);
@@ -31,9 +34,11 @@ export function LabRecordDetailRoute() {
     }
   }, [labs, route.params.recordId]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
 
   if (loading) return <AppText>{t('labs.loading')}</AppText>;
   if (error || record === null) {
@@ -50,11 +55,25 @@ export function LabRecordDetailRoute() {
   }
   return (
     <LabRecordDetail
-      onChanged={setRecord}
-      onDeleted={() => navigation.goBack()}
+      detail={record}
+      onCorrect={(measurementId) =>
+        root?.navigate('MeasurementCorrection', { recordId: record.id, measurementId })
+      }
+      onDelete={(measurementId) =>
+        root?.navigate(
+          'LabDeletion',
+          measurementId === undefined
+            ? { recordId: record.id }
+            : { recordId: record.id, measurementId },
+        )
+      }
       onEditRecord={() => navigation.navigate('LabRecordForm', { recordId: record.id })}
-      record={record}
-      service={labs}
+      onViewSource={(measurement) =>
+        root?.navigate('RecordSourcePreview', {
+          recordId: record.id,
+          measurementId: measurement.id,
+        })
+      }
     />
   );
 }
