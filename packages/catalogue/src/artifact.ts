@@ -128,6 +128,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** Compare UTF-16 code units without locale or host-locale dependence. */
+export function compareCodeUnits(left: string, right: string): number {
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftCodeUnit = left.charCodeAt(index);
+    const rightCodeUnit = right.charCodeAt(index);
+    if (leftCodeUnit !== rightCodeUnit) return leftCodeUnit - rightCodeUnit;
+  }
+  return left.length - right.length;
+}
+
 function malformedArtifactReason(artifact: unknown): string | null {
   if (!isRecord(artifact)) return 'catalogue artifact is malformed';
   if (artifact.schemaVersion !== CATALOGUE_ARTIFACT_SCHEMA_VERSION)
@@ -176,8 +187,8 @@ function normalizeArtifactParts(
   // The content arrays are sets at the artifact boundary. Sorting them here means source-module
   // import order cannot affect emitted bytes, signatures, or the generated consumer module.
   return {
-    entries: [...entries].sort((left, right) => left.id.localeCompare(right.id)),
-    sourceSet: [...sourceSet].sort((left, right) => left.id.localeCompare(right.id)),
+    entries: [...entries].sort((left, right) => compareCodeUnits(left.id, right.id)),
+    sourceSet: [...sourceSet].sort((left, right) => compareCodeUnits(left.id, right.id)),
   };
 }
 
@@ -420,7 +431,7 @@ export const verifyCatalogueArtifact = validateCatalogueArtifact;
 function deriveSourceSet(entries: readonly BiomarkerCatalogueEntry[]): readonly CatalogueSource[] {
   const sources = entries.flatMap((entry) => entry.sources ?? []);
   return [...new Map(sources.map((source) => [source.id, source])).values()].sort((a, b) =>
-    a.id.localeCompare(b.id),
+    compareCodeUnits(a.id, b.id),
   );
 }
 

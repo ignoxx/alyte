@@ -10,7 +10,7 @@ npm run catalogue:build --workspace=@alyte/catalogue
 ```
 
 The default development artifact may be unsigned and review-pending. That state is explicit in its
-manifest and generated verification metadata. Production/release consumers must call
+manifest. Production/release consumers must call
 `validateCatalogueArtifact` with `environment: 'production'` or `'release'` and configured trusted
 public keys; those policies require both a trusted signature and an approved publication manifest.
 They never silently fall back to the development artifact.
@@ -32,8 +32,17 @@ cat "$KEY_FILE" | npm run catalogue:sign --workspace=@alyte/catalogue -- \
 ```
 
 The CLI also accepts `--private-key-env NAME` for a CI secret or `--private-key-fd N` for a protected
-descriptor. It accepts JWK JSON or PEM and converts PEM only in memory to a Web Crypto JWK. The
-public-key verification CLI accepts a non-secret JSON key list from `--trusted-keys PATH` or the
+descriptor. With an npm package command, use descriptor `0` (or the tested stdin form) so npm does
+not close a higher-numbered descriptor:
+
+```sh
+npm run catalogue:sign --workspace=@alyte/catalogue -- \
+  --in dist/catalogue.artifact.json --out /tmp/catalogue.signed.json \
+  --key-id release-key-1 --algorithm ECDSA-P256-SHA256 --private-key-fd 0 < "$KEY_FILE"
+```
+
+It accepts JWK JSON or PEM and converts PEM only in memory to a Web Crypto JWK. The public-key
+verification CLI accepts a non-secret JSON key list from `--trusted-keys PATH` or the
 `ALYTE_CATALOGUE_TRUSTED_KEYS` environment variable:
 
 ```sh

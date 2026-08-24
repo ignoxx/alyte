@@ -5,6 +5,7 @@ import {
   bundledCatalogueArtifact,
   canonicalCataloguePayload,
   canonicalJson,
+  compareCodeUnits,
   comparableBiomarkers,
   createCatalogueArtifact,
   signCatalogueArtifact,
@@ -24,6 +25,12 @@ describe('catalogue release artifact boundary', () => {
     assert.equal(canonicalJson({ b: 2, a: 1 }), canonicalJson({ a: 1, b: 2 }));
     assert.equal(canonicalCataloguePayload(first), canonicalCataloguePayload(second));
     assert.equal(first.integrity.digest, second.integrity.digest);
+  });
+
+  it('orders canonical identifiers by locale-independent UTF-16 code units', () => {
+    assert.ok(compareCodeUnits('z', 'ä') < 0);
+    assert.ok(compareCodeUnits('biomarker.a', 'biomarker.z') < 0);
+    assert.ok(compareCodeUnits('same', 'same') === 0);
   });
 
   it('signs in memory and verifies only with the caller trusted public key', async () => {
@@ -142,6 +149,40 @@ describe('catalogue release artifact boundary', () => {
     const validation = await validateCatalogueArtifact(unresolved as CatalogueArtifact);
     assert.equal(validation.ok, false);
     assert.match(validation.reason, /source/i);
+  });
+
+  it('rejects unreviewed extra entries and malformed guidance review metadata', async () => {
+    const firstEntry = bundledCatalogueArtifact.entries[0]!;
+    const extraEntry = {
+      ...firstEntry,
+      id: 'biomarker.extra_probe',
+      aliases: ['extra probe'],
+      review: undefined,
+    } as unknown as typeof firstEntry;
+    const extraResult = await validateCatalogueArtifact({
+      ...bundledCatalogueArtifact,
+      entries: [...bundledCatalogueArtifact.entries, extraEntry],
+    });
+    assert.equal(extraResult.ok, false);
+    assert.match(extraResult.reason, /review/i);
+
+    const guidedEntry = bundledCatalogueArtifact.entries.find(
+      (entry) => (entry.generalGuidance?.length ?? 0) > 0,
+    )!;
+    const malformedGuidance = {
+      ...guidedEntry,
+      generalGuidance: guidedEntry.generalGuidance!.map((guidance, index) =>
+        index === 0 ? { ...guidance, review: {} } : guidance,
+      ),
+    } as unknown as typeof guidedEntry;
+    const guidanceResult = await validateCatalogueArtifact({
+      ...bundledCatalogueArtifact,
+      entries: bundledCatalogueArtifact.entries.map((entry) =>
+        entry.id === guidedEntry.id ? malformedGuidance : entry,
+      ),
+    });
+    assert.equal(guidanceResult.ok, false);
+    assert.match(guidanceResult.reason, /review/i);
   });
 
   it('makes review-pending development explicit and release policy fail closed', async () => {

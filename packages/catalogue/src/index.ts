@@ -1,14 +1,11 @@
-import {
-  generatedCatalogueArtifact,
-  generatedCatalogueBuildVerification,
-} from './generated/catalogue-artifact';
+import { generatedCatalogueArtifact } from './generated/catalogue-artifact';
 import {
   bloodLiverBiomarkerIds,
   lipidBiomarkerIds,
   metabolicMicronutrientBiomarkerIds,
   type BiomarkerCatalogueEntry,
 } from './schema';
-import { normalizeCatalogueAlias } from './validation';
+import { normalizeCatalogueAlias, validateCatalogueRelease } from './validation';
 
 export * from './schema';
 export * from './validation';
@@ -51,17 +48,20 @@ export {
   nihVitaminB12Source,
 } from './metabolic-micronutrients';
 
-if (
-  !generatedCatalogueBuildVerification.integrityValidated ||
-  !generatedCatalogueBuildVerification.semanticValidated
-) {
-  throw new Error('Generated catalogue artifact did not pass build verification');
+const generatedCatalogueIssues = validateCatalogueRelease(
+  generatedCatalogueArtifact.entries,
+  generatedCatalogueArtifact.manifest,
+);
+if (generatedCatalogueIssues.length > 0) {
+  throw new Error(
+    `Generated catalogue artifact is not a valid launch artifact: ${generatedCatalogueIssues[0]!.message}`,
+  );
 }
 const runtime = globalThis as unknown as { process?: { env?: { NODE_ENV?: string } } };
 if (
   runtime.process?.env?.NODE_ENV === 'production' &&
-  (!generatedCatalogueBuildVerification.signatureValidated ||
-    String(generatedCatalogueBuildVerification.reviewStatus) !== 'approved')
+  (generatedCatalogueArtifact.signature === null ||
+    generatedCatalogueArtifact.manifest.status !== 'approved')
 ) {
   throw new Error('Production catalogue requires a signed, publication-approved artifact');
 }

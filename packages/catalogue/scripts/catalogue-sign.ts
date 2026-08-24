@@ -15,6 +15,13 @@ function option(name: string): string | undefined {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
+function assertKnownOptions(options: readonly string[]): void {
+  for (const argument of process.argv.slice(2)) {
+    if (argument.startsWith('--') && !options.includes(argument))
+      throw new Error(`unknown catalogue signing option: ${argument}`);
+  }
+}
+
 async function readPrivateKeyMaterial(): Promise<string> {
   const envName = option('--private-key-env');
   if (envName !== undefined) {
@@ -75,6 +82,15 @@ function requireNodeCrypto(): { readonly createPrivateKey: typeof createPrivateK
 }
 
 const input = option('--in');
+assertKnownOptions([
+  '--in',
+  '--out',
+  '--key-id',
+  '--algorithm',
+  '--private-key-env',
+  '--private-key-fd',
+  '--private-key-stdin',
+]);
 const output = option('--out');
 const keyId = option('--key-id');
 const algorithm = option('--algorithm') as CataloguePrivateSigningKey['algorithm'] | undefined;

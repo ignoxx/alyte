@@ -17,6 +17,70 @@ function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
+function isIsoDate(value: string): boolean {
+  return (
+    /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})?)?$/.test(
+      value,
+    ) && !Number.isNaN(Date.parse(value))
+  );
+}
+
+function reviewMetadataIssues(
+  value: unknown,
+  path: string,
+  expectedVersion?: string,
+): CatalogueValidationIssue[] {
+  const issues: CatalogueValidationIssue[] = [];
+  if (!isRecord(value)) {
+    return [{ path, message: 'review metadata must be an object' }];
+  }
+  if (value.status !== 'pending-human-publication' && value.status !== 'approved') {
+    issues.push({ path: `${path}.status`, message: 'unsupported review status' });
+  }
+  if (typeof value.contentVersion !== 'string' || !/^\d+\.\d+\.\d+$/.test(value.contentVersion)) {
+    issues.push({ path: `${path}.contentVersion`, message: 'review version must be semver' });
+  } else if (expectedVersion !== undefined && value.contentVersion !== expectedVersion) {
+    issues.push({
+      path: `${path}.contentVersion`,
+      message: 'review content version must match the catalogue version',
+    });
+  }
+  if (typeof value.reviewNotes !== 'string' || value.reviewNotes.trim().length === 0) {
+    issues.push({ path: `${path}.reviewNotes`, message: 'review notes are required' });
+  }
+  const reviewedAtIsNull = value.reviewedAt === null;
+  const reviewerIsNull = value.reviewer === null;
+  const reviewedAtIsString = typeof value.reviewedAt === 'string';
+  const reviewerIsString = typeof value.reviewer === 'string';
+  if (!reviewedAtIsNull && !reviewedAtIsString) {
+    issues.push({ path: `${path}.reviewedAt`, message: 'review date must be a string or null' });
+  } else if (
+    reviewedAtIsString &&
+    (!(value.reviewedAt as string).trim() || !isIsoDate(value.reviewedAt as string))
+  ) {
+    issues.push({ path: `${path}.reviewedAt`, message: 'review date must be a valid ISO date' });
+  }
+  if (!reviewerIsNull && !reviewerIsString) {
+    issues.push({ path: `${path}.reviewer`, message: 'reviewer must be a string or null' });
+  } else if (reviewerIsString && (value.reviewer as string).trim().length === 0) {
+    issues.push({ path: `${path}.reviewer`, message: 'reviewer must not be empty' });
+  }
+  if (value.status === 'pending-human-publication') {
+    if (!reviewedAtIsNull || !reviewerIsNull) {
+      issues.push({
+        path,
+        message: 'pending review must not contain an approval date or reviewer',
+      });
+    }
+  } else if (value.status === 'approved' && (!reviewedAtIsString || !reviewerIsString)) {
+    issues.push({
+      path,
+      message: 'approved review requires a date and reviewer',
+    });
+  }
+  return issues;
+}
+
 function runtimeEntryShapeIssues(entry: unknown, path: string): CatalogueValidationIssue[] {
   const issues: CatalogueValidationIssue[] = [];
   if (!isRecord(entry)) return [{ path, message: 'entry must be an object' }];
@@ -104,23 +168,8 @@ function runtimeEntryShapeIssues(entry: unknown, path: string): CatalogueValidat
     }
   }
 
-  if (entry.review !== undefined) {
-    const review = entry.review;
-    if (!isRecord(review)) {
-      issues.push({ path: `${path}.review`, message: 'review must be an object' });
-    } else {
-      if (review.status !== 'pending-human-publication' && review.status !== 'approved')
-        issues.push({ path: `${path}.review.status`, message: 'unsupported review status' });
-      for (const field of ['contentVersion', 'reviewNotes'] as const) {
-        if (typeof review[field] !== 'string')
-          issues.push({ path: `${path}.review.${field}`, message: 'must be a string' });
-      }
-      for (const field of ['reviewedAt', 'reviewer'] as const) {
-        if (review[field] !== null && typeof review[field] !== 'string')
-          issues.push({ path: `${path}.review.${field}`, message: 'must be a string or null' });
-      }
-    }
-  }
+  if (entry.review !== undefined)
+    issues.push(...reviewMetadataIssues(entry.review, `${path}.review`));
 
   if (entry.methodPolicy !== undefined) {
     const policy = entry.methodPolicy;
@@ -213,6 +262,16 @@ function runtimeEntryShapeIssues(entry: unknown, path: string): CatalogueValidat
           if (typeof guidance[field] !== 'string')
             issues.push({ path: `${guidancePath}.${field}`, message: 'must be a string' });
         }
+        if (guidance.reviewDate !== null && typeof guidance.reviewDate !== 'string')
+          issues.push({
+            path: `${guidancePath}.reviewDate`,
+            message: 'must be a string or null',
+          });
+        if (typeof guidance.reviewDate === 'string' && !isIsoDate(guidance.reviewDate))
+          issues.push({
+            path: `${guidancePath}.reviewDate`,
+            message: 'must be a valid ISO date',
+          });
         if (!Array.isArray(guidance.thresholds)) {
           issues.push({ path: `${guidancePath}.thresholds`, message: 'must be an array' });
         } else {
@@ -268,8 +327,7 @@ function runtimeEntryShapeIssues(entry: unknown, path: string): CatalogueValidat
               message: 'must be an array of strings',
             });
         }
-        if (!isRecord(guidance.review))
-          issues.push({ path: `${guidancePath}.review`, message: 'review is malformed' });
+        issues.push(...reviewMetadataIssues(guidance.review, `${guidancePath}.review`));
       }
     }
   }
@@ -583,20 +641,9 @@ export function validateCatalogue(
         }
       }
     }
-    if (entry.review?.status === 'approved' && entry.review.reviewedAt === null) {
-      issues.push({ path: `${path}.review`, message: 'approved content requires reviewedAt' });
-    }
-    if (
-      entry.catalogueVersion !== undefined &&
-      entry.review !== undefined &&
-      entry.review.contentVersion !== entry.catalogueVersion
-    ) {
-      issues.push({
-        path: `${path}.review.contentVersion`,
-        message: 'review content version must match the entry catalogue version',
-      });
-    }
-    for (const guidance of entry.generalGuidance ?? []) {
+    if (entry.review !== undefined)
+      issues.push(...reviewMetadataIssues(entry.review, `${path}.review`, entry.catalogueVersion));
+    for (const [guidanceIndex, guidance] of (entry.generalGuidance ?? []).entries()) {
       if (!guidance.applicability || guidance.applicability.population !== 'adults') {
         issues.push({
           path: `${path}.generalGuidance`,
@@ -630,12 +677,13 @@ export function validateCatalogue(
           message: 'guidance review metadata is incomplete',
         });
       }
-      if (guidance.review.status === 'approved' && guidance.review.reviewedAt === null) {
-        issues.push({
-          path: `${path}.generalGuidance`,
-          message: 'approved guidance requires reviewedAt',
-        });
-      }
+      issues.push(
+        ...reviewMetadataIssues(
+          guidance.review,
+          `${path}.generalGuidance[${guidanceIndex}].review`,
+          entry.catalogueVersion,
+        ),
+      );
       if (guidance.sources.some((sourceId) => !sourceId.trim())) {
         issues.push({ path: `${path}.generalGuidance`, message: 'guidance source is missing' });
       }
@@ -689,31 +737,52 @@ export function validateCatalogueRelease(
         message: 'entry catalogue version must match the manifest version',
       });
     }
-    if (entry.review !== undefined) {
-      if (entry.review.status === 'approved' && manifest.status !== 'approved') {
+    const entryReview = isRecord(entry.review) ? entry.review : undefined;
+    if (entryReview !== undefined) {
+      issues.push(
+        ...reviewMetadataIssues(entryReview, `entries[${index}].review`, manifest.version),
+      );
+      if (entryReview.status === 'approved' && manifest.status !== 'approved') {
         issues.push({
           path: `entries[${index}].review`,
           message: 'approved entry cannot be emitted in a review-pending manifest',
         });
       }
-      if (entry.review.status === 'pending-human-publication' && manifest.status === 'approved') {
+      if (entryReview.status === 'pending-human-publication' && manifest.status === 'approved') {
         issues.push({
           path: `entries[${index}].review`,
           message: 'approved manifest cannot contain review-pending entry',
         });
       }
+    } else {
+      issues.push({
+        path: `entries[${index}].review`,
+        message: 'emitted entries require complete review metadata',
+      });
     }
     for (const [guidanceIndex, guidance] of (entry.generalGuidance ?? []).entries()) {
-      if (guidance.review.status === 'approved' && manifest.status !== 'approved') {
+      const guidanceReview = isRecord(guidance.review) ? guidance.review : undefined;
+      if (guidanceReview === undefined) {
+        issues.push({
+          path: `entries[${index}].generalGuidance[${guidanceIndex}].review`,
+          message: 'emitted guidance requires complete review metadata',
+        });
+        continue;
+      }
+      issues.push(
+        ...reviewMetadataIssues(
+          guidanceReview,
+          `entries[${index}].generalGuidance[${guidanceIndex}].review`,
+          entry.catalogueVersion ?? manifest.version,
+        ),
+      );
+      if (guidanceReview.status === 'approved' && manifest.status !== 'approved') {
         issues.push({
           path: `entries[${index}].generalGuidance[${guidanceIndex}].review`,
           message: 'approved guidance cannot be emitted in a review-pending manifest',
         });
       }
-      if (
-        guidance.review.status === 'pending-human-publication' &&
-        manifest.status === 'approved'
-      ) {
+      if (guidanceReview.status === 'pending-human-publication' && manifest.status === 'approved') {
         issues.push({
           path: `entries[${index}].generalGuidance[${guidanceIndex}].review`,
           message: 'approved manifest cannot contain review-pending guidance',
