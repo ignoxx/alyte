@@ -92,6 +92,7 @@ export function LabRecordDetailRoute() {
         )
       }
       onEditRecord={() => navigation.navigate('LabRecordForm', { recordId: record.id })}
+      onViewHistory={(biomarkerId) => navigation.navigate('BiomarkerHistory', { biomarkerId })}
       onViewSource={(measurement) =>
         root?.navigate('RecordSourcePreview', {
           recordId: record.id,

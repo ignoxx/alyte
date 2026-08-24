@@ -124,7 +124,7 @@ export function missingShowcaseLabRecordInputs(
   return inputs.filter((input) => input.id === undefined || !existingIds.has(input.id));
 }
 
-/** Seed only after the Labs screen requests its repository, avoiding a startup open race. */
+/** Seed at service composition time; failures remain retryable on the next development launch. */
 export async function seedShowcaseLabRecords(labs: LabsService): Promise<void> {
   try {
     const existingIds = new Set((await labs.listRecords()).map((record) => record.id));

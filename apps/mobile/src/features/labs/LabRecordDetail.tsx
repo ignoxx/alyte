@@ -11,6 +11,7 @@ type Props = {
   readonly onCorrect: (id: string) => void;
   readonly onDelete: (id?: string) => void;
   readonly onEditRecord: () => void;
+  readonly onViewHistory: (biomarkerId: string) => void;
   readonly onViewSource: (item: Measurement) => void;
   readonly onRetrySource: () => void;
 };
@@ -27,6 +28,7 @@ export function LabRecordDetail({
   onCorrect,
   onDelete,
   onEditRecord,
+  onViewHistory,
   onViewSource,
   onRetrySource,
 }: Props) {
@@ -140,6 +142,7 @@ export function LabRecordDetail({
                 measurement={item}
                 onCorrect={onCorrect}
                 onDelete={onDelete}
+                onViewHistory={onViewHistory}
                 onViewSource={onViewSource}
               />
             )}
@@ -155,12 +158,14 @@ function MeasurementDetails({
   measurement,
   onCorrect,
   onDelete,
+  onViewHistory,
   onViewSource,
 }: {
   detail: Detail;
   measurement: Detail['measurements'][number];
   onCorrect: (id: string) => void;
   onDelete: (id: string) => void;
+  onViewHistory: (biomarkerId: string) => void;
   onViewSource: (item: Measurement) => void;
 }) {
   const sourceAvailable = detail.source.kind === 'retained' && measurement.source !== null;
@@ -255,6 +260,15 @@ function MeasurementDetails({
           onPress={() => onViewSource(measurement)}
           tone="secondary"
         />
+        {measurement.reviewState === 'confirmed' && measurement.biomarkerId !== null && (
+          <AppButton
+            label={t('labs.historyView')}
+            onPress={() => {
+              if (measurement.biomarkerId !== null) onViewHistory(measurement.biomarkerId);
+            }}
+            tone="secondary"
+          />
+        )}
         <AppButton
           label={t('labs.measurementCorrect')}
           onPress={() => onCorrect(measurement.id)}

@@ -8,17 +8,23 @@ import {
 } from 'react-native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
-import { formatLocaleDate, formatLocaleDecimal, type MeasuredTrendNonPoint } from '@alyte/domain';
+import {
+  formatLocaleDate,
+  formatLocaleDecimal,
+  type MeasuredTrendNonPoint,
+  type MeasurementSnapshot,
+} from '@alyte/domain';
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { colors, screenStyles, spacing } from '../../theme';
+import { colors, screenStyles, spacing, typography } from '../../theme';
 import { AppButton, AppSurface, AppText, ScreenScrollView, StatusPill } from '../../ui/primitives';
 import {
   buildBiomarkerHistoryViewModel,
   buildHistoryAccessibilityLabel,
   type BiomarkerHistoryViewModel,
   type HistoryAccessibilityCopy,
+  type HistoryGuidanceItem,
   type HistoryTimelineItem,
 } from './biomarker-history-model';
 
@@ -40,6 +46,12 @@ const nonPointKey: Record<MeasuredTrendNonPoint['kind'], string> = {
   unsupported: 'labs.historyNonPointUnsupported',
 };
 
+const guidanceReasonKey = {
+  'context-unavailable': 'labs.historyGuidanceContextUnavailable',
+  'no-match': 'labs.historyGuidanceNoMatch',
+  'pending-review': 'labs.historyGuidancePendingReview',
+} as const;
+
 const provenanceKey = {
   extracted: 'labs.provenance.extracted',
   'user-entered': 'labs.provenance.user_entered',
@@ -50,6 +62,7 @@ function accessibilityCopy(): HistoryAccessibilityCopy {
   return {
     chart: t('labs.historyChartTitle'),
     measuredPoint: t('labs.historyMeasuredPoint'),
+    current: t('labs.historyCurrentResult'),
     nonPoint: {
       'not-measured': t('labs.historyNonPointNotMeasured'),
       'date-missing': t('labs.historyNonPointDateMissing'),
@@ -237,38 +250,27 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
         </View>
       )}
 
-      {model.trend.generalGuidance.length > 0 && (
-        <View style={styles.section}>
-          <AppText variant="heading" selectable>
-            {t('labs.historyGeneralGuidance')}
-          </AppText>
+      <View style={styles.section}>
+        <AppText variant="heading" selectable>
+          {t('labs.historyGeneralGuidance')}
+        </AppText>
+        {model.guidance.kind === 'applicable' ? (
           <AppSurface tone="soft" style={styles.factsSurface}>
             <AppText selectable style={styles.secondary}>
               {t('labs.historyGeneralGuidanceBody')}
             </AppText>
-            {model.trend.generalGuidance.map((guidance) => (
-              <View key={guidance.guidanceId} style={styles.factGroup}>
-                <AppText variant="label" selectable>
-                  {guidance.guidanceId}
-                </AppText>
-                <Fact
-                  label={t('labs.historyValue')}
-                  value={guidance.guidance.thresholds
-                    .map(
-                      (threshold) => `${threshold.operator} ${threshold.value} ${threshold.unit}`,
-                    )
-                    .join(' · ')}
-                />
-                <Fact
-                  label={t('labs.historyCatalogueVersion')}
-                  value={guidance.catalogueVersion ?? t('labs.historyNotProvided')}
-                />
-                <Fact label={t('labs.historySources')} value={guidance.sourceIds.join(', ')} />
-              </View>
+            {model.guidance.items.map((guidance) => (
+              <GuidanceDetails guidance={guidance} key={guidance.id} locale={locale} />
             ))}
           </AppSurface>
-        </View>
-      )}
+        ) : (
+          <AppSurface tone="soft" style={styles.factsSurface}>
+            <AppText selectable style={styles.secondary}>
+              {t(guidanceReasonKey[model.guidance.reason])}
+            </AppText>
+          </AppSurface>
+        )}
+      </View>
 
       {model.explanation !== null || model.explanationReviewPending ? (
         <View style={styles.section}>
@@ -297,12 +299,23 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
               <AppText variant="label" selectable>
                 {t('labs.historySources')}
               </AppText>
+              <Fact
+                label={t('labs.historyCatalogueVersion')}
+                value={model.catalogueVersion ?? t('labs.historyNotProvided')}
+              />
+              <Fact
+                label={t('labs.historyContentVersion')}
+                value={model.contentVersion ?? t('labs.historyNotProvided')}
+              />
               {model.sources.length > 0 ? (
                 model.sources.map((source) => (
                   <View key={source.id} style={styles.factGroup}>
                     <AppText selectable>{source.title}</AppText>
                     <AppText selectable style={styles.secondary}>
-                      {`${source.publisher} · ${source.id}`}
+                      {source.publisher}
+                    </AppText>
+                    <AppText selectable style={styles.linkLabel}>
+                      {source.url}
                     </AppText>
                   </View>
                 ))
@@ -323,6 +336,107 @@ function timelineKey(item: HistoryTimelineItem, index: number): string {
   return `${item.kind}-${item.kind === 'point' ? item.point.measurementId : item.nonPoint.labRecordId}-${index}`;
 }
 
+function snapshotText(snapshot: MeasurementSnapshot, locale: string): string {
+  const value =
+    snapshot.value.kind === 'numeric'
+      ? formatLocaleDecimal(snapshot.value.value, locale)
+      : snapshot.value.kind === 'bounded'
+        ? `${snapshot.value.comparator}${formatLocaleDecimal(snapshot.value.value, locale)}`
+        : snapshot.value.value;
+  return `${snapshot.label}: ${value}${snapshot.unit ? ` ${snapshot.unit}` : ''}`;
+}
+
+function originalSourceText(snapshot: MeasurementSnapshot | null): string {
+  if (snapshot === null) return '';
+  return `${snapshot.label}: ${snapshot.valueString}${snapshot.unit ? ` ${snapshot.unit}` : ''}`;
+}
+
+function reviewedDate(value: string | null, locale: string): string {
+  return value !== null && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? formatLocaleDate(value, locale)
+    : (value ?? t('labs.historyNotProvided'));
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function GuidanceDetails({
+  guidance,
+  locale,
+}: {
+  readonly guidance: HistoryGuidanceItem;
+  readonly locale: string;
+}) {
+  const applicability = [
+    t('labs.historyGuidancePopulationAdults'),
+    `${t('labs.historyGuidanceJurisdiction')}: ${guidance.applicability.jurisdiction}`,
+    `${t('labs.historyGuidancePurpose')}: ${t('labs.historyGuidanceScreening')}`,
+    `${t('labs.historyGuidanceSex')}: ${t(`labs.historyGuidanceSex${capitalize(guidance.applicability.sex)}`)}`,
+    `${t('labs.historyGuidanceFasting')}: ${t(`labs.historyGuidanceFasting${capitalize(guidance.applicability.fasting.replace('-', ''))}`)}`,
+  ].join(' · ');
+  return (
+    <View style={styles.factGroup}>
+      <AppText variant="label" selectable>
+        {guidance.label}
+      </AppText>
+      <AppText selectable>{guidance.description}</AppText>
+      <Fact
+        label={t('labs.historyValue')}
+        value={guidance.thresholds
+          .map(
+            (threshold) =>
+              `${threshold.operator} ${formatLocaleDecimal(threshold.value, locale)} ${threshold.unit}`,
+          )
+          .join(' · ')}
+      />
+      <Fact label={t('labs.historyGuidanceAuthority')} value={guidance.authority} />
+      <Fact label={t('labs.historyGuidanceApplicability')} value={applicability} />
+      <Fact
+        label={t('labs.historyGuidanceLimitations')}
+        value={guidance.applicability.limitations.join(' · ') || t('labs.historyNotProvided')}
+      />
+      {guidance.disagreement !== null && (
+        <Fact label={t('labs.historyGuidanceDisagreement')} value={guidance.disagreement} />
+      )}
+      <Fact
+        label={t('labs.historyCatalogueVersion')}
+        value={guidance.catalogueVersion ?? t('labs.historyNotProvided')}
+      />
+      <Fact label={t('labs.historyContentVersion')} value={guidance.review.contentVersion} />
+      <Fact label={t('labs.historyGuidancePublication')} value={guidance.publicationVersion} />
+      <Fact
+        label={t('labs.historyGuidanceReviewed')}
+        value={reviewedDate(guidance.review.reviewedAt ?? guidance.reviewDate, locale)}
+      />
+      <Fact
+        label={t('labs.historyGuidanceReviewer')}
+        value={guidance.review.reviewer ?? t('labs.historyNotProvided')}
+      />
+      <AppText variant="label" selectable>
+        {t('labs.historySources')}
+      </AppText>
+      {guidance.sourceDetails.length > 0 ? (
+        guidance.sourceDetails.map((source) => (
+          <View key={source.id} style={styles.sourceRow}>
+            <AppText selectable>{source.title}</AppText>
+            <AppText selectable style={styles.secondary}>
+              {source.publisher}
+            </AppText>
+            <AppText selectable style={styles.linkLabel}>
+              {source.url}
+            </AppText>
+          </View>
+        ))
+      ) : (
+        <AppText selectable style={styles.secondary}>
+          {t('labs.historyNotProvided')}
+        </AppText>
+      )}
+    </View>
+  );
+}
+
 function HistoryTimelineRow({
   item,
   locale,
@@ -336,7 +450,8 @@ function HistoryTimelineRow({
 }) {
   if (item.kind === 'point') {
     const value = `${formatLocaleDecimal(item.point.normalized.value, locale)} ${item.point.normalized.unit}`;
-    const source = `${item.point.source.label}: ${item.point.source.valueString}${item.point.source.unit ? ` ${item.point.source.unit}` : ''}`;
+    const current = snapshotText(item.current, locale);
+    const source = originalSourceText(item.original);
     return (
       <View style={styles.timelineRow}>
         <View style={styles.timelineMarker} />
@@ -349,6 +464,9 @@ function HistoryTimelineRow({
           </View>
           <AppText selectable style={styles.secondary}>
             {formatLocaleDate(item.point.collectionDate, locale)}
+          </AppText>
+          <AppText selectable style={styles.secondary}>
+            {`${t('labs.historyCurrentResult')}: ${current}`}
           </AppText>
           <AppText selectable style={styles.secondary}>
             {`${t('labs.historyOriginalSource')}: ${source}`}
@@ -365,10 +483,17 @@ function HistoryTimelineRow({
           </Pressable>
           {expanded && (
             <View style={styles.details}>
-              <Fact label={t('labs.historyValue')} value={value} />
+              <Fact label={t('labs.historyCurrentResult')} value={current} />
               <Fact label={t('labs.historyOriginalSource')} value={source} />
               <Fact label={t('labs.historySpecimen')} value={item.point.specimenType} />
-              <Fact label={t('labs.historyProvenance')} value={t(provenanceKey[item.provenance])} />
+              <Fact
+                label={t('labs.historyProvenance')}
+                value={
+                  item.provenance === null
+                    ? t('labs.historyNotProvided')
+                    : t(provenanceKey[item.provenance])
+                }
+              />
               <Fact
                 label={t('labs.historySourceLocation')}
                 value={
@@ -391,10 +516,10 @@ function HistoryTimelineRow({
     item.nonPoint.collectionDate.kind === 'known'
       ? formatLocaleDate(item.nonPoint.collectionDate.value, locale)
       : t('labs.historyNonPointDateMissing');
-  const source =
-    item.nonPoint.source === null
-      ? null
-      : `${item.nonPoint.source.label}: ${item.nonPoint.source.valueString}${item.nonPoint.source.unit ? ` ${item.nonPoint.source.unit}` : ''}`;
+  const current = item.current === null ? null : snapshotText(item.current, locale);
+  const source = originalSourceText(item.original);
+  const interval = item.laboratoryReference.interval ?? t('labs.historyNotProvided');
+  const flag = item.laboratoryReference.flag ?? t('labs.historyNotProvided');
   return (
     <View style={styles.timelineRow}>
       <View style={[styles.timelineMarker, styles.nonPointMarker]} />
@@ -408,11 +533,22 @@ function HistoryTimelineRow({
         <AppText selectable style={styles.secondary}>
           {date}
         </AppText>
-        {source !== null && (
+        {current !== null && (
+          <AppText selectable style={styles.secondary}>
+            {`${t('labs.historyCurrentResult')}: ${current}`}
+          </AppText>
+        )}
+        {source !== '' && (
           <AppText selectable style={styles.secondary}>
             {`${t('labs.historyOriginalSource')}: ${source}`}
           </AppText>
         )}
+        <AppText selectable style={styles.secondary}>
+          {`${t('labs.historyLaboratoryInterval')}: ${interval}`}
+        </AppText>
+        <AppText selectable style={styles.secondary}>
+          {`${t('labs.historyLaboratoryFlag')}: ${flag}`}
+        </AppText>
         {item.provenance !== null && (
           <AppText selectable style={styles.secondary}>
             {`${t('labs.historyProvenance')}: ${t(provenanceKey[item.provenance])}`}
@@ -431,8 +567,22 @@ function HistoryTimelineRow({
         {expanded && (
           <View style={styles.details}>
             <Fact
+              label={t('labs.historyCurrentResult')}
+              value={current ?? t('labs.historyNotProvided')}
+            />
+            <Fact
               label={t('labs.historyOriginalSource')}
-              value={source ?? t('labs.historyNotProvided')}
+              value={source || t('labs.historyNotProvided')}
+            />
+            <Fact label={t('labs.historyLaboratoryInterval')} value={interval} />
+            <Fact label={t('labs.historyLaboratoryFlag')} value={flag} />
+            <Fact
+              label={t('labs.historyProvenance')}
+              value={
+                item.provenance === null
+                  ? t('labs.historyNotProvided')
+                  : t(provenanceKey[item.provenance])
+              }
             />
             <Fact
               label={t('labs.historySourceLocation')}
@@ -590,7 +740,12 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: 12,
   },
-  chartAxisLabel: { color: colors.mutedInk, fontSize: 12, position: 'absolute', right: spacing.sm },
+  chartAxisLabel: {
+    ...typography.caption,
+    color: colors.mutedInk,
+    position: 'absolute',
+    right: spacing.sm,
+  },
   chartAxisTop: { top: spacing.sm },
   chartAxisBottom: { bottom: spacing.sm },
   chartEmpty: { alignItems: 'center', flex: 1, justifyContent: 'center' },
@@ -635,6 +790,7 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
   },
   factsSurface: { gap: spacing.md },
+  sourceRow: { gap: spacing.xs },
   factGroup: {
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,

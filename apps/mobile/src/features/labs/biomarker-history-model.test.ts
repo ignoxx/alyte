@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { canonicalId, type LabRecord, type Measurement } from '@alyte/domain';
+import {
+  canonicalId,
+  type LabRecord,
+  type Measurement,
+  type MeasurementSnapshot,
+} from '@alyte/domain';
 import {
   buildBiomarkerHistoryViewModel,
   buildHistoryAccessibilityLabel,
@@ -11,6 +16,7 @@ import {
 const copy: HistoryAccessibilityCopy = {
   chart: 'Measured trend',
   measuredPoint: 'Measured point',
+  current: 'Current result',
   nonPoint: {
     'not-measured': 'Not measured',
     'date-missing': 'Collection date missing',
@@ -38,6 +44,7 @@ function measurement(
   options: Partial<Pick<Measurement, 'reviewState' | 'provenance' | 'biomarkerId'>> &
     Partial<Pick<Measurement['current'], 'unit' | 'valueString' | 'referenceInterval' | 'flag'>> & {
       readonly label?: string;
+      readonly current?: Partial<MeasurementSnapshot>;
     } = {},
 ): Measurement {
   const biomarkerId = options.biomarkerId ?? canonicalId('biomarker.ldl_c');
@@ -49,6 +56,15 @@ function measurement(
     unit: options.unit ?? 'mg/dL',
     referenceInterval: options.referenceInterval ?? '<100',
     flag: options.flag ?? null,
+  };
+  const current = {
+    ...snapshot,
+    ...options.current,
+    value: options.current?.value ?? snapshot.value,
+    valueString: options.current?.valueString ?? snapshot.valueString,
+    unit: options.current?.unit ?? snapshot.unit,
+    referenceInterval: options.current?.referenceInterval ?? snapshot.referenceInterval,
+    flag: options.current?.flag ?? snapshot.flag,
   };
   return {
     id,
@@ -65,7 +81,7 @@ function measurement(
       provenance: options.provenance ?? 'extracted',
       source: null,
     },
-    current: snapshot,
+    current,
     provenance: options.provenance ?? 'extracted',
     reviewState: options.reviewState ?? 'confirmed',
     source: {
@@ -136,7 +152,16 @@ test('view model keeps points, missing states, source metadata, and guidance sep
         'm3',
         'r3',
         { kind: 'bounded', comparator: '<', value: 100 },
-        { valueString: '<100' },
+        {
+          valueString: '<100',
+          provenance: 'user-corrected',
+          current: {
+            value: { kind: 'bounded', comparator: '<', value: 90 },
+            valueString: '<90',
+            referenceInterval: '<80',
+            flag: 'H',
+          },
+        },
       ),
     ]),
     record('r4', { kind: 'missing' }, [measurement('m4', 'r4', { kind: 'numeric', value: 90 })]),
@@ -159,10 +184,25 @@ test('view model keeps points, missing states, source metadata, and guidance sep
     assert.equal(model.timeline[0].sourceLocation?.pageIndex, 1);
     assert.equal(model.timeline[0].point.laboratoryReference.interval, '<100');
   }
+  const corrected = model.timeline.find(
+    (item) => item.kind === 'non-point' && item.nonPoint.measurementId === 'm3',
+  );
+  assert.ok(corrected && corrected.kind === 'non-point');
+  assert.equal(corrected.current?.valueString, '<90');
+  assert.equal(corrected.original?.valueString, '<100');
+  assert.equal(corrected.provenance, 'user-corrected');
+  assert.deepEqual(corrected.laboratoryReference, { interval: '<80', flag: 'H' });
+  const correctedLabel = buildHistoryAccessibilityLabel(model, copy, 'en-US');
+  assert.ok(
+    correctedLabel.indexOf('Current result LDL-C: <90') <
+      correctedLabel.indexOf('Original source LDL-C: <100'),
+  );
+  assert.match(correctedLabel, /Laboratory interval <80, Laboratory flag H, User-corrected/);
   assert.deepEqual(
     model.trend.generalGuidance.map((guidance) => guidance.guidanceId),
     ['guidance.ldl-c.screening-us'],
   );
+  assert.deepEqual(model.guidance, { kind: 'not-applicable', reason: 'pending-review' });
 });
 
 test('VoiceOver alternative orders every measured point and non-point state', () => {
@@ -177,11 +217,44 @@ test('VoiceOver alternative orders every measured point and non-point state', ()
     'biomarker.ldl_c',
   );
   assert.ok(model);
-  const label = buildHistoryAccessibilityLabel(model, copy);
+  const label = buildHistoryAccessibilityLabel(model, copy, 'en-US');
   assert.ok(label.indexOf('Measured point') < label.indexOf('Not measured'));
   assert.ok(label.indexOf('Not measured') < label.indexOf('Collection date missing'));
   assert.match(label, /Original source LDL-C: 110 mg\/dL/);
   assert.match(label, /Laboratory interval <100/);
+});
+
+test('VoiceOver uses localized dates and decimals for a converted comma-decimal source', () => {
+  const model = buildBiomarkerHistoryViewModel(
+    [
+      record('r-comma', { kind: 'known', value: '2026-01-01' }, [
+        measurement(
+          'm-comma',
+          'r-comma',
+          { kind: 'numeric', value: 3.8 },
+          { unit: 'mmol/L', valueString: '3,8' },
+        ),
+      ]),
+    ],
+    'biomarker.ldl_c',
+  );
+  assert.ok(model);
+  const label = buildHistoryAccessibilityLabel(model, copy, 'de-DE');
+  assert.match(label, /01\.01\.2026/);
+  assert.match(label, /146,946 mg\/dL/);
+});
+
+test('production history keeps guidance ambiguity explicit when context is absent', () => {
+  const model = buildBiomarkerHistoryViewModel(
+    [
+      record('r-context', { kind: 'known', value: '2026-01-01' }, [
+        measurement('m-context', 'r-context', { kind: 'numeric', value: 110 }),
+      ]),
+    ],
+    'biomarker.ldl_c',
+  );
+  assert.ok(model);
+  assert.deepEqual(model.guidance, { kind: 'not-applicable', reason: 'context-unavailable' });
 });
 
 test('unsupported canonical measurements stay visible as non-points', () => {

@@ -18,7 +18,6 @@ import {
 import { colors, screenStyles, spacing } from '../../theme';
 import { labsShowsManualRecordAction } from './labs-ui-model';
 import { listHistoryEntries } from './biomarker-history-model';
-import { seedShowcaseLabRecords } from '../../services/showcase-seed';
 import { openReportImportFromStack } from '../../navigation/parent-tab';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
@@ -84,7 +83,6 @@ export function LabsScreen() {
     setLoading(true);
     setError(false);
     try {
-      if (services.showcase !== null) await seedShowcaseLabRecords(labs);
       const [nextRecords, nextReports] = await Promise.all([
         labs.listRecords(),
         services.reports.listReports(),
