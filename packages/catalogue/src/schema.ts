@@ -80,7 +80,18 @@ export type CatalogueMethodPolicy = {
   readonly kind: 'method-agnostic' | 'standardized' | 'requires-explicit-method';
   readonly allowedMethods: readonly string[];
   readonly unsafePatterns: readonly string[];
+  /** Complete source-text profile requirements for methods whose identity affects comparability. */
+  readonly profiles?: readonly CatalogueMethodProfile[];
   readonly rationale: string;
+};
+
+export type CatalogueMethodProfile = {
+  readonly id: string;
+  readonly assayPatterns: readonly string[];
+  readonly temperatureC: 30 | 37;
+  readonly temperaturePatterns: readonly string[];
+  readonly pyridoxalPhosphate: 'present' | 'absent' | 'not-applicable';
+  readonly pyridoxalPhosphatePatterns: readonly string[];
 };
 
 export type GeneralGuidanceThreshold = {

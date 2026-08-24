@@ -161,6 +161,30 @@ function validateComparableEntry(
         );
       if (!policy.rationale.trim())
         required('methodPolicy.rationale', `${family} method rationale is required`);
+      for (const [profileIndex, profile] of (policy.profiles ?? []).entries()) {
+        const profilePath = `${path}.methodPolicy.profiles[${profileIndex}]`;
+        if (!profile.id.trim())
+          required(`${profilePath}.id`, `${family} method profile id is required`);
+        if (profile.assayPatterns.length === 0)
+          required(`${profilePath}.assayPatterns`, `${family} method assay patterns are required`);
+        if (profile.temperaturePatterns.length === 0)
+          required(
+            `${profilePath}.temperaturePatterns`,
+            `${family} method temperature patterns are required`,
+          );
+        if (profile.pyridoxalPhosphatePatterns.length === 0)
+          required(
+            `${profilePath}.pyridoxalPhosphatePatterns`,
+            `${family} method PLP/P5P patterns are required`,
+          );
+        if (![30, 37].includes(profile.temperatureC))
+          required(`${profilePath}.temperatureC`, `${family} method temperature is unsupported`);
+        if (!['present', 'absent', 'not-applicable'].includes(profile.pyridoxalPhosphate))
+          required(
+            `${profilePath}.pyridoxalPhosphate`,
+            `${family} method PLP/P5P status is unsupported`,
+          );
+      }
     }
   }
   return issues;

@@ -88,15 +88,57 @@ export const medlineplusGgtSource: CatalogueSource = {
   sourceKind: 'public-health-authority',
 };
 
-export const ifccEnzymeReferenceSource: CatalogueSource = {
-  id: 'source.ifcc.enzyme-reference-procedures',
+export const ifccAltReferenceSource: CatalogueSource = {
+  id: 'source.ifcc.alt-reference-procedure',
   title:
-    'IFCC primary reference procedures for catalytic activity concentrations of enzymes at 37 °C',
+    'IFCC primary reference procedures for catalytic activity concentrations of enzymes at 37 °C. Part 4. Reference procedure for the measurement of catalytic concentration of alanine aminotransferase',
   publisher: 'International Federation of Clinical Chemistry and Laboratory Medicine',
-  url: 'https://cms.ifcc.org/media/158451/IFCCprimaryrefproceduresforthemeasurementofcatalyticactivityCCLM20114914391446.pdf',
-  publicationDate: '2011-09',
+  url: 'https://pubmed.ncbi.nlm.nih.gov/12241021/',
+  publicationDate: '2002-07',
   accessedAt: '2026-08-24',
   sourceKind: 'professional-guideline',
+};
+
+export const ifccAstReferenceSource: CatalogueSource = {
+  id: 'source.ifcc.ast-reference-procedure',
+  title:
+    'IFCC primary reference procedures for catalytic activity concentrations of enzymes at 37 °C. Part 5. Reference procedure for the measurement of catalytic concentration of aspartate aminotransferase',
+  publisher: 'International Federation of Clinical Chemistry and Laboratory Medicine',
+  url: 'https://pubmed.ncbi.nlm.nih.gov/12241022/',
+  publicationDate: '2002-07',
+  accessedAt: '2026-08-24',
+  sourceKind: 'professional-guideline',
+};
+
+export const ifccGgtReferenceSource: CatalogueSource = {
+  id: 'source.ifcc.ggt-reference-procedure',
+  title:
+    'IFCC primary reference procedures for catalytic activity concentrations of enzymes at 37 °C. Part 6. Reference procedure for the measurement of catalytic concentration of gamma-glutamyltransferase',
+  publisher: 'International Federation of Clinical Chemistry and Laboratory Medicine',
+  url: 'https://pubmed.ncbi.nlm.nih.gov/12241023/',
+  publicationDate: '2002-07',
+  accessedAt: '2026-08-24',
+  sourceKind: 'professional-guideline',
+};
+
+export const nistUnitDefinitionsSource: CatalogueSource = {
+  id: 'source.nist.si-unit-definitions',
+  title: 'NIST SI Units and Metric Prefixes',
+  publisher: 'National Institute of Standards and Technology',
+  url: 'https://www.nist.gov/pml/owm/si-units-volume',
+  publicationDate: null,
+  accessedAt: '2026-08-24',
+  sourceKind: 'reference',
+};
+
+export const nistPercentageDefinitionsSource: CatalogueSource = {
+  id: 'source.nist.si-percentage-definitions',
+  title: 'NIST Guide to the SI, Chapter 7: Expressing Values of Quantities',
+  publisher: 'National Institute of Standards and Technology',
+  url: 'https://www.nist.gov/pml/special-publication-811/nist-guide-si-chapter-7-rules-and-style-conventions-expressing-values',
+  publicationDate: null,
+  accessedAt: '2026-08-24',
+  sourceKind: 'reference',
 };
 
 export const bloodLiverSources: readonly CatalogueSource[] = [
@@ -108,7 +150,11 @@ export const bloodLiverSources: readonly CatalogueSource[] = [
   medlineplusAltSource,
   medlineplusAstSource,
   medlineplusGgtSource,
-  ifccEnzymeReferenceSource,
+  ifccAltReferenceSource,
+  ifccAstReferenceSource,
+  ifccGgtReferenceSource,
+  nistUnitDefinitionsSource,
+  nistPercentageDefinitionsSource,
 ];
 
 export const bloodLiverReviewPending: CatalogueReviewMetadata = {
@@ -133,13 +179,60 @@ const methodPolicy = (
   allowedMethods: readonly string[],
   unsafePatterns: readonly string[],
   rationale: string,
+  profiles: CatalogueMethodPolicy['profiles'] = undefined,
 ): CatalogueMethodPolicy => ({
   version: '1.0.0',
   kind,
   allowedMethods,
   unsafePatterns,
+  ...(profiles === undefined ? {} : { profiles }),
   rationale,
 });
+
+const enzymeProfiles = (prefix: string): NonNullable<CatalogueMethodPolicy['profiles']> => [
+  {
+    id: `${prefix}-ifcc-37-p5p`,
+    assayPatterns: ['ifcc'],
+    temperatureC: 37,
+    temperaturePatterns: ['37 c', '37 degrees'],
+    pyridoxalPhosphate: 'present',
+    pyridoxalPhosphatePatterns: ['with p5p', 'with pyridoxal phosphate', 'p5p present'],
+  },
+  {
+    id: `${prefix}-ifcc-30-p5p`,
+    assayPatterns: ['ifcc'],
+    temperatureC: 30,
+    temperaturePatterns: ['30 c', '30 degrees'],
+    pyridoxalPhosphate: 'present',
+    pyridoxalPhosphatePatterns: ['with p5p', 'with pyridoxal phosphate', 'p5p present'],
+  },
+  {
+    id: `${prefix}-ifcc-37-no-p5p`,
+    assayPatterns: ['ifcc'],
+    temperatureC: 37,
+    temperaturePatterns: ['37 c', '37 degrees'],
+    pyridoxalPhosphate: 'absent',
+    pyridoxalPhosphatePatterns: [
+      'without p5p',
+      'without pyridoxal phosphate',
+      'no p5p',
+      'no pyridoxal phosphate',
+    ],
+  },
+  {
+    id: `${prefix}-ifcc-30-no-p5p`,
+    assayPatterns: ['ifcc'],
+    temperatureC: 30,
+    temperaturePatterns: ['30 c', '30 degrees'],
+    pyridoxalPhosphate: 'absent',
+    pyridoxalPhosphatePatterns: [
+      'without p5p',
+      'without pyridoxal phosphate',
+      'no p5p',
+      'no pyridoxal phosphate',
+    ],
+  },
+];
 
 const hemoglobinMethodPolicy = methodPolicy(
   'method-agnostic',
@@ -180,36 +273,25 @@ const mcvMethodPolicy = methodPolicy(
 const altMethodPolicy = methodPolicy(
   'requires-explicit-method',
   ['ifcc', 'pyridoxal phosphate', 'p5p'],
-  [
-    'without pyridoxal phosphate',
-    'without p5p',
-    'no pyridoxal phosphate',
-    'non-ifcc',
-    'alkaline phosphatase',
-    'aspartate aminotransferase',
-  ],
-  'ALT catalytic activity is comparable only when a supported IFCC/P5P assay identity is explicitly present; legacy or differently named assays stay preserved-only.',
+  ['non-ifcc'],
+  'ALT catalytic activity is comparable only when the source states a complete supported IFCC assay profile, including temperature and PLP/P5P status; incomplete or differently named assays stay preserved-only.',
+  enzymeProfiles('alt'),
 );
 
 const astMethodPolicy = methodPolicy(
   'requires-explicit-method',
   ['ifcc', 'pyridoxal phosphate', 'p5p'],
-  [
-    'without pyridoxal phosphate',
-    'without p5p',
-    'no pyridoxal phosphate',
-    'non-ifcc',
-    'alkaline phosphatase',
-    'alanine aminotransferase',
-  ],
-  'AST catalytic activity is comparable only when a supported IFCC/P5P assay identity is explicitly present; legacy or differently named assays stay preserved-only.',
+  ['non-ifcc'],
+  'AST catalytic activity is comparable only when the source states a complete supported IFCC assay profile, including temperature and PLP/P5P status; incomplete or differently named assays stay preserved-only.',
+  enzymeProfiles('ast'),
 );
 
 const ggtMethodPolicy = methodPolicy(
   'requires-explicit-method',
   ['ifcc'],
-  ['non-ifcc', 'legacy', 'alkaline phosphatase', 'alanine aminotransferase'],
-  'GGT catalytic activity is comparable only when the supported IFCC assay identity is explicitly present; other assay identities stay preserved-only.',
+  ['non-ifcc', 'legacy'],
+  'GGT catalytic activity is comparable only when the source states a complete supported IFCC assay profile, including temperature and PLP/P5P status; incomplete or differently named assays stay preserved-only.',
+  enzymeProfiles('ggt'),
 );
 
 type BloodLiverEntryInput = Omit<
@@ -250,13 +332,13 @@ function bloodLiverEntry(entry: BloodLiverEntryInput): BiomarkerCatalogueEntry {
 }
 
 const hemoglobinConversions: readonly UnitConversion[] = [
-  conversion('g/L', 'g/dL', 0.1, 0, medlineplusHemoglobinSource.id),
-  conversion('g/dL', 'g/L', 10, 0, medlineplusHemoglobinSource.id),
+  conversion('g/L', 'g/dL', 0.1, 0, nistUnitDefinitionsSource.id),
+  conversion('g/dL', 'g/L', 10, 0, nistUnitDefinitionsSource.id),
 ];
 
 const hematocritConversions: readonly UnitConversion[] = [
-  conversion('L/L', '%', 100, 0, medlineplusHematocritSource.id),
-  conversion('%', 'L/L', 0.01, 0, medlineplusHematocritSource.id),
+  conversion('L/L', '%', 100, 0, nistPercentageDefinitionsSource.id),
+  conversion('%', 'L/L', 0.01, 0, nistPercentageDefinitionsSource.id),
 ];
 
 export const bloodLiverBiomarkers: readonly BiomarkerCatalogueEntry[] = [
@@ -286,7 +368,11 @@ export const bloodLiverBiomarkers: readonly BiomarkerCatalogueEntry[] = [
     specimenCompatibility: [['blood'], ['unknown']],
     explanation:
       'Measures the concentration of hemoglobin in whole blood. It is commonly reported in a complete blood count and describes one part of the red-cell oxygen-carrying system. Age, sex, pregnancy, altitude, smoking, hydration, specimen handling, and laboratory method can affect the result; the issuing laboratory interval remains primary.',
-    sources: [medlineplusCompleteBloodCountSource, medlineplusHemoglobinSource],
+    sources: [
+      medlineplusCompleteBloodCountSource,
+      medlineplusHemoglobinSource,
+      nistUnitDefinitionsSource,
+    ],
   }),
   bloodLiverEntry({
     id: 'biomarker.hematocrit',
@@ -304,6 +390,7 @@ export const bloodLiverBiomarkers: readonly BiomarkerCatalogueEntry[] = [
       'ematocrito',
       'hematocriet',
       'hematokritas',
+      'hematokryt',
     ],
     unsafeAliases: hematocritMethodPolicy.unsafePatterns,
     methodPolicy: hematocritMethodPolicy,
@@ -314,7 +401,11 @@ export const bloodLiverBiomarkers: readonly BiomarkerCatalogueEntry[] = [
     specimenCompatibility: [['blood'], ['unknown']],
     explanation:
       'Measures the fraction of whole blood occupied by red blood cells. It is commonly reported in a complete blood count. Hydration, altitude, pregnancy, specimen handling, and laboratory method can affect the result; the issuing laboratory interval remains primary.',
-    sources: [medlineplusCompleteBloodCountSource, medlineplusHematocritSource],
+    sources: [
+      medlineplusCompleteBloodCountSource,
+      medlineplusHematocritSource,
+      nistPercentageDefinitionsSource,
+    ],
   }),
   bloodLiverEntry({
     id: 'biomarker.mcv',
@@ -368,7 +459,7 @@ export const bloodLiverBiomarkers: readonly BiomarkerCatalogueEntry[] = [
     specimenCompatibility: [['blood'], ['serum', 'plasma'], ['unknown']],
     explanation:
       'Measures alanine aminotransferase catalytic activity in a blood sample. ALT is commonly included with other liver-panel measurements, but it is also present outside the liver. Exercise, medicines, specimen handling, and assay method can affect the result; one measurement cannot identify a specific reason for a change.',
-    sources: [medlineplusLiverFunctionSource, medlineplusAltSource, ifccEnzymeReferenceSource],
+    sources: [medlineplusLiverFunctionSource, medlineplusAltSource, ifccAltReferenceSource],
   }),
   bloodLiverEntry({
     id: 'biomarker.ast',
@@ -396,7 +487,7 @@ export const bloodLiverBiomarkers: readonly BiomarkerCatalogueEntry[] = [
     specimenCompatibility: [['blood'], ['serum', 'plasma'], ['unknown']],
     explanation:
       'Measures aspartate aminotransferase catalytic activity in a blood sample. AST is found in several tissues and is commonly considered with other liver-panel measurements. Exercise, medicines, specimen handling, and assay method can affect the result; one measurement cannot identify a specific reason for a change.',
-    sources: [medlineplusLiverFunctionSource, medlineplusAstSource, ifccEnzymeReferenceSource],
+    sources: [medlineplusLiverFunctionSource, medlineplusAstSource, ifccAstReferenceSource],
   }),
   bloodLiverEntry({
     id: 'biomarker.ggt',
@@ -425,6 +516,6 @@ export const bloodLiverBiomarkers: readonly BiomarkerCatalogueEntry[] = [
     specimenCompatibility: [['blood'], ['serum', 'plasma'], ['unknown']],
     explanation:
       'Measures gamma-glutamyl transferase catalytic activity in a blood sample. GGT is found throughout the body and is concentrated in the liver and bile-duct system. Alcohol, medicines, exercise, specimen handling, and assay method can affect the result; one measurement cannot identify a specific reason for a change.',
-    sources: [medlineplusLiverFunctionSource, medlineplusGgtSource, ifccEnzymeReferenceSource],
+    sources: [medlineplusLiverFunctionSource, medlineplusGgtSource, ifccGgtReferenceSource],
   }),
 ];

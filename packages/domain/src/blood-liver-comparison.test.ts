@@ -86,13 +86,13 @@ describe('blood-count and liver comparison fixtures', () => {
       value: 14,
       unit: 'g/dL',
       catalogueVersion: '0.2.0',
-      conversionSourceIds: ['source.medlineplus.hemoglobin-test'],
+      conversionSourceIds: ['source.nist.si-unit-definitions'],
     });
     assert.deepEqual(convertComparableValue(0.45, 'L/L', hematocrit), {
       value: 45,
       unit: '%',
       catalogueVersion: '0.2.0',
-      conversionSourceIds: ['source.medlineplus.hematocrit-test'],
+      conversionSourceIds: ['source.nist.si-percentage-definitions'],
     });
     assert.equal(convertComparableValue(1, 'µkat/L', alt), null);
     assert.ok(
@@ -110,6 +110,7 @@ describe('blood-count and liver comparison fixtures', () => {
       ['Gamma-GT', 'biomarker.ggt'],
     ];
     for (const [label, id] of aliases) assert.equal(resolveBiomarkerAlias(label), id, label);
+    assert.equal(resolveBiomarkerAlias('Hematokryt'), 'biomarker.hematocrit');
     assert.notEqual(resolveBiomarkerAlias('AST'), 'biomarker.alt');
     assert.notEqual(resolveBiomarkerAlias('ALT'), 'biomarker.ast');
     assert.notEqual(resolveBiomarkerAlias('MCH'), 'biomarker.mcv');
@@ -152,7 +153,7 @@ describe('blood-count and liver comparison fixtures', () => {
     assert.equal(trend.points[1]?.source.unit, 'g/L');
     assert.equal(trend.points[1]?.laboratoryReference.interval, 'laboratory interval');
     assert.deepEqual(trend.points[1]?.normalized.conversionSourceIds, [
-      'source.medlineplus.hemoglobin-test',
+      'source.nist.si-unit-definitions',
     ]);
     assert.equal(trend.generalGuidance.length, 0);
   });
@@ -168,7 +169,7 @@ describe('blood-count and liver comparison fixtures', () => {
             { kind: 'numeric', value: 20 },
             'U/L',
             'serum',
-            { label: 'ALT IFCC' },
+            { label: 'ALT IFCC 37 C with P5P' },
           ),
         ]),
         record('alt-2', { kind: 'known', value: '2026-02-01' }, 'plasma', [
@@ -179,7 +180,7 @@ describe('blood-count and liver comparison fixtures', () => {
             { kind: 'numeric', value: 30 },
             'U/L',
             'plasma',
-            { label: 'ALT IFCC' },
+            { label: 'ALT IFCC 37 C with P5P' },
           ),
         ]),
         record('alt-3', { kind: 'known', value: '2026-03-01' }, 'blood', [
@@ -190,7 +191,7 @@ describe('blood-count and liver comparison fixtures', () => {
             { kind: 'numeric', value: 40 },
             'U/L',
             'blood',
-            { label: 'ALT IFCC' },
+            { label: 'ALT IFCC 37 C with P5P' },
           ),
         ]),
         record('alt-4', { kind: 'known', value: '2026-04-01' }, 'serum', [
@@ -220,6 +221,156 @@ describe('blood-count and liver comparison fixtures', () => {
       ],
     );
     assert.equal(trend.direction, 'increased');
+  });
+
+  it('does not reconnect a later specimen group across missing or incompatible records', () => {
+    const missingThenBlood = buildMeasuredTrend(
+      [
+        record('series-1', { kind: 'known', value: '2026-01-01' }, 'serum', [
+          measurement(
+            'series-m1',
+            'series-1',
+            'biomarker.alt',
+            { kind: 'numeric', value: 20 },
+            'U/L',
+            'serum',
+            { label: 'ALT IFCC 37 C with P5P' },
+          ),
+        ]),
+        record('series-2', { kind: 'known', value: '2026-02-01' }, 'serum', []),
+        record('series-3', { kind: 'known', value: '2026-03-01' }, 'blood', [
+          measurement(
+            'series-m3',
+            'series-3',
+            'biomarker.alt',
+            { kind: 'numeric', value: 30 },
+            'U/L',
+            'blood',
+            { label: 'ALT IFCC 37 C with P5P' },
+          ),
+        ]),
+      ],
+      canonicalId('biomarker.alt'),
+      bloodLiverBiomarkers,
+    );
+    assert.deepEqual(
+      missingThenBlood.points.map((point) => point.measurementId),
+      ['series-m1'],
+    );
+    assert.equal(missingThenBlood.nonPoints.at(-1)?.reason, 'incompatible-specimen');
+
+    const incompatibleThenUnknown = buildMeasuredTrend(
+      [
+        record('series-a', { kind: 'known', value: '2026-01-01' }, 'serum', [
+          measurement(
+            'series-ma',
+            'series-a',
+            'biomarker.alt',
+            { kind: 'numeric', value: 20 },
+            'U/L',
+            'serum',
+            { label: 'ALT IFCC 37 C with P5P' },
+          ),
+        ]),
+        record('series-b', { kind: 'known', value: '2026-02-01' }, 'blood', [
+          measurement(
+            'series-mb',
+            'series-b',
+            'biomarker.alt',
+            { kind: 'numeric', value: 25 },
+            'U/L',
+            'blood',
+            { label: 'ALT IFCC 37 C with P5P' },
+          ),
+        ]),
+        record('series-c', { kind: 'known', value: '2026-03-01' }, 'unknown', [
+          measurement(
+            'series-mc',
+            'series-c',
+            'biomarker.alt',
+            { kind: 'numeric', value: 30 },
+            'U/L',
+            'unknown',
+            { label: 'ALT IFCC 37 C with P5P' },
+          ),
+        ]),
+      ],
+      canonicalId('biomarker.alt'),
+      bloodLiverBiomarkers,
+    );
+    assert.deepEqual(
+      incompatibleThenUnknown.points.map((point) => point.measurementId),
+      ['series-ma'],
+    );
+    assert.deepEqual(
+      incompatibleThenUnknown.nonPoints.map((nonPoint) => nonPoint.reason),
+      ['incompatible-specimen', 'incompatible-specimen'],
+    );
+  });
+
+  it('keeps complete enzyme method profiles separate by temperature and PLP state', () => {
+    const trend = buildMeasuredTrend(
+      [
+        record('method-1', { kind: 'known', value: '2026-01-01' }, 'serum', [
+          measurement(
+            'method-m1',
+            'method-1',
+            'biomarker.ast',
+            { kind: 'numeric', value: 20 },
+            'U/L',
+            'serum',
+            { label: 'AST IFCC 37 C with P5P' },
+          ),
+        ]),
+        record('method-2', { kind: 'known', value: '2026-02-01' }, 'serum', [
+          measurement(
+            'method-m2',
+            'method-2',
+            'biomarker.ast',
+            { kind: 'numeric', value: 22 },
+            'U/L',
+            'serum',
+            { label: 'AST IFCC 30 C with P5P' },
+          ),
+        ]),
+        record('method-3', { kind: 'known', value: '2026-03-01' }, 'serum', [
+          measurement(
+            'method-m3',
+            'method-3',
+            'biomarker.ast',
+            { kind: 'numeric', value: 24 },
+            'U/L',
+            'serum',
+            { label: 'AST IFCC 37 C without P5P' },
+          ),
+        ]),
+        record('method-4', { kind: 'known', value: '2026-04-01' }, 'serum', [
+          measurement(
+            'method-m4',
+            'method-4',
+            'biomarker.ast',
+            { kind: 'numeric', value: 26 },
+            'U/L',
+            'serum',
+            { label: 'AST IFCC 37 C' },
+          ),
+        ]),
+      ],
+      canonicalId('biomarker.ast'),
+      bloodLiverBiomarkers,
+    );
+    assert.deepEqual(
+      trend.points.map((point) => point.measurementId),
+      ['method-m1'],
+    );
+    assert.deepEqual(
+      trend.nonPoints.map((nonPoint) => [nonPoint.measurementId, nonPoint.reason]),
+      [
+        ['method-m2', 'incompatible-method'],
+        ['method-m3', 'incompatible-method'],
+        ['method-m4', 'incompatible-method'],
+      ],
+    );
   });
 
   it('preserves bounded, categorical, unsupported-unit, and date-missing values as non-points', () => {
@@ -293,7 +444,7 @@ describe('blood-count and liver comparison fixtures', () => {
             { kind: 'numeric', value: 20 },
             'U/L',
             'serum',
-            { label: 'GGT IFCC' },
+            { label: 'GGT IFCC 37 C with P5P' },
           ),
         ]),
         record('ggt-2', { kind: 'known', value: '2026-02-01' }, 'unknown', [
@@ -304,7 +455,7 @@ describe('blood-count and liver comparison fixtures', () => {
             { kind: 'numeric', value: 25 },
             'U/L',
             'unknown',
-            { label: 'GGT IFCC' },
+            { label: 'GGT IFCC 37 C with P5P' },
           ),
         ]),
       ],

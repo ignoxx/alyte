@@ -70,6 +70,9 @@ describe('local extraction domain', () => {
                 kind: entry.methodPolicy.kind,
                 allowedMethods: entry.methodPolicy.allowedMethods,
                 unsafePatterns: entry.methodPolicy.unsafePatterns,
+                ...(entry.methodPolicy.profiles === undefined
+                  ? {}
+                  : { profiles: entry.methodPolicy.profiles }),
               },
             }),
       }),

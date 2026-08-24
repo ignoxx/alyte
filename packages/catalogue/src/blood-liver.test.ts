@@ -56,6 +56,7 @@ describe('blood-count and liver catalogue family', () => {
       ['Hematocrit', 'biomarker.hematocrit'],
       ['PCV', 'biomarker.hematocrit'],
       ['Hämatokrit', 'biomarker.hematocrit'],
+      ['Hematokryt', 'biomarker.hematocrit'],
       ['Mean Cell Volume', 'biomarker.mcv'],
       ['Mittleres korpuskuläres Volumen', 'biomarker.mcv'],
       ['ALT', 'biomarker.alt'],
@@ -120,6 +121,19 @@ describe('blood-count and liver catalogue family', () => {
       const entry = bloodLiverBiomarkers.find((candidate) => candidate.id === id)!;
       assert.equal(entry.methodPolicy?.kind, 'requires-explicit-method', id);
       assert.ok(entry.methodPolicy?.allowedMethods.length, id);
+      assert.equal(entry.methodPolicy?.profiles?.length, 4, id);
+      assert.deepEqual(
+        entry.methodPolicy?.profiles?.map((profile) => [
+          profile.temperatureC,
+          profile.pyridoxalPhosphate,
+        ]),
+        [
+          [37, 'present'],
+          [30, 'present'],
+          [37, 'absent'],
+          [30, 'absent'],
+        ],
+      );
     }
     const alt = bloodLiverBiomarkers.find((entry) => entry.id === 'biomarker.alt')!;
     assert.ok(

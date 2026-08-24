@@ -160,7 +160,17 @@ export type ExtractionAliasEntry = {
     readonly kind: 'method-agnostic' | 'standardized' | 'requires-explicit-method';
     readonly allowedMethods: readonly string[];
     readonly unsafePatterns: readonly string[];
+    readonly profiles?: readonly ExtractionMethodProfile[];
   };
+};
+
+export type ExtractionMethodProfile = {
+  readonly id: string;
+  readonly assayPatterns: readonly string[];
+  readonly temperatureC: 30 | 37;
+  readonly temperaturePatterns: readonly string[];
+  readonly pyridoxalPhosphate: 'present' | 'absent' | 'not-applicable';
+  readonly pyridoxalPhosphatePatterns: readonly string[];
 };
 
 export type ExtractionSemanticProposal = {
@@ -535,8 +545,10 @@ function aliasPattern(alias: string): RegExp | null {
 export function findUnsafeBiomarkerLabel(
   sourceText: string,
   aliases: readonly ExtractionAliasEntry[],
+  candidateId?: CanonicalId | null,
 ): { readonly id: CanonicalId; readonly pattern: string } | null {
   for (const entry of aliases) {
+    if (candidateId !== undefined && entry.id !== candidateId) continue;
     for (const patternText of [
       ...(entry.unsafeAliases ?? []),
       ...(entry.methodPolicy?.unsafePatterns ?? []),
@@ -548,6 +560,26 @@ export function findUnsafeBiomarkerLabel(
   return null;
 }
 
+function methodProfileMatches(sourceText: string, profile: ExtractionMethodProfile): boolean {
+  const normalized = normalizeAlias(sourceText);
+  const containsAny = (patterns: readonly string[]) =>
+    patterns.some((pattern) => normalized.includes(normalizeAlias(pattern)));
+  return (
+    containsAny(profile.assayPatterns) &&
+    containsAny(profile.temperaturePatterns) &&
+    containsAny(profile.pyridoxalPhosphatePatterns)
+  );
+}
+
+export function resolveExtractionMethodProfile(
+  sourceText: string,
+  policy: ExtractionAliasEntry['methodPolicy'] | undefined,
+): ExtractionMethodProfile | null {
+  if (policy?.profiles === undefined) return null;
+  const matches = policy.profiles.filter((profile) => methodProfileMatches(sourceText, profile));
+  return matches.length === 1 ? matches[0]! : null;
+}
+
 function methodCompatible(
   sourceText: string,
   biomarkerId: CanonicalId | null,
@@ -557,13 +589,20 @@ function methodCompatible(
   const entry = aliases.find((candidate) => candidate.id === biomarkerId);
   const policy = entry?.methodPolicy;
   if (policy === undefined || policy.kind !== 'requires-explicit-method') return true;
+  if (policy.profiles !== undefined)
+    return resolveExtractionMethodProfile(sourceText, policy) !== null;
   return policy.allowedMethods.some((method) => aliasPattern(method)?.test(sourceText) ?? false);
 }
 
-function findAliasInText(
+function findAliasMatches(
   sourceText: string,
   aliases: readonly ExtractionAliasEntry[],
-): { readonly id: CanonicalId; readonly text: string } | null {
+): readonly {
+  readonly id: CanonicalId;
+  readonly text: string;
+  readonly length: number;
+  readonly start: number;
+}[] {
   const matches = aliases.flatMap((entry) =>
     entry.aliases.flatMap((alias) => {
       const pattern = aliasPattern(alias);
@@ -582,14 +621,14 @@ function findAliasInText(
                 id: entry.id as CanonicalId,
                 text: sourceText.slice(start, end),
                 length: normalizeAlias(alias).length,
+                start,
               },
             ];
           })();
     }),
   );
-  matches.sort((a, b) => b.length - a.length || a.text.length - b.text.length);
-  const match = matches[0];
-  return match === undefined ? null : { id: match.id, text: match.text };
+  matches.sort((a, b) => a.start - b.start || b.length - a.length || a.text.length - b.text.length);
+  return matches;
 }
 
 function findUnitInText(sourceText: string): string | null {
@@ -723,8 +762,12 @@ function parseSourceRow(
       { ...firstBox },
     ),
   };
-  const unsafeMatch = findUnsafeBiomarkerLabel(sourceText, aliases);
-  const aliasMatch = unsafeMatch === null ? findAliasInText(sourceText, aliases) : null;
+  const aliasMatches = findAliasMatches(sourceText, aliases);
+  const aliasMatch = aliasMatches[0] ?? null;
+  const hasSiblingAlias = new Set(aliasMatches.map((match) => match.id)).size > 1;
+  const unsafeMatch = findUnsafeBiomarkerLabel(sourceText, aliases, aliasMatch?.id);
+  const globalUnsafeMatch =
+    aliasMatch === null ? findUnsafeBiomarkerLabel(sourceText, aliases) : null;
   const numericCandidates = [...sourceText.matchAll(new RegExp(NUMERIC_TOKEN_PATTERN, 'gu'))]
     .map((match) => {
       const raw = match[0].trim();
@@ -740,10 +783,15 @@ function parseSourceRow(
       const before = sourceText[candidate.start - 1] ?? '';
       const after = sourceText[candidate.end] ?? '';
       const afterAfter = sourceText[candidate.end + 1] ?? '';
+      const afterCandidate = sourceText.slice(candidate.start);
+      const isMethodTemperature = /^(?:30|37)\s*(?:°\s*)?C\b|^(?:30|37)\s+degrees?/iu.test(
+        afterCandidate,
+      );
       return (
         !/[\p{L}\p{N}]/u.test(before) &&
         !/[\p{L}\p{N}]/u.test(after) &&
-        !(after === '-' && /[\p{L}]/u.test(afterAfter))
+        !(after === '-' && /[\p{L}]/u.test(afterAfter)) &&
+        !isMethodTemperature
       );
     });
   const referenceCandidates = [
@@ -808,8 +856,9 @@ function parseSourceRow(
   const reference = parseReferenceInterval(referenceCandidate);
   const flagCandidate =
     sourceText.match(/(?:^|\s)(high|low|normal|abnormal|h|l|n)(?=\s|$)/iu)?.[1] ?? null;
-  const label = aliasMatch?.text ?? (rawLabel.trim() || sourceText);
-  const biomarkerId = aliasMatch?.id ?? proposeBiomarkerId(label, aliases);
+  const safeAliasMatch = unsafeMatch === null && !hasSiblingAlias ? aliasMatch : null;
+  const label = safeAliasMatch?.text ?? (rawLabel.trim() || sourceText);
+  const biomarkerId = safeAliasMatch?.id ?? proposeBiomarkerId(label, aliases);
   const reasons: ExtractionReviewReason[] = [];
   if (!label) reasons.push('missing-label');
   if (!rawValue) reasons.push('missing-value');
@@ -817,7 +866,8 @@ function parseSourceRow(
   if (valueCandidates.length > 1 || effectiveReferences.length > 1)
     reasons.push('unsupported-layout');
   if (biomarkerId === null) reasons.push('unsupported-alias');
-  if (unsafeMatch !== null) reasons.push('ambiguous-assay');
+  if (unsafeMatch !== null || globalUnsafeMatch !== null || hasSiblingAlias)
+    reasons.push('ambiguous-assay');
   else if (!methodCompatible(sourceText, biomarkerId, aliases)) reasons.push('incompatible-method');
   if (!unitCompatible(unit, biomarkerId, aliases)) reasons.push('incompatible-unit');
   if (!specimenCompatible(specimenType, biomarkerId, aliases))
@@ -871,10 +921,23 @@ export function revalidateExtractionRow(
   if (!next.sourceValueString.trim()) reasons.add('missing-value');
   if (next.proposedValue.kind === 'free_text' && !next.proposedValue.value.trim())
     reasons.add('unparseable-value');
-  const unsafeMatch = findUnsafeBiomarkerLabel(next.sourceText, aliases);
-  const id = unsafeMatch === null ? next.proposedBiomarkerId : null;
+  const aliasMatches = findAliasMatches(next.sourceText, aliases);
+  const aliasMatch = aliasMatches[0] ?? null;
+  const hasSiblingAlias = new Set(aliasMatches.map((match) => match.id)).size > 1;
+  const unsafeMatch = findUnsafeBiomarkerLabel(
+    next.sourceText,
+    aliases,
+    next.proposedBiomarkerId ?? aliasMatch?.id,
+  );
+  const globalUnsafeMatch =
+    aliasMatch === null ? findUnsafeBiomarkerLabel(next.sourceText, aliases) : null;
+  const id =
+    unsafeMatch === null && globalUnsafeMatch === null && !hasSiblingAlias
+      ? next.proposedBiomarkerId
+      : null;
   if (id === null) reasons.add('unsupported-alias');
-  if (unsafeMatch !== null) reasons.add('ambiguous-assay');
+  if (unsafeMatch !== null || globalUnsafeMatch !== null || hasSiblingAlias)
+    reasons.add('ambiguous-assay');
   else if (!methodCompatible(next.sourceText, id, aliases)) reasons.add('incompatible-method');
   if (!unitCompatible(next.proposedUnit, id, aliases)) reasons.add('incompatible-unit');
   if (!specimenCompatible(next.proposedSpecimenType, id, aliases))

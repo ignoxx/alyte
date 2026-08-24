@@ -137,10 +137,20 @@ export type ComparableBiomarkerConstraint = {
     readonly kind: 'method-agnostic' | 'standardized' | 'requires-explicit-method';
     readonly allowedMethods: readonly string[];
     readonly unsafePatterns: readonly string[];
+    readonly profiles?: readonly ComparableMethodProfile[];
   };
   readonly valueType?: 'numeric';
   readonly explanation?: string;
   readonly generalGuidance?: readonly ComparableGeneralGuidance[];
+};
+
+export type ComparableMethodProfile = {
+  readonly id: string;
+  readonly assayPatterns: readonly string[];
+  readonly temperatureC: 30 | 37;
+  readonly temperaturePatterns: readonly string[];
+  readonly pyridoxalPhosphate: 'present' | 'absent' | 'not-applicable';
+  readonly pyridoxalPhosphatePatterns: readonly string[];
 };
 
 export type ComparableGeneralGuidance = {
@@ -590,9 +600,41 @@ function methodPolicyCompatible(
   )
     return false;
   if (policy.kind !== 'requires-explicit-method') return true;
+  if (policy.profiles !== undefined) return resolveMethodProfile(sourceFacts, policy) !== null;
   return policy.allowedMethods.some((method) =>
     normalizedSource.includes(normalizeMethodText(method)),
   );
+}
+
+function resolveMethodProfile(
+  sourceText: string,
+  policy: NonNullable<ComparableBiomarkerConstraint['methodPolicy']>,
+): ComparableMethodProfile | null {
+  if (policy.profiles === undefined) return null;
+  const normalized = normalizeMethodText(sourceText);
+  const containsAny = (patterns: readonly string[]) =>
+    patterns.some((pattern) => normalized.includes(normalizeMethodText(pattern)));
+  const matches = policy.profiles.filter(
+    (profile) =>
+      containsAny(profile.assayPatterns) &&
+      containsAny(profile.temperaturePatterns) &&
+      containsAny(profile.pyridoxalPhosphatePatterns),
+  );
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+function methodProfileId(
+  measurement: Measurement,
+  entry: ComparableBiomarkerConstraint,
+): string | null {
+  const policy = entry.methodPolicy;
+  if (policy?.profiles === undefined) return null;
+  const sourceFacts = [
+    measurement.current.label,
+    measurement.original.label,
+    ...(measurement.source?.observations?.map((observation) => observation.text) ?? []),
+  ].join(' ');
+  return resolveMethodProfile(sourceFacts, policy)?.id ?? null;
 }
 
 function nonPointForMeasurement(
@@ -681,6 +723,7 @@ export function buildMeasuredTrend(
   const segments: MeasuredTrendPoint[][] = [];
   let currentSegment: MeasuredTrendPoint[] | null = null;
   let activeSpecimenGroup: number | null = null;
+  let activeMethodProfileId: string | null = null;
 
   for (const record of orderedRecords) {
     const candidates = record.measurements.filter(
@@ -705,8 +748,9 @@ export function buildMeasuredTrend(
           source: null,
         });
       }
+      // A gap is a visual segment break, but it does not clear the selected specimen/method
+      // identity. Later points must remain in that identity rather than silently switching.
       currentSegment = null;
-      activeSpecimenGroup = null;
       continue;
     }
     let recordHasPoint = false;
@@ -723,6 +767,7 @@ export function buildMeasuredTrend(
         specimenPairCompatible(entry, measurement.specimenType, record.specimenType)
           ? convertComparableValue(value.value, unit, entry)
           : null;
+      const methodProfile = entry === undefined ? null : methodProfileId(measurement, entry);
       const specimenGroup =
         entry === undefined
           ? null
@@ -731,10 +776,16 @@ export function buildMeasuredTrend(
       const crossPointSpecimenCompatible =
         specimenGroup !== null &&
         (activeSpecimenGroup === null || activeSpecimenGroup === specimenGroup);
+      const requiresMethodProfile = entry?.methodPolicy?.profiles !== undefined;
+      const crossPointMethodCompatible =
+        !requiresMethodProfile ||
+        (methodProfile !== null &&
+          (activeMethodProfileId === null || activeMethodProfileId === methodProfile));
       if (
         record.collectionDate.kind === 'known' &&
         normalized !== null &&
-        crossPointSpecimenCompatible
+        crossPointSpecimenCompatible &&
+        crossPointMethodCompatible
       ) {
         const point: MeasuredTrendPoint = {
           kind: 'measured-point',
@@ -760,6 +811,7 @@ export function buildMeasuredTrend(
         currentSegment.push(point);
         recordHasPoint = true;
         activeSpecimenGroup = specimenGroup;
+        if (methodProfile !== null) activeMethodProfileId = methodProfile;
       } else {
         nonPoints.push(
           nonPointForMeasurement(
@@ -768,11 +820,12 @@ export function buildMeasuredTrend(
             entry,
             normalized !== null && !crossPointSpecimenCompatible
               ? 'incompatible-specimen'
-              : undefined,
+              : normalized !== null && !crossPointMethodCompatible
+                ? 'incompatible-method'
+                : undefined,
           ),
         );
         currentSegment = null;
-        activeSpecimenGroup = null;
       }
     }
     if (!recordHasPoint) currentSegment = null;
