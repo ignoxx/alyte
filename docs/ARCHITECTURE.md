@@ -140,6 +140,25 @@ Build narrow, typed modules rather than one general native bridge.
 - supports explicit recognition-language hints while allowing automatic detection; and
 - never logs recognized content.
 
+`AlyteLocalModels`:
+
+- owns optional on-device semantic model-pack discovery, download state, integrity verification,
+  activation, load/unload, inference cancellation, and deletion behind one typed Expo module;
+- consumes a versioned Alyte manifest containing the Hugging Face repository, immutable commit,
+  exact allowlisted filenames, publisher, license, runtime/quantization, byte size, SHA-256,
+  supported languages, prompt/schema compatibility, and device requirements;
+- downloads public, ungated files directly from Hugging Face over HTTPS when possible, follows the
+  resolved CDN response, resumes safely when supported, and restarts cleanly otherwise;
+- rejects moving revisions, unlisted files, checksum mismatches, unsupported licenses/runtimes, and
+  gated repositories that would require a user or bundled access token;
+- stores completed packs under Application Support, excludes them from iCloud Backup, stages
+  partial downloads separately, and atomically promotes a verified pack;
+- loads at most one pack at a time, releases it under memory or thermal pressure, and exposes
+  observable not-installed, downloading, verifying, ready, loaded, failed, and deleting states;
+- permits multiple selectable packs only in development/evaluation builds while release builds
+  expose one recommended pack and user-visible storage/delete controls; and
+- never logs structured OCR input, prompts, generated tokens, or model results.
+
 `AlytePDF`:
 
 - inspects page count, dimensions, encryption state, metadata, and text-layer presence;
@@ -252,7 +271,7 @@ Files/Photos selection
   → render and verify Sanitized Report
   → Vision document/table recognition over sanitized pages
   → measurement-candidate filtering
-  → optional schema-constrained local semantic mapping when available
+  → optional schema-constrained local semantic mapping through the active verified model pack
   → locale-aware alias and unit mapper
   → deterministic semantic validation
   → compact editable Extraction Draft
@@ -270,8 +289,9 @@ Parsing occurs in layers:
    other measurement-shaped candidates;
 3. locale parsers recognize dates, decimals, comparators, intervals, and units;
 4. the multilingual alias catalogue proposes canonical Biomarker IDs;
-5. where the device and input language are supported, an on-device model may select source cell IDs
-   and propose semantic roles or canonical candidates through a versioned schema;
+5. where the device, input language, and installed pack are supported, an on-device model receives
+   small structured OCR chunks and may select source cell IDs, classify section/row specimen, or
+   propose semantic roles and canonical candidates through a versioned schema;
 6. deterministic validators copy exact source values, reject invented cell IDs and incompatible
    specimen/value/unit mappings, and decide which fields genuinely need review; and
 7. the user inspects a grouped table, resolves the exceptions, and confirms the draft.
@@ -280,11 +300,21 @@ Raw OCR or PDF text observations are retained only as internal provenance. They 
 a draft row. Unknown measurement-shaped results remain preserved even when they cannot be mapped;
 unrelated headers, addresses, licences, and prose do not become user review work.
 
-The iOS 26 Foundation Models framework is an optional accelerator, not the local contract. It does
-not directly inspect PDFs or images on this deployment target, is unavailable on some supported
-devices, and does not officially support every report language, including Lithuanian. Chunk any
-supported semantic request by table/page, accept only source identifiers that exist, and never let
-the model author authoritative numbers, units, ranges, conversions, or medical explanations.
+The semantic mapper remains provider- and model-neutral. Candidate model packs are benchmarked
+against identical structured OCR fixtures before one is recommended for release; no model name is
+part of the Extraction Draft contract. The iOS 26 Foundation Models framework may remain an
+optional accelerator where available, but it is not the local contract and does not replace a
+downloadable pack for unsupported languages. Chunk every semantic request by table and bounded row
+count, accept only source identifiers that exist, reject duplicate source-row consumption, and
+never let a model author authoritative numbers, units, ranges, conversions, translations, or
+medical explanations. The catalogue owns localized display names while exact source labels remain
+provenance.
+
+Model weights are executable inputs even when they contain no health record. Alyte therefore
+accepts only manifest-pinned inference formats from reviewed repositories and never loads pickle or
+arbitrary code from the Hub. Download availability is an enhancement boundary: missing, deleted,
+corrupt, incompatible, or interrupted packs fall back to Vision structure, locale parsing, aliases,
+deterministic validation, and focused user review without blocking local mode.
 
 Cloud report extraction is a fallback for selected, sanitized pages. It produces another editable
 Extraction Draft and never bypasses review.

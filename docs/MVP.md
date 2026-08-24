@@ -126,6 +126,14 @@ headroom rather than treating it as abuse.
   record management, and export have the same functional contract on every supported device,
   allowing only reasonable performance differences. A supported on-device model may improve
   candidate mapping or translation, but its absence cannot collapse the account-free product.
+- Optional local semantic models are replaceable model packs rather than one hard-coded model.
+  Development builds may compare several compatible packs against the same synthetic fixtures;
+  release builds expose only an Alyte-recommended pack plus its download, storage, and deletion
+  controls. When possible, Alyte downloads an exact allowlisted file directly from a public,
+  ungated Hugging Face repository at a pinned commit. The app shows the model, publisher, license,
+  download size, and source before download and verifies the expected SHA-256 before activation.
+  The first release does not ask for or embed a Hugging Face account token, use a gated model, or
+  silently follow a moving branch such as `main`.
 
 ## Laboratory-history model
 
@@ -203,6 +211,10 @@ Biomarker is not currently included in the person's comparable laboratory trends
 - Recognition of a specific Biomarker depends on the supported alias catalogue and semantic
   validators. An unknown measurement-shaped result is preserved with its original label and shown
   as unsupported; an arbitrary OCR line is not treated as a result merely to avoid dropping it.
+- Specimen context is resolved per section, table, or row rather than once for an entire Lab Report.
+  A mixed report may therefore keep blood, serum, and plasma Measurements separate from urine or
+  other specimen results. Uncertain specimen context remains visible for review instead of being
+  silently discarded.
 - Launch parsing fixtures prioritize English, German, and Lithuanian, then French, Spanish, Italian,
   Portuguese, Dutch, and Polish. Other US and EU report languages are best effort locally and may
   use paid cloud fallback.
@@ -509,6 +521,9 @@ messages, medication reminders, biomarker warnings, and inferred-health alerts a
   ongoing processing cost.
 - Local Lab Reports, local OCR, manual Lab Records, supported Measured Trends, manual Intake Events,
   local export, and account-free use are not held behind a subscription.
+- Downloading an optional local semantic model pack does not require an Alyte account or paid
+  entitlement. Deleting it does not delete Lab Reports, Lab Records, Measurements, or Extraction
+  Drafts, and extraction continues through the deterministic local fallback.
 - Cloud report extraction and Intake Image analysis require a paid entitlement.
 - Launch offers one `Cloud Plus` subscription with monthly and annual billing and an included
   monthly Cloud Analysis allowance. A bounded starter purchase and a way for subscribers to obtain
@@ -576,6 +591,9 @@ messages, medication reminders, biomarker warnings, and inferred-health alerts a
   privacy; the need to verify imports and distinguish measured results from general research; and
   the optional paid cloud boundary plus adult-only/non-diagnostic scope.
 - Onboarding leads directly into the local app and never forces account creation or a paywall.
+- The already-shipped onboarding is not presumed final: the release pass must verify that each
+  screen earns its place, emphasizes the two-report outcome over implementation details, and avoids
+  model downloads, permissions, account creation, and payment until they are contextually needed.
 - Detailed teaching is contextual and appears when the person first imports, verifies, analyzes,
   or explores evidence rather than lengthening the opening tour.
 - Settings provides clear Contact, Feedback, and Billing Help actions for complaints or assistance.

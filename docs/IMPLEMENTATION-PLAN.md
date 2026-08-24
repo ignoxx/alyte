@@ -70,6 +70,11 @@ Build:
 - verified Sanitized Report creation before extraction;
 - Vision document/table recognition, measurement-candidate filtering, locale parsing, alias mapping,
   unit normalization, and preservation of every credible result;
+- a bounded comparison of interchangeable on-device semantic models using identical structured OCR
+  fixtures, followed only by a model-pack manager and production mapper if the evidence clears the
+  precision, memory, latency, thermal, license, and download-size gates;
+- section/table/row specimen context so mixed blood, serum, plasma, urine, and unknown results are
+  not assigned one report-wide specimen;
 - English, German, and Lithuanian fixtures first, followed by the remaining declared languages;
 - compact grouped Extraction Draft review with exception-level reasons and source-page inspection;
 - Lab Report library, Lab Record detail, complete Measurement list, deletion, and manual entry; and
@@ -288,18 +293,23 @@ Cloud Plus passes Gate C.
 4. **Privacy workspace** — full-screen PDFKit viewing, crop/rotation/direct redaction, exact artifact
    preview, verification.
 5. **Candidate extraction** — Vision document/tables, measurement filtering, locale parsing,
-   Lithuanian fixtures, deterministic validation, optional local semantic mapping.
-6. **Laboratory history and review** — compact draft, Reports, Records, Measurements, manual entry,
+   Lithuanian fixtures, per-section specimen context, deterministic validation, a provider-neutral
+   semantic mapper, and identical-fixture evaluation of candidate on-device models through #50.
+6. **Optional local model packs** — direct public/ungated Hugging Face download from immutable
+   revisions, reviewed manifest/license, checksum verification, storage/load/delete lifecycle,
+   developer-only model selection, one production recommendation, and deterministic no-model
+   fallback through #51, followed by constrained extraction integration through #52.
+7. **Laboratory history and review** — compact draft, Reports, Records, Measurements, manual entry,
    source inspection, correction, provenance.
-7. **Comparison** — canonical aliases, units, trends, missing/incompatible behavior.
-8. **Education** — explanations, ranges/guidance, sources, signed catalogue.
-9. **Local control** — export, deletion, app lock, support, privacy dashboard.
-10. **Cloud transport** — outbox, auth, consent, upload, status, result envelope.
-11. **Cloud intelligence** — intake recognition, report fallback, candidate validation.
-12. **Intake core** — cloud-useful capture, Log, Snap, manual entry, correction, inclusion.
-13. **Commerce** — products, entitlements, usage ledger, warnings, restore.
-14. **Relationships** — Potential Relationships and locally derived interval context.
-15. **Release** — fixtures, screenshots, metadata, device matrix, TestFlight, submission.
+8. **Comparison** — canonical aliases, units, trends, missing/incompatible behavior.
+9. **Education** — explanations, ranges/guidance, sources, signed catalogue.
+10. **Local control** — export, deletion, app lock, support, privacy dashboard.
+11. **Cloud transport** — outbox, auth, consent, upload, status, result envelope.
+12. **Cloud intelligence** — intake recognition, report fallback, candidate validation.
+13. **Intake core** — cloud-useful capture, Log, Snap, manual entry, correction, inclusion.
+14. **Commerce** — products, entitlements, usage ledger, warnings, restore.
+15. **Relationships** — Potential Relationships and locally derived interval context.
+16. **Release** — fixtures, screenshots, metadata, device matrix, TestFlight, submission.
 
 Each slice is complete when its material reverse and failure states, privacy behavior, highest-risk
 tests, and user-visible integrated flow are accounted for. Low-risk obvious wiring does not require
