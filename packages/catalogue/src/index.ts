@@ -1,29 +1,93 @@
-import { lipidBiomarkers } from './lipids.js';
-import { metabolicMicronutrientBiomarkers } from './metabolic-micronutrients.js';
-import { bloodLiverBiomarkers } from './blood-liver.js';
-import type { BiomarkerCatalogueEntry } from './schema.js';
+import {
+  generatedCatalogueArtifact,
+  generatedCatalogueBuildVerification,
+} from './generated/catalogue-artifact.js';
+import {
+  bloodLiverBiomarkerIds,
+  lipidBiomarkerIds,
+  metabolicMicronutrientBiomarkerIds,
+  type BiomarkerCatalogueEntry,
+} from './schema.js';
 import { normalizeCatalogueAlias } from './validation.js';
 
 export * from './schema.js';
-export * from './lipids.js';
-export * from './metabolic-micronutrients.js';
-export * from './blood-liver.js';
-export * from './other-biomarkers.js';
 export * from './validation.js';
 export * from './artifact.js';
 
-export function composeCatalogue(
-  ...groups: readonly (readonly BiomarkerCatalogueEntry[])[]
-): readonly BiomarkerCatalogueEntry[] {
-  return groups.flat();
+// Preserve source/provenance exports used by catalogue review and comparison fixtures. The entry
+// arrays below intentionally come from the generated artifact, never from these source modules.
+export {
+  bloodLiverSources,
+  bloodLiverReviewPending,
+  medlineplusAltSource,
+  medlineplusAstSource,
+  medlineplusCompleteBloodCountSource,
+  medlineplusGgtSource,
+  medlineplusHematocritSource,
+  medlineplusHemoglobinSource,
+  medlineplusLiverFunctionSource,
+  medlineplusMcvSource,
+  ifccAltReferenceSource,
+  ifccAstReferenceSource,
+  ifccGgtReferenceSource,
+  nistPercentageDefinitionsSource,
+  nistUnitDefinitionsSource,
+} from './blood-liver.js';
+export {
+  lipidSources,
+  reviewPending,
+  conversionSource,
+  cdcLipidSource,
+  nhlbiLipidSource,
+} from './lipids.js';
+export {
+  metabolicSources,
+  metabolicReviewPending,
+  cdcDiabetesTestingSource,
+  niddkDiabetesConversionsSource,
+  ngspIfccSource,
+  whoFerritinSource,
+  nihVitaminDSource,
+  nihVitaminB12Source,
+} from './metabolic-micronutrients.js';
+
+if (
+  !generatedCatalogueBuildVerification.integrityValidated ||
+  !generatedCatalogueBuildVerification.semanticValidated
+) {
+  throw new Error('Generated catalogue artifact did not pass build verification');
+}
+const runtime = globalThis as unknown as { process?: { env?: { NODE_ENV?: string } } };
+if (
+  runtime.process?.env?.NODE_ENV === 'production' &&
+  (!generatedCatalogueBuildVerification.signatureValidated ||
+    String(generatedCatalogueBuildVerification.reviewStatus) !== 'approved')
+) {
+  throw new Error('Production catalogue requires a signed, publication-approved artifact');
 }
 
-/** Deterministic aggregate consumed by extraction adapters and downstream domain code. */
-export const comparableBiomarkers: readonly BiomarkerCatalogueEntry[] = composeCatalogue(
-  lipidBiomarkers,
-  metabolicMicronutrientBiomarkers,
-  bloodLiverBiomarkers,
+/** The exact generated artifact consumed by application/domain code. */
+export const bundledCatalogueArtifact = generatedCatalogueArtifact;
+
+/** Stable catalogue entries derived from the verified generated artifact. */
+export const comparableBiomarkers: readonly BiomarkerCatalogueEntry[] =
+  bundledCatalogueArtifact.entries;
+
+function familyEntries(ids: readonly string[]): readonly BiomarkerCatalogueEntry[] {
+  return ids.flatMap((id) => {
+    const entry = comparableBiomarkers.find((candidate) => candidate.id === id);
+    return entry === undefined ? [] : [entry];
+  });
+}
+
+export const lipidBiomarkers = familyEntries(Object.values(lipidBiomarkerIds));
+export const metabolicMicronutrientBiomarkers = familyEntries(
+  Object.values(metabolicMicronutrientBiomarkerIds),
 );
+export const bloodLiverBiomarkers = familyEntries(Object.values(bloodLiverBiomarkerIds));
+
+/** Deprecated compatibility alias; it remains artifact-derived. */
+export const otherComparableBiomarkers = bloodLiverBiomarkers;
 
 export function findCatalogueBiomarker(id: string): BiomarkerCatalogueEntry | null {
   return comparableBiomarkers.find((entry) => entry.id === id) ?? null;

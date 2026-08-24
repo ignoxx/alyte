@@ -1,10 +1,280 @@
 import {
+  ALL_COMPARABLE_BIOMARKER_IDS,
+  CATALOGUE_SCHEMA_VERSION,
+  CATALOGUE_VERSION,
   bloodLiverBiomarkerIds,
   lipidBiomarkerIds,
   metabolicMicronutrientBiomarkerIds,
   type BiomarkerCatalogueEntry,
   type CatalogueValidationIssue,
 } from './schema.js';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function runtimeEntryShapeIssues(entry: unknown, path: string): CatalogueValidationIssue[] {
+  const issues: CatalogueValidationIssue[] = [];
+  if (!isRecord(entry)) return [{ path, message: 'entry must be an object' }];
+  const requiredStrings = ['id', 'aliases', 'specimens', 'units'] as const;
+  for (const field of requiredStrings) {
+    if (field === 'id') {
+      if (typeof entry[field] !== 'string')
+        issues.push({ path: `${path}.${field}`, message: 'must be a string' });
+    } else if (!isStringArray(entry[field])) {
+      issues.push({ path: `${path}.${field}`, message: 'must be an array of strings' });
+    }
+  }
+  for (const field of [
+    'catalogueVersion',
+    'canonicalLabel',
+    'canonicalUnit',
+    'explanation',
+  ] as const) {
+    if (entry[field] !== undefined && typeof entry[field] !== 'string')
+      issues.push({ path: `${path}.${field}`, message: 'must be a string' });
+  }
+  if (entry.valueType !== undefined && entry.valueType !== 'numeric')
+    issues.push({ path: `${path}.valueType`, message: 'unsupported value type' });
+  if (entry.unsafeAliases !== undefined && !isStringArray(entry.unsafeAliases))
+    issues.push({ path: `${path}.unsafeAliases`, message: 'must be an array of strings' });
+
+  if (entry.unitConversions !== undefined) {
+    if (!Array.isArray(entry.unitConversions)) {
+      issues.push({ path: `${path}.unitConversions`, message: 'must be an array' });
+    } else {
+      for (const [index, conversion] of entry.unitConversions.entries()) {
+        const conversionPath = `${path}.unitConversions[${index}]`;
+        if (!isRecord(conversion)) {
+          issues.push({ path: conversionPath, message: 'conversion must be an object' });
+          continue;
+        }
+        for (const field of ['from', 'to', 'sourceId'] as const) {
+          if (typeof conversion[field] !== 'string')
+            issues.push({ path: `${conversionPath}.${field}`, message: 'must be a string' });
+        }
+        for (const field of ['factor', 'offset'] as const) {
+          if (typeof conversion[field] !== 'number' || !Number.isFinite(conversion[field]))
+            issues.push({ path: `${conversionPath}.${field}`, message: 'must be finite' });
+        }
+      }
+    }
+  }
+
+  if (entry.specimenCompatibility !== undefined) {
+    if (
+      !Array.isArray(entry.specimenCompatibility) ||
+      !entry.specimenCompatibility.every((group) => isStringArray(group))
+    ) {
+      issues.push({ path: `${path}.specimenCompatibility`, message: 'must be specimen groups' });
+    }
+  }
+
+  if (entry.sources !== undefined) {
+    if (!Array.isArray(entry.sources)) {
+      issues.push({ path: `${path}.sources`, message: 'must be an array' });
+    } else {
+      for (const [index, source] of entry.sources.entries()) {
+        const sourcePath = `${path}.sources[${index}]`;
+        if (!isRecord(source)) {
+          issues.push({ path: sourcePath, message: 'source must be an object' });
+          continue;
+        }
+        for (const field of ['id', 'title', 'publisher', 'url', 'accessedAt'] as const) {
+          if (typeof source[field] !== 'string')
+            issues.push({ path: `${sourcePath}.${field}`, message: 'must be a string' });
+        }
+        if (source.publicationDate !== null && typeof source.publicationDate !== 'string')
+          issues.push({
+            path: `${sourcePath}.publicationDate`,
+            message: 'must be a string or null',
+          });
+        if (
+          source.sourceKind !== 'public-health-authority' &&
+          source.sourceKind !== 'professional-guideline' &&
+          source.sourceKind !== 'reference'
+        ) {
+          issues.push({ path: `${sourcePath}.sourceKind`, message: 'unsupported source kind' });
+        }
+      }
+    }
+  }
+
+  if (entry.review !== undefined) {
+    const review = entry.review;
+    if (!isRecord(review)) {
+      issues.push({ path: `${path}.review`, message: 'review must be an object' });
+    } else {
+      if (review.status !== 'pending-human-publication' && review.status !== 'approved')
+        issues.push({ path: `${path}.review.status`, message: 'unsupported review status' });
+      for (const field of ['contentVersion', 'reviewNotes'] as const) {
+        if (typeof review[field] !== 'string')
+          issues.push({ path: `${path}.review.${field}`, message: 'must be a string' });
+      }
+      for (const field of ['reviewedAt', 'reviewer'] as const) {
+        if (review[field] !== null && typeof review[field] !== 'string')
+          issues.push({ path: `${path}.review.${field}`, message: 'must be a string or null' });
+      }
+    }
+  }
+
+  if (entry.methodPolicy !== undefined) {
+    const policy = entry.methodPolicy;
+    if (!isRecord(policy)) {
+      issues.push({ path: `${path}.methodPolicy`, message: 'method policy must be an object' });
+    } else {
+      for (const field of ['version', 'rationale'] as const) {
+        if (typeof policy[field] !== 'string')
+          issues.push({ path: `${path}.methodPolicy.${field}`, message: 'must be a string' });
+      }
+      if (
+        policy.kind !== 'method-agnostic' &&
+        policy.kind !== 'standardized' &&
+        policy.kind !== 'requires-explicit-method'
+      )
+        issues.push({
+          path: `${path}.methodPolicy.kind`,
+          message: 'unsupported method policy kind',
+        });
+      for (const field of ['allowedMethods', 'unsafePatterns'] as const) {
+        if (!isStringArray(policy[field]))
+          issues.push({
+            path: `${path}.methodPolicy.${field}`,
+            message: 'must be an array of strings',
+          });
+      }
+      if (policy.profiles !== undefined) {
+        if (!Array.isArray(policy.profiles)) {
+          issues.push({ path: `${path}.methodPolicy.profiles`, message: 'must be an array' });
+        } else {
+          for (const [profileIndex, profile] of policy.profiles.entries()) {
+            const profilePath = `${path}.methodPolicy.profiles[${profileIndex}]`;
+            if (!isRecord(profile)) {
+              issues.push({ path: profilePath, message: 'profile must be an object' });
+              continue;
+            }
+            for (const field of [
+              'id',
+              'assayPatterns',
+              'temperaturePatterns',
+              'pyridoxalPhosphatePatterns',
+            ] as const) {
+              if (
+                field === 'id' ? typeof profile[field] !== 'string' : !isStringArray(profile[field])
+              )
+                issues.push({
+                  path: `${profilePath}.${field}`,
+                  message: 'profile field is malformed',
+                });
+            }
+            if (profile.temperatureC !== 30 && profile.temperatureC !== 37)
+              issues.push({
+                path: `${profilePath}.temperatureC`,
+                message: 'unsupported temperature',
+              });
+            if (
+              profile.pyridoxalPhosphate !== 'present' &&
+              profile.pyridoxalPhosphate !== 'absent' &&
+              profile.pyridoxalPhosphate !== 'not-applicable'
+            )
+              issues.push({
+                path: `${profilePath}.pyridoxalPhosphate`,
+                message: 'unsupported PLP status',
+              });
+          }
+        }
+      }
+    }
+  }
+
+  if (entry.generalGuidance !== undefined) {
+    if (!Array.isArray(entry.generalGuidance)) {
+      issues.push({ path: `${path}.generalGuidance`, message: 'must be an array' });
+    } else {
+      for (const [index, guidance] of entry.generalGuidance.entries()) {
+        const guidancePath = `${path}.generalGuidance[${index}]`;
+        if (!isRecord(guidance)) {
+          issues.push({ path: guidancePath, message: 'guidance must be an object' });
+          continue;
+        }
+        for (const field of [
+          'id',
+          'label',
+          'description',
+          'authority',
+          'publicationVersion',
+          'unit',
+          'boundarySemantics',
+        ] as const) {
+          if (typeof guidance[field] !== 'string')
+            issues.push({ path: `${guidancePath}.${field}`, message: 'must be a string' });
+        }
+        if (!Array.isArray(guidance.thresholds)) {
+          issues.push({ path: `${guidancePath}.thresholds`, message: 'must be an array' });
+        } else {
+          for (const threshold of guidance.thresholds) {
+            if (
+              !isRecord(threshold) ||
+              typeof threshold.unit !== 'string' ||
+              typeof threshold.value !== 'number' ||
+              !Number.isFinite(threshold.value) ||
+              !['<', '<=', '>', '>='].includes(String(threshold.operator))
+            )
+              issues.push({
+                path: `${guidancePath}.thresholds`,
+                message: 'threshold is malformed',
+              });
+          }
+        }
+        if (!isStringArray(guidance.sources))
+          issues.push({ path: `${guidancePath}.sources`, message: 'must be an array of strings' });
+        if (!isRecord(guidance.applicability)) {
+          issues.push({
+            path: `${guidancePath}.applicability`,
+            message: 'applicability is malformed',
+          });
+        } else {
+          const applicability = guidance.applicability;
+          for (const field of [
+            'population',
+            'jurisdiction',
+            'context',
+            'sex',
+            'fasting',
+          ] as const) {
+            if (typeof applicability[field] !== 'string')
+              issues.push({
+                path: `${guidancePath}.applicability.${field}`,
+                message: 'must be a string',
+              });
+          }
+          if (applicability.purpose !== undefined && typeof applicability.purpose !== 'string')
+            issues.push({
+              path: `${guidancePath}.applicability.purpose`,
+              message: 'must be a string',
+            });
+          if (applicability.specimen !== undefined && typeof applicability.specimen !== 'string')
+            issues.push({
+              path: `${guidancePath}.applicability.specimen`,
+              message: 'must be a string',
+            });
+          if (!isStringArray(applicability.limitations))
+            issues.push({
+              path: `${guidancePath}.applicability.limitations`,
+              message: 'must be an array of strings',
+            });
+        }
+        if (!isRecord(guidance.review))
+          issues.push({ path: `${guidancePath}.review`, message: 'review is malformed' });
+      }
+    }
+  }
+  return issues;
+}
 
 /** Source-shaped aliases are normalized only for lookup; they never replace the original label. */
 export function normalizeCatalogueAlias(value: string): string {
@@ -198,10 +468,18 @@ export function findForbiddenWording(text: string): string | null {
 export function validateCatalogue(
   entries: readonly BiomarkerCatalogueEntry[],
 ): readonly CatalogueValidationIssue[] {
+  if (!Array.isArray(entries)) return [{ path: 'entries', message: 'entries must be an array' }];
+  const runtimeEntries = entries as readonly BiomarkerCatalogueEntry[];
   const issues: CatalogueValidationIssue[] = [];
   const ids = new Set<string>();
-  for (const [index, entry] of entries.entries()) {
+  const normalizedAliases = new Map<string, string>();
+  for (const [index, entry] of runtimeEntries.entries()) {
     const path = `entries[${index}]`;
+    const shapeIssues = runtimeEntryShapeIssues(entry, path);
+    if (shapeIssues.length > 0) {
+      issues.push(...shapeIssues);
+      continue;
+    }
     if (ids.has(entry.id)) issues.push({ path: `${path}.id`, message: 'duplicate canonical id' });
     ids.add(entry.id);
     if (!/^biomarker\.[a-z0-9_]+$/.test(entry.id)) {
@@ -221,6 +499,18 @@ export function validateCatalogue(
         path: `${path}.aliases`,
         message: 'aliases must be unique within the source language',
       });
+    }
+    for (const alias of entry.aliases) {
+      const normalized = normalizeCatalogueAlias(alias);
+      const previous = normalizedAliases.get(normalized);
+      if (previous !== undefined && previous !== entry.id) {
+        issues.push({
+          path: `${path}.aliases`,
+          message: `alias is ambiguous with ${previous}: ${normalized}`,
+        });
+      } else {
+        normalizedAliases.set(normalized, entry.id);
+      }
     }
     for (const unit of entry.units) {
       if (!unit.trim()) issues.push({ path: `${path}.units`, message: 'unit cannot be empty' });
@@ -251,6 +541,12 @@ export function validateCatalogue(
           issues.push({
             path: conversionPath,
             message: 'conversion factor must be finite and non-zero',
+          });
+        }
+        if (!Number.isFinite(conversion.offset)) {
+          issues.push({
+            path: conversionPath,
+            message: 'conversion offset must be finite',
           });
         }
         if (!conversion.sourceId.trim()) {
@@ -289,6 +585,16 @@ export function validateCatalogue(
     }
     if (entry.review?.status === 'approved' && entry.review.reviewedAt === null) {
       issues.push({ path: `${path}.review`, message: 'approved content requires reviewedAt' });
+    }
+    if (
+      entry.catalogueVersion !== undefined &&
+      entry.review !== undefined &&
+      entry.review.contentVersion !== entry.catalogueVersion
+    ) {
+      issues.push({
+        path: `${path}.review.contentVersion`,
+        message: 'review content version must match the entry catalogue version',
+      });
     }
     for (const guidance of entry.generalGuidance ?? []) {
       if (!guidance.applicability || guidance.applicability.population !== 'adults') {
@@ -341,6 +647,77 @@ export function validateCatalogue(
             message: 'guidance source must be included in the entry source set',
           });
         }
+      }
+    }
+  }
+  return issues;
+}
+
+/**
+ * Validation used by an emitted launch artifact. The lower-level validator intentionally permits
+ * future extension entries for source-preserving parsing tests; a release artifact must contain
+ * every stable MVP identity and keep all entry versions aligned with its manifest.
+ */
+export function validateCatalogueRelease(
+  entries: readonly BiomarkerCatalogueEntry[],
+  manifest: {
+    readonly version: string;
+    readonly schemaVersion: string;
+    readonly status: 'review-pending' | 'approved';
+    readonly signatureRequired: boolean;
+  },
+): readonly CatalogueValidationIssue[] {
+  const issues = [...validateCatalogue(entries)];
+  if (manifest.schemaVersion !== CATALOGUE_SCHEMA_VERSION) {
+    issues.push({ path: 'manifest.schemaVersion', message: 'catalogue schema version mismatch' });
+  }
+  if (manifest.version !== CATALOGUE_VERSION) {
+    issues.push({ path: 'manifest.version', message: 'catalogue version mismatch' });
+  }
+  const present = new Set(
+    entries.flatMap((entry) => (isRecord(entry) && typeof entry.id === 'string' ? [entry.id] : [])),
+  );
+  for (const id of ALL_COMPARABLE_BIOMARKER_IDS) {
+    if (!present.has(id))
+      issues.push({ path: 'entries', message: `missing stable biomarker ID: ${id}` });
+  }
+  for (const [index, entry] of entries.entries()) {
+    if (!isRecord(entry)) continue;
+    if (entry.catalogueVersion !== manifest.version) {
+      issues.push({
+        path: `entries[${index}].catalogueVersion`,
+        message: 'entry catalogue version must match the manifest version',
+      });
+    }
+    if (entry.review !== undefined) {
+      if (entry.review.status === 'approved' && manifest.status !== 'approved') {
+        issues.push({
+          path: `entries[${index}].review`,
+          message: 'approved entry cannot be emitted in a review-pending manifest',
+        });
+      }
+      if (entry.review.status === 'pending-human-publication' && manifest.status === 'approved') {
+        issues.push({
+          path: `entries[${index}].review`,
+          message: 'approved manifest cannot contain review-pending entry',
+        });
+      }
+    }
+    for (const [guidanceIndex, guidance] of (entry.generalGuidance ?? []).entries()) {
+      if (guidance.review.status === 'approved' && manifest.status !== 'approved') {
+        issues.push({
+          path: `entries[${index}].generalGuidance[${guidanceIndex}].review`,
+          message: 'approved guidance cannot be emitted in a review-pending manifest',
+        });
+      }
+      if (
+        guidance.review.status === 'pending-human-publication' &&
+        manifest.status === 'approved'
+      ) {
+        issues.push({
+          path: `entries[${index}].generalGuidance[${guidanceIndex}].review`,
+          message: 'approved manifest cannot contain review-pending guidance',
+        });
       }
     }
   }
