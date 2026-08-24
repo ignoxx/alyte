@@ -1,12 +1,13 @@
 import { lipidBiomarkers } from './lipids.js';
 import { metabolicMicronutrientBiomarkers } from './metabolic-micronutrients.js';
-import { otherComparableBiomarkers } from './other-biomarkers.js';
+import { bloodLiverBiomarkers } from './blood-liver.js';
 import type { BiomarkerCatalogueEntry } from './schema.js';
 import { normalizeCatalogueAlias } from './validation.js';
 
 export * from './schema.js';
 export * from './lipids.js';
 export * from './metabolic-micronutrients.js';
+export * from './blood-liver.js';
 export * from './other-biomarkers.js';
 export * from './validation.js';
 export * from './artifact.js';
@@ -21,7 +22,7 @@ export function composeCatalogue(
 export const comparableBiomarkers: readonly BiomarkerCatalogueEntry[] = composeCatalogue(
   lipidBiomarkers,
   metabolicMicronutrientBiomarkers,
-  otherComparableBiomarkers,
+  bloodLiverBiomarkers,
 );
 
 export function findCatalogueBiomarker(id: string): BiomarkerCatalogueEntry | null {

@@ -2,9 +2,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   METABOLIC_MICRONUTRIENT_BIOMARKER_IDS,
+  bloodLiverBiomarkers,
   metabolicMicronutrientBiomarkers,
   metabolicSources,
-  otherComparableBiomarkers,
   resolveBiomarkerAlias,
   validateCatalogue,
   findForbiddenWording,
@@ -13,13 +13,13 @@ import {
 const familyIds = Object.values(METABOLIC_MICRONUTRIENT_BIOMARKER_IDS);
 
 describe('metabolic and micronutrient catalogue family', () => {
-  it('keeps five stable, source-backed entries separate from the skeletal blood/liver family', () => {
+  it('keeps five stable, source-backed entries separate from the blood/liver family', () => {
     assert.deepEqual(
       metabolicMicronutrientBiomarkers.map((entry) => entry.id),
       familyIds,
     );
     assert.deepEqual(
-      otherComparableBiomarkers.map((entry) => entry.id),
+      bloodLiverBiomarkers.map((entry) => entry.id),
       [
         'biomarker.hemoglobin',
         'biomarker.hematocrit',

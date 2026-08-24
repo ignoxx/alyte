@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CATALOGUE_VERSION,
+  bloodLiverSources,
   canonicalJson,
   catalogueManifest,
   comparableBiomarkers,
@@ -116,7 +117,7 @@ describe('catalogue boundary', () => {
       schemaVersion: 'alyte.catalogue.artifact.v1',
       manifest: { ...catalogueManifest, version: CATALOGUE_VERSION },
       entries: comparableBiomarkers,
-      sourceSet: [...lipidSources, ...metabolicSources],
+      sourceSet: [...lipidSources, ...metabolicSources, ...bloodLiverSources],
       integrity: { algorithm: 'SHA-256', digest: 'not-the-digest' },
       signature: null,
     };

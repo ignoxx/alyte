@@ -24,6 +24,19 @@ export type MetabolicBiomarkerId =
   (typeof metabolicMicronutrientBiomarkerIds)[keyof typeof metabolicMicronutrientBiomarkerIds];
 export const METABOLIC_MICRONUTRIENT_BIOMARKER_IDS = metabolicMicronutrientBiomarkerIds;
 
+export const bloodLiverBiomarkerIds = {
+  hemoglobin: 'biomarker.hemoglobin',
+  hematocrit: 'biomarker.hematocrit',
+  mcv: 'biomarker.mcv',
+  alt: 'biomarker.alt',
+  ast: 'biomarker.ast',
+  ggt: 'biomarker.ggt',
+} as const;
+
+export type BloodLiverBiomarkerId =
+  (typeof bloodLiverBiomarkerIds)[keyof typeof bloodLiverBiomarkerIds];
+export const BLOOD_LIVER_BIOMARKER_IDS = bloodLiverBiomarkerIds;
+
 export type CataloguePublicationStatus = 'review-pending' | 'approved';
 
 export type CatalogueReviewMetadata = {

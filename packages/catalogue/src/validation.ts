@@ -1,4 +1,5 @@
 import {
+  bloodLiverBiomarkerIds,
   lipidBiomarkerIds,
   metabolicMicronutrientBiomarkerIds,
   type BiomarkerCatalogueEntry,
@@ -29,7 +30,7 @@ const forbiddenWordingPatterns: readonly RegExp[] = [
 ];
 
 type ComparableEntryRequirements = {
-  readonly family: 'lipid' | 'metabolic/micronutrient';
+  readonly family: 'lipid' | 'metabolic/micronutrient' | 'blood/liver';
   readonly guidance: 'required' | 'optional';
   readonly requireMethodPolicy: boolean;
 };
@@ -44,6 +45,10 @@ const comparableEntryRequirements = new Map<string, ComparableEntryRequirements>
         id,
         { family: 'metabolic/micronutrient', guidance: 'optional', requireMethodPolicy: true },
       ] as const,
+  ),
+  ...Object.values(bloodLiverBiomarkerIds).map(
+    (id) =>
+      [id, { family: 'blood/liver', guidance: 'optional', requireMethodPolicy: true }] as const,
   ),
 ]);
 
