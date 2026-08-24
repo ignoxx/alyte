@@ -11,7 +11,7 @@ review, turns accepted findings into a remediation brief, integrates commits, ru
 verification, and updates ticket status. Sol does not implement ticket code.
 
 **The implementation subagent is the implementer.** Every implementation assignment uses model
-`gpt-5.6-sol` with reasoning effort `low`. The subagent receives one ticket sized for a fresh
+`gpt-5.6-luna` with reasoning effort `xhigh`. The subagent receives one ticket sized for a fresh
 context, works only in the assigned branch and worktree, invokes Matt Pocock's `implement` skill,
 and returns an implementation commit for Sol's review. The subagent also owns every remediation
 code change Sol requests.

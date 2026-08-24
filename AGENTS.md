@@ -193,7 +193,7 @@ When implementing an MVP ticket, read its complete GitHub issue, `docs/MVP.md`, 
 `docs/agents/SOL-LUNA-ORCHESTRATION.md`. GitHub Issues is the ticket source of truth; local scratch
 generation artifacts are not authoritative. Sol owns dependency-frontier scheduling and
 integration, including the single post-implementation review and its remediation brief;
-implementation subagents own all code changes. Delegated implementation uses GPT-5.6 Sol at light
+implementation subagents own all code changes. Delegated implementation uses GPT-5.6 Luna at xhigh
 reasoning in an isolated worktree when parallel, and every implementation subagent invokes Matt
 Pocock's `implement` skill. Follow the review and remediation sequence in
 `docs/agents/SOL-LUNA-ORCHESTRATION.md`.
