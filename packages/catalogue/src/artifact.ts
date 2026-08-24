@@ -17,8 +17,8 @@ import {
   type CatalogueTrustedKey,
   type CatalogueValidationIssue,
   type CatalogueVerificationOptions,
-} from './schema.js';
-import { assertCatalogueValid, validateCatalogueRelease } from './validation.js';
+} from './schema';
+import { assertCatalogueValid, validateCatalogueRelease } from './validation';
 
 type SubtleCryptoLike = {
   digest: (algorithm: string, data: ArrayBuffer) => Promise<ArrayBuffer>;

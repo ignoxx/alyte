@@ -1,18 +1,18 @@
 import {
   generatedCatalogueArtifact,
   generatedCatalogueBuildVerification,
-} from './generated/catalogue-artifact.js';
+} from './generated/catalogue-artifact';
 import {
   bloodLiverBiomarkerIds,
   lipidBiomarkerIds,
   metabolicMicronutrientBiomarkerIds,
   type BiomarkerCatalogueEntry,
-} from './schema.js';
-import { normalizeCatalogueAlias } from './validation.js';
+} from './schema';
+import { normalizeCatalogueAlias } from './validation';
 
-export * from './schema.js';
-export * from './validation.js';
-export * from './artifact.js';
+export * from './schema';
+export * from './validation';
+export * from './artifact';
 
 // Preserve source/provenance exports used by catalogue review and comparison fixtures. The entry
 // arrays below intentionally come from the generated artifact, never from these source modules.
@@ -32,14 +32,14 @@ export {
   ifccGgtReferenceSource,
   nistPercentageDefinitionsSource,
   nistUnitDefinitionsSource,
-} from './blood-liver.js';
+} from './blood-liver';
 export {
   lipidSources,
   reviewPending,
   conversionSource,
   cdcLipidSource,
   nhlbiLipidSource,
-} from './lipids.js';
+} from './lipids';
 export {
   metabolicSources,
   metabolicReviewPending,
@@ -49,7 +49,7 @@ export {
   whoFerritinSource,
   nihVitaminDSource,
   nihVitaminB12Source,
-} from './metabolic-micronutrients.js';
+} from './metabolic-micronutrients';
 
 if (
   !generatedCatalogueBuildVerification.integrityValidated ||

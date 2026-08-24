@@ -6,7 +6,7 @@ import {
   type GeneralGuidance,
   type GeneralGuidanceThreshold,
   type UnitConversion,
-} from './schema.js';
+} from './schema';
 
 export const conversionSource: CatalogueSource = {
   id: 'source.ahrq.lipid-conversion-factors',

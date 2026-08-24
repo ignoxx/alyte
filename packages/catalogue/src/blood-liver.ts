@@ -5,7 +5,7 @@ import {
   type CatalogueReviewMetadata,
   type CatalogueSource,
   type UnitConversion,
-} from './schema.js';
+} from './schema';
 
 /** Public, non-personal sources for the blood-count and liver-enzyme draft content. */
 export const medlineplusCompleteBloodCountSource: CatalogueSource = {

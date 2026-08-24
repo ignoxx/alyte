@@ -7,7 +7,7 @@ import {
   findForbiddenWording,
   resolveBiomarkerAlias,
   validateCatalogue,
-} from './index.js';
+} from './index';
 
 const familyIds = Object.values(BLOOD_LIVER_BIOMARKER_IDS);
 

@@ -1,7 +1,7 @@
-import { bloodLiverBiomarkers, bloodLiverSources } from './blood-liver.js';
-import { lipidBiomarkers, lipidSources } from './lipids.js';
-import { metabolicMicronutrientBiomarkers, metabolicSources } from './metabolic-micronutrients.js';
-import type { BiomarkerCatalogueEntry, CatalogueSource } from './schema.js';
+import { bloodLiverBiomarkers, bloodLiverSources } from './blood-liver';
+import { lipidBiomarkers, lipidSources } from './lipids';
+import { metabolicMicronutrientBiomarkers, metabolicSources } from './metabolic-micronutrients';
+import type { BiomarkerCatalogueEntry, CatalogueSource } from './schema';
 
 /**
  * Source modules are build inputs only. Application/domain consumers must import the generated

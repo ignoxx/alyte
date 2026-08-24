@@ -6,7 +6,7 @@ import {
   type CatalogueMethodPolicy,
   type GeneralGuidance,
   type UnitConversion,
-} from './schema.js';
+} from './schema';
 
 /** Sources are deliberately limited to public authorities and the HbA1c standardization body. */
 export const cdcDiabetesTestingSource: CatalogueSource = {

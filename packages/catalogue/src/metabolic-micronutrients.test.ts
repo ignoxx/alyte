@@ -8,7 +8,7 @@ import {
   resolveBiomarkerAlias,
   validateCatalogue,
   findForbiddenWording,
-} from './index.js';
+} from './index';
 
 const familyIds = Object.values(METABOLIC_MICRONUTRIENT_BIOMARKER_IDS);
 

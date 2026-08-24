@@ -11,7 +11,7 @@ import {
   validateCatalogueArtifact,
   verifyCatalogueForConsumption,
   type CatalogueArtifact,
-} from './index.js';
+} from './index';
 
 describe('catalogue release artifact boundary', () => {
   it('serializes equal source content to byte-identical canonical payloads', async () => {

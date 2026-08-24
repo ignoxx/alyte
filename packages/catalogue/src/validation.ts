@@ -7,7 +7,7 @@ import {
   metabolicMicronutrientBiomarkerIds,
   type BiomarkerCatalogueEntry,
   type CatalogueValidationIssue,
-} from './schema.js';
+} from './schema';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

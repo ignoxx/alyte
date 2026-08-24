@@ -14,7 +14,7 @@ import {
   validateCatalogue,
   validateCatalogueArtifact,
   type CatalogueArtifact,
-} from './index.js';
+} from './index';
 
 describe('catalogue boundary', () => {
   it('ships a versioned, reviewable manifest', () => {

@@ -44,6 +44,8 @@ function measurement(
   options: Partial<Pick<Measurement, 'reviewState' | 'provenance' | 'biomarkerId'>> &
     Partial<Pick<Measurement['current'], 'unit' | 'valueString' | 'referenceInterval' | 'flag'>> & {
       readonly label?: string;
+      readonly specimenType?: Measurement['specimenType'];
+      readonly panelLabel?: string | null;
       readonly current?: Partial<MeasurementSnapshot>;
     } = {},
 ): Measurement {
@@ -70,12 +72,12 @@ function measurement(
     id,
     labRecordId: recordId,
     biomarkerId,
-    specimenType: 'serum',
-    panelLabel: 'Lipids',
+    specimenType: options.specimenType ?? 'serum',
+    panelLabel: options.panelLabel ?? 'Lipids',
     original: snapshot,
     originalState: {
       biomarkerId,
-      specimenType: 'serum',
+      specimenType: options.specimenType ?? 'serum',
       snapshot,
       reviewState: options.reviewState ?? 'confirmed',
       provenance: options.provenance ?? 'extracted',
@@ -97,12 +99,13 @@ function record(
   id: string,
   collectionDate: LabRecord['collectionDate'],
   measurements: readonly Measurement[],
+  specimenType: LabRecord['specimenType'] = 'serum',
 ): LabRecord {
   return {
     id,
     labReportId: `report-${id}`,
     collectionDate,
-    specimenType: 'serum',
+    specimenType,
     laboratoryName: 'Synthetic Laboratory',
     notes: null,
     createdAt: '2026-01-01T00:00:00.000Z',
@@ -280,4 +283,161 @@ test('unsupported canonical measurements stay visible as non-points', () => {
   if (unsupported.timeline[0]?.kind === 'non-point') {
     assert.equal(unsupported.timeline[0].nonPoint.kind, 'unsupported');
   }
+});
+
+test('non-lipid history keeps every representative non-point state and source range visible', () => {
+  const model = buildBiomarkerHistoryViewModel(
+    [
+      record(
+        'alt-exact',
+        { kind: 'known', value: '2026-01-01' },
+        [
+          measurement(
+            'alt-exact-measurement',
+            'alt-exact',
+            { kind: 'numeric', value: 22 },
+            {
+              biomarkerId: canonicalId('biomarker.alt'),
+              label: 'ALT (IFCC 37 C with P5P)',
+              unit: 'U/L',
+              referenceInterval: '<40 U/L',
+              flag: 'H',
+              specimenType: 'blood',
+              provenance: 'user-corrected',
+              current: {
+                value: { kind: 'numeric', value: 24 },
+                valueString: '24',
+                referenceInterval: '<35 U/L',
+                flag: 'H',
+              },
+            },
+          ),
+        ],
+        'blood',
+      ),
+      record('alt-missing', { kind: 'known', value: '2026-02-01' }, [], 'blood'),
+      record(
+        'alt-bounded',
+        { kind: 'known', value: '2026-03-01' },
+        [
+          measurement(
+            'alt-bounded-measurement',
+            'alt-bounded',
+            { kind: 'bounded', comparator: '<', value: 40 },
+            {
+              biomarkerId: canonicalId('biomarker.alt'),
+              label: 'ALT (IFCC 37 C with P5P)',
+              unit: 'U/L',
+              referenceInterval: '<40 U/L',
+              specimenType: 'blood',
+            },
+          ),
+        ],
+        'blood',
+      ),
+      record(
+        'alt-incompatible-specimen',
+        { kind: 'known', value: '2026-04-01' },
+        [
+          measurement(
+            'alt-incompatible-specimen-measurement',
+            'alt-incompatible-specimen',
+            {
+              kind: 'numeric',
+              value: 24,
+            },
+            {
+              biomarkerId: canonicalId('biomarker.alt'),
+              label: 'ALT (IFCC 37 C with P5P)',
+              unit: 'U/L',
+              referenceInterval: '<40 U/L',
+              specimenType: 'serum',
+            },
+          ),
+        ],
+        'blood',
+      ),
+      record(
+        'alt-incompatible-method',
+        { kind: 'known', value: '2026-05-01' },
+        [
+          measurement(
+            'alt-incompatible-method-measurement',
+            'alt-incompatible-method',
+            {
+              kind: 'numeric',
+              value: 25,
+            },
+            {
+              biomarkerId: canonicalId('biomarker.alt'),
+              label: 'ALT',
+              unit: 'U/L',
+              referenceInterval: '<40 U/L',
+              specimenType: 'blood',
+            },
+          ),
+        ],
+        'blood',
+      ),
+      record(
+        'alt-date-missing',
+        { kind: 'missing' },
+        [
+          measurement(
+            'alt-date-missing-measurement',
+            'alt-date-missing',
+            {
+              kind: 'numeric',
+              value: 23,
+            },
+            {
+              biomarkerId: canonicalId('biomarker.alt'),
+              label: 'ALT (IFCC 37 C with P5P)',
+              unit: 'U/L',
+              referenceInterval: '<40 U/L',
+              specimenType: 'blood',
+            },
+          ),
+        ],
+        'blood',
+      ),
+    ],
+    'biomarker.alt',
+  );
+
+  assert.ok(model);
+  assert.deepEqual(
+    model.timeline.map((item) => (item.kind === 'point' ? 'point' : item.nonPoint.kind)),
+    ['point', 'not-measured', 'bounded', 'incompatible', 'incompatible', 'date-missing'],
+  );
+  assert.equal(model.timeline[0]?.kind, 'point');
+  if (model.timeline[0]?.kind === 'point') {
+    assert.deepEqual(model.timeline[0].point.laboratoryReference, {
+      interval: '<35 U/L',
+      flag: 'H',
+    });
+    assert.equal(model.timeline[0].current?.valueString, '24');
+    assert.equal(model.timeline[0].original?.valueString, '22');
+    assert.equal(model.timeline[0].provenance, 'user-corrected');
+  }
+  assert.deepEqual(
+    model.timeline
+      .filter(
+        (item): item is Extract<typeof item, { kind: 'non-point' }> => item.kind === 'non-point',
+      )
+      .map((item) => item.nonPoint.reason),
+    [undefined, undefined, 'incompatible-specimen', 'incompatible-method', undefined],
+  );
+  assert.equal(model.guidance.kind, 'not-applicable');
+  assert.equal(model.guidance.reason, 'context-unavailable');
+  const accessibilityLabel = buildHistoryAccessibilityLabel(model, copy, 'en-US');
+  assert.ok(
+    accessibilityLabel.indexOf('Current result ALT: 24 U/L') <
+      accessibilityLabel.indexOf('Original source ALT (IFCC 37 C with P5P): 22 U/L'),
+  );
+  assert.match(
+    accessibilityLabel,
+    /Laboratory interval <35 U\/L, Laboratory flag H, User-corrected/,
+  );
+  assert.match(accessibilityLabel, /Incompatible result/);
 });

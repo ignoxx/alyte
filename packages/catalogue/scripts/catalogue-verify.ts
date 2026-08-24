@@ -5,7 +5,7 @@ import {
   type CatalogueArtifact,
   type CatalogueEnvironment,
   type CatalogueTrustedKey,
-} from '../src/index.js';
+} from '../src/index';
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name);
