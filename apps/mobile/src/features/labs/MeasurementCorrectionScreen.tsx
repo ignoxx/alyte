@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
 import {
   ActionSheetIOS,
+  Alert,
   KeyboardAvoidingView,
   ScrollView,
   StyleSheet,
@@ -9,6 +10,7 @@ import {
 } from 'react-native';
 import {
   useNavigation,
+  usePreventRemove,
   useRoute,
   type NavigationProp,
   type RouteProp,
@@ -19,7 +21,12 @@ import { useServices } from '../../services';
 import { t } from '../../localization';
 import { colors, spacing } from '../../theme';
 import { AppButton, AppText } from '../../ui/primitives';
-import { correctionInput, measurementDraft, type MeasurementDraft } from './record-detail-model';
+import {
+  correctionDraftIsDirty,
+  correctionInput,
+  measurementDraft,
+  type MeasurementDraft,
+} from './record-detail-model';
 
 type Route = RouteProp<RootStackParamList, 'MeasurementCorrection'>;
 const kinds = ['numeric', 'bounded', 'categorical', 'free_text'] as const;
@@ -30,9 +37,24 @@ export function MeasurementCorrectionScreen() {
   const route = useRoute<Route>();
   const { labs } = useServices();
   const [draft, setDraft] = useState<MeasurementDraft | null>(null);
+  const [initialDraft, setInitialDraft] = useState<MeasurementDraft | null>(null);
   const [measurement, setMeasurement] = useState<Measurement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const dirty =
+    draft !== null && initialDraft !== null && correctionDraftIsDirty(initialDraft, draft);
+  usePreventRemove((dirty || busy) && !saved, ({ data }) => {
+    if (busy) return;
+    Alert.alert(t('labs.detailDiscardCorrectionTitle'), t('labs.detailDiscardCorrectionBody'), [
+      { text: t('labs.detailKeepEditing'), style: 'cancel' },
+      {
+        text: t('labs.detailDiscardCorrection'),
+        style: 'destructive',
+        onPress: () => navigation.dispatch(data.action),
+      },
+    ]);
+  });
   useLayoutEffect(
     () =>
       navigation.setOptions({
@@ -53,7 +75,9 @@ export function MeasurementCorrectionScreen() {
         const found = detail?.measurements.find((item) => item.id === route.params.measurementId);
         if (found) {
           setMeasurement(found);
-          setDraft(measurementDraft(found));
+          const nextDraft = measurementDraft(found);
+          setDraft(nextDraft);
+          setInitialDraft(nextDraft);
         } else setError(t('labs.recordNotFound'));
       })
       .catch(() => setError(t('labs.recordLoadError')));
@@ -69,7 +93,8 @@ export function MeasurementCorrectionScreen() {
     setError(null);
     try {
       await labs.correctMeasurement(measurement.id, input);
-      navigation.goBack();
+      setSaved(true);
+      setTimeout(() => navigation.goBack(), 0);
     } catch {
       setError(t('labs.detailCorrectionPreserved'));
     } finally {

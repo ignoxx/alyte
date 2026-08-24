@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { LabsStackParamList } from '../../navigation/types';
@@ -18,21 +18,31 @@ export function LabRecordDetailRoute() {
   const route = useRoute<DetailRoute>();
   const { labs } = useServices();
   const [record, setRecord] = useState<Detail | null>(null);
+  const recordRef = useRef<Detail | null>(null);
   const root = navigation.getParent()?.getParent<NavigationProp<RootStackParamList>>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [notFound, setNotFound] = useState(false);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    if (recordRef.current === null) setLoading(true);
     try {
-      setRecord(await labs.getRecordDetail(route.params.recordId));
+      const next = await labs.getRecordDetail(route.params.recordId);
+      if (next === null) {
+        if (recordRef.current !== null) navigation.goBack();
+        else setNotFound(true);
+        return;
+      }
+      recordRef.current = next;
+      setRecord(next);
       setError(false);
+      setNotFound(false);
     } catch {
       setError(true);
     } finally {
       setLoading(false);
     }
-  }, [labs, route.params.recordId]);
+  }, [labs, navigation, route.params.recordId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -41,10 +51,23 @@ export function LabRecordDetailRoute() {
   );
 
   if (loading) return <AppText>{t('labs.loading')}</AppText>;
-  if (error || record === null) {
+  if (notFound) {
+    return (
+      <>
+        <AppText>{t('labs.recordNotFound')}</AppText>
+        <AppButton
+          label={t('accessibility.back')}
+          onPress={() => navigation.goBack()}
+          tone="quiet"
+        />
+      </>
+    );
+  }
+  if (error && record === null) {
     return (
       <>
         <AppText>{t('labs.recordLoadError')}</AppText>
+        <AppButton label={t('labs.retry')} onPress={() => void load()} tone="secondary" />
         <AppButton
           label={t('labs.recordCancel')}
           onPress={() => navigation.goBack()}
@@ -53,6 +76,7 @@ export function LabRecordDetailRoute() {
       </>
     );
   }
+  if (record === null) return <AppText>{t('labs.loading')}</AppText>;
   return (
     <LabRecordDetail
       detail={record}
@@ -73,6 +97,12 @@ export function LabRecordDetailRoute() {
           recordId: record.id,
           measurementId: measurement.id,
         })
+      }
+      onRetrySource={() =>
+        void labs
+          .retryPendingDeletion(record.id)
+          .then(load)
+          .catch(() => setError(true))
       }
     />
   );

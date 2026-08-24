@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import {
   useNavigation,
@@ -27,6 +27,7 @@ export function LabDeletionScreen() {
   const [plan, setPlan] = useState<Awaited<ReturnType<typeof labs.planDeletion>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const request = useRef(0);
   useLayoutEffect(
     () =>
       navigation.setOptions({
@@ -41,12 +42,20 @@ export function LabDeletionScreen() {
     [navigation],
   );
   useEffect(() => {
+    const token = ++request.current;
     setPlan(null);
     setError(null);
     void labs
       .planDeletion(scope)
-      .then(setPlan)
-      .catch(() => setError(t('labs.detailDeletionPlanError')));
+      .then((next) => {
+        if (token === request.current) setPlan(next);
+      })
+      .catch(() => {
+        if (token === request.current) setError(t('labs.detailDeletionPlanError'));
+      });
+    return () => {
+      request.current += 1;
+    };
   }, [labs, scope]);
   const choices: readonly LabDeletionScope[] = route.params.measurementId
     ? [scope]
@@ -59,10 +68,28 @@ export function LabDeletionScreen() {
     setBusy(true);
     setError(null);
     try {
-      await labs.executeDeletion(scope);
-      navigation.goBack();
-    } catch {
-      setError(t('labs.detailDeletionRetry'));
+      await labs.executeDeletion(scope, plan!);
+      if (plan!.recordRemains) navigation.goBack();
+      else
+        navigation.reset({
+          index: 0,
+          routes: [
+            { name: 'MainTabs', params: { screen: 'Labs', params: { screen: 'LabsRoot' } } },
+          ],
+        });
+    } catch (cause) {
+      setPlan(null);
+      try {
+        const refreshed = await labs.planDeletion(scope);
+        setPlan(refreshed);
+        setError(
+          cause instanceof Error && cause.message === 'Lab deletion plan changed'
+            ? t('labs.detailDeletionPlanChanged')
+            : t('labs.detailDeletionRetry'),
+        );
+      } catch {
+        setError(t('labs.detailDeletionRetry'));
+      }
     } finally {
       setBusy(false);
     }
@@ -85,15 +112,12 @@ export function LabDeletionScreen() {
         <AppText variant="heading">{t('labs.detailDeletionPreview')}</AppText>
         {plan ? (
           deletionFacts(plan).map((fact) => (
-            <AppText key={fact} selectable>
-              {fact.startsWith('measurements-deleted:')
-                ? t('labs.deletionFact.measurements_deleted').replace(
-                    '{count}',
-                    fact.split(':')[1]!,
-                  )
-                : fact.startsWith('linked-records-source-deleted:')
-                  ? t('labs.deletionFact.linked_records').replace('{count}', fact.split(':')[1]!)
-                  : t(`labs.deletionFact.${fact.replaceAll('-', '_')}`)}
+            <AppText key={fact.kind} selectable>
+              {fact.kind === 'measurements-deleted'
+                ? t('labs.deletionFact.measurements_deleted').replace('{count}', String(fact.count))
+                : fact.kind === 'linked-records-source-deleted'
+                  ? t('labs.deletionFact.linked_records').replace('{count}', String(fact.count))
+                  : t(`labs.deletionFact.${fact.kind.replaceAll('-', '_')}`)}
             </AppText>
           ))
         ) : (

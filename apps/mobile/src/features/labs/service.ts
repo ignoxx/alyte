@@ -36,7 +36,8 @@ export type LabsService = {
   updateRecord(id: string, input: UpdateLabRecordInput): Promise<LabRecord>;
   correctMeasurement(id: string, input: CorrectMeasurementInput): Promise<Measurement>;
   planDeletion(scope: LabDeletionScope): Promise<LabDeletionPlan>;
-  executeDeletion(scope: LabDeletionScope): Promise<void>;
+  executeDeletion(scope: LabDeletionScope, expectedPlan?: LabDeletionPlan): Promise<void>;
+  retryPendingDeletion(recordId: string): Promise<void>;
   reconcilePendingDeletions(): Promise<void>;
   deleteRecord(id: string): Promise<void>;
 };
@@ -113,8 +114,14 @@ export function createLabsService(options: LabsServiceOptions = {}): LabsService
     };
   }
 
-  async function executeDeletion(scope: LabDeletionScope): Promise<void> {
+  async function executeDeletion(
+    scope: LabDeletionScope,
+    expectedPlan?: LabDeletionPlan,
+  ): Promise<void> {
     const plan = await planDeletion(scope);
+    if (expectedPlan !== undefined && JSON.stringify(plan) !== JSON.stringify(expectedPlan)) {
+      throw new Error('Lab deletion plan changed');
+    }
     const repo = await repository();
     if (scope.kind === 'measurement-only') return repo.deleteMeasurement(scope.measurementId);
     if (scope.kind === 'source-only') return deleteSource(plan.reportId!);
@@ -169,6 +176,23 @@ export function createLabsService(options: LabsServiceOptions = {}): LabsService
     planDeletion,
     executeDeletion,
     reconcilePendingDeletions,
+    async retryPendingDeletion(recordId) {
+      const repo = await rawRepository();
+      const combined = (await repo.listPendingCombinedDeletions()).find(
+        (operation) => operation.recordId === recordId,
+      );
+      if (combined !== undefined) {
+        await reconcile(repo, false);
+        return;
+      }
+      const record = await repo.getRecord(recordId);
+      if (record?.labReportId === null || record === null)
+        throw new Error('Lab Record has no pending source deletion');
+      const report = await repo.getReport(record.labReportId);
+      if (report?.deletionState !== 'requested' && report?.deletionState !== 'failed')
+        throw new Error('Lab Record has no pending source deletion');
+      await deleteSource(report.id);
+    },
     async deleteRecord(id) {
       return executeDeletion({ kind: 'record-only', recordId: id });
     },

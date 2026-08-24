@@ -4,7 +4,7 @@ import { formatLocaleDate, type LabRecordDetail as Detail, type Measurement } fr
 import { t } from '../../localization';
 import { colors, spacing } from '../../theme';
 import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
-import { measurementValue, recordSections } from './record-detail-model';
+import { correctionChangedFields, measurementValue, recordSections } from './record-detail-model';
 
 type Props = {
   readonly detail: Detail;
@@ -12,6 +12,7 @@ type Props = {
   readonly onDelete: (id?: string) => void;
   readonly onEditRecord: () => void;
   readonly onViewSource: (item: Measurement) => void;
+  readonly onRetrySource: () => void;
 };
 
 const supportReason = (item: Detail['measurements'][number]) =>
@@ -27,6 +28,7 @@ export function LabRecordDetail({
   onDelete,
   onEditRecord,
   onViewSource,
+  onRetrySource,
 }: Props) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
@@ -75,6 +77,14 @@ export function LabRecordDetail({
               tone="secondary"
             />
           </View>
+          {(detail.source.kind === 'deletion-pending' ||
+            detail.source.kind === 'deletion-failed') && (
+            <AppButton
+              label={t('labs.detailRetrySourceDeletion')}
+              onPress={onRetrySource}
+              tone="secondary"
+            />
+          )}
           {detail.measurements.length === 0 && (
             <AppText style={styles.secondary}>{t('labs.recordNoMeasurements')}</AppText>
           )}
@@ -167,8 +177,14 @@ function MeasurementDetails({
       >
         {t(`labs.provenance.${measurement.provenance.replaceAll('-', '_')}`)}
       </StatusPill>
+      <Fact label={t('labs.detailCurrentLabel')} value={measurement.current.label} />
       <Fact
-        label={t('labs.measurementOriginal')}
+        label={t('labs.detailCurrentValue')}
+        value={`${measurementValue(measurement, Intl.DateTimeFormat().resolvedOptions().locale)}${measurement.current.unit ? ` ${measurement.current.unit}` : ''}`}
+      />
+      <Fact label={t('labs.detailOriginalLabel')} value={measurement.original.label} />
+      <Fact
+        label={t('labs.detailOriginalValue')}
         value={`${measurement.original.valueString}${measurement.original.unit ? ` ${measurement.original.unit}` : ''}`}
       />
       <Fact label={t('labs.measurementType')} value={measurement.current.value.kind} />
@@ -181,6 +197,18 @@ function MeasurementDetails({
         value={measurement.current.flag ?? t('labs.detailNotProvided')}
       />
       <Fact label={t('labs.measurementSpecimen')} value={measurement.specimenType} />
+      <Fact
+        label={t('labs.recordDateLabel')}
+        value={
+          detail.collectionDate.kind === 'known'
+            ? detail.collectionDate.value
+            : t('labs.recordDateMissing')
+        }
+      />
+      <Fact
+        label={t('labs.detailPanel')}
+        value={measurement.panelLabel ?? t('labs.detailNotProvided')}
+      />
       <Fact label={t('labs.detailSupport')} value={supportReason(measurement)} />
       <Fact
         label={t('labs.detailSourceLocation')}
@@ -190,12 +218,33 @@ function MeasurementDetails({
             : t('labs.detailNoSourceLocation')
         }
       />
-      {measurement.corrections.map((correction) => (
-        <Fact
-          key={correction.id}
-          label={t('labs.detailCorrection')}
-          value={`${correction.previous.snapshot.valueString} → ${correction.next.snapshot.valueString}`}
-        />
+      {[...measurement.corrections].reverse().map((correction) => (
+        <View key={correction.id} style={styles.fact}>
+          <AppText variant="label">{t('labs.detailCorrection')}</AppText>
+          <Fact
+            label={t('labs.detailCorrectionDate')}
+            value={new Intl.DateTimeFormat(undefined, {
+              dateStyle: 'medium',
+              timeStyle: 'short',
+            }).format(new Date(correction.correctedAt))}
+          />
+          <Fact
+            label={t('labs.detailCorrectionReason')}
+            value={correction.reason ?? t('labs.detailNotProvided')}
+          />
+          <Fact
+            label={t('labs.detailChangedFields')}
+            value={correctionChangedFields(correction).join(', ') || t('labs.detailNoFieldChanges')}
+          />
+          <Fact
+            label={t('labs.detailBefore')}
+            value={`${correction.previous.snapshot.label} · ${correction.previous.snapshot.valueString}${correction.previous.snapshot.unit ? ` ${correction.previous.snapshot.unit}` : ''} · ${correction.previous.snapshot.referenceInterval ?? '—'} · ${correction.previous.snapshot.flag ?? '—'} · ${correction.previous.specimenType}`}
+          />
+          <Fact
+            label={t('labs.detailAfter')}
+            value={`${correction.next.snapshot.label} · ${correction.next.snapshot.valueString}${correction.next.snapshot.unit ? ` ${correction.next.snapshot.unit}` : ''} · ${correction.next.snapshot.referenceInterval ?? '—'} · ${correction.next.snapshot.flag ?? '—'} · ${correction.next.specimenType}`}
+          />
+        </View>
       ))}
       <View style={styles.actions}>
         <AppButton

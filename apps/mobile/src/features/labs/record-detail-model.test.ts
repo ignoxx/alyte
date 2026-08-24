@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Measurement } from '@alyte/domain';
-import { correctionInput, deletionFacts, measurementDraft } from './record-detail-model';
+import {
+  correctionDraftIsDirty,
+  correctionInput,
+  deletionFacts,
+  measurementDraft,
+} from './record-detail-model';
 
 const measurement = {
   id: 'm1',
@@ -34,6 +39,8 @@ const measurement = {
 
 test('correction validation preserves a draft until it can produce a service input', () => {
   const draft = measurementDraft(measurement);
+  assert.equal(correctionDraftIsDirty(draft, draft), false);
+  assert.equal(correctionDraftIsDirty(draft, { ...draft, flag: 'synthetic flag' }), true);
   assert.equal(correctionInput({ ...draft, value: 'not numeric' }, measurement, 'reason'), null);
   assert.deepEqual(correctionInput({ ...draft, value: '2,5' }, measurement, 'reason')?.value, {
     kind: 'numeric',
@@ -52,6 +59,11 @@ test('deletion facts are derived only from the service plan', () => {
       recordRemains: true,
       sourceRemains: false,
     }),
-    ['measurements-remain', 'record-remains', 'source-deleted', 'linked-records-source-deleted:1'],
+    [
+      { kind: 'measurements-remain' },
+      { kind: 'record-remains' },
+      { kind: 'source-deleted' },
+      { kind: 'linked-records-source-deleted', count: 1 },
+    ],
   );
 });

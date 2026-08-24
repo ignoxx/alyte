@@ -36,6 +36,12 @@ export function measurementDraft(measurement: Measurement): MeasurementDraft {
     reviewState: measurement.reviewState,
   };
 }
+export function correctionDraftIsDirty(
+  initial: MeasurementDraft,
+  current: MeasurementDraft,
+): boolean {
+  return JSON.stringify(initial) !== JSON.stringify(current);
+}
 
 export function correctionInput(
   draft: MeasurementDraft,
@@ -78,18 +84,25 @@ export function measurementValue(measurement: Measurement, locale: string): stri
   return value.value;
 }
 
-export function deletionFacts(plan: LabDeletionPlan): readonly string[] {
-  const facts = [
+export type DeletionFact =
+  | { readonly kind: 'measurements-remain' }
+  | { readonly kind: 'measurements-deleted'; readonly count: number }
+  | { readonly kind: 'record-remains' | 'record-deleted' | 'source-remains' | 'source-deleted' }
+  | { readonly kind: 'linked-records-source-deleted'; readonly count: number };
+
+export function deletionFacts(plan: LabDeletionPlan): readonly DeletionFact[] {
+  const facts: DeletionFact[] = [
     plan.measurementIdsDeleted.length === 0
-      ? 'measurements-remain'
-      : `measurements-deleted:${plan.measurementIdsDeleted.length}`,
-    plan.recordRemains ? 'record-remains' : 'record-deleted',
-    plan.sourceRemains ? 'source-remains' : 'source-deleted',
+      ? { kind: 'measurements-remain' }
+      : { kind: 'measurements-deleted', count: plan.measurementIdsDeleted.length },
+    { kind: plan.recordRemains ? 'record-remains' : 'record-deleted' },
+    { kind: plan.sourceRemains ? 'source-remains' : 'source-deleted' },
   ];
   if (plan.linkedRecordIdsAffectedBySourceDeletion.length > 0)
-    facts.push(
-      `linked-records-source-deleted:${plan.linkedRecordIdsAffectedBySourceDeletion.length}`,
-    );
+    facts.push({
+      kind: 'linked-records-source-deleted',
+      count: plan.linkedRecordIdsAffectedBySourceDeletion.length,
+    });
   return facts;
 }
 
@@ -100,4 +113,62 @@ export function recordSections(detail: LabRecordDetail) {
     grouped.set(key, [...(grouped.get(key) ?? []), measurement]);
   }
   return [...grouped].map(([panel, data]) => ({ panel, data }));
+}
+
+export type MeasurementFact = { readonly key: string; readonly value: string };
+export function measurementFacts(
+  detail: LabRecordDetail,
+  measurement: LabRecordDetail['measurements'][number],
+): readonly MeasurementFact[] {
+  const valueText = (snapshot: Measurement['current']) =>
+    `${snapshot.valueString}${snapshot.unit ? ` ${snapshot.unit}` : ''}`;
+  return [
+    { key: 'current-label', value: measurement.current.label },
+    { key: 'current-value', value: valueText(measurement.current) },
+    { key: 'value-type', value: measurement.current.value.kind },
+    ...(measurement.current.value.kind === 'bounded'
+      ? [{ key: 'comparator', value: measurement.current.value.comparator }]
+      : []),
+    { key: 'unit', value: measurement.current.unit ?? '' },
+    { key: 'reference', value: measurement.current.referenceInterval ?? '' },
+    { key: 'flag', value: measurement.current.flag ?? '' },
+    { key: 'specimen', value: measurement.specimenType },
+    {
+      key: 'date',
+      value: detail.collectionDate.kind === 'known' ? detail.collectionDate.value : '',
+    },
+    { key: 'panel', value: measurement.panelLabel ?? '' },
+    {
+      key: 'support',
+      value:
+        measurement.support.kind === 'comparable-supported'
+          ? measurement.support.kind
+          : measurement.support.reason,
+    },
+    { key: 'source-state', value: detail.source.kind },
+    { key: 'provenance', value: measurement.provenance },
+    {
+      key: 'source-location',
+      value: measurement.source ? String(measurement.source.pageIndex + 1) : '',
+    },
+    { key: 'original-label', value: measurement.original.label },
+    { key: 'original-value', value: valueText(measurement.original) },
+  ];
+}
+
+export function correctionChangedFields(
+  correction: Measurement['corrections'][number],
+): readonly string[] {
+  const previous = correction.previous;
+  const next = correction.next;
+  const fields: string[] = [];
+  if (previous.snapshot.label !== next.snapshot.label) fields.push('label');
+  if (JSON.stringify(previous.snapshot.value) !== JSON.stringify(next.snapshot.value))
+    fields.push('value');
+  for (const key of ['unit', 'referenceInterval', 'flag'] as const)
+    if (previous.snapshot[key] !== next.snapshot[key]) fields.push(key);
+  if (previous.specimenType !== next.specimenType) fields.push('specimen');
+  if (previous.reviewState !== next.reviewState) fields.push('reviewState');
+  if (previous.biomarkerId !== next.biomarkerId) fields.push('biomarker');
+  return fields;
 }

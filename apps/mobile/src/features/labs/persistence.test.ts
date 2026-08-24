@@ -626,7 +626,7 @@ describe('protected manual Lab Record persistence', () => {
       deleteSource: async (reportId) =>
         repository.completeReportDeletion(reportId).then(() => undefined),
     });
-    await relaunched.listRecords();
+    await relaunched.retryPendingDeletion('record-target');
     assert.equal(await repository.getRecord('record-target'), null);
     assert.notEqual(await repository.getRecord('record-sibling'), null);
     assert.equal((await service.getRecordDetail('record-sibling'))?.source.kind, 'deleted');
@@ -669,6 +669,29 @@ describe('protected manual Lab Record persistence', () => {
     await repository.close();
   });
 
+  test('LabsService rejects an execution when the displayed deletion plan became stale', async () => {
+    const { repository } = createRepository();
+    await repository.createRecord({
+      id: 'record-stale-plan',
+      collectionDate: { kind: 'missing' },
+      measurements: [
+        { id: 'measurement-before-plan', label: 'Synthetic', value: { kind: 'numeric', value: 1 } },
+      ],
+    });
+    const service = createLabsService({ repositoryFactory: async () => repository });
+    const displayed = await service.planDeletion({
+      kind: 'record-only',
+      recordId: 'record-stale-plan',
+    });
+    await repository.deleteMeasurement('measurement-before-plan');
+    await assert.rejects(
+      service.executeDeletion({ kind: 'record-only', recordId: 'record-stale-plan' }, displayed),
+      /plan changed/,
+    );
+    assert.notEqual(await repository.getRecord('record-stale-plan'), null);
+    await repository.close();
+  });
+
   test('LabsService source-only keeps linked records readable as source-deleted after restart', async () => {
     const { repository, databasePath } = createRepository();
     await repository.createReport({
@@ -703,6 +726,43 @@ describe('protected manual Lab Record persistence', () => {
       assert.equal((await relaunched.getRecordDetail(id))?.source.kind, 'deleted');
     }
     await reopened.repository.close();
+  });
+
+  test('LabsService retries source-only cleanup without asking UI to infer its operation', async () => {
+    const { repository } = createRepository();
+    await repository.createReport({
+      id: 'report-retry-source',
+      sourceType: 'pdf',
+      originalFilename: 'synthetic.pdf',
+      mimeType: 'application/pdf',
+      originalPath: 'protected://original-reports/retry.pdf',
+      importState: 'imported',
+    });
+    await repository.createRecord({
+      id: 'record-retry-source',
+      labReportId: 'report-retry-source',
+      collectionDate: { kind: 'missing' },
+      measurements: [],
+    });
+    let attempts = 0;
+    const service = createLabsService({
+      repositoryFactory: async () => repository,
+      deleteSource: async (id) => {
+        attempts += 1;
+        if (attempts === 1) {
+          await repository.requestReportDeletion(id);
+          await repository.failReportDeletion(id, 'synthetic');
+          throw new Error('synthetic');
+        }
+        await repository.completeReportDeletion(id);
+      },
+    });
+    await assert.rejects(
+      service.executeDeletion({ kind: 'source-only', recordId: 'record-retry-source' }),
+    );
+    await service.retryPendingDeletion('record-retry-source');
+    assert.equal((await service.getRecordDetail('record-retry-source'))?.source.kind, 'deleted');
+    await repository.close();
   });
 
   test('legacy correction snapshots remain readable after the provenance contract expands', async () => {
