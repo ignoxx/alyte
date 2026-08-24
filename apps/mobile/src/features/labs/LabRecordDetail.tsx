@@ -4,7 +4,12 @@ import { formatLocaleDate, type LabRecordDetail as Detail, type Measurement } fr
 import { t } from '../../localization';
 import { colors, spacing } from '../../theme';
 import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
-import { correctionChangedFields, measurementValue, recordSections } from './record-detail-model';
+import {
+  correctionChangedFields,
+  labRecordSupportReasonLocalizationKeys,
+  measurementValue,
+  recordSections,
+} from './record-detail-model';
 
 type Props = {
   readonly detail: Detail;
@@ -19,7 +24,7 @@ type Props = {
 const supportReason = (item: Detail['measurements'][number]) =>
   item.support.kind === 'comparable-supported'
     ? t('labs.detailComparable')
-    : t(`labs.supportReason.${item.support.reason}`);
+    : t(labRecordSupportReasonLocalizationKeys[item.support.reason]);
 const sourceLabel = (detail: Detail) =>
   t(`labs.sourceState.${detail.source.kind.replaceAll('-', '_')}`);
 

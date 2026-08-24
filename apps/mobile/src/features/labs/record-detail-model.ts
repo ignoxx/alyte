@@ -6,9 +6,28 @@ import {
   type Measurement,
   type MeasurementReviewState,
   type MeasurementValue,
+  type MeasurementSupportState,
   type SpecimenType,
 } from '@alyte/domain';
 import type { LabDeletionPlan } from './service';
+
+type PreservedOnlyReason = Extract<
+  MeasurementSupportState,
+  { readonly kind: 'preserved-only' }
+>['reason'];
+
+type SupportReasonLocalizationKey = `labs.supportReason.${PreservedOnlyReason}`;
+
+export const labRecordSupportReasonLocalizationKeys = {
+  unmapped: 'labs.supportReason.unmapped',
+  'unsupported-canonical-id': 'labs.supportReason.unsupported-canonical-id',
+  unconfirmed: 'labs.supportReason.unconfirmed',
+  'non-numeric-value': 'labs.supportReason.non-numeric-value',
+  'missing-unit': 'labs.supportReason.missing-unit',
+  'incompatible-unit': 'labs.supportReason.incompatible-unit',
+  'incompatible-specimen': 'labs.supportReason.incompatible-specimen',
+  'incompatible-method': 'labs.supportReason.incompatible-method',
+} as const satisfies Record<PreservedOnlyReason, SupportReasonLocalizationKey>;
 
 export type MeasurementDraft = {
   readonly label: string;

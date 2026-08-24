@@ -454,7 +454,8 @@
       "non-numeric-value": "Preserved only · non-numeric value",
       "missing-unit": "Preserved only · unit missing",
       "incompatible-unit": "Preserved only · incompatible unit",
-      "incompatible-specimen": "Preserved only · incompatible specimen"
+      "incompatible-specimen": "Preserved only · incompatible specimen",
+      "incompatible-method": "Preserved only · method profile incomplete or incompatible; not compared"
     },
     "deletionScope": {
       "measurement_only": "Measurement only",

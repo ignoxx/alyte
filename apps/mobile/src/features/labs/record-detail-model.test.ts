@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Measurement } from '@alyte/domain';
+import { t } from '../../localization';
 import {
   correctionDraftIsDirty,
   correctionInput,
   deletionFacts,
+  labRecordSupportReasonLocalizationKeys,
   measurementDraft,
 } from './record-detail-model';
 
@@ -66,4 +68,16 @@ test('deletion facts are derived only from the service plan', () => {
       { kind: 'linked-records-source-deleted', count: 1 },
     ],
   );
+});
+
+test('every Lab Record preserved-only support reason has localized detail copy', () => {
+  for (const [reason, localizationKey] of Object.entries(labRecordSupportReasonLocalizationKeys)) {
+    const copy = t(localizationKey);
+    assert.notEqual(copy, localizationKey, `${reason} must resolve to user-facing copy`);
+    assert.notEqual(copy.trim(), '', `${reason} must not resolve to blank copy`);
+  }
+
+  const methodCopy = t(labRecordSupportReasonLocalizationKeys['incompatible-method']);
+  assert.match(methodCopy, /Preserved only/);
+  assert.match(methodCopy, /not compared/);
 });
