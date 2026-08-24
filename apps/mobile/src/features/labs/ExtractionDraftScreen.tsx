@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Platform,
   Pressable,
   SectionList,
   StyleSheet,
   useWindowDimensions,
   View,
+  type LayoutChangeEvent,
 } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { ExtractionDraft, ExtractionDraftRow } from '@alyte/domain';
 import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
@@ -79,6 +82,7 @@ export function ExtractionDraftScreen() {
   const route = useRoute<DraftRoute>();
   const { reports } = useServices();
   const { fontScale } = useWindowDimensions();
+  const safeAreaInsets = useSafeAreaInsets();
   const largeType = fontScale > 1;
   const [draft, setDraft] = useState<ExtractionDraft | null>(null);
   const [search, setSearch] = useState('');
@@ -86,6 +90,7 @@ export function ExtractionDraftScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
+  const [accessoryHeight, setAccessoryHeight] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -146,24 +151,39 @@ export function ExtractionDraftScreen() {
 
   const usesNativeTabAccessory =
     Platform.OS === 'ios' && Number.parseInt(String(Platform.Version), 10) >= 26;
+  const nativeBottomInset = usesNativeTabAccessory ? accessoryHeight + safeAreaInsets.bottom : 0;
+  const measureAccessory = useCallback((event: LayoutChangeEvent) => {
+    const measuredHeight = event.nativeEvent.layout.height;
+    setAccessoryHeight((current) => (current === measuredHeight ? current : measuredHeight));
+  }, []);
   useLayoutEffect(() => {
     if (!usesNativeTabAccessory || draft === null) return;
     const tabNavigation = navigation.getParent();
     if (tabNavigation === undefined) return;
     tabNavigation.setOptions({
       bottomAccessory: () => (
-        <ReviewFooter
+        <ReviewAccessory
           busy={busy}
           canConfirm={canConfirm}
           included={included}
           needsReview={needsReview}
           onConfirm={() => void confirm()}
-          compact
+          onLayout={measureAccessory}
         />
       ),
     });
     return () => tabNavigation.setOptions({ bottomAccessory: undefined });
-  }, [busy, canConfirm, confirm, draft, included, navigation, needsReview, usesNativeTabAccessory]);
+  }, [
+    busy,
+    canConfirm,
+    confirm,
+    draft,
+    included,
+    measureAccessory,
+    navigation,
+    needsReview,
+    usesNativeTabAccessory,
+  ]);
 
   if (loading) return <AppText style={styles.loading}>{t('labs.loading')}</AppText>;
   if (draft === null) {
@@ -179,6 +199,7 @@ export function ExtractionDraftScreen() {
     <View style={styles.safe}>
       <SectionList
         contentContainerStyle={styles.content}
+        contentInset={{ bottom: nativeBottomInset }}
         contentInsetAdjustmentBehavior="automatic"
         sections={sections}
         keyExtractor={(row) => row.id}
@@ -299,6 +320,7 @@ export function ExtractionDraftScreen() {
           </Pressable>
         )}
         stickySectionHeadersEnabled={false}
+        scrollIndicatorInsets={{ bottom: nativeBottomInset }}
         style={styles.list}
       />
       {!usesNativeTabAccessory && (
@@ -347,36 +369,83 @@ function ReviewFooter({
   included,
   needsReview,
   onConfirm,
-  compact = false,
 }: {
   readonly busy: boolean;
   readonly canConfirm: boolean;
   readonly included: number;
   readonly needsReview: number;
   readonly onConfirm: () => void;
-  readonly compact?: boolean;
 }) {
+  const accessibilityLabel = confirmationAccessibilityLabel(included, needsReview);
+
   return (
-    <View style={[styles.footer, compact && styles.footerCompact]}>
-      {!compact && (
-        <AppText style={[styles.muted, styles.footerProgress]}>
-          {t('labs.extractionConfirmationProgress')
-            .replace('{included}', String(included))
-            .replace('{review}', String(needsReview))}
-        </AppText>
-      )}
-      <AppButton
-        accessibilityLabel={`${t('labs.extractionConfirm')}. ${t(
-          'labs.extractionConfirmationProgress',
-        )
+    <View style={styles.footer}>
+      <AppText style={[styles.muted, styles.footerProgress]}>
+        {t('labs.extractionConfirmationProgress')
           .replace('{included}', String(included))
-          .replace('{review}', String(needsReview))}`}
+          .replace('{review}', String(needsReview))}
+      </AppText>
+      <AppButton
+        accessibilityLabel={accessibilityLabel}
         disabled={busy || !canConfirm}
-        label={t(compact ? 'labs.extractionConfirmShort' : 'labs.extractionConfirm')}
-        {...(compact ? { labelMaxFontSizeMultiplier: 1.3 } : {})}
+        label={t('labs.extractionConfirm')}
         onPress={onConfirm}
-        style={[styles.confirm, compact && styles.confirmCompact]}
+        style={styles.confirm}
       />
+    </View>
+  );
+}
+
+function confirmationAccessibilityLabel(included: number, needsReview: number): string {
+  return `${t('labs.extractionConfirm')}. ${t('labs.extractionConfirmationProgress')
+    .replace('{included}', String(included))
+    .replace('{review}', String(needsReview))}`;
+}
+
+function ReviewAccessory({
+  busy,
+  canConfirm,
+  included,
+  needsReview,
+  onConfirm,
+  onLayout,
+}: {
+  readonly busy: boolean;
+  readonly canConfirm: boolean;
+  readonly included: number;
+  readonly needsReview: number;
+  readonly onConfirm: () => void;
+  readonly onLayout: (event: LayoutChangeEvent) => void;
+}) {
+  const disabled = busy || !canConfirm;
+
+  return (
+    <View onLayout={onLayout} style={styles.accessory}>
+      <Pressable
+        accessibilityLabel={confirmationAccessibilityLabel(included, needsReview)}
+        accessibilityRole="button"
+        accessibilityState={{ busy, disabled }}
+        disabled={disabled}
+        onPress={onConfirm}
+        style={({ pressed }) => [
+          styles.accessoryAction,
+          pressed && !disabled && styles.accessoryActionPressed,
+          disabled && styles.accessoryActionDisabled,
+        ]}
+      >
+        {busy ? (
+          <ActivityIndicator color={colors.accent} />
+        ) : (
+          <AppText
+            maxFontSizeMultiplier={1.3}
+            numberOfLines={1}
+            variant="label"
+            style={styles.accessoryActionLabel}
+          >
+            {t('labs.extractionConfirmShort')}
+          </AppText>
+        )}
+      </Pressable>
     </View>
   );
 }
@@ -460,8 +529,28 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     paddingBottom: spacing.lg,
   },
-  footerCompact: { paddingBottom: spacing.sm },
   footerProgress: { flex: 1, minWidth: 0 },
   confirm: { flexShrink: 0, minWidth: 164 },
-  confirmCompact: { flex: 1, minWidth: 0 },
+  // UIKit measures the accessory and places it above the Liquid Glass tab bar. Keep the root at
+  // the action's intrinsic 44pt target so custom padding cannot overflow that native placement.
+  accessory: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    minHeight: 44,
+    paddingHorizontal: spacing.md,
+  },
+  accessoryAction: {
+    alignItems: 'center',
+    borderCurve: 'continuous',
+    borderRadius: 999,
+    justifyContent: 'center',
+    minHeight: 44,
+    minWidth: 96,
+    paddingHorizontal: spacing.md,
+  },
+  accessoryActionPressed: { backgroundColor: colors.accentSoft },
+  accessoryActionDisabled: { opacity: 0.45 },
+  accessoryActionLabel: { color: colors.accent },
 });
