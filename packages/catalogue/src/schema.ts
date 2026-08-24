@@ -63,19 +63,29 @@ export type GeneralGuidance = {
     readonly population: 'adults';
     readonly jurisdiction: string;
     readonly context: 'screening';
+    readonly sex: 'all' | 'female' | 'male';
+    readonly fasting: 'any' | 'fasting' | 'non-fasting';
     readonly limitations: readonly string[];
   };
   /** Disagreement is explicit; catalogue content never silently chooses a universal threshold. */
   readonly disagreement: string | null;
+  readonly authority: string;
+  readonly publicationVersion: string;
+  readonly reviewDate: string | null;
+  readonly unit: string;
+  readonly boundarySemantics: 'exclusive' | 'inclusive' | 'sex-specific';
   readonly sources: readonly string[];
   readonly review: CatalogueReviewMetadata;
 };
 
 export type BiomarkerCatalogueEntry = {
   readonly id: string;
+  /** Catalogue release that authored this entry; optional for pending non-lipid extensions. */
+  readonly catalogueVersion?: string;
   readonly aliases: readonly string[];
   readonly specimens: readonly CatalogueSpecimen[];
   readonly units: readonly string[];
+  readonly canonicalLabel?: string;
   readonly valueType?: 'numeric';
   readonly canonicalUnit?: string;
   readonly unitConversions?: readonly UnitConversion[];
@@ -106,14 +116,27 @@ export type CatalogueArtifact = {
   readonly schemaVersion: typeof CATALOGUE_ARTIFACT_SCHEMA_VERSION;
   readonly manifest: CatalogueManifest;
   readonly entries: readonly BiomarkerCatalogueEntry[];
+  readonly sourceSet: readonly CatalogueSource[];
   readonly integrity: { readonly algorithm: 'SHA-256'; readonly digest: string };
   readonly signature: CatalogueSignature | null;
 };
 
 export type CatalogueSignature = {
+  /** Key ID is resolved against caller-supplied trusted key material. */
+  readonly keyId: string;
   readonly algorithm: 'Ed25519' | 'ECDSA-P256-SHA256';
-  readonly publicKeyJwk: Record<string, unknown>;
   readonly value: string;
+};
+
+export type CatalogueTrustedKey = {
+  readonly keyId: string;
+  readonly algorithm: CatalogueSignature['algorithm'];
+  readonly publicKeyJwk: Record<string, unknown>;
+};
+
+export type CatalogueVerificationOptions = {
+  readonly requireSignature?: boolean;
+  readonly trustedKeys?: readonly CatalogueTrustedKey[];
 };
 
 export type CatalogueArtifactVerification =

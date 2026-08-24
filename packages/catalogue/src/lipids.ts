@@ -69,6 +69,10 @@ const lipidGuidance = (
   label: string,
   thresholds: readonly GeneralGuidanceThreshold[],
   limitations: readonly string[] = [],
+  applicability: {
+    readonly sex: 'all' | 'female' | 'male';
+    readonly fasting?: 'any' | 'fasting' | 'non-fasting';
+  } = { sex: 'all' },
 ): readonly GeneralGuidance[] => [
   {
     id,
@@ -80,18 +84,26 @@ const lipidGuidance = (
       population: 'adults',
       jurisdiction: 'US',
       context: 'screening',
+      sex: applicability.sex,
+      fasting: applicability.fasting ?? 'any',
       limitations,
     },
     disagreement:
       'Authorities use context-dependent thresholds; this baseline records the cited screening point without resolving it into a personal target.',
     sources: [cdcLipidSource.id, nhlbiLipidSource.id],
     review: reviewPending,
+    authority: 'CDC and NHLBI/NIH',
+    publicationVersion: 'CDC-2024-05-15; NHLBI-current-page',
+    reviewDate: null,
+    unit: thresholds[0]?.unit ?? 'mg/dL',
+    boundarySemantics: applicability.sex === 'all' ? 'exclusive' : 'sex-specific',
   },
 ];
 
 const lipidEntry = (
   entry: Omit<
     BiomarkerCatalogueEntry,
+    | 'canonicalLabel'
     | 'valueType'
     | 'canonicalUnit'
     | 'unitConversions'
@@ -101,6 +113,7 @@ const lipidEntry = (
     | 'review'
     | 'generalGuidance'
   > & {
+    readonly canonicalLabel: string;
     readonly explanation: string;
     readonly sources: readonly CatalogueSource[];
     readonly generalGuidance: readonly GeneralGuidance[];
@@ -108,8 +121,10 @@ const lipidEntry = (
   },
 ): BiomarkerCatalogueEntry => ({
   ...entry,
+  catalogueVersion: CATALOGUE_VERSION,
   valueType: 'numeric',
   canonicalUnit: 'mg/dL',
+  canonicalLabel: entry.canonicalLabel,
   unitConversions: entry.unitConversions,
   specimenCompatibility: [['blood', 'serum', 'plasma'], ['unknown']],
   explanation: entry.explanation,
@@ -121,6 +136,7 @@ const lipidEntry = (
 export const lipidBiomarkers: readonly BiomarkerCatalogueEntry[] = [
   lipidEntry({
     id: 'biomarker.total_cholesterol',
+    canonicalLabel: 'Total cholesterol',
     aliases: [
       'total cholesterol',
       'cholesterol total',
@@ -136,7 +152,7 @@ export const lipidBiomarkers: readonly BiomarkerCatalogueEntry[] = [
     units: ['mg/dL', 'mmol/L'],
     explanation:
       'Measures the total amount of cholesterol carried in blood. It is commonly included in a lipid panel with LDL-C, HDL-C, and triglycerides. Interpretation depends on the laboratory interval and broader context.',
-    sources: [cdcLipidSource, nhlbiLipidSource],
+    sources: [conversionSource, cdcLipidSource, nhlbiLipidSource],
     unitConversions: lipidConversions(38.67),
     generalGuidance: lipidGuidance(
       'guidance.total-cholesterol.screening-us',
@@ -146,6 +162,7 @@ export const lipidBiomarkers: readonly BiomarkerCatalogueEntry[] = [
   }),
   lipidEntry({
     id: 'biomarker.ldl_c',
+    canonicalLabel: 'LDL-C',
     aliases: [
       'ldl',
       'ldl-c',
@@ -162,7 +179,7 @@ export const lipidBiomarkers: readonly BiomarkerCatalogueEntry[] = [
     units: ['mg/dL', 'mmol/L'],
     explanation:
       'Measures cholesterol carried by low-density lipoproteins. Persistently higher LDL-C is associated with cardiovascular risk; this app does not interpret an individual result.',
-    sources: [cdcLipidSource, nhlbiLipidSource],
+    sources: [conversionSource, cdcLipidSource, nhlbiLipidSource],
     unitConversions: lipidConversions(38.67),
     generalGuidance: lipidGuidance(
       'guidance.ldl-c.screening-us',
@@ -172,6 +189,7 @@ export const lipidBiomarkers: readonly BiomarkerCatalogueEntry[] = [
   }),
   lipidEntry({
     id: 'biomarker.hdl_c',
+    canonicalLabel: 'HDL-C',
     aliases: [
       'hdl',
       'hdl-c',
@@ -186,20 +204,28 @@ export const lipidBiomarkers: readonly BiomarkerCatalogueEntry[] = [
     units: ['mg/dL', 'mmol/L'],
     explanation:
       'Measures cholesterol carried by high-density lipoproteins. It is considered with LDL-C, triglycerides, and other context; a single HDL-C result is not interpreted on its own.',
-    sources: [cdcLipidSource, nhlbiLipidSource],
+    sources: [conversionSource, cdcLipidSource, nhlbiLipidSource],
     unitConversions: lipidConversions(38.67),
-    generalGuidance: lipidGuidance(
-      'guidance.hdl-c.screening-us',
-      'Adult screening reference points by sex',
-      [
-        { operator: '>=', value: 40, unit: 'mg/dL' },
-        { operator: '>=', value: 50, unit: 'mg/dL' },
-      ],
-      ['The cited thresholds are sex-specific; do not collapse them into one value.'],
-    ),
+    generalGuidance: [
+      ...lipidGuidance(
+        'guidance.hdl-c.screening-us-female',
+        'Adult screening reference point',
+        [{ operator: '>=', value: 50, unit: 'mg/dL' }],
+        ['This cited threshold applies only when the report context is female.'],
+        { sex: 'female' },
+      ),
+      ...lipidGuidance(
+        'guidance.hdl-c.screening-us-male',
+        'Adult screening reference point',
+        [{ operator: '>=', value: 40, unit: 'mg/dL' }],
+        ['This cited threshold applies only when the report context is male.'],
+        { sex: 'male' },
+      ),
+    ],
   }),
   lipidEntry({
     id: 'biomarker.triglycerides',
+    canonicalLabel: 'Triglycerides',
     aliases: [
       'triglycerides',
       'triglyceride',
@@ -215,7 +241,7 @@ export const lipidBiomarkers: readonly BiomarkerCatalogueEntry[] = [
     units: ['mg/dL', 'mmol/L'],
     explanation:
       'Measures triglycerides, a type of fat transported in blood. Levels can vary with fasting state and other context, so the laboratory interval and collection context remain relevant.',
-    sources: [cdcLipidSource, nhlbiLipidSource],
+    sources: [conversionSource, cdcLipidSource, nhlbiLipidSource],
     unitConversions: lipidConversions(88.57),
     generalGuidance: lipidGuidance(
       'guidance.triglycerides.screening-us',

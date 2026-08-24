@@ -119,6 +119,7 @@ export type CreateMeasurementInput = {
 
 export type ComparableBiomarkerConstraint = {
   readonly id: string;
+  readonly catalogueVersion?: string;
   readonly specimens: readonly SpecimenType[];
   readonly units: readonly string[];
   readonly canonicalUnit?: string;
@@ -127,12 +128,50 @@ export type ComparableBiomarkerConstraint = {
     readonly to: string;
     readonly factor: number;
     readonly offset?: number;
+    readonly sourceId: string;
   }[];
   /** Explicit groups keep serum/plasma compatibility a catalogue decision, not a guess. */
   readonly specimenCompatibility?: readonly (readonly [SpecimenType, ...SpecimenType[]])[];
   readonly valueType?: 'numeric';
   readonly explanation?: string;
-  readonly generalGuidance?: readonly unknown[];
+  readonly generalGuidance?: readonly ComparableGeneralGuidance[];
+};
+
+export type ComparableGeneralGuidance = {
+  readonly id: string;
+  readonly thresholds: readonly {
+    readonly operator: '<' | '<=' | '>' | '>=';
+    readonly value: number;
+    readonly unit: string;
+  }[];
+  readonly applicability: {
+    readonly population: 'adults';
+    readonly jurisdiction: string;
+    readonly context: 'screening';
+    readonly sex: 'all' | 'female' | 'male';
+    readonly fasting: 'any' | 'fasting' | 'non-fasting';
+    readonly limitations: readonly string[];
+  };
+  readonly authority: string;
+  readonly publicationVersion: string;
+  readonly reviewDate: string | null;
+  readonly unit: string;
+  readonly boundarySemantics: 'exclusive' | 'inclusive' | 'sex-specific';
+  readonly sources: readonly string[];
+};
+
+export type GuidanceContext = {
+  readonly population: 'adults';
+  readonly jurisdiction: string;
+  readonly sex: 'female' | 'male' | 'unknown';
+  readonly fasting: 'fasting' | 'non-fasting' | 'unknown';
+};
+
+export type SelectedGeneralGuidance = {
+  readonly guidanceId: string;
+  readonly catalogueVersion: string | null;
+  readonly sourceIds: readonly string[];
+  readonly guidance: ComparableGeneralGuidance;
 };
 
 export type LabRecordSourceState =
@@ -398,6 +437,8 @@ export function assertMeasurementValue(value: MeasurementValue): void {
 export type ComparableNormalizedValue = {
   readonly value: number;
   readonly unit: string;
+  readonly catalogueVersion: string | null;
+  readonly conversionSourceIds: readonly string[];
 };
 
 export type MeasuredTrendPoint = {
@@ -406,6 +447,7 @@ export type MeasuredTrendPoint = {
   readonly labRecordId: string;
   readonly collectionDate: string;
   readonly biomarkerId: CanonicalId;
+  readonly catalogueVersion: string | null;
   readonly specimenType: SpecimenType;
   /** Deterministic value used by a renderer; no value is inferred for any other record. */
   readonly normalized: ComparableNormalizedValue;
@@ -437,15 +479,14 @@ export type MeasuredTrendNonPoint = {
 export type MeasuredTrendDirection = 'increased' | 'decreased' | 'stable' | 'not-comparable';
 
 export type MeasuredTrend = {
-  readonly biomarkerId: string;
+  readonly biomarkerId: CanonicalId;
   readonly points: readonly MeasuredTrendPoint[];
   readonly nonPoints: readonly MeasuredTrendNonPoint[];
   /** Segments deliberately stop at date-missing, incompatible, bounded, or absent records. */
   readonly segments: readonly (readonly MeasuredTrendPoint[])[];
   readonly direction: MeasuredTrendDirection;
-  readonly directionText: string;
   /** Separate catalogue content; it never replaces a point's laboratoryReference. */
-  readonly generalGuidance: readonly unknown[];
+  readonly generalGuidance: readonly SelectedGeneralGuidance[];
 };
 
 export type MeasuredChartModel = MeasuredTrend;
@@ -458,14 +499,38 @@ export function convertComparableValue(
 ): ComparableNormalizedValue | null {
   if (!Number.isFinite(value)) return null;
   if (!entry.units.includes(fromUnit) || !entry.units.includes(targetUnit)) return null;
-  if (fromUnit === targetUnit) return { value, unit: targetUnit };
+  if (fromUnit === targetUnit) {
+    return {
+      value,
+      unit: targetUnit,
+      catalogueVersion: entry.catalogueVersion ?? null,
+      conversionSourceIds: [],
+    };
+  }
   const conversion = entry.unitConversions?.find(
     (candidate) => candidate.from === fromUnit && candidate.to === targetUnit,
   );
   if (conversion === undefined) return null;
   // Keep conversions reproducible across engines while avoiding binary-noise in displayed values.
   const converted = Number((value * conversion.factor + (conversion.offset ?? 0)).toFixed(12));
-  return Number.isFinite(converted) ? { value: converted, unit: targetUnit } : null;
+  return Number.isFinite(converted)
+    ? {
+        value: converted,
+        unit: targetUnit,
+        catalogueVersion: entry.catalogueVersion ?? null,
+        conversionSourceIds: [conversion.sourceId],
+      }
+    : null;
+}
+
+function specimenGroupIndex(
+  entry: ComparableBiomarkerConstraint,
+  specimen: SpecimenType,
+): number | null {
+  if (!entry.specimens.includes(specimen)) return null;
+  if (entry.specimenCompatibility === undefined) return 0;
+  const index = entry.specimenCompatibility.findIndex((group) => group.includes(specimen));
+  return index < 0 ? null : index;
 }
 
 function specimenPairCompatible(
@@ -488,6 +553,7 @@ function nonPointForMeasurement(
   record: LabRecord,
   measurement: Measurement,
   entry: ComparableBiomarkerConstraint | undefined,
+  reasonOverride?: MeasuredTrendNonPoint['reason'],
 ): MeasuredTrendNonPoint {
   const value = measurement.current.value;
   if (record.collectionDate.kind === 'missing') {
@@ -496,7 +562,7 @@ function nonPointForMeasurement(
       labRecordId: record.id,
       collectionDate: record.collectionDate,
       measurementId: measurement.id,
-      source: measurement.current,
+      source: measurement.original,
     };
   }
   if (value.kind === 'bounded') {
@@ -505,7 +571,7 @@ function nonPointForMeasurement(
       labRecordId: record.id,
       collectionDate: record.collectionDate,
       measurementId: measurement.id,
-      source: measurement.current,
+      source: measurement.original,
     };
   }
   if (entry === undefined) {
@@ -514,8 +580,18 @@ function nonPointForMeasurement(
       labRecordId: record.id,
       collectionDate: record.collectionDate,
       measurementId: measurement.id,
-      source: measurement.current,
+      source: measurement.original,
       reason: 'unsupported-canonical-id',
+    };
+  }
+  if (reasonOverride !== undefined) {
+    return {
+      kind: 'incompatible',
+      labRecordId: record.id,
+      collectionDate: record.collectionDate,
+      measurementId: measurement.id,
+      source: measurement.original,
+      reason: reasonOverride,
     };
   }
   let reason: MeasuredTrendNonPoint['reason'] = 'non-numeric-value';
@@ -531,7 +607,7 @@ function nonPointForMeasurement(
     labRecordId: record.id,
     collectionDate: record.collectionDate,
     measurementId: measurement.id,
-    source: measurement.current,
+    source: measurement.original,
     reason,
   };
 }
@@ -543,8 +619,9 @@ function nonPointForMeasurement(
  */
 export function buildMeasuredTrend(
   records: readonly LabRecord[],
-  biomarkerId: string,
+  biomarkerId: CanonicalId,
   catalogue: readonly ComparableBiomarkerConstraint[],
+  options: { readonly guidanceContext?: GuidanceContext } = {},
 ): MeasuredChartModel {
   const entry = catalogue.find((candidate) => candidate.id === biomarkerId);
   const orderedRecords = [...records].sort((left, right) => {
@@ -557,10 +634,12 @@ export function buildMeasuredTrend(
   const nonPoints: MeasuredTrendNonPoint[] = [];
   const segments: MeasuredTrendPoint[][] = [];
   let currentSegment: MeasuredTrendPoint[] | null = null;
+  let activeSpecimenGroup: number | null = null;
 
   for (const record of orderedRecords) {
     const candidates = record.measurements.filter(
-      (measurement) => measurement.biomarkerId === biomarkerId,
+      (measurement): measurement is Measurement & { readonly biomarkerId: CanonicalId } =>
+        measurement.biomarkerId === biomarkerId,
     );
     if (candidates.length === 0) {
       if (record.collectionDate.kind === 'known') {
@@ -581,6 +660,7 @@ export function buildMeasuredTrend(
         });
       }
       currentSegment = null;
+      activeSpecimenGroup = null;
       continue;
     }
     let recordHasPoint = false;
@@ -596,13 +676,26 @@ export function buildMeasuredTrend(
         specimenPairCompatible(entry, measurement.specimenType, record.specimenType)
           ? convertComparableValue(value.value, unit, entry)
           : null;
-      if (record.collectionDate.kind === 'known' && normalized !== null) {
+      const specimenGroup =
+        entry === undefined
+          ? null
+          : (specimenGroupIndex(entry, measurement.specimenType) ??
+            specimenGroupIndex(entry, record.specimenType));
+      const crossPointSpecimenCompatible =
+        specimenGroup !== null &&
+        (activeSpecimenGroup === null || activeSpecimenGroup === specimenGroup);
+      if (
+        record.collectionDate.kind === 'known' &&
+        normalized !== null &&
+        crossPointSpecimenCompatible
+      ) {
         const point: MeasuredTrendPoint = {
           kind: 'measured-point',
           measurementId: measurement.id,
           labRecordId: record.id,
           collectionDate: record.collectionDate.value,
-          biomarkerId: measurement.biomarkerId as CanonicalId,
+          biomarkerId: measurement.biomarkerId,
+          catalogueVersion: normalized.catalogueVersion,
           specimenType: measurement.specimenType,
           normalized,
           source: measurement.original,
@@ -619,9 +712,20 @@ export function buildMeasuredTrend(
         }
         currentSegment.push(point);
         recordHasPoint = true;
+        activeSpecimenGroup = specimenGroup;
       } else {
-        nonPoints.push(nonPointForMeasurement(record, measurement, entry));
+        nonPoints.push(
+          nonPointForMeasurement(
+            record,
+            measurement,
+            entry,
+            normalized !== null && !crossPointSpecimenCompatible
+              ? 'incompatible-specimen'
+              : undefined,
+          ),
+        );
         currentSegment = null;
+        activeSpecimenGroup = null;
       }
     }
     if (!recordHasPoint) currentSegment = null;
@@ -635,21 +739,37 @@ export function buildMeasuredTrend(
         : points[points.length - 1]!.normalized.value < points[0]!.normalized.value
           ? 'decreased'
           : 'stable';
-  const directionText =
-    direction === 'not-comparable'
-      ? 'Not comparable from the available measured points.'
-      : `Measured direction: ${direction}.`;
   return {
     biomarkerId,
     points,
     nonPoints,
     segments,
     direction,
-    directionText,
-    generalGuidance: entry?.generalGuidance ?? [],
+    generalGuidance:
+      entry === undefined || options.guidanceContext === undefined
+        ? []
+        : selectApplicableGeneralGuidance(entry, options.guidanceContext),
   };
 }
 
-export const buildLipidComparison = buildMeasuredTrend;
-export const buildMeasuredChartModel = buildMeasuredTrend;
-export const buildLipidChartModel = buildMeasuredTrend;
+export function selectApplicableGeneralGuidance(
+  entry: ComparableBiomarkerConstraint,
+  context: GuidanceContext,
+): readonly SelectedGeneralGuidance[] {
+  if (context.sex === 'unknown' || context.fasting === 'unknown') return [];
+  return (entry.generalGuidance ?? [])
+    .filter(
+      (guidance) =>
+        guidance.applicability.population === context.population &&
+        guidance.applicability.jurisdiction === context.jurisdiction &&
+        (guidance.applicability.sex === 'all' || guidance.applicability.sex === context.sex) &&
+        (guidance.applicability.fasting === 'any' ||
+          guidance.applicability.fasting === context.fasting),
+    )
+    .map((guidance) => ({
+      guidanceId: guidance.id,
+      catalogueVersion: entry.catalogueVersion ?? null,
+      sourceIds: guidance.sources,
+      guidance,
+    }));
+}

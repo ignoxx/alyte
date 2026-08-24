@@ -6,6 +6,8 @@ import {
   type CatalogueArtifact,
   type CatalogueArtifactVerification,
   type CatalogueManifest,
+  type CatalogueSource,
+  type CatalogueVerificationOptions,
 } from './schema.js';
 import { assertCatalogueValid, validateCatalogue } from './validation.js';
 
@@ -25,7 +27,11 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 function base64ToBytes(value: string): Uint8Array {
-  const binary = atob(value);
+  const normalized = value
+    .replace(/-/g, '+')
+    .replace(/_/g, '/')
+    .padEnd(Math.ceil(value.length / 4) * 4, '=');
+  const binary = atob(normalized);
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
@@ -56,17 +62,20 @@ export async function sha256Hex(value: string): Promise<string> {
 export async function createCatalogueArtifact(
   entries: readonly BiomarkerCatalogueEntry[],
   manifest: CatalogueManifest = catalogueManifest,
+  sourceSet: readonly CatalogueSource[] = deriveSourceSet(entries),
 ): Promise<CatalogueArtifact> {
   assertCatalogueValid(entries);
   const payload = canonicalJson({
     schemaVersion: CATALOGUE_ARTIFACT_SCHEMA_VERSION,
     manifest,
     entries,
+    sourceSet,
   });
   return {
     schemaVersion: CATALOGUE_ARTIFACT_SCHEMA_VERSION,
     manifest,
     entries,
+    sourceSet,
     integrity: { algorithm: 'SHA-256', digest: await sha256Hex(payload) },
     signature: null,
   };
@@ -74,7 +83,7 @@ export async function createCatalogueArtifact(
 
 export async function validateCatalogueArtifact(
   artifact: CatalogueArtifact,
-  options: { readonly requireSignature?: boolean } = {},
+  options: CatalogueVerificationOptions = {},
 ): Promise<CatalogueArtifactVerification> {
   if (artifact.schemaVersion !== CATALOGUE_ARTIFACT_SCHEMA_VERSION) {
     return { ok: false, reason: 'catalogue artifact schema mismatch' };
@@ -82,13 +91,26 @@ export async function validateCatalogueArtifact(
   if (artifact.manifest.version !== CATALOGUE_VERSION) {
     return { ok: false, reason: 'catalogue version mismatch' };
   }
-  const issues = validateCatalogue(artifact.entries);
+  let issues;
+  try {
+    issues = validateCatalogue(artifact.entries);
+  } catch {
+    return { ok: false, reason: 'catalogue validation: malformed entry' };
+  }
   if (issues.length > 0)
     return { ok: false, reason: `catalogue validation: ${issues[0]!.message}` };
+  let localReferenceIssue: string | null;
+  try {
+    localReferenceIssue = validateArtifactSourceReferences(artifact.entries, artifact.sourceSet);
+  } catch {
+    return { ok: false, reason: 'catalogue source set is malformed' };
+  }
+  if (localReferenceIssue !== null) return { ok: false, reason: localReferenceIssue };
   const payload = canonicalJson({
     schemaVersion: CATALOGUE_ARTIFACT_SCHEMA_VERSION,
     manifest: artifact.manifest,
     entries: artifact.entries,
+    sourceSet: artifact.sourceSet,
   });
   const digest = await sha256Hex(payload);
   if (digest !== artifact.integrity.digest)
@@ -102,12 +124,20 @@ export async function validateCatalogueArtifact(
   const subtle = getCryptoSubtle();
   if (subtle === null)
     return { ok: false, reason: 'Web Crypto signature verification unavailable' };
+  const trustedKey = options.trustedKeys?.find(
+    (candidate) => candidate.keyId === artifact.signature?.keyId,
+  );
+  if (trustedKey === undefined)
+    return { ok: false, reason: 'catalogue signing key is not trusted' };
+  if (trustedKey.algorithm !== artifact.signature.algorithm) {
+    return { ok: false, reason: 'catalogue signing algorithm does not match trusted key' };
+  }
   try {
     const algorithm =
       artifact.signature.algorithm === 'Ed25519'
         ? { name: 'Ed25519' }
         : { name: 'ECDSA', namedCurve: 'P-256' };
-    const key = await subtle.importKey('jwk', artifact.signature.publicKeyJwk, algorithm, false, [
+    const key = await subtle.importKey('jwk', trustedKey.publicKeyJwk, algorithm, false, [
       'verify',
     ]);
     const verified = await subtle.verify(
@@ -127,3 +157,31 @@ export async function validateCatalogueArtifact(
 }
 
 export const verifyCatalogueArtifact = validateCatalogueArtifact;
+
+function deriveSourceSet(entries: readonly BiomarkerCatalogueEntry[]): readonly CatalogueSource[] {
+  const sources = entries.flatMap((entry) => entry.sources ?? []);
+  return [...new Map(sources.map((source) => [source.id, source])).values()];
+}
+
+function validateArtifactSourceReferences(
+  entries: readonly BiomarkerCatalogueEntry[],
+  sourceSet: readonly CatalogueSource[],
+): string | null {
+  const sourceIds = new Set(sourceSet.map((source) => source.id));
+  for (const entry of entries) {
+    for (const source of entry.sources ?? []) {
+      if (!sourceIds.has(source.id)) return `catalogue source is missing: ${source.id}`;
+    }
+    for (const conversion of entry.unitConversions ?? []) {
+      if (!sourceIds.has(conversion.sourceId)) {
+        return `catalogue conversion source is missing: ${conversion.sourceId}`;
+      }
+    }
+    for (const guidance of entry.generalGuidance ?? []) {
+      for (const sourceId of guidance.sources) {
+        if (!sourceIds.has(sourceId)) return `catalogue guidance source is missing: ${sourceId}`;
+      }
+    }
+  }
+  return null;
+}

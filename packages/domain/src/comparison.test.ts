@@ -1,10 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { findCatalogueBiomarker } from '@alyte/catalogue';
+import { findCatalogueBiomarker, lipidSources } from '@alyte/catalogue';
 import { canonicalId } from './index.js';
 import {
   buildMeasuredTrend,
   convertComparableValue,
+  selectApplicableGeneralGuidance,
   type LabRecord,
   type Measurement,
 } from './labs.js';
@@ -16,8 +17,9 @@ function measurement(
   recordId: string,
   value: Measurement['current']['value'],
   options: Partial<Pick<Measurement, 'specimenType' | 'reviewState'>> &
-    Partial<Measurement['current']> = {},
+    Partial<Measurement['current']> & { readonly biomarkerId?: Measurement['biomarkerId'] } = {},
 ): Measurement {
+  const biomarkerId = options.biomarkerId ?? canonicalId('biomarker.ldl_c');
   const snapshot = {
     label: 'LDL-Cholesterin',
     value,
@@ -29,12 +31,12 @@ function measurement(
   return {
     id,
     labRecordId: recordId,
-    biomarkerId: canonicalId('biomarker.ldl_c'),
+    biomarkerId,
     specimenType: options.specimenType ?? 'serum',
     panelLabel: 'Lipids',
     original: snapshot,
     originalState: {
-      biomarkerId: canonicalId('biomarker.ldl_c'),
+      biomarkerId,
       specimenType: options.specimenType ?? 'serum',
       snapshot,
       reviewState: options.reviewState ?? 'confirmed',
@@ -73,10 +75,14 @@ describe('lipid comparison core', () => {
     assert.deepEqual(convertComparableValue(3.1, 'mmol/L', ldl!), {
       value: 119.877,
       unit: 'mg/dL',
+      catalogueVersion: '0.2.0',
+      conversionSourceIds: [lipidSources[0]!.id],
     });
     assert.deepEqual(convertComparableValue(119.877, 'mg/dL', ldl!, 'mmol/L'), {
       value: 3.1,
       unit: 'mmol/L',
+      catalogueVersion: '0.2.0',
+      conversionSourceIds: [lipidSources[0]!.id],
     });
     assert.equal(convertComparableValue(3.1, 'nmol/L', ldl!), null);
   });
@@ -114,7 +120,7 @@ describe('lipid comparison core', () => {
         measurement('m6', 'r6', { kind: 'numeric', value: 90 }, { specimenType: 'urine' }),
       ]),
     ];
-    const trend = buildMeasuredTrend(records, 'biomarker.ldl_c', [ldl]);
+    const trend = buildMeasuredTrend(records, canonicalId('biomarker.ldl_c'), [ldl]);
     assert.deepEqual(
       trend.points.map((point) => point.measurementId),
       ['m1', 'm3'],
@@ -128,8 +134,9 @@ describe('lipid comparison core', () => {
       trend.nonPoints.map((item) => item.kind),
       ['not-measured', 'bounded', 'incompatible', 'date-missing'],
     );
-    assert.match(trend.directionText, /increased/i);
-    assert.doesNotMatch(trend.directionText, /good|bad|improv|worsen|cause|predict/i);
+    assert.equal(trend.points[0]?.catalogueVersion, '0.2.0');
+    assert.deepEqual(trend.points[1]?.normalized.conversionSourceIds, [lipidSources[0]!.id]);
+    assert.equal(trend.generalGuidance.length, 0, 'guidance requires explicit context');
   });
 
   it('returns not-comparable when two exact points are unavailable', () => {
@@ -139,11 +146,129 @@ describe('lipid comparison core', () => {
           measurement('m1', 'r1', { kind: 'bounded', comparator: '>', value: 10 }),
         ]),
       ],
-      'biomarker.ldl_c',
+      canonicalId('biomarker.ldl_c'),
       [ldl],
     );
     assert.equal(trend.direction, 'not-comparable');
     assert.equal(trend.points.length, 0);
     assert.equal(trend.nonPoints[0]?.kind, 'bounded');
+  });
+
+  it('does not surface guidance for unknown context and only selects matching applicability', () => {
+    const hdl = findCatalogueBiomarker('biomarker.hdl_c')!;
+    assert.deepEqual(
+      selectApplicableGeneralGuidance(hdl, {
+        population: 'adults',
+        jurisdiction: 'US',
+        sex: 'unknown',
+        fasting: 'fasting',
+      }),
+      [],
+    );
+    const female = selectApplicableGeneralGuidance(hdl, {
+      population: 'adults',
+      jurisdiction: 'US',
+      sex: 'female',
+      fasting: 'non-fasting',
+    });
+    assert.deepEqual(
+      female.map((guidance) => guidance.guidanceId),
+      ['guidance.hdl-c.screening-us-female'],
+    );
+    assert.equal(female[0]?.catalogueVersion, '0.2.0');
+    assert.deepEqual(female[0]?.sourceIds, [
+      'source.cdc.ldl-hdl-triglycerides',
+      'source.nhlbi.blood-cholesterol-diagnosis',
+    ]);
+  });
+
+  it('keeps compatible specimen groups together and preserves mixed groups as non-points', () => {
+    const compatible = buildMeasuredTrend(
+      [
+        record(
+          'serum',
+          { kind: 'known', value: '2026-01-01' },
+          [measurement('serum-m', 'serum', { kind: 'numeric', value: 100 })],
+          'serum',
+        ),
+        record(
+          'plasma',
+          { kind: 'known', value: '2026-02-01' },
+          [
+            measurement(
+              'plasma-m',
+              'plasma',
+              { kind: 'numeric', value: 110 },
+              { specimenType: 'plasma' },
+            ),
+          ],
+          'plasma',
+        ),
+      ],
+      canonicalId('biomarker.ldl_c'),
+      [ldl],
+    );
+    assert.deepEqual(
+      compatible.points.map((point) => point.measurementId),
+      ['serum-m', 'plasma-m'],
+    );
+    assert.equal(compatible.direction, 'increased');
+
+    const mixed = buildMeasuredTrend(
+      [
+        record(
+          'serum',
+          { kind: 'known', value: '2026-01-01' },
+          [measurement('serum-m', 'serum', { kind: 'numeric', value: 100 })],
+          'serum',
+        ),
+        record(
+          'unknown',
+          { kind: 'known', value: '2026-02-01' },
+          [
+            measurement(
+              'unknown-m',
+              'unknown',
+              { kind: 'numeric', value: 110 },
+              { specimenType: 'unknown' },
+            ),
+          ],
+          'unknown',
+        ),
+      ],
+      canonicalId('biomarker.ldl_c'),
+      [ldl],
+    );
+    assert.deepEqual(
+      mixed.points.map((point) => point.measurementId),
+      ['serum-m'],
+    );
+    assert.equal(mixed.nonPoints[0]?.measurementId, 'unknown-m');
+    assert.equal(mixed.nonPoints[0]?.reason, 'incompatible-specimen');
+    assert.equal(mixed.direction, 'not-comparable');
+  });
+
+  it('surfaces matching guidance only when a complete context is explicit', () => {
+    const trend = buildMeasuredTrend(
+      [
+        record('r1', { kind: 'known', value: '2026-01-01' }, [
+          measurement('m1', 'r1', { kind: 'numeric', value: 100 }),
+        ]),
+      ],
+      canonicalId('biomarker.ldl_c'),
+      [ldl],
+      {
+        guidanceContext: {
+          population: 'adults',
+          jurisdiction: 'US',
+          sex: 'female',
+          fasting: 'non-fasting',
+        },
+      },
+    );
+    assert.deepEqual(
+      trend.generalGuidance.map((guidance) => guidance.guidanceId),
+      ['guidance.ldl-c.screening-us'],
+    );
   });
 });
