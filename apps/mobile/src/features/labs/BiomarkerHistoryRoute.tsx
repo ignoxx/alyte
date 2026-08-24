@@ -457,7 +457,7 @@ function HistoryTimelineRow({
         <View style={styles.timelineMarker} />
         <View style={styles.timelineCopy}>
           <View style={styles.rowHeader}>
-            <AppText variant="heading" selectable>
+            <AppText variant="heading" selectable style={styles.rowHeaderTitle}>
               {value}
             </AppText>
             <StatusPill tone="measured">{t('labs.historyMeasuredPoint')}</StatusPill>
@@ -525,7 +525,7 @@ function HistoryTimelineRow({
       <View style={[styles.timelineMarker, styles.nonPointMarker]} />
       <View style={styles.timelineCopy}>
         <View style={styles.rowHeader}>
-          <AppText variant="heading" selectable>
+          <AppText variant="heading" selectable style={styles.rowHeaderTitle}>
             {t(nonPointKey[item.nonPoint.kind])}
           </AppText>
           <StatusPill tone="neutral">{t('labs.historyContextNotPoint')}</StatusPill>
@@ -772,9 +772,11 @@ const styles = StyleSheet.create({
   rowHeader: {
     alignItems: 'flex-start',
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
     justifyContent: 'space-between',
   },
+  rowHeaderTitle: { flexShrink: 1, minWidth: 0 },
   disclosureButton: {
     alignItems: 'flex-start',
     gap: spacing.xs,

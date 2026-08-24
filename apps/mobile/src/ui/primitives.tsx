@@ -289,11 +289,12 @@ const styles = StyleSheet.create({
   pill: {
     alignSelf: 'flex-start',
     borderRadius: 99,
+    maxWidth: '100%',
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
   subtlePill: { borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth },
-  pillText: { fontWeight: '600' },
+  pillText: { flexShrink: 1, fontWeight: '600' },
   groupedRow: {
     alignItems: 'center',
     borderBottomColor: colors.border,
