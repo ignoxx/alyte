@@ -36,12 +36,20 @@ export function AppText({
   ...props
 }: AppTextProps) {
   const baseStyle = typography[variant];
+  const { fontScale } = useWindowDimensions();
 
   return (
     <Text
       allowFontScaling={allowFontScaling}
       maxFontSizeMultiplier={maxFontSizeMultiplier}
-      style={[baseStyle, styles.text, style]}
+      style={[
+        baseStyle,
+        styles.text,
+        typeof baseStyle.lineHeight === 'number' && {
+          lineHeight: baseStyle.lineHeight * fontScale,
+        },
+        style,
+      ]}
       {...props}
     />
   );
@@ -102,6 +110,7 @@ export const ScreenScrollView = forwardRef<ScrollView, ScreenScrollViewProps>(
 
 type AppButtonProps = Omit<PressableProps, 'children'> & {
   label: string;
+  icon?: AppIconName;
   accessibilityLabel?: string;
   labelMaxFontSizeMultiplier?: number;
   tone?: 'primary' | 'secondary' | 'quiet';
@@ -109,6 +118,7 @@ type AppButtonProps = Omit<PressableProps, 'children'> & {
 
 export function AppButton({
   label,
+  icon,
   accessibilityLabel = label,
   labelMaxFontSizeMultiplier,
   tone = 'primary',
@@ -131,6 +141,13 @@ export function AppButton({
       ]}
       {...props}
     >
+      {icon !== undefined && (
+        <AppIcon
+          color={tone === 'primary' ? colors.onAccent : colors.accent}
+          name={icon}
+          size={17}
+        />
+      )}
       <AppText
         maxFontSizeMultiplier={labelMaxFontSizeMultiplier}
         numberOfLines={labelMaxFontSizeMultiplier === undefined ? undefined : 1}
@@ -309,6 +326,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderCurve: 'continuous',
     borderRadius: 12,
+    flexDirection: 'row',
+    gap: spacing.sm,
     minHeight: 48,
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,

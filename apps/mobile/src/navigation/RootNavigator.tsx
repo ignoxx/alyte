@@ -39,7 +39,7 @@ const stackScreenOptions = {
   headerShadowVisible: false,
   // native-stack's headerStyle typing predates RN's opaque semantic color type; UIKit accepts it
   // at runtime and resolves it against the current appearance.
-  headerTintColor: colors.accent,
+  headerTintColor: colors.accent as string,
   headerTitleAlign: 'left' as const,
 };
 
@@ -54,7 +54,7 @@ function navigationTheme(dark: boolean): Theme {
       border: colors.border as string,
       card: colors.surface as string,
       notification: colors.danger as string,
-      primary: colors.accent,
+      primary: colors.accent as string,
       text: colors.ink as string,
     },
   };
@@ -76,7 +76,7 @@ function FeatureStackNavigator({
       <FeatureStack.Screen
         name={stackRootName}
         component={root.component}
-        options={{ title: t(root.titleKey) }}
+        options={{ headerLargeTitle: true, title: t(root.titleKey) }}
       />
       {extensions.map((feature) => (
         <FeatureStack.Screen

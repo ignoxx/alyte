@@ -1,9 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { IntakeEvent } from '@alyte/domain';
+import {
+  canonicalId,
+  type IntakeEvent,
+  type LabRecord,
+  type LabReport,
+  type Measurement,
+} from '@alyte/domain';
 import type { IntakeCloudJob } from '../intake/outbox';
 import { intakeEventMenuActions } from '../intake/ui';
-import { homeHasLocalHistory, sortHomeTimeline } from './home-model';
+import { buildHomeLabViewModel, homeHasLocalHistory, sortHomeTimeline } from './home-model';
 
 function event(
   id: string,
@@ -46,6 +52,82 @@ const queuedJob = {
   cancelledAt: null,
 } satisfies IntakeCloudJob;
 
+function measurement(
+  id: string,
+  recordId: string,
+  biomarkerId: string,
+  value: number,
+  reviewState: Measurement['reviewState'] = 'confirmed',
+): Measurement {
+  const snapshot = {
+    label: biomarkerId.replace('biomarker.', '').toUpperCase(),
+    value: { kind: 'numeric' as const, value },
+    valueString: String(value),
+    unit: 'mg/dL',
+    referenceInterval: null,
+    flag: null,
+  };
+  return {
+    id,
+    labRecordId: recordId,
+    biomarkerId: canonicalId(biomarkerId),
+    specimenType: 'serum',
+    panelLabel: null,
+    original: snapshot,
+    originalState: {
+      biomarkerId: canonicalId(biomarkerId),
+      specimenType: 'serum',
+      snapshot,
+      reviewState,
+      provenance: 'extracted',
+      source: null,
+    },
+    current: snapshot,
+    provenance: 'extracted',
+    reviewState,
+    source: null,
+    corrections: [],
+  };
+}
+
+function labRecord(id: string, date: string, measurements: readonly Measurement[]): LabRecord {
+  return {
+    id,
+    labReportId: `report-${id}`,
+    collectionDate: { kind: 'known', value: date },
+    specimenType: 'serum',
+    laboratoryName: 'Synthetic Laboratory',
+    notes: null,
+    createdAt: `${date}T12:00:00.000Z`,
+    updatedAt: `${date}T12:00:00.000Z`,
+    measurements,
+  };
+}
+
+function report(id: string, recordId: string, date: string): LabReport {
+  return {
+    id,
+    sourceType: 'pdf',
+    originalFilename: `${id}.pdf`,
+    mimeType: 'application/pdf',
+    byteSize: null,
+    sourceHash: null,
+    originalPath: '/protected/report.pdf',
+    importState: 'imported',
+    deletionState: 'none',
+    deletionRequestedAt: null,
+    deletionError: null,
+    failureReason: null,
+    encrypted: true,
+    pageCount: 1,
+    createdAt: `${date}T12:00:00.000Z`,
+    updatedAt: `${date}T12:00:00.000Z`,
+    importedAt: `${date}T12:00:00.000Z`,
+    pages: [],
+    labRecordIds: [recordId],
+  };
+}
+
 test('Home keeps the requested day timeline newest first', () => {
   const records = [
     event('older', '2026-08-22', '2026-08-22T08:00:00.000Z'),
@@ -82,4 +164,53 @@ test('Home menu keeps destructive and uncommon actions out of the row', () => {
     intakeEventMenuActions(event('plain', '2026-08-22', '2026-08-22T09:00:00.000Z'), null),
     ['edit', 'toggle-inclusion', 'delete'],
   );
+});
+
+test('Quiet Home prioritizes the latest local report and caps measured changes at three', () => {
+  const first = labRecord('first', '2026-01-01', [
+    measurement('first-ldl', 'first', 'biomarker.ldl_c', 100),
+    measurement('first-hdl', 'first', 'biomarker.hdl_c', 50),
+    measurement('first-triglycerides', 'first', 'biomarker.triglycerides', 120),
+    measurement('first-total', 'first', 'biomarker.total_cholesterol', 180),
+  ]);
+  const latest = labRecord('latest', '2026-08-18', [
+    measurement('latest-ldl', 'latest', 'biomarker.ldl_c', 110),
+    measurement('latest-hdl', 'latest', 'biomarker.hdl_c', 55),
+    measurement('latest-triglycerides', 'latest', 'biomarker.triglycerides', 100),
+    measurement('latest-total', 'latest', 'biomarker.total_cholesterol', 170),
+  ]);
+  const model = buildHomeLabViewModel(
+    [
+      report('latest-report', 'latest', '2026-08-18'),
+      report('first-report', 'first', '2026-01-01'),
+    ],
+    [first, latest],
+  );
+
+  assert.equal(model.latestReport?.id, 'latest-report');
+  assert.deepEqual(
+    model.recentReports.map((row) => row.id),
+    ['latest-report', 'first-report'],
+  );
+  assert.equal(model.measuredChanges.length, 3);
+  assert.deepEqual(model.measuredChanges.map((change) => change.direction).sort(), [
+    'decreased',
+    'increased',
+    'increased',
+  ]);
+});
+
+test('Quiet Home keeps unfinished import and review work visible without creating a change', () => {
+  const record = labRecord('review', '2026-08-18', [
+    measurement('review-ldl', 'review', 'biomarker.ldl_c', 100, 'needs-review'),
+  ]);
+  const interrupted = {
+    ...report('interrupted', 'review', '2026-08-18'),
+    importState: 'interrupted' as const,
+  };
+  const model = buildHomeLabViewModel([interrupted], [record]);
+
+  assert.equal(model.pendingImports.length, 1);
+  assert.equal(model.reviewCount, 1);
+  assert.equal(model.measuredChanges.length, 0);
 });
