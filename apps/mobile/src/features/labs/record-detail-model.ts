@@ -16,7 +16,9 @@ type PreservedOnlyReason = Extract<
   { readonly kind: 'preserved-only' }
 >['reason'];
 
-type SupportReasonLocalizationKey = `labs.supportReason.${PreservedOnlyReason}`;
+type SupportReasonLocalizationKeys = {
+  readonly [Reason in PreservedOnlyReason]: `labs.supportReason.${Reason}`;
+};
 
 export const labRecordSupportReasonLocalizationKeys = {
   unmapped: 'labs.supportReason.unmapped',
@@ -27,7 +29,7 @@ export const labRecordSupportReasonLocalizationKeys = {
   'incompatible-unit': 'labs.supportReason.incompatible-unit',
   'incompatible-specimen': 'labs.supportReason.incompatible-specimen',
   'incompatible-method': 'labs.supportReason.incompatible-method',
-} as const satisfies Record<PreservedOnlyReason, SupportReasonLocalizationKey>;
+} as const satisfies SupportReasonLocalizationKeys;
 
 export type MeasurementDraft = {
   readonly label: string;

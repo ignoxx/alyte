@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { findForbiddenWording } from '@alyte/catalogue';
 import type { Measurement } from '@alyte/domain';
 import { t } from '../../localization';
 import {
@@ -75,6 +76,7 @@ test('every Lab Record preserved-only support reason has localized detail copy',
     const copy = t(localizationKey);
     assert.notEqual(copy, localizationKey, `${reason} must resolve to user-facing copy`);
     assert.notEqual(copy.trim(), '', `${reason} must not resolve to blank copy`);
+    assert.equal(findForbiddenWording(copy), null, `${reason} must pass the wording guard`);
   }
 
   const methodCopy = t(labRecordSupportReasonLocalizationKeys['incompatible-method']);
