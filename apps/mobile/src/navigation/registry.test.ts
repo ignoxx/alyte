@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { StackActions, StackRouter } from '@react-navigation/routers';
+import type { ParamListBase, StackNavigationState } from '@react-navigation/routers';
 import {
+  extractionEditorDestination,
   featureStackRootName,
   preGateTabNames,
   reportImportDestination,
@@ -70,6 +73,60 @@ test('pre-gate shell exposes three tabs and report import is a root full-screen 
     route: 'ReportImport',
     presentation: 'fullScreenModal',
   });
+});
+
+test('the extraction editor is a root form sheet', () => {
+  assert.deepEqual(extractionEditorDestination, {
+    route: 'ExtractionMeasurementEditor',
+    presentation: 'formSheet',
+  });
+});
+
+test('replacing the root editor with source preview keeps MainTabs underneath for Back', () => {
+  const router = StackRouter({ initialRouteName: 'MainTabs' });
+  const routeNames = ['MainTabs', 'ExtractionMeasurementEditor', 'SanitizedSourcePreview'];
+  const options = {
+    routeNames,
+    routeParamList: {},
+    routeGetIdList: {},
+  };
+  const initial = router.getInitialState(options);
+  const withEditor = router.getStateForAction(
+    initial as StackNavigationState<ParamListBase>,
+    StackActions.push('ExtractionMeasurementEditor', {
+      reportId: 'report-synthetic',
+      draftId: 'draft-synthetic',
+      rowId: 'row-synthetic',
+    }) as never,
+    options,
+  );
+  assert.ok(withEditor);
+
+  const withPreview = router.getStateForAction(
+    withEditor as StackNavigationState<ParamListBase>,
+    StackActions.replace('SanitizedSourcePreview', {
+      reportId: 'report-synthetic',
+      pageIndex: 0,
+      boundingBox: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+    }) as never,
+    options,
+  );
+  assert.deepEqual(
+    withPreview?.routes.map((route) => route.name),
+    ['MainTabs', 'SanitizedSourcePreview'],
+  );
+
+  const afterBack = withPreview
+    ? router.getStateForAction(
+        withPreview as StackNavigationState<ParamListBase>,
+        StackActions.pop(),
+        options,
+      )
+    : null;
+  assert.deepEqual(
+    afterBack?.routes.map((route) => route.name),
+    ['MainTabs'],
+  );
 });
 
 test('Home quick actions dispatch to sibling tabs and preserve the Log edit push', () => {

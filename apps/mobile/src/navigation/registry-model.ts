@@ -38,6 +38,11 @@ export const reportImportDestination = {
   presentation: 'fullScreenModal',
 } as const;
 
+export const extractionEditorDestination = {
+  route: 'ExtractionMeasurementEditor',
+  presentation: 'formSheet',
+} as const;
+
 export function featureStackRootName(tabName: string): string {
   return `${tabName}Root`;
 }

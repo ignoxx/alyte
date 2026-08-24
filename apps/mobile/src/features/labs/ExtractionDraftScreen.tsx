@@ -7,17 +7,10 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import {
-  useFocusEffect,
-  useNavigation,
-  useRoute,
-  type NavigationProp,
-  type RouteProp,
-} from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { ExtractionDraft, ExtractionDraftRow } from '@alyte/domain';
 import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
-import { handoffAfterAppearance } from '../../navigation/dismissal-handoff';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
@@ -93,17 +86,6 @@ export function ExtractionDraftScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
-
-  useEffect(() => {
-    const sourcePreview = route.params.sourcePreview;
-    if (sourcePreview === undefined) return;
-    const root = navigation.getParent()?.getParent<NavigationProp<RootStackParamList>>();
-    if (root === undefined) return;
-    return handoffAfterAppearance(navigation, () => {
-      navigation.setParams({ sourcePreview: undefined });
-      root.navigate('SanitizedSourcePreview', sourcePreview);
-    });
-  }, [navigation, route.params.sourcePreview]);
 
   const load = useCallback(async () => {
     try {
@@ -262,11 +244,14 @@ export function ExtractionDraftScreen() {
             accessibilityLabel={rowAccessibilityLabel(row)}
             accessibilityRole="button"
             onPress={() =>
-              navigation.navigate('ExtractionMeasurementEditor', {
-                reportId: route.params.reportId,
-                draftId: draft.id,
-                rowId: row.id,
-              })
+              navigation
+                .getParent()
+                ?.getParent<NativeStackNavigationProp<RootStackParamList>>()
+                ?.navigate('ExtractionMeasurementEditor', {
+                  reportId: route.params.reportId,
+                  draftId: draft.id,
+                  rowId: row.id,
+                })
             }
             style={({ pressed }) => [
               styles.row,

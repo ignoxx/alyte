@@ -4,21 +4,20 @@ import {
   useNavigation,
   usePreventRemove,
   useRoute,
-  type NavigationProp,
   type RouteProp,
 } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { parseComparatorValue, type ExtractionDraftRow } from '@alyte/domain';
-import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
+import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import { colors, spacing } from '../../theme';
 import { extractionNeedsResolution, sourceRegionPresentation } from './extraction-ui-model';
 
-type EditorRoute = RouteProp<LabsStackParamList, 'ExtractionMeasurementEditor'>;
+type EditorRoute = RouteProp<RootStackParamList, 'ExtractionMeasurementEditor'>;
 type EditorNavigation = NativeStackNavigationProp<
-  LabsStackParamList,
+  RootStackParamList,
   'ExtractionMeasurementEditor'
 >;
 
@@ -28,8 +27,6 @@ type RowEdit = {
   readonly unit: string;
   readonly reference: string;
 };
-
-type SourcePreviewParams = RootStackParamList['SanitizedSourcePreview'];
 
 function valueText(row: ExtractionDraftRow): string {
   const value = row.proposedValue;
@@ -58,7 +55,6 @@ export function ExtractionMeasurementEditorScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [allowRemove, setAllowRemove] = useState(false);
-  const [pendingPreview, setPendingPreview] = useState<SourcePreviewParams | null>(null);
   const previewRequestPending = useRef(false);
   const initialEdit = useMemo(() => (row === null ? null : editFrom(row)), [row]);
   const dirty =
@@ -85,6 +81,10 @@ export function ExtractionMeasurementEditorScreen() {
   }, [route.params.draftId, route.params.rowId]);
 
   usePreventRemove(dirty && !allowRemove, ({ data }) => {
+    if (previewRequestPending.current) {
+      navigation.dispatch(data.action);
+      return;
+    }
     Alert.alert(t('labs.extractionDiscardTitle'), t('labs.extractionDiscardBody'), [
       { text: t('labs.cancel'), style: 'cancel' },
       {
@@ -102,19 +102,6 @@ export function ExtractionMeasurementEditorScreen() {
       ),
     });
   }, [navigation]);
-
-  useEffect(() => {
-    if (pendingPreview === null) return;
-    navigation.popTo(
-      'ExtractionDraft',
-      {
-        reportId: route.params.reportId,
-        draftId: route.params.draftId,
-        sourcePreview: pendingPreview,
-      },
-      { merge: true },
-    );
-  }, [navigation, pendingPreview, route.params.draftId, route.params.reportId]);
 
   async function save(): Promise<ExtractionDraftRow | null> {
     if (row === null || edit === null) return null;
@@ -172,7 +159,7 @@ export function ExtractionMeasurementEditorScreen() {
     }
     const target = sourceRegionPresentation(saved);
     setAllowRemove(true);
-    setPendingPreview({
+    navigation.replace('SanitizedSourcePreview', {
       reportId: route.params.reportId,
       pageIndex: target.pageIndex,
       boundingBox: target.boundingBox,

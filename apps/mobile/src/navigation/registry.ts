@@ -5,7 +5,6 @@ import { LabRecordDetailRoute } from '../features/labs/LabRecordDetailRoute';
 import { LabRecordFormRoute } from '../features/labs/LabRecordFormRoute';
 import { LabReportDetailRoute } from '../features/labs/LabReportDetailRoute';
 import { ExtractionDraftScreen } from '../features/labs/ExtractionDraftScreen';
-import { ExtractionMeasurementEditorScreen } from '../features/labs/ExtractionMeasurementEditorScreen';
 import { LogScreen } from '../features/intake/LogScreen';
 import { IntakeEntryScreen } from '../features/intake/IntakeEntryScreen';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
@@ -49,19 +48,6 @@ const labsFeatures: readonly NavigationFeature[] = [
     target: 'labs',
     component: ExtractionDraftScreen,
     titleKey: 'labs.extractionTitle',
-  },
-  {
-    name: 'ExtractionMeasurementEditor',
-    target: 'labs',
-    component: ExtractionMeasurementEditorScreen,
-    titleKey: 'labs.extractionEditorTitle',
-    options: {
-      presentation: 'formSheet',
-      sheetAllowedDetents: [0.6, 0.92],
-      sheetInitialDetentIndex: 1,
-      sheetGrabberVisible: true,
-      headerLargeTitle: false,
-    },
   },
   {
     name: 'LabRecordForm',

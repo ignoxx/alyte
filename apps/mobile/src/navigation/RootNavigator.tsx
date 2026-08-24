@@ -13,6 +13,8 @@ import { SnapScreen } from '../features/intake/SnapScreen';
 import { SanitizedReportEditorRoute } from '../features/labs/SanitizedReportEditorRoute';
 import { LabReportImportRoute } from '../features/labs/LabReportImportRoute';
 import { SanitizedSourcePreviewScreen } from '../features/labs/SanitizedSourcePreviewScreen';
+import { ExtractionMeasurementEditorScreen } from '../features/labs/ExtractionMeasurementEditorScreen';
+import { extractionEditorDestination } from './registry-model';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const MainTabs = createNativeBottomTabNavigator<MainTabParamList>();
@@ -195,6 +197,19 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
           name="PrivacyWorkspace"
           component={SanitizedReportEditorRoute}
           options={{ presentation: 'fullScreenModal', headerShown: true }}
+        />
+        <RootStack.Screen
+          name={extractionEditorDestination.route}
+          component={ExtractionMeasurementEditorScreen}
+          options={{
+            presentation: extractionEditorDestination.presentation,
+            sheetAllowedDetents: [0.6, 0.92],
+            sheetInitialDetentIndex: 1,
+            sheetGrabberVisible: true,
+            headerLargeTitle: false,
+            headerShown: true,
+            title: t('labs.extractionEditorTitle'),
+          }}
         />
         <RootStack.Screen
           name="SanitizedSourcePreview"
