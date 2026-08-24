@@ -51,6 +51,8 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     mediaStore: createProtectedIntakeMediaStore(),
   });
 
+  const labs = createLabsService({ repositoryFactory });
+
   if (showcase !== null) {
     void seedShowcaseIntake(intake, showcase, clock);
   }
@@ -62,7 +64,7 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     },
     clock,
     showcase,
-    labs: createLabsService({ repositoryFactory }),
+    labs,
     reports: createLabReportsService({ repositoryFactory }),
     intake,
   };

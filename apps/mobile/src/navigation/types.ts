@@ -25,6 +25,7 @@ export type LabsStackParamList = {
   };
   LabRecordForm: { readonly recordId?: string } | undefined;
   LabRecordDetail: { readonly recordId: string };
+  BiomarkerHistory: { readonly biomarkerId: string };
   MeasurementDetail: { readonly recordId: string; readonly measurementId: string };
 };
 

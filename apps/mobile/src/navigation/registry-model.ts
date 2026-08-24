@@ -43,6 +43,12 @@ export const extractionEditorDestination = {
   presentation: 'formSheet',
 } as const;
 
+/** Generic Labs-stack seam for future shell promotion; the route remains nested under Labs. */
+export const biomarkerHistoryDestination = {
+  route: 'BiomarkerHistory',
+  presentation: 'push',
+} as const;
+
 export function featureStackRootName(tabName: string): string {
   return `${tabName}Root`;
 }

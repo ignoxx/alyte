@@ -1,6 +1,11 @@
 import type { NavigationProp, ParamListBase } from '@react-navigation/native';
 import type { MainTabParamList, RootStackParamList } from './types';
-import { reportImportDestination, snapActionDestination } from './registry-model';
+import {
+  biomarkerHistoryDestination,
+  reportImportDestination,
+  snapActionDestination,
+} from './registry-model';
+import type { LabsStackParamList } from './types';
 
 export type FeatureStackNavigation = NavigationProp<ParamListBase>;
 export type ParentTabNavigation = NavigationProp<MainTabParamList>;
@@ -55,6 +60,14 @@ export function openReportImportFromStack(navigation: FeatureStackNavigation): v
   const root = getParentTabNavigation(navigation).getParent<NavigationProp<RootStackParamList>>();
   if (root === undefined) throw new Error('Report import requires the root navigator');
   root.navigate(reportImportDestination.route);
+}
+
+/** Open a generic history destination inside the current Labs stack. */
+export function openBiomarkerHistoryFromStack(
+  navigation: NavigationProp<LabsStackParamList>,
+  biomarkerId: string,
+): void {
+  navigation.navigate(biomarkerHistoryDestination.route, { biomarkerId });
 }
 
 export function dispatchHomeQuickActionFromStack(

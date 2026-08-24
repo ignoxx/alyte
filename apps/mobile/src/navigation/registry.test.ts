@@ -4,6 +4,7 @@ import { StackActions, StackRouter } from '@react-navigation/routers';
 import type { ParamListBase, StackNavigationState } from '@react-navigation/routers';
 import {
   extractionEditorDestination,
+  biomarkerHistoryDestination,
   featureStackRootName,
   preGateTabNames,
   reportImportDestination,
@@ -79,6 +80,13 @@ test('the extraction editor is a root form sheet', () => {
   assert.deepEqual(extractionEditorDestination, {
     route: 'ExtractionMeasurementEditor',
     presentation: 'formSheet',
+  });
+});
+
+test('biomarker history stays a generic push route inside Labs', () => {
+  assert.deepEqual(biomarkerHistoryDestination, {
+    route: 'BiomarkerHistory',
+    presentation: 'push',
   });
 });
 

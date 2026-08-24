@@ -1,7 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadShowcaseSnapshot } from '@alyte/fixtures';
-import { missingShowcaseIntakeInputs, showcaseIntakeInputs } from './showcase-seed';
+import {
+  missingShowcaseIntakeInputs,
+  missingShowcaseLabRecordInputs,
+  showcaseIntakeInputs,
+  showcaseLabRecordInputs,
+} from './showcase-seed';
 
 test('showcase intake inputs use stable same-day identifiers and times', () => {
   const snapshot = loadShowcaseSnapshot('development', true);
@@ -33,5 +38,31 @@ test('showcase intake inputs use stable same-day identifiers and times', () => {
       (input) => input.id,
     ),
     ['showcase-intake-drink'],
+  );
+});
+
+test('showcase lab inputs cover all four lipid entries without inventing intermediate values', () => {
+  const inputs = showcaseLabRecordInputs();
+  assert.equal(inputs.length, 4);
+  assert.deepEqual(
+    new Set(
+      inputs.flatMap((record) => record.measurements.map((measurement) => measurement.biomarkerId)),
+    ),
+    new Set([
+      'biomarker.total_cholesterol',
+      'biomarker.ldl_c',
+      'biomarker.hdl_c',
+      'biomarker.triglycerides',
+    ]),
+  );
+  assert.equal(inputs[2]?.collectionDate.kind, 'missing');
+  assert.equal(inputs[3]?.measurements[0]?.value.kind, 'bounded');
+  assert.deepEqual(
+    missingShowcaseLabRecordInputs(inputs, new Set([inputs[0]!.id!])).map((record) => record.id),
+    [
+      'showcase-lab-record-2026-03',
+      'showcase-lab-record-date-missing',
+      'showcase-lab-record-2026-05',
+    ],
   );
 });

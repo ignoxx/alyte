@@ -4,6 +4,7 @@ import { LabsScreen } from '../features/labs/LabsScreen';
 import { LabRecordDetailRoute } from '../features/labs/LabRecordDetailRoute';
 import { LabRecordFormRoute } from '../features/labs/LabRecordFormRoute';
 import { LabReportDetailRoute } from '../features/labs/LabReportDetailRoute';
+import { BiomarkerHistoryRoute } from '../features/labs/BiomarkerHistoryRoute';
 import { ExtractionDraftScreen } from '../features/labs/ExtractionDraftScreen';
 import { LogScreen } from '../features/intake/LogScreen';
 import { IntakeEntryScreen } from '../features/intake/IntakeEntryScreen';
@@ -60,6 +61,12 @@ const labsFeatures: readonly NavigationFeature[] = [
     target: 'labs',
     component: LabRecordDetailRoute,
     titleKey: 'labs.recordTitle',
+  },
+  {
+    name: 'BiomarkerHistory',
+    target: 'labs',
+    component: BiomarkerHistoryRoute,
+    titleKey: 'labs.biomarkerHistoryTitle',
   },
 ];
 

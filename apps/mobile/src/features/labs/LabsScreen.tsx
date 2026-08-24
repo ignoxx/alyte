@@ -17,6 +17,8 @@ import {
 } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { labsShowsManualRecordAction } from './labs-ui-model';
+import { listHistoryEntries } from './biomarker-history-model';
+import { seedShowcaseLabRecords } from '../../services/showcase-seed';
 import { openReportImportFromStack } from '../../navigation/parent-tab';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
@@ -58,6 +60,7 @@ export function LabsScreen() {
   const usesAccessibilityTextSize = fontScale >= 1.3;
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
   const hasData = labsShowsManualRecordAction(reports.length, records.length);
+  const historyEntries = listHistoryEntries(records);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -81,6 +84,7 @@ export function LabsScreen() {
     setLoading(true);
     setError(false);
     try {
+      if (services.showcase !== null) await seedShowcaseLabRecords(labs);
       const [nextRecords, nextReports] = await Promise.all([
         labs.listRecords(),
         services.reports.listReports(),
@@ -155,6 +159,40 @@ export function LabsScreen() {
                     </AppText>
                     <AppText numberOfLines={1} style={styles.muted}>
                       {`${reportSourceLabel(report)} · ${reportStateLabel(report)}`}
+                    </AppText>
+                  </View>
+                  <AppIcon name="chevronRight" size={16} />
+                </Pressable>
+              ))}
+            </AppSurface>
+          </View>
+        )}
+        {historyEntries.length > 0 && (
+          <View style={styles.section}>
+            <AppText variant="label" style={styles.sectionLabel}>
+              {t('labs.historySection')}
+            </AppText>
+            <AppSurface style={styles.sectionSurface}>
+              {historyEntries.map((entry) => (
+                <Pressable
+                  accessibilityLabel={`${entry.canonicalLabel}, ${t('labs.historyEntrySubtitle').replace('{count}', String(entry.measurementCount))}`}
+                  accessibilityRole="button"
+                  key={entry.biomarkerId}
+                  onPress={() =>
+                    navigation.navigate('BiomarkerHistory', { biomarkerId: entry.biomarkerId })
+                  }
+                  style={({ pressed }) => [styles.listRow, pressed && styles.rowPressed]}
+                >
+                  <AppIcon name="labs" size={22} />
+                  <View style={styles.rowBody}>
+                    <AppText numberOfLines={1} variant="heading">
+                      {entry.canonicalLabel}
+                    </AppText>
+                    <AppText numberOfLines={1} style={styles.muted}>
+                      {t('labs.historyEntrySubtitle').replace(
+                        '{count}',
+                        String(entry.measurementCount),
+                      )}
                     </AppText>
                   </View>
                   <AppIcon name="chevronRight" size={16} />
