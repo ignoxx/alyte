@@ -3,37 +3,6 @@ import type { BiomarkerCatalogueEntry } from './schema.js';
 /** Existing non-lipid comparable families stay isolated from lipid content ownership. */
 export const otherComparableBiomarkers: readonly BiomarkerCatalogueEntry[] = [
   {
-    id: 'biomarker.glucose',
-    aliases: [
-      'glucose',
-      'glukose',
-      'glucose à jeun',
-      'glucosa',
-      'glicemia',
-      'glucose nuchter',
-      'glukoza',
-      'gliukozė',
-    ],
-    specimens: ['blood', 'serum', 'plasma', 'unknown'],
-    units: ['mg/dL', 'mmol/L'],
-  },
-  {
-    id: 'biomarker.hba1c',
-    aliases: [
-      'hba1c',
-      'hb a1c',
-      'glycated hemoglobin',
-      'glykiertes hämoglobin',
-      'hémoglobine glyquée',
-      'hemoglobina glicosilada',
-      'emoglobina glicata',
-      'geglyceerd hemoglobine',
-      'hemoglobina glikowana',
-    ],
-    specimens: ['blood', 'unknown'],
-    units: ['%', 'mmol/mol'],
-  },
-  {
     id: 'biomarker.hemoglobin',
     aliases: ['hemoglobin', 'hämoglobin', 'hémoglobine', 'hemoglobina', 'emoglobina'],
     specimens: ['blood', 'unknown'],
@@ -68,12 +37,6 @@ export const otherComparableBiomarkers: readonly BiomarkerCatalogueEntry[] = [
     ],
     specimens: ['blood', 'unknown'],
     units: ['fL'],
-  },
-  {
-    id: 'biomarker.ferritin',
-    aliases: ['ferritin', 'ferritine', 'ferritina', 'ferrytyna'],
-    specimens: ['blood', 'serum', 'plasma', 'unknown'],
-    units: ['ng/mL', 'µg/L', 'ug/L'],
   },
   {
     id: 'biomarker.alt',
@@ -118,34 +81,5 @@ export const otherComparableBiomarkers: readonly BiomarkerCatalogueEntry[] = [
     ],
     specimens: ['blood', 'serum', 'plasma', 'unknown'],
     units: ['U/L'],
-  },
-  {
-    id: 'biomarker.vitamin_d_total',
-    aliases: [
-      'vitamin d',
-      '25-oh vitamin d',
-      '25 hydroxyvitamin d',
-      '25-oh-vitamin d',
-      'vitamine d',
-      'vitamina d',
-      'vitamina d totale',
-      'vitamine d totaal',
-      'witamina d',
-    ],
-    specimens: ['blood', 'serum', 'plasma', 'unknown'],
-    units: ['ng/mL', 'nmol/L'],
-  },
-  {
-    id: 'biomarker.vitamin_b12_total',
-    aliases: [
-      'vitamin b12',
-      'b12',
-      'vitamine b12',
-      'vitamina b12',
-      'vitamina b12 totale',
-      'witamina b12',
-    ],
-    specimens: ['blood', 'serum', 'plasma', 'unknown'],
-    units: ['pg/mL', 'pmol/L'],
   },
 ];

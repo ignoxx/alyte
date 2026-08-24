@@ -1,10 +1,12 @@
 import { lipidBiomarkers } from './lipids.js';
+import { metabolicMicronutrientBiomarkers } from './metabolic-micronutrients.js';
 import { otherComparableBiomarkers } from './other-biomarkers.js';
 import type { BiomarkerCatalogueEntry } from './schema.js';
 import { normalizeCatalogueAlias } from './validation.js';
 
 export * from './schema.js';
 export * from './lipids.js';
+export * from './metabolic-micronutrients.js';
 export * from './other-biomarkers.js';
 export * from './validation.js';
 export * from './artifact.js';
@@ -18,6 +20,7 @@ export function composeCatalogue(
 /** Deterministic aggregate consumed by extraction adapters and downstream domain code. */
 export const comparableBiomarkers: readonly BiomarkerCatalogueEntry[] = composeCatalogue(
   lipidBiomarkers,
+  metabolicMicronutrientBiomarkers,
   otherComparableBiomarkers,
 );
 

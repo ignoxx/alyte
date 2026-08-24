@@ -1,4 +1,4 @@
-import { lipidBiomarkerIds } from './schema.js';
+import { lipidBiomarkerIds, metabolicBiomarkerIds } from './schema.js';
 import type { BiomarkerCatalogueEntry, CatalogueValidationIssue } from './schema.js';
 
 /** Source-shaped aliases are normalized only for lookup; they never replace the original label. */
@@ -23,6 +23,8 @@ const forbiddenWordingPatterns: readonly RegExp[] = [
   /\bstop\s+taking\b/i,
   /\byou\s+have\s+(?:a\s+)?(?:deficien|disease)/i,
 ];
+
+const metabolicBiomarkerIdSet = new Set<string>(Object.values(metabolicBiomarkerIds));
 
 export function findForbiddenWording(text: string): string | null {
   const match = forbiddenWordingPatterns.find((pattern) => pattern.test(text));
@@ -112,6 +114,69 @@ export function validateCatalogue(
             issues.push({
               path: `${path}.unitConversions`,
               message: `lipid conversion coverage is missing for ${unit}`,
+            });
+          }
+        }
+      }
+    }
+    if (metabolicBiomarkerIdSet.has(entry.id)) {
+      if (entry.canonicalLabel === undefined || entry.canonicalLabel.trim().length === 0) {
+        issues.push({
+          path: `${path}.canonicalLabel`,
+          message: 'metabolic/micronutrient canonical label is required',
+        });
+      }
+      if (entry.valueType !== 'numeric') {
+        issues.push({
+          path: `${path}.valueType`,
+          message: 'metabolic/micronutrient entries must be numeric',
+        });
+      }
+      if (entry.specimens.length === 0) {
+        issues.push({
+          path: `${path}.specimens`,
+          message: 'metabolic/micronutrient specimens are required',
+        });
+      }
+      if (entry.units.length === 0) {
+        issues.push({
+          path: `${path}.units`,
+          message: 'metabolic/micronutrient units are required',
+        });
+      }
+      if (entry.canonicalUnit === undefined || entry.canonicalUnit.trim().length === 0) {
+        issues.push({
+          path: `${path}.canonicalUnit`,
+          message: 'metabolic/micronutrient canonical unit is required',
+        });
+      }
+      if (entry.explanation === undefined || entry.explanation.trim().length === 0) {
+        issues.push({
+          path: `${path}.explanation`,
+          message: 'metabolic/micronutrient explanation is required',
+        });
+      }
+      if (entry.sources === undefined || entry.sources.length === 0) {
+        issues.push({
+          path: `${path}.sources`,
+          message: 'metabolic/micronutrient source metadata is required',
+        });
+      }
+      if (entry.review === undefined) {
+        issues.push({
+          path: `${path}.review`,
+          message: 'metabolic/micronutrient review metadata is required',
+        });
+      }
+      for (const unit of entry.units) {
+        if (entry.canonicalUnit !== undefined && unit !== entry.canonicalUnit) {
+          const covered = entry.unitConversions?.some(
+            (conversion) => conversion.from === unit && conversion.to === entry.canonicalUnit,
+          );
+          if (!covered) {
+            issues.push({
+              path: `${path}.unitConversions`,
+              message: `metabolic/micronutrient conversion coverage is missing for ${unit}`,
             });
           }
         }

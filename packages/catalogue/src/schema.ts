@@ -12,6 +12,18 @@ export const lipidBiomarkerIds = {
 export type LipidBiomarkerId = (typeof lipidBiomarkerIds)[keyof typeof lipidBiomarkerIds];
 export const LIPID_BIOMARKER_IDS = lipidBiomarkerIds;
 
+export const metabolicBiomarkerIds = {
+  glucose: 'biomarker.glucose',
+  hba1c: 'biomarker.hba1c',
+  ferritin: 'biomarker.ferritin',
+  vitaminDTotal: 'biomarker.vitamin_d_total',
+  vitaminB12Total: 'biomarker.vitamin_b12_total',
+} as const;
+
+export type MetabolicBiomarkerId =
+  (typeof metabolicBiomarkerIds)[keyof typeof metabolicBiomarkerIds];
+export const METABOLIC_BIOMARKER_IDS = metabolicBiomarkerIds;
+
 export type CataloguePublicationStatus = 'review-pending' | 'approved';
 
 export type CatalogueReviewMetadata = {

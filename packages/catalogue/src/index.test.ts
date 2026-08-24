@@ -8,6 +8,7 @@ import {
   createCatalogueArtifact,
   findCatalogueBiomarker,
   lipidSources,
+  metabolicSources,
   resolveBiomarkerAlias,
   validateCatalogue,
   validateCatalogueArtifact,
@@ -115,7 +116,7 @@ describe('catalogue boundary', () => {
       schemaVersion: 'alyte.catalogue.artifact.v1',
       manifest: { ...catalogueManifest, version: CATALOGUE_VERSION },
       entries: comparableBiomarkers,
-      sourceSet: lipidSources,
+      sourceSet: [...lipidSources, ...metabolicSources],
       integrity: { algorithm: 'SHA-256', digest: 'not-the-digest' },
       signature: null,
     };
