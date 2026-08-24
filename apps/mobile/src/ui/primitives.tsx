@@ -1,4 +1,11 @@
-import { forwardRef, useContext, type PropsWithChildren, type ReactNode } from 'react';
+import {
+  forwardRef,
+  useContext,
+  useEffect,
+  useState,
+  type PropsWithChildren,
+  type ReactNode,
+} from 'react';
 import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import { Image } from 'expo-image';
 import {
@@ -7,6 +14,7 @@ import {
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
   type ColorValue,
   type PressableProps,
   type ScrollViewProps,
@@ -144,18 +152,47 @@ export function StatusPill({
   subtle = false,
 }: PropsWithChildren<{ readonly tone?: StatusTone; readonly subtle?: boolean }>) {
   const status = statusColors[tone];
+  const { fontScale, width: windowWidth } = useWindowDimensions();
+  const maxPillWidth = Math.max(0, windowWidth - spacing.xl * 2);
+  const [contentWidth, setContentWidth] = useState<number | undefined>();
+
+  useEffect(() => {
+    setContentWidth(undefined);
+  }, [fontScale, windowWidth]);
+
+  const measuredPillWidth = contentWidth ?? maxPillWidth;
+
   return (
     <View
       accessibilityRole="text"
       style={[
         styles.pill,
         subtle && styles.subtlePill,
-        { backgroundColor: subtle ? colors.accentSoft : status.fill },
+        {
+          backgroundColor: subtle ? colors.accentSoft : status.fill,
+          width: measuredPillWidth,
+        },
       ]}
     >
       <AppText
         variant="caption"
-        style={[styles.pillText, { color: subtle ? colors.ink : status.ink }]}
+        style={[
+          styles.pillText,
+          {
+            color: subtle ? colors.ink : status.ink,
+            maxWidth: Math.max(0, windowWidth - spacing.xl * 2),
+          },
+        ]}
+        onTextLayout={({ nativeEvent }) => {
+          if (nativeEvent.lines.length === 0) return;
+          const lineWidth = Math.max(...nativeEvent.lines.map((line) => line.width), 0);
+          const nextWidth = Math.min(maxPillWidth, lineWidth + spacing.sm * 2);
+          setContentWidth((previousWidth) =>
+            previousWidth === undefined || Math.abs(previousWidth - nextWidth) > 1
+              ? nextWidth
+              : previousWidth,
+          );
+        }}
       >
         {children}
       </AppText>
@@ -289,12 +326,13 @@ const styles = StyleSheet.create({
   pill: {
     alignSelf: 'flex-start',
     borderRadius: 99,
+    flexDirection: 'row',
     maxWidth: '100%',
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
   subtlePill: { borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth },
-  pillText: { flexShrink: 1, fontWeight: '600' },
+  pillText: { flexShrink: 1, fontWeight: '600', minWidth: 0 },
   groupedRow: {
     alignItems: 'center',
     borderBottomColor: colors.border,
