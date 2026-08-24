@@ -12,7 +12,7 @@ export const lipidBiomarkerIds = {
 export type LipidBiomarkerId = (typeof lipidBiomarkerIds)[keyof typeof lipidBiomarkerIds];
 export const LIPID_BIOMARKER_IDS = lipidBiomarkerIds;
 
-export const metabolicBiomarkerIds = {
+export const metabolicMicronutrientBiomarkerIds = {
   glucose: 'biomarker.glucose',
   hba1c: 'biomarker.hba1c',
   ferritin: 'biomarker.ferritin',
@@ -21,8 +21,8 @@ export const metabolicBiomarkerIds = {
 } as const;
 
 export type MetabolicBiomarkerId =
-  (typeof metabolicBiomarkerIds)[keyof typeof metabolicBiomarkerIds];
-export const METABOLIC_BIOMARKER_IDS = metabolicBiomarkerIds;
+  (typeof metabolicMicronutrientBiomarkerIds)[keyof typeof metabolicMicronutrientBiomarkerIds];
+export const METABOLIC_MICRONUTRIENT_BIOMARKER_IDS = metabolicMicronutrientBiomarkerIds;
 
 export type CataloguePublicationStatus = 'review-pending' | 'approved';
 
@@ -60,6 +60,16 @@ export type SpecimenCompatibility = readonly (readonly [
   ...CatalogueSpecimen[],
 ])[];
 
+export type CatalogueMethodPolicy = {
+  /** Policy release, independent from the catalogue content release. */
+  readonly version: string;
+  /** Standardized methods may be omitted when the reported identity and unit are explicit. */
+  readonly kind: 'method-agnostic' | 'standardized' | 'requires-explicit-method';
+  readonly allowedMethods: readonly string[];
+  readonly unsafePatterns: readonly string[];
+  readonly rationale: string;
+};
+
 export type GeneralGuidanceThreshold = {
   readonly operator: '<' | '<=' | '>' | '>=';
   readonly value: number;
@@ -75,8 +85,10 @@ export type GeneralGuidance = {
     readonly population: 'adults';
     readonly jurisdiction: string;
     readonly context: 'screening';
+    readonly purpose?: 'screening' | 'monitoring';
     readonly sex: 'all' | 'female' | 'male';
     readonly fasting: 'any' | 'fasting' | 'non-fasting';
+    readonly specimen?: CatalogueSpecimen;
     readonly limitations: readonly string[];
   };
   /** Disagreement is explicit; catalogue content never silently chooses a universal threshold. */
@@ -102,6 +114,8 @@ export type BiomarkerCatalogueEntry = {
   readonly canonicalUnit?: string;
   readonly unitConversions?: readonly UnitConversion[];
   readonly specimenCompatibility?: SpecimenCompatibility;
+  readonly unsafeAliases?: readonly string[];
+  readonly methodPolicy?: CatalogueMethodPolicy;
   readonly explanation?: string;
   readonly sources?: readonly CatalogueSource[];
   readonly review?: CatalogueReviewMetadata;

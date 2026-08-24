@@ -3,6 +3,7 @@ import {
   type BiomarkerCatalogueEntry,
   type CatalogueReviewMetadata,
   type CatalogueSource,
+  type CatalogueMethodPolicy,
   type GeneralGuidance,
   type UnitConversion,
 } from './schema.js';
@@ -106,6 +107,7 @@ const guidance = (
   },
   fasting: 'any' | 'fasting',
   source: CatalogueSource,
+  specimen: 'blood' | 'serum' | 'plasma' | undefined = undefined,
 ): GeneralGuidance => ({
   id,
   label,
@@ -116,8 +118,10 @@ const guidance = (
     population: 'adults',
     jurisdiction: 'US',
     context: 'screening',
+    purpose: 'screening',
     sex: 'all',
     fasting,
+    ...(specimen === undefined ? {} : { specimen }),
     limitations: [
       'Shown only when the adult population, US jurisdiction, and required collection context are explicit.',
       'The issuing laboratory interval and source context remain primary.',
@@ -145,6 +149,7 @@ type MetabolicEntryInput = Omit<
   | 'explanation'
   | 'sources'
   | 'review'
+  | 'methodPolicy'
   | 'generalGuidance'
 > & {
   readonly canonicalLabel: string;
@@ -154,6 +159,7 @@ type MetabolicEntryInput = Omit<
   readonly explanation: string;
   readonly sources: readonly CatalogueSource[];
   readonly generalGuidance?: readonly GeneralGuidance[];
+  readonly methodPolicy: CatalogueMethodPolicy;
 };
 
 function metabolicEntry({
@@ -178,8 +184,8 @@ function metabolicEntry({
 const glucoseConversionSource = niddkDiabetesConversionsSource;
 
 const glucoseConversions: readonly UnitConversion[] = [
-  conversion('mmol/L', 'mg/dL', 18, 0, glucoseConversionSource.id),
-  conversion('mg/dL', 'mmol/L', 1 / 18, 0, glucoseConversionSource.id),
+  conversion('mmol/L', 'mg/dL', 1 / 0.0555, 0, glucoseConversionSource.id),
+  conversion('mg/dL', 'mmol/L', 0.0555, 0, glucoseConversionSource.id),
 ];
 
 const hba1cConversions: readonly UnitConversion[] = [
@@ -206,9 +212,62 @@ const vitaminB12Conversions: readonly UnitConversion[] = [
   conversion('pg/mL', 'pmol/L', 0.738, 0, nihVitaminB12Source.id),
 ];
 
+const methodPolicy = (
+  kind: CatalogueMethodPolicy['kind'],
+  allowedMethods: readonly string[],
+  unsafePatterns: readonly string[],
+  rationale: string,
+): CatalogueMethodPolicy => ({
+  version: '1.0.0',
+  kind,
+  allowedMethods,
+  unsafePatterns,
+  rationale,
+});
+
+const glucoseMethodPolicy = methodPolicy(
+  'method-agnostic',
+  [],
+  [
+    'glucose tolerance',
+    'oral glucose tolerance',
+    'ogtt',
+    'glucose challenge',
+    'glucose load',
+    'post-load glucose',
+  ],
+  'The canonical entry is a direct glucose result; tolerance, challenge, and post-load forms are separate tests.',
+);
+const hba1cMethodPolicy = methodPolicy(
+  'standardized',
+  ['ngsp', 'ifcc'],
+  [],
+  'NGSP and IFCC are the reviewed standardized HbA1c identity/unit systems; a clear HbA1c label and unit may omit the method.',
+);
+const ferritinMethodPolicy = methodPolicy(
+  'method-agnostic',
+  [],
+  [],
+  'The entry is total ferritin and does not require a method discriminator for comparable numeric results.',
+);
+const vitaminDMethodPolicy = methodPolicy(
+  'requires-explicit-method',
+  ['lc-ms/ms', 'lc-ms', 'immunoassay', 'chemiluminescence', 'clia', 'elisa'],
+  [],
+  'Total 25-hydroxyvitamin D is retained conservatively when the source explicitly identifies a supported assay method.',
+);
+const vitaminB12MethodPolicy = methodPolicy(
+  'requires-explicit-method',
+  ['immunoassay', 'chemiluminescence', 'eclia', 'elisa'],
+  [],
+  'Total vitamin B12 is retained conservatively when the source explicitly identifies a supported assay method.',
+);
+
 export const metabolicMicronutrientBiomarkers: readonly BiomarkerCatalogueEntry[] = [
   metabolicEntry({
     id: 'biomarker.glucose',
+    unsafeAliases: glucoseMethodPolicy.unsafePatterns,
+    methodPolicy: glucoseMethodPolicy,
     canonicalLabel: 'Glucose',
     aliases: [
       'glucose',
@@ -242,11 +301,13 @@ export const metabolicMicronutrientBiomarkers: readonly BiomarkerCatalogueEntry[
         { operator: '<', value: 100, unit: 'mg/dL' },
         'fasting',
         cdcDiabetesTestingSource,
+        'plasma',
       ),
     ],
   }),
   metabolicEntry({
     id: 'biomarker.hba1c',
+    methodPolicy: hba1cMethodPolicy,
     canonicalLabel: 'HbA1c',
     aliases: [
       'hba1c',
@@ -279,11 +340,13 @@ export const metabolicMicronutrientBiomarkers: readonly BiomarkerCatalogueEntry[
         { operator: '<', value: 5.7, unit: '%' },
         'any',
         cdcDiabetesTestingSource,
+        'blood',
       ),
     ],
   }),
   metabolicEntry({
     id: 'biomarker.ferritin',
+    methodPolicy: ferritinMethodPolicy,
     canonicalLabel: 'Ferritin',
     aliases: [
       'ferritin',
@@ -305,6 +368,18 @@ export const metabolicMicronutrientBiomarkers: readonly BiomarkerCatalogueEntry[
   }),
   metabolicEntry({
     id: 'biomarker.vitamin_d_total',
+    unsafeAliases: [
+      'vitamin d2',
+      'vitamin d3',
+      'ergocalciferol',
+      'cholecalciferol',
+      '1,25-dihydroxyvitamin d',
+      '1,25-oh vitamin d',
+      'calcitriol',
+      'vitamin d total',
+      'total vitamin d',
+    ],
+    methodPolicy: vitaminDMethodPolicy,
     canonicalLabel: 'Total 25-hydroxyvitamin D',
     aliases: [
       '25-oh vitamin d',
@@ -333,6 +408,14 @@ export const metabolicMicronutrientBiomarkers: readonly BiomarkerCatalogueEntry[
   }),
   metabolicEntry({
     id: 'biomarker.vitamin_b12_total',
+    unsafeAliases: [
+      'active b12',
+      'holotranscobalamin',
+      'holo tc',
+      'holo-transcobalamin',
+      'active cobalamin',
+    ],
+    methodPolicy: vitaminB12MethodPolicy,
     canonicalLabel: 'Total vitamin B12',
     aliases: [
       'vitamin b12',
@@ -358,5 +441,3 @@ export const metabolicMicronutrientBiomarkers: readonly BiomarkerCatalogueEntry[
     sources: [nihVitaminB12Source],
   }),
 ];
-
-export const metabolicBiomarkers = metabolicMicronutrientBiomarkers;

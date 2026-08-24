@@ -275,6 +275,17 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       aliases: entry.aliases,
       specimens: entry.specimens,
       units: entry.units,
+      ...(entry.unsafeAliases === undefined ? {} : { unsafeAliases: entry.unsafeAliases }),
+      ...(entry.methodPolicy === undefined
+        ? {}
+        : {
+            methodPolicy: {
+              version: entry.methodPolicy.version,
+              kind: entry.methodPolicy.kind,
+              allowedMethods: entry.methodPolicy.allowedMethods,
+              unsafePatterns: entry.methodPolicy.unsafePatterns,
+            },
+          }),
     }));
   const semanticMapper = options.semanticMapper;
   const now = options.now ?? isoNow;

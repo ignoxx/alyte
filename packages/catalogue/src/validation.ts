@@ -1,5 +1,9 @@
-import { lipidBiomarkerIds, metabolicBiomarkerIds } from './schema.js';
-import type { BiomarkerCatalogueEntry, CatalogueValidationIssue } from './schema.js';
+import {
+  lipidBiomarkerIds,
+  metabolicMicronutrientBiomarkerIds,
+  type BiomarkerCatalogueEntry,
+  type CatalogueValidationIssue,
+} from './schema.js';
 
 /** Source-shaped aliases are normalized only for lookup; they never replace the original label. */
 export function normalizeCatalogueAlias(value: string): string {
@@ -24,7 +28,138 @@ const forbiddenWordingPatterns: readonly RegExp[] = [
   /\byou\s+have\s+(?:a\s+)?(?:deficien|disease)/i,
 ];
 
-const metabolicBiomarkerIdSet = new Set<string>(Object.values(metabolicBiomarkerIds));
+type ComparableEntryRequirements = {
+  readonly family: 'lipid' | 'metabolic/micronutrient';
+  readonly guidance: 'required' | 'optional';
+  readonly requireMethodPolicy: boolean;
+};
+
+const comparableEntryRequirements = new Map<string, ComparableEntryRequirements>([
+  ...Object.values(lipidBiomarkerIds).map(
+    (id) => [id, { family: 'lipid', guidance: 'required', requireMethodPolicy: false }] as const,
+  ),
+  ...Object.values(metabolicMicronutrientBiomarkerIds).map(
+    (id) =>
+      [
+        id,
+        { family: 'metabolic/micronutrient', guidance: 'optional', requireMethodPolicy: true },
+      ] as const,
+  ),
+]);
+
+function validateComparableEntry(
+  entry: BiomarkerCatalogueEntry,
+  path: string,
+  requirements: ComparableEntryRequirements,
+): CatalogueValidationIssue[] {
+  const issues: CatalogueValidationIssue[] = [];
+  const family = requirements.family;
+  const required = (field: string, message: string): void => {
+    issues.push({ path: `${path}.${field}`, message });
+  };
+  if (entry.canonicalLabel === undefined || entry.canonicalLabel.trim().length === 0)
+    required('canonicalLabel', `${family} canonical label is required`);
+  if (entry.valueType !== 'numeric') required('valueType', `${family} entries must be numeric`);
+  if (entry.specimens.length === 0) required('specimens', `${family} specimens are required`);
+  if (entry.units.length === 0) required('units', `${family} units are required`);
+  if (entry.canonicalUnit === undefined || entry.canonicalUnit.trim().length === 0)
+    required('canonicalUnit', `${family} canonical unit is required`);
+  if (entry.explanation === undefined || entry.explanation.trim().length === 0)
+    required('explanation', `${family} explanation is required`);
+  if (entry.sources === undefined || entry.sources.length === 0)
+    required('sources', `${family} source metadata is required`);
+  if (entry.review === undefined) required('review', `${family} review metadata is required`);
+  if (
+    requirements.guidance === 'required' &&
+    (entry.generalGuidance === undefined || entry.generalGuidance.length === 0)
+  )
+    required('generalGuidance', `${family} guidance metadata is required`);
+
+  for (const unit of entry.units) {
+    if (entry.canonicalUnit !== undefined && unit !== entry.canonicalUnit) {
+      const covered = entry.unitConversions?.some(
+        (candidate) => candidate.from === unit && candidate.to === entry.canonicalUnit,
+      );
+      if (!covered)
+        issues.push({
+          path: `${path}.unitConversions`,
+          message: `${family} conversion coverage is missing for ${unit}`,
+        });
+    }
+  }
+
+  if (entry.specimens.length > 0) {
+    const listedSpecimens = new Set(entry.specimens);
+    if (listedSpecimens.size !== entry.specimens.length)
+      required('specimens', `${family} specimens must be unique`);
+    const groups = entry.specimenCompatibility;
+    if (groups === undefined || groups.length === 0) {
+      required('specimenCompatibility', `${family} specimen compatibility groups are required`);
+    } else {
+      const coveredSpecimens = new Set<string>();
+      for (const [groupIndex, group] of groups.entries()) {
+        if (!Array.isArray(group) || group.length === 0) {
+          issues.push({
+            path: `${path}.specimenCompatibility[${groupIndex}]`,
+            message: `${family} specimen compatibility groups cannot be empty`,
+          });
+          continue;
+        }
+        for (const specimen of group) {
+          if (!listedSpecimens.has(specimen)) {
+            issues.push({
+              path: `${path}.specimenCompatibility[${groupIndex}]`,
+              message: `${family} specimen compatibility references an unlisted specimen`,
+            });
+          }
+          if (coveredSpecimens.has(specimen)) {
+            issues.push({
+              path: `${path}.specimenCompatibility[${groupIndex}]`,
+              message: `${family} specimen compatibility groups overlap`,
+            });
+          }
+          coveredSpecimens.add(specimen);
+        }
+      }
+      for (const specimen of listedSpecimens) {
+        if (!coveredSpecimens.has(specimen)) {
+          issues.push({
+            path: `${path}.specimenCompatibility`,
+            message: `${family} specimen compatibility does not cover every listed specimen`,
+          });
+          break;
+        }
+      }
+    }
+  }
+
+  if (requirements.requireMethodPolicy) {
+    const policy = entry.methodPolicy;
+    if (policy === undefined) {
+      required('methodPolicy', `${family} method policy is required`);
+    } else {
+      if (!/^\d+\.\d+\.\d+$/.test(policy.version))
+        required('methodPolicy.version', `${family} method policy version is invalid`);
+      if (!['method-agnostic', 'standardized', 'requires-explicit-method'].includes(policy.kind))
+        required('methodPolicy.kind', `${family} method policy kind is invalid`);
+      if (
+        (policy.kind === 'standardized' || policy.kind === 'requires-explicit-method') &&
+        policy.allowedMethods.length === 0
+      )
+        required('methodPolicy.allowedMethods', `${family} policy needs allowed methods`);
+      if (policy.allowedMethods.some((method) => method.trim().length === 0))
+        required('methodPolicy.allowedMethods', `${family} method policy contains an empty method`);
+      if (policy.unsafePatterns.some((pattern) => pattern.trim().length === 0))
+        required(
+          'methodPolicy.unsafePatterns',
+          `${family} method policy contains an empty unsafe pattern`,
+        );
+      if (!policy.rationale.trim())
+        required('methodPolicy.rationale', `${family} method rationale is required`);
+    }
+  }
+  return issues;
+}
 
 export function findForbiddenWording(text: string): string | null {
   const match = forbiddenWordingPatterns.find((pattern) => pattern.test(text));
@@ -70,118 +205,9 @@ export function validateCatalogue(
         message: 'canonical unit is not listed in units',
       });
     }
-    if (
-      Object.values(lipidBiomarkerIds).includes(
-        entry.id as (typeof lipidBiomarkerIds)[keyof typeof lipidBiomarkerIds],
-      )
-    ) {
-      if (entry.canonicalLabel === undefined || entry.canonicalLabel.trim().length === 0) {
-        issues.push({
-          path: `${path}.canonicalLabel`,
-          message: 'lipid canonical label is required',
-        });
-      }
-      if (entry.valueType !== 'numeric') {
-        issues.push({ path: `${path}.valueType`, message: 'lipid entries must be numeric' });
-      }
-      if (entry.specimens.length === 0) {
-        issues.push({ path: `${path}.specimens`, message: 'lipid specimens are required' });
-      }
-      if (entry.units.length === 0) {
-        issues.push({ path: `${path}.units`, message: 'lipid units are required' });
-      }
-      if (entry.explanation === undefined || entry.explanation.trim().length === 0) {
-        issues.push({ path: `${path}.explanation`, message: 'lipid explanation is required' });
-      }
-      if (entry.sources === undefined || entry.sources.length === 0) {
-        issues.push({ path: `${path}.sources`, message: 'lipid source metadata is required' });
-      }
-      if (entry.review === undefined) {
-        issues.push({ path: `${path}.review`, message: 'lipid review metadata is required' });
-      }
-      if (entry.generalGuidance === undefined || entry.generalGuidance.length === 0) {
-        issues.push({
-          path: `${path}.generalGuidance`,
-          message: 'lipid guidance metadata is required',
-        });
-      }
-      for (const unit of entry.units) {
-        if (entry.canonicalUnit !== undefined && unit !== entry.canonicalUnit) {
-          const covered = entry.unitConversions?.some(
-            (conversion) => conversion.from === unit && conversion.to === entry.canonicalUnit,
-          );
-          if (!covered) {
-            issues.push({
-              path: `${path}.unitConversions`,
-              message: `lipid conversion coverage is missing for ${unit}`,
-            });
-          }
-        }
-      }
-    }
-    if (metabolicBiomarkerIdSet.has(entry.id)) {
-      if (entry.canonicalLabel === undefined || entry.canonicalLabel.trim().length === 0) {
-        issues.push({
-          path: `${path}.canonicalLabel`,
-          message: 'metabolic/micronutrient canonical label is required',
-        });
-      }
-      if (entry.valueType !== 'numeric') {
-        issues.push({
-          path: `${path}.valueType`,
-          message: 'metabolic/micronutrient entries must be numeric',
-        });
-      }
-      if (entry.specimens.length === 0) {
-        issues.push({
-          path: `${path}.specimens`,
-          message: 'metabolic/micronutrient specimens are required',
-        });
-      }
-      if (entry.units.length === 0) {
-        issues.push({
-          path: `${path}.units`,
-          message: 'metabolic/micronutrient units are required',
-        });
-      }
-      if (entry.canonicalUnit === undefined || entry.canonicalUnit.trim().length === 0) {
-        issues.push({
-          path: `${path}.canonicalUnit`,
-          message: 'metabolic/micronutrient canonical unit is required',
-        });
-      }
-      if (entry.explanation === undefined || entry.explanation.trim().length === 0) {
-        issues.push({
-          path: `${path}.explanation`,
-          message: 'metabolic/micronutrient explanation is required',
-        });
-      }
-      if (entry.sources === undefined || entry.sources.length === 0) {
-        issues.push({
-          path: `${path}.sources`,
-          message: 'metabolic/micronutrient source metadata is required',
-        });
-      }
-      if (entry.review === undefined) {
-        issues.push({
-          path: `${path}.review`,
-          message: 'metabolic/micronutrient review metadata is required',
-        });
-      }
-      for (const unit of entry.units) {
-        if (entry.canonicalUnit !== undefined && unit !== entry.canonicalUnit) {
-          const covered = entry.unitConversions?.some(
-            (conversion) => conversion.from === unit && conversion.to === entry.canonicalUnit,
-          );
-          if (!covered) {
-            issues.push({
-              path: `${path}.unitConversions`,
-              message: `metabolic/micronutrient conversion coverage is missing for ${unit}`,
-            });
-          }
-        }
-      }
-    }
+    const requirements = comparableEntryRequirements.get(entry.id);
+    if (requirements !== undefined)
+      issues.push(...validateComparableEntry(entry, path, requirements));
     if (entry.unitConversions !== undefined) {
       const entrySourceIds = new Set((entry.sources ?? []).map((source) => source.id));
       for (const [conversionIndex, conversion] of entry.unitConversions.entries()) {
@@ -246,6 +272,10 @@ export function validateCatalogue(
       if (
         !guidance.applicability.jurisdiction.trim() ||
         guidance.applicability.context !== 'screening' ||
+        (guidance.applicability.purpose !== undefined &&
+          !['screening', 'monitoring'].includes(guidance.applicability.purpose)) ||
+        (guidance.applicability.specimen !== undefined &&
+          !entry.specimens.includes(guidance.applicability.specimen)) ||
         !['all', 'female', 'male'].includes(guidance.applicability.sex) ||
         !['any', 'fasting', 'non-fasting'].includes(guidance.applicability.fasting)
       ) {

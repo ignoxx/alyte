@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  METABOLIC_BIOMARKER_IDS,
+  METABOLIC_MICRONUTRIENT_BIOMARKER_IDS,
   metabolicMicronutrientBiomarkers,
   metabolicSources,
   otherComparableBiomarkers,
@@ -10,7 +10,7 @@ import {
   findForbiddenWording,
 } from './index.js';
 
-const familyIds = Object.values(METABOLIC_BIOMARKER_IDS);
+const familyIds = Object.values(METABOLIC_MICRONUTRIENT_BIOMARKER_IDS);
 
 describe('metabolic and micronutrient catalogue family', () => {
   it('keeps five stable, source-backed entries separate from the skeletal blood/liver family', () => {
@@ -44,6 +44,7 @@ describe('metabolic and micronutrient catalogue family', () => {
       assert.equal(entry.review?.status, 'pending-human-publication');
       assert.equal(entry.review?.reviewedAt, null);
       assert.equal(entry.review?.reviewer, null);
+      assert.ok(entry.methodPolicy);
       for (const source of entry.sources ?? []) {
         assert.ok(/^https:\/\//.test(source.url));
         assert.ok(metabolicSources.some((candidate) => candidate.id === source.id));
@@ -63,6 +64,33 @@ describe('metabolic and micronutrient catalogue family', () => {
       }
     }
     assert.deepEqual(validateCatalogue(metabolicMicronutrientBiomarkers), []);
+  });
+
+  it('rejects incomplete, overlapping, or unlisted specimen compatibility groups', () => {
+    const glucose = metabolicMicronutrientBiomarkers.find(
+      (entry) => entry.id === 'biomarker.glucose',
+    )!;
+    assert.ok(
+      validateCatalogue([{ ...glucose, specimenCompatibility: [['serum']] }]).some((issue) =>
+        /does not cover every listed specimen/i.test(issue.message),
+      ),
+    );
+    assert.ok(
+      validateCatalogue([
+        {
+          ...glucose,
+          specimenCompatibility: [
+            ['blood', 'serum'],
+            ['serum', 'plasma'],
+          ],
+        },
+      ]).some((issue) => /overlap/i.test(issue.message)),
+    );
+    assert.ok(
+      validateCatalogue([
+        { ...glucose, specimenCompatibility: [['blood', 'serum', 'plasma', 'urine'] as const] },
+      ]).some((issue) => /unlisted specimen/i.test(issue.message)),
+    );
   });
 
   it('maps representative English, German, US, and EU labels without collapsing identities', () => {

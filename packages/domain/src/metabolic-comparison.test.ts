@@ -19,10 +19,11 @@ function measurement(
   unit: string | null,
   specimenType: Measurement['specimenType'],
   valueString = String(value.kind === 'numeric' ? value.value : value),
+  label = biomarkerId,
 ): Measurement {
   const canonical = canonicalId(biomarkerId);
   const snapshot: MeasurementSnapshot = {
-    label: biomarkerId,
+    label,
     value,
     valueString,
     unit,
@@ -80,8 +81,8 @@ describe('metabolic and micronutrient comparison fixtures', () => {
     const vitaminD = findCatalogueBiomarker('biomarker.vitamin_d_total')!;
     const vitaminB12 = findCatalogueBiomarker('biomarker.vitamin_b12_total')!;
 
-    assert.equal(convertComparableValue(126, 'mg/dL', glucose, 'mmol/L')?.value, 7);
-    assert.equal(convertComparableValue(7, 'mmol/L', glucose)?.value, 126);
+    assert.equal(convertComparableValue(126, 'mg/dL', glucose, 'mmol/L')?.value, 6.993);
+    assert.equal(convertComparableValue(6.993, 'mmol/L', glucose)?.value, 126);
     assert.equal(convertComparableValue(6.5, '%', hba1c, 'mmol/mol')?.value, 47.545);
     assert.equal(convertComparableValue(53, 'mmol/mol', hba1c)?.value, 7.00044);
     assert.equal(convertComparableValue(25, 'µg/L', ferritin)?.value, 25);
@@ -131,6 +132,8 @@ describe('metabolic and micronutrient comparison fixtures', () => {
         jurisdiction: 'US',
         sex: 'female',
         fasting: 'fasting',
+        purpose: 'screening',
+        specimen: 'plasma',
       })[0]?.guidanceId,
       'guidance.glucose.fasting-screening-us',
     );
@@ -140,9 +143,66 @@ describe('metabolic and micronutrient comparison fixtures', () => {
         jurisdiction: 'US',
         sex: 'male',
         fasting: 'non-fasting',
+        purpose: 'screening',
+        specimen: 'blood',
       })[0]?.guidanceId,
       'guidance.hba1c.screening-us',
     );
+  });
+
+  it('does not invent a direction when exact glucose quantities use different units', () => {
+    const records = [
+      record('same-quantity-1', { kind: 'known', value: '2026-01-01' }, 'serum', [
+        measurement(
+          'same-quantity-mg',
+          'same-quantity-1',
+          'biomarker.glucose',
+          { kind: 'numeric', value: 126 },
+          'mg/dL',
+          'serum',
+        ),
+      ]),
+      record('same-quantity-2', { kind: 'known', value: '2026-02-01' }, 'plasma', [
+        measurement(
+          'same-quantity-mmol',
+          'same-quantity-2',
+          'biomarker.glucose',
+          { kind: 'numeric', value: 6.993 },
+          'mmol/L',
+          'plasma',
+        ),
+      ]),
+    ];
+    const trend = buildMeasuredTrend(
+      records,
+      canonicalId('biomarker.glucose'),
+      metabolicMicronutrientBiomarkers,
+    );
+    assert.equal(trend.points.length, 2);
+    assert.equal(trend.direction, 'stable');
+  });
+
+  it('keeps required-method families as typed non-points when source method details are absent', () => {
+    const trend = buildMeasuredTrend(
+      [
+        record('methodless', { kind: 'known', value: '2026-01-01' }, 'serum', [
+          measurement(
+            'methodless-vitamin-d',
+            'methodless',
+            'biomarker.vitamin_d_total',
+            { kind: 'numeric', value: 20 },
+            'ng/mL',
+            'serum',
+            '20',
+            '25-OH Vitamin D',
+          ),
+        ]),
+      ],
+      canonicalId('biomarker.vitamin_d_total'),
+      metabolicMicronutrientBiomarkers,
+    );
+    assert.equal(trend.points.length, 0);
+    assert.equal(trend.nonPoints[0]?.reason, 'incompatible-method');
   });
 
   it('keeps specimen ambiguity, bounds, missing dates, and absent tests outside an interpolated trend', () => {
@@ -157,10 +217,10 @@ describe('metabolic and micronutrient comparison fixtures', () => {
           'm3',
           'r3',
           glucoseId,
-          { kind: 'numeric', value: 7 },
+          { kind: 'numeric', value: 6.993 },
           'mmol/L',
           'plasma',
-          '7,0',
+          '6,993',
         ),
       ]),
       record('r4', { kind: 'known', value: '2026-04-01' }, 'serum', [
@@ -190,7 +250,7 @@ describe('metabolic and micronutrient comparison fixtures', () => {
       trend.points.map((point) => point.measurementId),
       ['m1', 'm3'],
     );
-    assert.equal(trend.points[1]?.source.valueString, '7,0');
+    assert.equal(trend.points[1]?.source.valueString, '6,993');
     assert.equal(trend.points[1]?.normalized.value, 126);
     assert.equal(trend.segments.length, 2);
     assert.deepEqual(
@@ -204,6 +264,12 @@ describe('metabolic and micronutrient comparison fixtures', () => {
     for (const [index, entry] of metabolicMicronutrientBiomarkers.entries()) {
       const specimen = entry.specimens[0]!;
       const unit = entry.canonicalUnit!;
+      const label =
+        entry.id === 'biomarker.vitamin_d_total'
+          ? '25-OH Vitamin D LC-MS/MS'
+          : entry.id === 'biomarker.vitamin_b12_total'
+            ? 'Vitamin B12 immunoassay'
+            : entry.canonicalLabel!;
       const records = [
         record(`family-${index}-point`, { kind: 'known', value: '2026-01-01' }, specimen, [
           measurement(
@@ -213,6 +279,8 @@ describe('metabolic and micronutrient comparison fixtures', () => {
             { kind: 'numeric', value: 10 },
             unit,
             specimen,
+            undefined,
+            label,
           ),
         ]),
         record(`family-${index}-bounded`, { kind: 'known', value: '2026-02-01' }, specimen, [

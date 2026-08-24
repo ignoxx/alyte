@@ -77,6 +77,8 @@ export type ExtractionReviewReason =
   | 'unsupported-alias'
   | 'incompatible-unit'
   | 'incompatible-specimen'
+  | 'ambiguous-assay'
+  | 'incompatible-method'
   | 'unparseable-reference-interval'
   | 'missing-collection-date'
   | 'ambiguous-date'
@@ -152,6 +154,13 @@ export type ExtractionAliasEntry = {
   readonly aliases: readonly string[];
   readonly specimens: readonly SpecimenType[];
   readonly units: readonly string[];
+  readonly unsafeAliases?: readonly string[];
+  readonly methodPolicy?: {
+    readonly version: string;
+    readonly kind: 'method-agnostic' | 'standardized' | 'requires-explicit-method';
+    readonly allowedMethods: readonly string[];
+    readonly unsafePatterns: readonly string[];
+  };
 };
 
 export type ExtractionSemanticProposal = {
@@ -410,6 +419,7 @@ export function proposeBiomarkerId(
 ): CanonicalId | null {
   const normalized = normalizeAlias(label);
   if (!normalized) return null;
+  if (findUnsafeBiomarkerLabel(label, aliases) !== null) return null;
   const exact = aliases.find((entry) =>
     entry.aliases.some((alias) => normalizeAlias(alias) === normalized),
   );
@@ -520,6 +530,34 @@ function aliasPattern(alias: string): RegExp | null {
   const words = normalizeAlias(alias).split(' ').filter(Boolean);
   if (words.length === 0) return null;
   return new RegExp(words.map(escapeRegExp).join('[^\\p{L}\\p{N}]+'), 'iu');
+}
+
+export function findUnsafeBiomarkerLabel(
+  sourceText: string,
+  aliases: readonly ExtractionAliasEntry[],
+): { readonly id: CanonicalId; readonly pattern: string } | null {
+  for (const entry of aliases) {
+    for (const patternText of [
+      ...(entry.unsafeAliases ?? []),
+      ...(entry.methodPolicy?.unsafePatterns ?? []),
+    ]) {
+      const pattern = aliasPattern(patternText);
+      if (pattern?.test(sourceText)) return { id: entry.id as CanonicalId, pattern: patternText };
+    }
+  }
+  return null;
+}
+
+function methodCompatible(
+  sourceText: string,
+  biomarkerId: CanonicalId | null,
+  aliases: readonly ExtractionAliasEntry[],
+): boolean {
+  if (biomarkerId === null) return true;
+  const entry = aliases.find((candidate) => candidate.id === biomarkerId);
+  const policy = entry?.methodPolicy;
+  if (policy === undefined || policy.kind !== 'requires-explicit-method') return true;
+  return policy.allowedMethods.some((method) => aliasPattern(method)?.test(sourceText) ?? false);
 }
 
 function findAliasInText(
@@ -685,7 +723,8 @@ function parseSourceRow(
       { ...firstBox },
     ),
   };
-  const aliasMatch = findAliasInText(sourceText, aliases);
+  const unsafeMatch = findUnsafeBiomarkerLabel(sourceText, aliases);
+  const aliasMatch = unsafeMatch === null ? findAliasInText(sourceText, aliases) : null;
   const numericCandidates = [...sourceText.matchAll(new RegExp(NUMERIC_TOKEN_PATTERN, 'gu'))]
     .map((match) => {
       const raw = match[0].trim();
@@ -778,6 +817,8 @@ function parseSourceRow(
   if (valueCandidates.length > 1 || effectiveReferences.length > 1)
     reasons.push('unsupported-layout');
   if (biomarkerId === null) reasons.push('unsupported-alias');
+  if (unsafeMatch !== null) reasons.push('ambiguous-assay');
+  else if (!methodCompatible(sourceText, biomarkerId, aliases)) reasons.push('incompatible-method');
   if (!unitCompatible(unit, biomarkerId, aliases)) reasons.push('incompatible-unit');
   if (!specimenCompatible(specimenType, biomarkerId, aliases))
     reasons.push('incompatible-specimen');
@@ -830,8 +871,11 @@ export function revalidateExtractionRow(
   if (!next.sourceValueString.trim()) reasons.add('missing-value');
   if (next.proposedValue.kind === 'free_text' && !next.proposedValue.value.trim())
     reasons.add('unparseable-value');
-  const id = next.proposedBiomarkerId;
+  const unsafeMatch = findUnsafeBiomarkerLabel(next.sourceText, aliases);
+  const id = unsafeMatch === null ? next.proposedBiomarkerId : null;
   if (id === null) reasons.add('unsupported-alias');
+  if (unsafeMatch !== null) reasons.add('ambiguous-assay');
+  else if (!methodCompatible(next.sourceText, id, aliases)) reasons.add('incompatible-method');
   if (!unitCompatible(next.proposedUnit, id, aliases)) reasons.add('incompatible-unit');
   if (!specimenCompatible(next.proposedSpecimenType, id, aliases))
     reasons.add('incompatible-specimen');
@@ -845,6 +889,7 @@ export function revalidateExtractionRow(
   const wasExplicitlySkipped = row.decision === 'skip' && patch.decision === undefined;
   return {
     ...next,
+    proposedBiomarkerId: id,
     reviewReasons,
     reviewState: reasons.size === 0 ? 'ready' : 'needs-review',
     decision:

@@ -132,6 +132,12 @@ export type ComparableBiomarkerConstraint = {
   }[];
   /** Explicit groups keep serum/plasma compatibility a catalogue decision, not a guess. */
   readonly specimenCompatibility?: readonly (readonly [SpecimenType, ...SpecimenType[]])[];
+  readonly methodPolicy?: {
+    readonly version: string;
+    readonly kind: 'method-agnostic' | 'standardized' | 'requires-explicit-method';
+    readonly allowedMethods: readonly string[];
+    readonly unsafePatterns: readonly string[];
+  };
   readonly valueType?: 'numeric';
   readonly explanation?: string;
   readonly generalGuidance?: readonly ComparableGeneralGuidance[];
@@ -148,8 +154,10 @@ export type ComparableGeneralGuidance = {
     readonly population: 'adults';
     readonly jurisdiction: string;
     readonly context: 'screening';
+    readonly purpose?: 'screening' | 'monitoring';
     readonly sex: 'all' | 'female' | 'male';
     readonly fasting: 'any' | 'fasting' | 'non-fasting';
+    readonly specimen?: SpecimenType;
     readonly limitations: readonly string[];
   };
   readonly authority: string;
@@ -165,6 +173,8 @@ export type GuidanceContext = {
   readonly jurisdiction: string;
   readonly sex: 'female' | 'male' | 'unknown';
   readonly fasting: 'fasting' | 'non-fasting' | 'unknown';
+  readonly purpose?: 'screening' | 'monitoring' | 'unknown';
+  readonly specimen?: SpecimenType;
 };
 
 export type SelectedGeneralGuidance = {
@@ -192,7 +202,8 @@ export type MeasurementSupportState =
         | 'non-numeric-value'
         | 'missing-unit'
         | 'incompatible-unit'
-        | 'incompatible-specimen';
+        | 'incompatible-specimen'
+        | 'incompatible-method';
     };
 
 export type LabRecordDetail = {
@@ -227,6 +238,8 @@ export function measurementSupportState(
     return { kind: 'preserved-only', reason: 'incompatible-unit' };
   if (!entry.specimens.includes(measurement.specimenType))
     return { kind: 'preserved-only', reason: 'incompatible-specimen' };
+  if (!methodPolicyCompatible(measurement, entry))
+    return { kind: 'preserved-only', reason: 'incompatible-method' };
   return { kind: 'comparable-supported', canonicalId: measurement.biomarkerId };
 }
 
@@ -473,6 +486,7 @@ export type MeasuredTrendNonPoint = {
     | 'missing-unit'
     | 'incompatible-unit'
     | 'incompatible-specimen'
+    | 'incompatible-method'
     | 'unsupported-canonical-id';
 };
 
@@ -549,6 +563,38 @@ function specimenPairCompatible(
   );
 }
 
+function normalizeMethodText(value: string): string {
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function methodPolicyCompatible(
+  measurement: Measurement,
+  entry: ComparableBiomarkerConstraint,
+): boolean {
+  const policy = entry.methodPolicy;
+  if (policy === undefined) return true;
+  const sourceFacts = [
+    measurement.current.label,
+    measurement.original.label,
+    ...(measurement.source?.observations?.map((observation) => observation.text) ?? []),
+  ].join(' ');
+  const normalizedSource = normalizeMethodText(sourceFacts);
+  if (
+    policy.unsafePatterns.some((pattern) => normalizedSource.includes(normalizeMethodText(pattern)))
+  )
+    return false;
+  if (policy.kind !== 'requires-explicit-method') return true;
+  return policy.allowedMethods.some((method) =>
+    normalizedSource.includes(normalizeMethodText(method)),
+  );
+}
+
 function nonPointForMeasurement(
   record: LabRecord,
   measurement: Measurement,
@@ -601,7 +647,7 @@ function nonPointForMeasurement(
   else if (!entry.units.includes(measurement.current.unit)) reason = 'incompatible-unit';
   else if (!specimenPairCompatible(entry, measurement.specimenType, record.specimenType)) {
     reason = 'incompatible-specimen';
-  }
+  } else if (!methodPolicyCompatible(measurement, entry)) reason = 'incompatible-method';
   return {
     kind: 'incompatible',
     labRecordId: record.id,
@@ -673,6 +719,7 @@ export function buildMeasuredTrend(
         measurement.reviewState === 'confirmed' &&
         value.kind === 'numeric' &&
         unit !== null &&
+        methodPolicyCompatible(measurement, entry) &&
         specimenPairCompatible(entry, measurement.specimenType, record.specimenType)
           ? convertComparableValue(value.value, unit, entry)
           : null;
@@ -757,6 +804,7 @@ export function selectApplicableGeneralGuidance(
   context: GuidanceContext,
 ): readonly SelectedGeneralGuidance[] {
   if (context.sex === 'unknown' || context.fasting === 'unknown') return [];
+  if (context.purpose === 'unknown' || context.specimen === 'unknown') return [];
   return (entry.generalGuidance ?? [])
     .filter(
       (guidance) =>
@@ -764,7 +812,15 @@ export function selectApplicableGeneralGuidance(
         guidance.applicability.jurisdiction === context.jurisdiction &&
         (guidance.applicability.sex === 'all' || guidance.applicability.sex === context.sex) &&
         (guidance.applicability.fasting === 'any' ||
-          guidance.applicability.fasting === context.fasting),
+          guidance.applicability.fasting === context.fasting) &&
+        (guidance.applicability.purpose === undefined ||
+          (context.purpose !== undefined &&
+            context.purpose !== 'unknown' &&
+            guidance.applicability.purpose === context.purpose)) &&
+        (guidance.applicability.specimen === undefined ||
+          (context.specimen !== undefined &&
+            context.specimen !== 'unknown' &&
+            guidance.applicability.specimen === context.specimen)),
     )
     .map((guidance) => ({
       guidanceId: guidance.id,

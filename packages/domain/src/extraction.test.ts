@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { metabolicMicronutrientBiomarkers } from '@alyte/catalogue';
 import {
   buildExtractionConfirmationPlan,
   decodeVisionOCRResult,
@@ -53,6 +54,73 @@ const tableAliases: readonly ExtractionAliasEntry[] = [
 ];
 
 describe('local extraction domain', () => {
+  it('fails closed for source-specific assays in the production catalogue extraction path', () => {
+    const productionAliases: readonly ExtractionAliasEntry[] = metabolicMicronutrientBiomarkers.map(
+      (entry) => ({
+        id: entry.id,
+        aliases: entry.aliases,
+        specimens: entry.specimens,
+        units: entry.units,
+        ...(entry.unsafeAliases === undefined ? {} : { unsafeAliases: entry.unsafeAliases }),
+        ...(entry.methodPolicy === undefined
+          ? {}
+          : {
+              methodPolicy: {
+                version: entry.methodPolicy.version,
+                kind: entry.methodPolicy.kind,
+                allowedMethods: entry.methodPolicy.allowedMethods,
+                unsafePatterns: entry.methodPolicy.unsafePatterns,
+              },
+            }),
+      }),
+    );
+    const observation = (id: string, text: string, index: number) => ({
+      id,
+      text,
+      alternatives: [],
+      pageIndex: 0,
+      orientation: 0,
+      boundingBox: { x: 0.1, y: 0.1 + index * 0.12, width: 0.8, height: 0.04 },
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    });
+    const rows = groupObservationsIntoRows(
+      [
+        observation('glucose', 'Glucose 126 mg/dL', 0),
+        observation('vitamin-d', '25-OH Vitamin D LC-MS/MS 20 ng/mL', 1),
+        observation('vitamin-d-unknown-method', '25-OH Vitamin D 20 ng/mL', 2),
+        observation('vitamin-d2', 'Vitamin D2 20 ng/mL', 3),
+        observation('vitamin-d3', 'Vitamin D3 20 ng/mL', 4),
+        observation('vitamin-d1-25', '1,25-dihydroxyvitamin D 20 pg/mL', 5),
+        observation('glucose-ogtt', 'Oral glucose tolerance 126 mg/dL', 6),
+      ],
+      {
+        aliases: productionAliases,
+        collectionDate: { kind: 'known', value: '2026-08-20' },
+        specimenType: 'serum',
+      },
+    );
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    assert.equal(byId.get('glucose')?.proposedBiomarkerId, 'biomarker.glucose');
+    assert.equal(byId.get('vitamin-d')?.proposedBiomarkerId, 'biomarker.vitamin_d_total');
+    assert.equal(byId.get('vitamin-d')?.reviewState, 'ready');
+    assert.equal(
+      byId.get('vitamin-d-unknown-method')?.proposedBiomarkerId,
+      'biomarker.vitamin_d_total',
+    );
+    assert.equal(byId.get('vitamin-d-unknown-method')?.reviewState, 'needs-review');
+    assert.ok(byId.get('vitamin-d-unknown-method')?.reviewReasons.includes('incompatible-method'));
+    for (const id of ['vitamin-d2', 'vitamin-d3', 'vitamin-d1-25', 'glucose-ogtt']) {
+      const row = byId.get(id);
+      assert.equal(row?.proposedBiomarkerId, null, id);
+      assert.ok(row?.reviewReasons.includes('ambiguous-assay'), id);
+      assert.equal(row?.decision, 'preserve', id);
+      assert.ok(
+        row?.source.observations?.some((item) => item.text.includes(row.sourceText)),
+        id,
+      );
+    }
+  });
+
   it('rejects untrusted OCR contract data outside normalized bounds', () => {
     assert.throws(
       () =>
