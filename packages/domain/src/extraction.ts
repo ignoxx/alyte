@@ -70,19 +70,22 @@ export type ExtractionDateContext = {
 
 export type ExtractionRowDecision = 'unresolved' | 'preserve' | 'skip' | 'resolve';
 
-export type ExtractionReviewReason =
-  | 'missing-label'
-  | 'missing-value'
-  | 'unparseable-value'
-  | 'unsupported-alias'
-  | 'incompatible-unit'
-  | 'incompatible-specimen'
-  | 'ambiguous-assay'
-  | 'incompatible-method'
-  | 'unparseable-reference-interval'
-  | 'missing-collection-date'
-  | 'ambiguous-date'
-  | 'unsupported-layout';
+export const EXTRACTION_REVIEW_REASONS = [
+  'missing-label',
+  'missing-value',
+  'unparseable-value',
+  'unsupported-alias',
+  'incompatible-unit',
+  'incompatible-specimen',
+  'ambiguous-assay',
+  'incompatible-method',
+  'unparseable-reference-interval',
+  'missing-collection-date',
+  'ambiguous-date',
+  'unsupported-layout',
+] as const;
+
+export type ExtractionReviewReason = (typeof EXTRACTION_REVIEW_REASONS)[number];
 
 const REQUIRED_EXTRACTION_REVIEW_REASONS = new Set<ExtractionReviewReason>([
   'missing-label',

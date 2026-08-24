@@ -257,6 +257,8 @@
       "unsupported-alias": "Biomarker not safely mapped",
       "incompatible-unit": "Unit is not compatible",
       "incompatible-specimen": "Specimen is not compatible",
+      "ambiguous-assay": "Assay needs review",
+      "incompatible-method": "Method is not compatible",
       "unparseable-reference-interval": "Reference interval needs review",
       "missing-collection-date": "Collection date missing",
       "ambiguous-date": "Date is ambiguous",
