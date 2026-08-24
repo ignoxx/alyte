@@ -296,14 +296,149 @@ async function createReleasedV4Fixture(database: SqliteDatabase): Promise<void> 
   `);
 }
 
+const FROZEN_V1_LABS_SQL = `
+  PRAGMA foreign_keys = ON;
+  CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL);
+  CREATE TABLE lab_records (
+    id TEXT PRIMARY KEY NOT NULL, collection_date TEXT,
+    date_state TEXT NOT NULL CHECK (date_state IN ('known', 'missing')),
+    specimen_type TEXT NOT NULL, laboratory_name TEXT, notes TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  CREATE TABLE measurements (
+    id TEXT PRIMARY KEY NOT NULL,
+    lab_record_id TEXT NOT NULL REFERENCES lab_records(id) ON DELETE CASCADE,
+    biomarker_id TEXT, specimen_type TEXT NOT NULL,
+    original_label TEXT NOT NULL, original_value_string TEXT NOT NULL,
+    original_value_json TEXT NOT NULL, original_unit TEXT,
+    original_reference_interval TEXT, original_flag TEXT,
+    current_label TEXT NOT NULL, current_value_string TEXT NOT NULL,
+    current_value_json TEXT NOT NULL, current_unit TEXT,
+    current_reference_interval TEXT, current_flag TEXT,
+    provenance TEXT NOT NULL CHECK (provenance IN ('user-entered', 'extracted', 'user-corrected')),
+    review_state TEXT NOT NULL CHECK (review_state IN ('confirmed', 'needs-review')),
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  CREATE TABLE measurement_corrections (
+    id TEXT PRIMARY KEY NOT NULL,
+    measurement_id TEXT NOT NULL REFERENCES measurements(id) ON DELETE CASCADE,
+    corrected_at TEXT NOT NULL, reason TEXT, previous_json TEXT NOT NULL, next_json TEXT NOT NULL,
+    previous_provenance TEXT NOT NULL CHECK (previous_provenance IN ('user-entered', 'extracted', 'user-corrected'))
+  );
+  CREATE INDEX measurements_lab_record_id_idx ON measurements(lab_record_id);
+  CREATE INDEX measurement_corrections_measurement_id_idx ON measurement_corrections(measurement_id);
+  INSERT INTO lab_records VALUES ('record-frozen', '2026-08-20', 'known', 'blood', 'Synthetic Lab', NULL, '2026-08-20T00:00:00.000Z', '2026-08-21T00:00:00.000Z');
+  INSERT INTO measurements VALUES (
+    'measurement-frozen', 'record-frozen', 'biomarker.ldl_c', 'blood', 'LDL-C', '3.2',
+    '{"label":"LDL-C","value":{"kind":"numeric","value":3.2},"valueString":"3.2","unit":"mmol/L","referenceInterval":"<3.0","flag":"H"}',
+    'mmol/L', '<3.0', 'H', 'LDL-C', '3.4',
+    '{"label":"LDL-C","value":{"kind":"numeric","value":3.4},"valueString":"3.4","unit":"mmol/L","referenceInterval":"<3.0","flag":"H"}',
+    'mmol/L', '<3.0', 'H', 'user-corrected', 'confirmed', '2026-08-20T00:00:00.000Z', '2026-08-21T00:00:00.000Z'
+  );
+  INSERT INTO measurement_corrections VALUES (
+    'correction-frozen', 'measurement-frozen', '2026-08-21T00:00:00.000Z', 'Synthetic correction',
+    '{"biomarkerId":"biomarker.ldl_c","specimenType":"blood","snapshot":{"label":"LDL-C","value":{"kind":"numeric","value":3.2},"valueString":"3.2","unit":"mmol/L","referenceInterval":"<3.0","flag":"H"},"reviewState":"confirmed","provenance":"user-entered","source":null}',
+    '{"biomarkerId":"biomarker.ldl_c","specimenType":"blood","snapshot":{"label":"LDL-C","value":{"kind":"numeric","value":3.4},"valueString":"3.4","unit":"mmol/L","referenceInterval":"<3.0","flag":"H"},"reviewState":"confirmed","provenance":"user-corrected","source":null}',
+    'user-entered'
+  );
+  INSERT INTO schema_migrations VALUES (1, '2026-08-20T00:00:00.000Z');
+`;
+
+async function createFrozenLabsFixture(database: SqliteDatabase, version: number): Promise<void> {
+  if (version >= 4) {
+    await database.execAsync(OLD_V5_FIXTURE_SQL);
+    if (version === 4) {
+      await database.execAsync(
+        'DROP TABLE app_preferences; DROP TABLE cloud_jobs; DELETE FROM schema_migrations WHERE version = 5;',
+      );
+    }
+  } else {
+    await database.execAsync(FROZEN_V1_LABS_SQL);
+    if (version >= 2) {
+      await database.execAsync(`
+        CREATE TABLE lab_reports (
+          id TEXT PRIMARY KEY NOT NULL, source_type TEXT NOT NULL, original_filename TEXT NOT NULL,
+          mime_type TEXT NOT NULL, byte_size INTEGER, source_hash TEXT, original_path TEXT,
+          import_state TEXT NOT NULL, failure_reason TEXT, encrypted INTEGER NOT NULL,
+          page_count INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, imported_at TEXT
+        );
+        CREATE TABLE lab_report_pages (
+          id TEXT PRIMARY KEY NOT NULL, report_id TEXT NOT NULL REFERENCES lab_reports(id) ON DELETE CASCADE,
+          page_index INTEGER NOT NULL, width REAL, height REAL, rotation REAL NOT NULL DEFAULT 0,
+          crop TEXT, derived_path TEXT, UNIQUE(report_id, page_index)
+        );
+        ALTER TABLE lab_records ADD COLUMN lab_report_id TEXT REFERENCES lab_reports(id) ON DELETE SET NULL;
+        INSERT INTO lab_reports VALUES ('report-frozen', 'pdf', 'synthetic.pdf', 'application/pdf', 128, 'hash-frozen', 'protected://original-reports/synthetic.pdf', 'imported', NULL, 0, 1, '2026-08-20T00:00:00.000Z', '2026-08-20T00:00:00.000Z', '2026-08-20T00:00:00.000Z');
+        UPDATE lab_records SET lab_report_id = 'report-frozen' WHERE id = 'record-frozen';
+        INSERT INTO schema_migrations VALUES (2, '2026-08-20T00:00:00.000Z');
+      `);
+    }
+    if (version >= 3) {
+      await database.execAsync(`
+        ALTER TABLE lab_reports ADD COLUMN deletion_state TEXT NOT NULL DEFAULT 'none';
+        ALTER TABLE lab_reports ADD COLUMN deletion_requested_at TEXT;
+        ALTER TABLE lab_reports ADD COLUMN deletion_error TEXT;
+        INSERT INTO schema_migrations VALUES (3, '2026-08-20T00:00:00.000Z');
+      `);
+    }
+  }
+  if (version >= 6) {
+    await database.execAsync(`
+      CREATE TABLE intake_capture_recovery (
+        capture_id TEXT PRIMARY KEY NOT NULL, event_id TEXT, media_path TEXT NOT NULL,
+        media_hash TEXT, media_size INTEGER, media_protection_json TEXT, event_json TEXT NOT NULL,
+        cloud_mode TEXT NOT NULL, consent_policy_version TEXT NOT NULL, state TEXT NOT NULL,
+        failure_category TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      ALTER TABLE intake_events ADD COLUMN source_media_hash TEXT;
+      ALTER TABLE intake_events ADD COLUMN source_media_size INTEGER;
+      ALTER TABLE intake_events ADD COLUMN source_media_protection_json TEXT;
+      INSERT INTO schema_migrations VALUES (6, '2026-08-20T00:00:00.000Z');
+    `);
+  }
+  if (version >= 7) {
+    await database.execAsync(`
+      CREATE TABLE extraction_drafts (
+        id TEXT PRIMARY KEY NOT NULL, report_id TEXT NOT NULL REFERENCES lab_reports(id) ON DELETE CASCADE,
+        state TEXT NOT NULL, ocr_contract_version TEXT NOT NULL, parser_version TEXT NOT NULL,
+        collection_date TEXT, date_state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        confirmed_at TEXT, UNIQUE(report_id)
+      );
+      CREATE TABLE extraction_draft_rows (
+        id TEXT PRIMARY KEY NOT NULL, draft_id TEXT NOT NULL REFERENCES extraction_drafts(id) ON DELETE CASCADE,
+        row_order INTEGER NOT NULL, panel_label TEXT, source_text TEXT NOT NULL, source_label TEXT NOT NULL,
+        source_value_string TEXT NOT NULL, source_unit TEXT, source_reference_interval TEXT, source_flag TEXT,
+        source_page_index INTEGER NOT NULL, source_bbox_json TEXT NOT NULL, source_orientation INTEGER NOT NULL,
+        proposed_label TEXT NOT NULL, proposed_value_json TEXT NOT NULL, proposed_unit TEXT,
+        proposed_reference_interval TEXT, proposed_flag TEXT, proposed_biomarker_id TEXT,
+        proposed_specimen_type TEXT NOT NULL, collection_date TEXT, date_state TEXT NOT NULL,
+        review_reasons_json TEXT NOT NULL, review_state TEXT NOT NULL,
+        UNIQUE(draft_id, row_order)
+      );
+      ALTER TABLE measurements ADD COLUMN source_page_index INTEGER;
+      ALTER TABLE measurements ADD COLUMN source_bbox_json TEXT;
+      ALTER TABLE measurements ADD COLUMN source_orientation INTEGER;
+      UPDATE measurements SET source_page_index = 0,
+        source_bbox_json = '{"x":0.1,"y":0.2,"width":0.3,"height":0.04,"observationIds":["frozen-source"],"observations":[],"semantic":null}',
+        source_orientation = 0 WHERE id = 'measurement-old-v5';
+      INSERT INTO schema_migrations VALUES (7, '2026-08-20T00:00:00.000Z');
+    `);
+  }
+  if (version >= 8) {
+    await database.execAsync(`
+      ALTER TABLE extraction_draft_rows ADD COLUMN source_value_json TEXT;
+      ALTER TABLE extraction_draft_rows ADD COLUMN date_context_json TEXT;
+      ALTER TABLE extraction_draft_rows ADD COLUMN decision TEXT NOT NULL DEFAULT 'unresolved';
+      INSERT INTO schema_migrations VALUES (8, '2026-08-20T00:00:00.000Z');
+    `);
+  }
+}
+
 describe('local schema forward migrations', () => {
   for (let releasedVersion = 1; releasedVersion <= 8; releasedVersion += 1) {
     test(`upgrades released v${releasedVersion} to v9`, async () => {
       const database = new NodeSqliteDatabase(temporaryDatabase());
-      await createBoundary(
-        database,
-        LOCAL_MIGRATIONS.filter((migration) => migration.version <= releasedVersion),
-      ).initialize();
+      await createFrozenLabsFixture(database, releasedVersion);
       await createBoundary(database).initialize();
       const version = await database.getAllAsync<{ version: number }>(
         'SELECT MAX(version) AS version FROM schema_migrations;',
@@ -314,6 +449,15 @@ describe('local schema forward migrations', () => {
       );
       assert.ok(columns.some((column) => column.name === 'panel_label'));
       assert.ok(columns.some((column) => column.name === 'original_state_json'));
+      const repository = createLabRepository(database, { protection });
+      const record = await repository.getRecord(
+        releasedVersion >= 4 ? 'record-old-v5' : 'record-frozen',
+      );
+      assert.notEqual(record, null);
+      assert.equal(record?.measurements[0]?.panelLabel, null);
+      assert.equal(record?.measurements[0]?.originalState.snapshot.valueString, '3.2');
+      assert.equal(record?.measurements[0]?.corrections.length, releasedVersion >= 4 ? 0 : 1);
+      if (releasedVersion >= 7) assert.equal(record?.measurements[0]?.source?.boundingBox.x, 0.1);
       assert.equal(
         (
           await database.getAllAsync(

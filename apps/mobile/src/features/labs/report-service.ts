@@ -32,6 +32,7 @@ import { comparableBiomarkers } from '@alyte/catalogue';
 import { openProtectedLabDatabase, type LabRepository } from './persistence';
 import {
   createProtectedReportFileService,
+  deleteProtectedReportArtifacts,
   type LabSourceSelection,
   type ProtectedCopy,
   type ProtectedReportFileService,
@@ -426,7 +427,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         report.originalPath,
         ...report.pages.map((page) => page.derivedPath),
         sanitized?.artifactPath ?? null,
-      ].filter((path): path is string => path !== null);
+      ];
       if (sanitized?.artifactPath !== null && sanitized?.artifactPath !== undefined) {
         await reportRepository.updateSanitizedReport(sanitized.id, {
           verificationState: 'failed',
@@ -434,15 +435,9 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           deletedAt: now(),
         });
       }
-      for (const path of new Set(protectedPaths)) {
-        const references = await reportRepository.countProtectedPathReferences(path, report.id);
-        if (references === 0) {
-          await fileService.remove(path);
-          if (await fileService.exists(path)) {
-            throw new Error('Protected report artifact remained after deletion');
-          }
-        }
-      }
+      await deleteProtectedReportArtifacts(fileService, protectedPaths, (path) =>
+        reportRepository.countProtectedPathReferences(path, report.id),
+      );
       if (sanitized !== null) await reportRepository.deleteSanitizedReport(sanitized.id);
       await reportRepository.completeReportDeletion(report.id);
     } catch (error) {

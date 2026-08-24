@@ -676,11 +676,12 @@ export type LabRepository = {
   createRecord(input: CreateLabRecordInput): Promise<LabRecord>;
   updateRecord(id: string, input: UpdateLabRecordInput): Promise<LabRecord>;
   correctMeasurement(id: string, input: CorrectMeasurementInput): Promise<Measurement>;
+  findMeasurementRecordId(id: string): Promise<string | null>;
   deleteMeasurement(id: string): Promise<void>;
   deleteRecord(id: string): Promise<void>;
   requestCombinedDeletion(recordId: string, reportId: string): Promise<void>;
   markCombinedDeletionSourceComplete(recordId: string, reportId: string): Promise<void>;
-  completeCombinedDeletion(recordId: string, reportId: string): Promise<void>;
+  finalizeCombinedDeletion(recordId: string, reportId: string): Promise<void>;
   listPendingCombinedDeletions(): Promise<
     readonly {
       recordId: string;
@@ -1090,6 +1091,17 @@ export function createLabRepository(
     });
   }
 
+  async function findMeasurementRecordId(id: string): Promise<string | null> {
+    await initialize();
+    const rows = await database.getAllAsync<{ lab_record_id: unknown }>(
+      'SELECT lab_record_id FROM measurements WHERE id = ?;',
+      id,
+    );
+    return rows[0] === undefined
+      ? null
+      : requiredString(rows[0].lab_record_id, 'Measurement Lab Record id');
+  }
+
   async function assertRecordReportLink(recordId: string, reportId: string): Promise<void> {
     const rows = await database.getAllAsync<{ lab_report_id: unknown }>(
       'SELECT lab_report_id FROM lab_records WHERE id = ?;',
@@ -1135,17 +1147,24 @@ export function createLabRepository(
     });
   }
 
-  async function completeCombinedDeletion(recordId: string, reportId: string): Promise<void> {
+  async function finalizeCombinedDeletion(recordId: string, reportId: string): Promise<void> {
     await initialize();
     await withWrite(async () => {
-      const result = await database.runAsync(
-        `UPDATE lab_combined_deletions SET state = 'complete', updated_at = ?
+      await assertRecordReportLink(recordId, reportId);
+      const operations = await database.getAllAsync<{ id: unknown }>(
+        `SELECT id FROM lab_combined_deletions
          WHERE record_id = ? AND report_id = ? AND state = 'source-complete';`,
-        now(),
         recordId,
         reportId,
       );
-      if (result.changes !== 1) throw new Error('Combined deletion could not be completed');
+      if (operations.length !== 1) throw new Error('Combined deletion is not ready to finalize');
+      const result = await database.runAsync('DELETE FROM lab_records WHERE id = ?;', recordId);
+      if (result.changes !== 1) throw new Error('Combined Lab Record deletion did not complete');
+      const dangling = await database.getAllAsync<{ id: unknown }>(
+        'SELECT id FROM lab_combined_deletions WHERE record_id = ?;',
+        recordId,
+      );
+      if (dangling.length > 0) throw new Error('Combined deletion intent did not cascade');
     });
   }
 
@@ -1507,11 +1526,12 @@ export function createLabRepository(
     createRecord,
     updateRecord,
     correctMeasurement,
+    findMeasurementRecordId,
     deleteMeasurement,
     deleteRecord,
     requestCombinedDeletion,
     markCombinedDeletionSourceComplete,
-    completeCombinedDeletion,
+    finalizeCombinedDeletion,
     listPendingCombinedDeletions,
     createExtractionDraft,
     getExtractionDraft,

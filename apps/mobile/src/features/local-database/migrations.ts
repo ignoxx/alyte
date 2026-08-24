@@ -376,9 +376,9 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
       await database.execAsync(`
         CREATE TABLE IF NOT EXISTS lab_combined_deletions (
           id TEXT PRIMARY KEY NOT NULL,
-          record_id TEXT NOT NULL,
-          report_id TEXT NOT NULL,
-          state TEXT NOT NULL CHECK (state IN ('requested', 'source-complete', 'complete')),
+          record_id TEXT NOT NULL REFERENCES lab_records(id) ON DELETE CASCADE,
+          report_id TEXT NOT NULL REFERENCES lab_reports(id),
+          state TEXT NOT NULL CHECK (state IN ('requested', 'source-complete')),
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           UNIQUE(record_id, report_id)

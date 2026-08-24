@@ -66,8 +66,7 @@ export function createLabsService(options: LabsServiceOptions = {}): LabsService
           await deleteSource(operation.reportId);
           await repo.markCombinedDeletionSourceComplete(operation.recordId, operation.reportId);
         }
-        await repo.deleteRecord(operation.recordId);
-        await repo.completeCombinedDeletion(operation.recordId, operation.reportId);
+        await repo.finalizeCombinedDeletion(operation.recordId, operation.reportId);
       } catch (error) {
         if (!preserveAvailability) throw error;
       }
@@ -85,9 +84,7 @@ export function createLabsService(options: LabsServiceOptions = {}): LabsService
     const repo = await repository();
     const recordId =
       scope.kind === 'measurement-only'
-        ? (await repo.listRecords()).find((record) =>
-            record.measurements.some((measurement) => measurement.id === scope.measurementId),
-          )?.id
+        ? ((await repo.findMeasurementRecordId(scope.measurementId)) ?? undefined)
         : scope.recordId;
     if (recordId === undefined) throw new Error('Measurement was not found');
     const record = await repo.getRecord(recordId);
@@ -126,9 +123,9 @@ export function createLabsService(options: LabsServiceOptions = {}): LabsService
       await deleteSource(plan.reportId!);
       await repo.markCombinedDeletionSourceComplete(plan.recordId, plan.reportId!);
     }
-    await repo.deleteRecord(plan.recordId);
     if (scope.kind === 'record-plus-source')
-      await repo.completeCombinedDeletion(plan.recordId, plan.reportId!);
+      await repo.finalizeCombinedDeletion(plan.recordId, plan.reportId!);
+    else await repo.deleteRecord(plan.recordId);
   }
 
   async function reconcilePendingDeletions(): Promise<void> {
@@ -173,7 +170,7 @@ export function createLabsService(options: LabsServiceOptions = {}): LabsService
     executeDeletion,
     reconcilePendingDeletions,
     async deleteRecord(id) {
-      return (await repository()).deleteRecord(id);
+      return executeDeletion({ kind: 'record-only', recordId: id });
     },
   };
 }

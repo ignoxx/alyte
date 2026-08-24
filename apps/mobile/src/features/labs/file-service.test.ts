@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import type * as FileSystemTypes from 'expo-file-system/legacy';
 import {
   createProtectedReportFileService,
+  deleteProtectedReportArtifacts,
   PROTECTED_REPORT_DIRECTORIES,
   type LabSourceSelection,
 } from './file-service';
@@ -221,5 +222,29 @@ describe('protected Original Report file adapter', () => {
     );
     const intakeCopy = await fixture.service.inspectIntake!('protected://intake-media/photo.jpg');
     assert.equal(intakeCopy?.path, current);
+  });
+
+  test('deletes distinct unreferenced report artifacts once and verifies shared paths remain', async () => {
+    const fixture = makeFixture();
+    fixtures.push(fixture);
+    await fixture.service.initialize();
+    const removable = 'protected://working-pages/removable.png';
+    const shared = 'protected://sanitized-reports/shared.pdf';
+    const removableNative = await fixture.service.resolvePath!(removable);
+    const sharedNative = await fixture.service.resolvePath!(shared);
+    fixture.fileSystem.files.set(removableNative, { content: 'page' });
+    fixture.fileSystem.files.set(sharedNative, { content: 'shared' });
+    const queried: string[] = [];
+    await deleteProtectedReportArtifacts(
+      fixture.service,
+      [removable, removable, shared, null],
+      async (path) => {
+        queried.push(path);
+        return path === shared ? 1 : 0;
+      },
+    );
+    assert.deepEqual(queried.sort(), [removable, shared].sort());
+    assert.equal(await fixture.service.exists(removable), false);
+    assert.equal(await fixture.service.exists(shared), true);
   });
 });

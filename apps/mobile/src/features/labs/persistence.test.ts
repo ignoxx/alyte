@@ -558,6 +558,18 @@ describe('protected manual Lab Record persistence', () => {
       reopened.repository.markCombinedDeletionSourceComplete('record-combined', 'report-combined'),
       /association changed/,
     );
+    await assert.rejects(
+      reopened.database.runAsync(
+        `INSERT INTO lab_combined_deletions (id, record_id, report_id, state, created_at, updated_at)
+         VALUES (?, ?, ?, 'requested', ?, ?);`,
+        'invalid-combined',
+        'missing-record',
+        'report-combined',
+        '2026-08-22T10:00:00.000Z',
+        '2026-08-22T10:00:00.000Z',
+      ),
+      /FOREIGN KEY/,
+    );
     await reopened.repository.close();
   });
 
@@ -618,7 +630,79 @@ describe('protected manual Lab Record persistence', () => {
     assert.equal(await repository.getRecord('record-target'), null);
     assert.notEqual(await repository.getRecord('record-sibling'), null);
     assert.equal((await service.getRecordDetail('record-sibling'))?.source.kind, 'deleted');
+    assert.deepEqual(await repository.listPendingCombinedDeletions(), []);
     await repository.close();
+  });
+
+  test('LabsService record-only preserves the report, sibling record, and source artifacts', async () => {
+    const { repository } = createRepository();
+    await repository.createReport({
+      id: 'report-record-only',
+      sourceType: 'pdf',
+      originalFilename: 'synthetic.pdf',
+      mimeType: 'application/pdf',
+      originalPath: 'protected://original-reports/record-only.pdf',
+      importState: 'imported',
+      pages: [{ pageIndex: 0, derivedPath: 'protected://working-pages/record-only.png' }],
+    });
+    for (const id of ['record-delete-only', 'record-keep-only'])
+      await repository.createRecord({
+        id,
+        labReportId: 'report-record-only',
+        collectionDate: { kind: 'missing' },
+        measurements: [],
+      });
+    let sourceDeletionCalls = 0;
+    const service = createLabsService({
+      repositoryFactory: async () => repository,
+      deleteSource: async () => {
+        sourceDeletionCalls += 1;
+      },
+    });
+    await service.deleteRecord('record-delete-only');
+    assert.equal(sourceDeletionCalls, 0);
+    assert.equal(await repository.getRecord('record-delete-only'), null);
+    assert.notEqual(await repository.getRecord('record-keep-only'), null);
+    const report = await repository.getReport('report-record-only');
+    assert.equal(report?.originalPath, 'protected://original-reports/record-only.pdf');
+    assert.equal(report?.pages[0]?.derivedPath, 'protected://working-pages/record-only.png');
+    await repository.close();
+  });
+
+  test('LabsService source-only keeps linked records readable as source-deleted after restart', async () => {
+    const { repository, databasePath } = createRepository();
+    await repository.createReport({
+      id: 'report-source-only',
+      sourceType: 'pdf',
+      originalFilename: 'synthetic.pdf',
+      mimeType: 'application/pdf',
+      originalPath: 'protected://original-reports/source-only.pdf',
+      importState: 'imported',
+    });
+    for (const id of ['record-source-one', 'record-source-two'])
+      await repository.createRecord({
+        id,
+        labReportId: 'report-source-only',
+        collectionDate: { kind: 'missing' },
+        measurements: [{ label: `Synthetic ${id}`, value: { kind: 'numeric', value: 1 } }],
+      });
+    const service = createLabsService({
+      repositoryFactory: async () => repository,
+      deleteSource: async (reportId) =>
+        repository.completeReportDeletion(reportId).then(() => undefined),
+    });
+    await service.executeDeletion({ kind: 'source-only', recordId: 'record-source-one' });
+    await repository.close();
+    const reopened = createRepository(databasePath);
+    const relaunched = createLabsService({
+      repositoryFactory: async () => reopened.repository,
+      deleteSource: async () => undefined,
+    });
+    for (const id of ['record-source-one', 'record-source-two']) {
+      assert.notEqual(await relaunched.getRecord(id), null);
+      assert.equal((await relaunched.getRecordDetail(id))?.source.kind, 'deleted');
+    }
+    await reopened.repository.close();
   });
 
   test('legacy correction snapshots remain readable after the provenance contract expands', async () => {

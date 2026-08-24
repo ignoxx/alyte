@@ -26,9 +26,11 @@ import type { PdfSanitizedVerification } from './pdf';
 import type { VisionOCR } from './vision';
 import type { DatabaseProtection } from './protection';
 import { addRedaction } from '@alyte/domain';
+import { createSanitizationRecipe } from '@alyte/domain';
 import { groupObservationsIntoRows } from '@alyte/domain';
 import { comparableBiomarkers } from '@alyte/catalogue';
 import { multilingualLabTableFixtures } from '@alyte/fixtures';
+import { createLabsService } from './service';
 
 class NodeSqliteDatabase implements SqliteDatabase {
   readonly databasePath: string;
@@ -975,15 +977,106 @@ describe('protected Lab Report import lifecycle', () => {
     await repository.updateReport(imported.id, {
       pages: [{ pageIndex: 0, derivedPath: 'protected://working-pages/shared-page.png' }],
     });
+    const sharedSanitizedPath = 'protected://sanitized-reports/shared.pdf';
+    files.files.set(sharedSanitizedPath, { hash: 'shared-sanitized-hash', size: 10 });
+    for (const reportId of [imported.id, second.id]) {
+      await repository.saveSanitizedReport({
+        reportId,
+        recipe: createSanitizationRecipe(reportId, [
+          { pageIndex: 0, selected: true, crop: null, rotation: 0, redactions: [] },
+        ]),
+        recipeHash: `recipe-${reportId}`,
+        artifactPath: sharedSanitizedPath,
+        artifactHash: 'shared-sanitized-hash',
+        verificationState: 'verified',
+      });
+    }
     assert.equal(second.originalPath, imported.originalPath);
     await service.deleteReport(imported.id);
     assert.equal(await files.exists(imported.originalPath!), true);
     assert.equal(await files.exists('protected://working-pages/shared-page.png'), true);
+    assert.equal(await files.exists(sharedSanitizedPath), true);
     assert.equal((await repository.getReport(imported.id))?.importState, 'deleted');
     assert.equal((await repository.getReport(second.id))?.importState, 'imported');
     await service.deleteReport(second.id);
     assert.equal(await files.exists(imported.originalPath!), false);
     assert.equal(await files.exists('protected://working-pages/shared-page.png'), false);
+    assert.equal(await files.exists(sharedSanitizedPath), false);
+  });
+
+  test('LabsService record-only leaves protected source files and sibling records untouched', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const reports = createService(repository, files);
+    const report = (await reports.importPdf(source('labs-record-only')))!.report;
+    await repository.createRecord({
+      id: 'labs-record-delete',
+      labReportId: report.id,
+      collectionDate: { kind: 'missing' },
+      measurements: [],
+    });
+    await repository.createRecord({
+      id: 'labs-record-sibling',
+      labReportId: report.id,
+      collectionDate: { kind: 'missing' },
+      measurements: [],
+    });
+    const labs = createLabsService({
+      repositoryFactory: async () => repository,
+      deleteSource: reports.deleteReport,
+    });
+    await labs.deleteRecord('labs-record-delete');
+    assert.equal(await files.exists(report.originalPath!), true);
+    assert.equal((await repository.getReport(report.id))?.importState, 'imported');
+    assert.notEqual(await repository.getRecord('labs-record-sibling'), null);
+  });
+
+  test('LabsService source-only survives restart with linked records and shared source explicit', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'alyte-labs-source-only-'));
+    temporaryPaths.push(directory);
+    const databasePath = join(directory, 'alyte.sqlite');
+    const repository = createRepository(databasePath);
+    const files = new FakeFiles();
+    const reports = createService(repository, files);
+    const report = (await reports.importPdf(source('labs-source-only')))!.report;
+    const shared = await repository.createReport({
+      id: 'labs-shared-path-report',
+      sourceType: 'pdf',
+      originalFilename: 'shared.pdf',
+      mimeType: 'application/pdf',
+      originalPath: report.originalPath,
+      sourceHash: 'shared-path-hash',
+      importState: 'imported',
+    });
+    for (const id of ['labs-source-record-one', 'labs-source-record-two'])
+      await repository.createRecord({
+        id,
+        labReportId: report.id,
+        collectionDate: { kind: 'missing' },
+        measurements: [{ label: id, value: { kind: 'numeric', value: 1 } }],
+      });
+    const labs = createLabsService({
+      repositoryFactory: async () => repository,
+      deleteSource: reports.deleteReport,
+    });
+    await labs.executeDeletion({ kind: 'source-only', recordId: 'labs-source-record-one' });
+    assert.equal(
+      await files.exists(report.originalPath!),
+      true,
+      'the other report still owns the shared path',
+    );
+    assert.equal((await repository.getReport(shared.id))?.importState, 'imported');
+    await repository.close();
+    const reopened = createRepository(databasePath);
+    const relaunched = createLabsService({
+      repositoryFactory: async () => reopened,
+      deleteSource: async () => undefined,
+    });
+    for (const id of ['labs-source-record-one', 'labs-source-record-two']) {
+      assert.notEqual(await relaunched.getRecord(id), null);
+      assert.equal((await relaunched.getRecordDetail(id))?.source.kind, 'deleted');
+    }
+    await reopened.close();
   });
 
   test('deletion intent survives a file cleanup failure and remains retryable', async () => {

@@ -92,6 +92,26 @@ export type ProtectedReportFileServiceOptions = {
   readonly rootDirectory?: string;
 };
 
+/**
+ * Single owner for reference-aware report artifact removal. Repository queries supply only counts;
+ * the protected-file boundary owns path de-duplication, adapter validation, removal, and verification.
+ */
+export async function deleteProtectedReportArtifacts(
+  fileService: ProtectedReportFileService,
+  paths: readonly (string | null)[],
+  referenceCount: (path: string) => Promise<number>,
+): Promise<void> {
+  for (const path of new Set(
+    paths.filter((candidate): candidate is string => candidate !== null),
+  )) {
+    if ((await referenceCount(path)) !== 0) continue;
+    await fileService.remove(path);
+    if (await fileService.exists(path)) {
+      throw new Error('Protected report artifact remained after deletion');
+    }
+  }
+}
+
 function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }
