@@ -37,6 +37,13 @@ export type BloodLiverBiomarkerId =
   (typeof bloodLiverBiomarkerIds)[keyof typeof bloodLiverBiomarkerIds];
 export const BLOOD_LIVER_BIOMARKER_IDS = bloodLiverBiomarkerIds;
 
+/** The stable launch set is intentionally explicit at the artifact boundary. */
+export const ALL_COMPARABLE_BIOMARKER_IDS = [
+  ...Object.values(lipidBiomarkerIds),
+  ...Object.values(metabolicMicronutrientBiomarkerIds),
+  ...Object.values(bloodLiverBiomarkerIds),
+] as const;
+
 export type CataloguePublicationStatus = 'review-pending' | 'approved';
 
 export type CatalogueReviewMetadata = {
@@ -187,7 +194,35 @@ export type CatalogueTrustedKey = {
 export type CatalogueVerificationOptions = {
   readonly requireSignature?: boolean;
   readonly trustedKeys?: readonly CatalogueTrustedKey[];
+  /** The artifact release expected by this executable. Defaults to the bundled version. */
+  readonly expectedVersion?: string;
+  /** Reject an artifact older than this semver release. */
+  readonly minimumVersion?: string;
+  /** Explicitly select the consumer boundary policy. */
+  readonly environment?: CatalogueEnvironment;
+  /** Release consumers must not use review-pending content. */
+  readonly requirePublicationApproval?: boolean;
 };
+
+export type CatalogueEnvironment = 'development' | 'test' | 'production' | 'release';
+
+export type CatalogueConsumptionOptions = Omit<
+  CatalogueVerificationOptions,
+  'requireSignature' | 'requirePublicationApproval'
+> & {
+  readonly environment?: CatalogueEnvironment;
+};
+
+export type CataloguePrivateSigningKey = {
+  readonly keyId: string;
+  readonly algorithm: CatalogueSignature['algorithm'];
+  /** Private JWK material is accepted only in memory by the signing API. */
+  readonly privateKeyJwk: Record<string, unknown>;
+};
+
+export type CatalogueConsumptionResult =
+  | { readonly ok: true; readonly signed: boolean; readonly artifact: CatalogueArtifact }
+  | { readonly ok: false; readonly reason: string };
 
 export type CatalogueArtifactVerification =
   { readonly ok: true; readonly signed: boolean } | { readonly ok: false; readonly reason: string };

@@ -7,8 +7,13 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "build": "tsx scripts/catalogue-build.ts",
+    "catalogue:build": "tsx scripts/catalogue-build.ts",
+    "catalogue:sign": "tsx scripts/catalogue-sign.ts",
+    "catalogue:verify": "tsx scripts/catalogue-verify.ts",
+    "catalogue:freshness": "tsx scripts/catalogue-freshness.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "tsx --test src/**/*.test.ts",
+    "test": "npm run catalogue:freshness && tsx --test src/**/*.test.ts",
     "watch": "tsc -p tsconfig.json --watch --preserveWatchOutput"
   }
 }
