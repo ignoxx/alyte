@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { canonicalId, type LabRecord, type Measurement } from '@alyte/domain';
+import { type LabRecord, type Measurement } from '@alyte/domain';
 import { loadShowcaseSnapshot } from '@alyte/fixtures';
 import {
   buildBiomarkerHistoryViewModel,
@@ -9,23 +9,10 @@ import {
 import {
   missingShowcaseIntakeInputs,
   missingShowcaseLabRecordInputs,
+  showcaseNonLipidBiomarkerIds,
   showcaseIntakeInputs,
   showcaseLabRecordInputs,
 } from './showcase-seed';
-
-const nonLipidIds = [
-  'biomarker.glucose',
-  'biomarker.hba1c',
-  'biomarker.ferritin',
-  'biomarker.vitamin_d_total',
-  'biomarker.vitamin_b12_total',
-  'biomarker.hemoglobin',
-  'biomarker.hematocrit',
-  'biomarker.mcv',
-  'biomarker.alt',
-  'biomarker.ast',
-  'biomarker.ggt',
-] as const;
 
 function recordsFromShowcaseInputs(): readonly LabRecord[] {
   return showcaseLabRecordInputs().map((input, recordIndex) => ({
@@ -224,15 +211,19 @@ test('showcase non-lipid fixtures render through the canonical Labs history mode
   const records = recordsFromShowcaseInputs();
   const entries = listHistoryEntries(records);
   assert.deepEqual(
-    new Set(nonLipidIds.map(canonicalId)),
+    new Set(showcaseNonLipidBiomarkerIds),
     new Set(
       entries
         .map((entry) => entry.biomarkerId)
-        .filter((id) => nonLipidIds.includes(id as (typeof nonLipidIds)[number])),
+        .filter((id) =>
+          showcaseNonLipidBiomarkerIds.includes(
+            id as (typeof showcaseNonLipidBiomarkerIds)[number],
+          ),
+        ),
     ),
   );
 
-  for (const biomarkerId of nonLipidIds) {
+  for (const biomarkerId of showcaseNonLipidBiomarkerIds) {
     const model = buildBiomarkerHistoryViewModel(records, biomarkerId);
     assert.ok(model, biomarkerId);
     assert.equal(model.trend.points.length, 2, biomarkerId);
@@ -251,5 +242,26 @@ test('showcase non-lipid fixtures render through the canonical Labs history mode
     assert.equal(model.explanation, null, biomarkerId);
     assert.equal(model.explanationReviewPending, true, biomarkerId);
     assert.equal(model.guidance.kind, 'not-applicable', biomarkerId);
+  }
+
+  for (const biomarkerId of ['biomarker.glucose', 'biomarker.hba1c'] as const) {
+    const model = buildBiomarkerHistoryViewModel(records, biomarkerId, {
+      population: 'adults',
+      jurisdiction: 'US',
+      sex: 'female',
+      fasting: 'fasting',
+      purpose: 'screening',
+      specimen: biomarkerId === 'biomarker.glucose' ? 'plasma' : 'blood',
+    });
+    assert.ok(model);
+    assert.deepEqual(model.guidance, { kind: 'not-applicable', reason: 'pending-review' });
+    assert.deepEqual(
+      model.trend.generalGuidance.map((item) => item.guidanceId),
+      [
+        biomarkerId === 'biomarker.glucose'
+          ? 'guidance.glucose.fasting-screening-us'
+          : 'guidance.hba1c.screening-us',
+      ],
+    );
   }
 });

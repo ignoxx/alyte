@@ -1,16 +1,16 @@
-import { lipidBiomarkers } from './lipids.js';
-import { metabolicMicronutrientBiomarkers } from './metabolic-micronutrients.js';
-import { bloodLiverBiomarkers } from './blood-liver.js';
-import type { BiomarkerCatalogueEntry } from './schema.js';
-import { normalizeCatalogueAlias } from './validation.js';
+import { lipidBiomarkers } from './lipids';
+import { metabolicMicronutrientBiomarkers } from './metabolic-micronutrients';
+import { bloodLiverBiomarkers } from './blood-liver';
+import type { BiomarkerCatalogueEntry } from './schema';
+import { normalizeCatalogueAlias } from './validation';
 
-export * from './schema.js';
-export * from './lipids.js';
-export * from './metabolic-micronutrients.js';
-export * from './blood-liver.js';
-export * from './other-biomarkers.js';
-export * from './validation.js';
-export * from './artifact.js';
+export * from './schema';
+export * from './lipids';
+export * from './metabolic-micronutrients';
+export * from './blood-liver';
+export * from './other-biomarkers';
+export * from './validation';
+export * from './artifact';
 
 export function composeCatalogue(
   ...groups: readonly (readonly BiomarkerCatalogueEntry[])[]

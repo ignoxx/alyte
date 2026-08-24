@@ -3,6 +3,7 @@ import {
   type CreateIntakeEventInput,
   type CreateLabRecordInput,
   type CreateMeasurementInput,
+  type CanonicalId,
   type MeasurementValue,
   type SpecimenType,
 } from '@alyte/domain';
@@ -174,6 +175,11 @@ const bloodFamilies: readonly FamilyFixture[] = [
   ),
 ];
 
+export const showcaseNonLipidBiomarkerIds: readonly CanonicalId[] = [
+  ...metabolicFamilies,
+  ...bloodFamilies,
+].map((familyFixture) => canonicalId(`biomarker.${familyFixture.id}`));
+
 function showcaseMeasurement(fixture: MeasurementFixture): CreateMeasurementInput {
   const valueString =
     fixture.value.kind === 'numeric' || fixture.value.kind === 'bounded'
@@ -189,7 +195,7 @@ function showcaseMeasurement(fixture: MeasurementFixture): CreateMeasurementInpu
     valueString,
     unit: fixture.unit,
     referenceInterval: fixture.referenceInterval,
-    provenance: fixture.provenance ?? 'extracted',
+    provenance: fixture.provenance ?? 'user-entered',
     reviewState: 'confirmed',
   };
 }

@@ -4,7 +4,7 @@ import {
   metabolicMicronutrientBiomarkerIds,
   type BiomarkerCatalogueEntry,
   type CatalogueValidationIssue,
-} from './schema.js';
+} from './schema';
 
 /** Source-shaped aliases are normalized only for lookup; they never replace the original label. */
 export function normalizeCatalogueAlias(value: string): string {

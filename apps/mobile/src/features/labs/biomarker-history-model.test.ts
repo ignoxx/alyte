@@ -77,7 +77,7 @@ function measurement(
     original: snapshot,
     originalState: {
       biomarkerId,
-      specimenType: 'serum',
+      specimenType: options.specimenType ?? 'serum',
       snapshot,
       reviewState: options.reviewState ?? 'confirmed',
       provenance: options.provenance ?? 'extracted',
@@ -301,7 +301,15 @@ test('non-lipid history keeps every representative non-point state and source ra
               label: 'ALT (IFCC 37 C with P5P)',
               unit: 'U/L',
               referenceInterval: '<40 U/L',
+              flag: 'H',
               specimenType: 'blood',
+              provenance: 'user-corrected',
+              current: {
+                value: { kind: 'numeric', value: 24 },
+                valueString: '24',
+                referenceInterval: '<35 U/L',
+                flag: 'H',
+              },
             },
           ),
         ],
@@ -404,7 +412,13 @@ test('non-lipid history keeps every representative non-point state and source ra
   );
   assert.equal(model.timeline[0]?.kind, 'point');
   if (model.timeline[0]?.kind === 'point') {
-    assert.equal(model.timeline[0].point.laboratoryReference.interval, '<40 U/L');
+    assert.deepEqual(model.timeline[0].point.laboratoryReference, {
+      interval: '<35 U/L',
+      flag: 'H',
+    });
+    assert.equal(model.timeline[0].current?.valueString, '24');
+    assert.equal(model.timeline[0].original?.valueString, '22');
+    assert.equal(model.timeline[0].provenance, 'user-corrected');
   }
   assert.deepEqual(
     model.timeline
@@ -417,6 +431,13 @@ test('non-lipid history keeps every representative non-point state and source ra
   assert.equal(model.guidance.kind, 'not-applicable');
   assert.equal(model.guidance.reason, 'context-unavailable');
   const accessibilityLabel = buildHistoryAccessibilityLabel(model, copy, 'en-US');
-  assert.match(accessibilityLabel, /Laboratory interval <40 U\/L/);
+  assert.ok(
+    accessibilityLabel.indexOf('Current result ALT: 24 U/L') <
+      accessibilityLabel.indexOf('Original source ALT (IFCC 37 C with P5P): 22 U/L'),
+  );
+  assert.match(
+    accessibilityLabel,
+    /Laboratory interval <35 U\/L, Laboratory flag H, User-corrected/,
+  );
   assert.match(accessibilityLabel, /Incompatible result/);
 });

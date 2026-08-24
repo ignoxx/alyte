@@ -8,8 +8,8 @@ import {
   type CatalogueManifest,
   type CatalogueSource,
   type CatalogueVerificationOptions,
-} from './schema.js';
-import { assertCatalogueValid, validateCatalogue } from './validation.js';
+} from './schema';
+import { assertCatalogueValid, validateCatalogue } from './validation';
 
 /** Stable JSON encoding keeps a digest independent of object insertion order. */
 export function canonicalJson(value: unknown): string {
