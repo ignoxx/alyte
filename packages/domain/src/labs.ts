@@ -121,6 +121,18 @@ export type ComparableBiomarkerConstraint = {
   readonly id: string;
   readonly specimens: readonly SpecimenType[];
   readonly units: readonly string[];
+  readonly canonicalUnit?: string;
+  readonly unitConversions?: readonly {
+    readonly from: string;
+    readonly to: string;
+    readonly factor: number;
+    readonly offset?: number;
+  }[];
+  /** Explicit groups keep serum/plasma compatibility a catalogue decision, not a guess. */
+  readonly specimenCompatibility?: readonly (readonly [SpecimenType, ...SpecimenType[]])[];
+  readonly valueType?: 'numeric';
+  readonly explanation?: string;
+  readonly generalGuidance?: readonly unknown[];
 };
 
 export type LabRecordSourceState =
@@ -382,3 +394,262 @@ export function assertMeasurementValue(value: MeasurementValue): void {
     throw new Error('Text measurements must not be empty');
   }
 }
+
+export type ComparableNormalizedValue = {
+  readonly value: number;
+  readonly unit: string;
+};
+
+export type MeasuredTrendPoint = {
+  readonly kind: 'measured-point';
+  readonly measurementId: string;
+  readonly labRecordId: string;
+  readonly collectionDate: string;
+  readonly biomarkerId: CanonicalId;
+  readonly specimenType: SpecimenType;
+  /** Deterministic value used by a renderer; no value is inferred for any other record. */
+  readonly normalized: ComparableNormalizedValue;
+  /** Immutable source-shaped value remains available beside the normalized point. */
+  readonly source: MeasurementSnapshot;
+  /** Current confirmed value used for comparison (may contain an explicit user correction). */
+  readonly current: MeasurementSnapshot;
+  readonly laboratoryReference: {
+    readonly interval: string | null;
+    readonly flag: string | null;
+  };
+};
+
+export type MeasuredTrendNonPoint = {
+  readonly kind: 'not-measured' | 'date-missing' | 'bounded' | 'incompatible' | 'unsupported';
+  readonly labRecordId: string;
+  readonly collectionDate: LabDateState;
+  readonly measurementId: string | null;
+  readonly source: MeasurementSnapshot | null;
+  readonly reason?:
+    | 'unconfirmed'
+    | 'non-numeric-value'
+    | 'missing-unit'
+    | 'incompatible-unit'
+    | 'incompatible-specimen'
+    | 'unsupported-canonical-id';
+};
+
+export type MeasuredTrendDirection = 'increased' | 'decreased' | 'stable' | 'not-comparable';
+
+export type MeasuredTrend = {
+  readonly biomarkerId: string;
+  readonly points: readonly MeasuredTrendPoint[];
+  readonly nonPoints: readonly MeasuredTrendNonPoint[];
+  /** Segments deliberately stop at date-missing, incompatible, bounded, or absent records. */
+  readonly segments: readonly (readonly MeasuredTrendPoint[])[];
+  readonly direction: MeasuredTrendDirection;
+  readonly directionText: string;
+  /** Separate catalogue content; it never replaces a point's laboratoryReference. */
+  readonly generalGuidance: readonly unknown[];
+};
+
+export type MeasuredChartModel = MeasuredTrend;
+
+export function convertComparableValue(
+  value: number,
+  fromUnit: string,
+  entry: ComparableBiomarkerConstraint,
+  targetUnit = entry.canonicalUnit ?? fromUnit,
+): ComparableNormalizedValue | null {
+  if (!Number.isFinite(value)) return null;
+  if (!entry.units.includes(fromUnit) || !entry.units.includes(targetUnit)) return null;
+  if (fromUnit === targetUnit) return { value, unit: targetUnit };
+  const conversion = entry.unitConversions?.find(
+    (candidate) => candidate.from === fromUnit && candidate.to === targetUnit,
+  );
+  if (conversion === undefined) return null;
+  // Keep conversions reproducible across engines while avoiding binary-noise in displayed values.
+  const converted = Number((value * conversion.factor + (conversion.offset ?? 0)).toFixed(12));
+  return Number.isFinite(converted) ? { value: converted, unit: targetUnit } : null;
+}
+
+function specimenPairCompatible(
+  entry: ComparableBiomarkerConstraint,
+  measurementSpecimen: SpecimenType,
+  recordSpecimen: SpecimenType,
+): boolean {
+  if (!entry.specimens.includes(measurementSpecimen) || !entry.specimens.includes(recordSpecimen)) {
+    return false;
+  }
+  if (measurementSpecimen === recordSpecimen) return true;
+  return (
+    entry.specimenCompatibility?.some(
+      (group) => group.includes(measurementSpecimen) && group.includes(recordSpecimen),
+    ) ?? false
+  );
+}
+
+function nonPointForMeasurement(
+  record: LabRecord,
+  measurement: Measurement,
+  entry: ComparableBiomarkerConstraint | undefined,
+): MeasuredTrendNonPoint {
+  const value = measurement.current.value;
+  if (record.collectionDate.kind === 'missing') {
+    return {
+      kind: 'date-missing',
+      labRecordId: record.id,
+      collectionDate: record.collectionDate,
+      measurementId: measurement.id,
+      source: measurement.current,
+    };
+  }
+  if (value.kind === 'bounded') {
+    return {
+      kind: 'bounded',
+      labRecordId: record.id,
+      collectionDate: record.collectionDate,
+      measurementId: measurement.id,
+      source: measurement.current,
+    };
+  }
+  if (entry === undefined) {
+    return {
+      kind: 'unsupported',
+      labRecordId: record.id,
+      collectionDate: record.collectionDate,
+      measurementId: measurement.id,
+      source: measurement.current,
+      reason: 'unsupported-canonical-id',
+    };
+  }
+  let reason: MeasuredTrendNonPoint['reason'] = 'non-numeric-value';
+  if (measurement.reviewState !== 'confirmed') reason = 'unconfirmed';
+  else if (value.kind !== 'numeric') reason = 'non-numeric-value';
+  else if (measurement.current.unit === null) reason = 'missing-unit';
+  else if (!entry.units.includes(measurement.current.unit)) reason = 'incompatible-unit';
+  else if (!specimenPairCompatible(entry, measurement.specimenType, record.specimenType)) {
+    reason = 'incompatible-specimen';
+  }
+  return {
+    kind: 'incompatible',
+    labRecordId: record.id,
+    collectionDate: record.collectionDate,
+    measurementId: measurement.id,
+    source: measurement.current,
+    reason,
+  };
+}
+
+/**
+ * Build a renderer-independent history. The only ordinary points are confirmed, exact numeric
+ * values with a known collection date, compatible specimen semantics, and a deterministic unit
+ * conversion. The function never creates an intermediate value or turns a bound into a point.
+ */
+export function buildMeasuredTrend(
+  records: readonly LabRecord[],
+  biomarkerId: string,
+  catalogue: readonly ComparableBiomarkerConstraint[],
+): MeasuredChartModel {
+  const entry = catalogue.find((candidate) => candidate.id === biomarkerId);
+  const orderedRecords = [...records].sort((left, right) => {
+    if (left.collectionDate.kind === 'missing' && right.collectionDate.kind === 'missing') return 0;
+    if (left.collectionDate.kind === 'missing') return 1;
+    if (right.collectionDate.kind === 'missing') return -1;
+    return left.collectionDate.value.localeCompare(right.collectionDate.value);
+  });
+  const points: MeasuredTrendPoint[] = [];
+  const nonPoints: MeasuredTrendNonPoint[] = [];
+  const segments: MeasuredTrendPoint[][] = [];
+  let currentSegment: MeasuredTrendPoint[] | null = null;
+
+  for (const record of orderedRecords) {
+    const candidates = record.measurements.filter(
+      (measurement) => measurement.biomarkerId === biomarkerId,
+    );
+    if (candidates.length === 0) {
+      if (record.collectionDate.kind === 'known') {
+        nonPoints.push({
+          kind: 'not-measured',
+          labRecordId: record.id,
+          collectionDate: record.collectionDate,
+          measurementId: null,
+          source: null,
+        });
+      } else {
+        nonPoints.push({
+          kind: 'date-missing',
+          labRecordId: record.id,
+          collectionDate: record.collectionDate,
+          measurementId: null,
+          source: null,
+        });
+      }
+      currentSegment = null;
+      continue;
+    }
+    let recordHasPoint = false;
+    for (const measurement of candidates) {
+      const value = measurement.current.value;
+      const unit = measurement.current.unit;
+      const normalized =
+        entry !== undefined &&
+        record.collectionDate.kind === 'known' &&
+        measurement.reviewState === 'confirmed' &&
+        value.kind === 'numeric' &&
+        unit !== null &&
+        specimenPairCompatible(entry, measurement.specimenType, record.specimenType)
+          ? convertComparableValue(value.value, unit, entry)
+          : null;
+      if (record.collectionDate.kind === 'known' && normalized !== null) {
+        const point: MeasuredTrendPoint = {
+          kind: 'measured-point',
+          measurementId: measurement.id,
+          labRecordId: record.id,
+          collectionDate: record.collectionDate.value,
+          biomarkerId: measurement.biomarkerId as CanonicalId,
+          specimenType: measurement.specimenType,
+          normalized,
+          source: measurement.original,
+          current: measurement.current,
+          laboratoryReference: {
+            interval: measurement.current.referenceInterval,
+            flag: measurement.current.flag,
+          },
+        };
+        points.push(point);
+        if (currentSegment === null) {
+          currentSegment = [];
+          segments.push(currentSegment);
+        }
+        currentSegment.push(point);
+        recordHasPoint = true;
+      } else {
+        nonPoints.push(nonPointForMeasurement(record, measurement, entry));
+        currentSegment = null;
+      }
+    }
+    if (!recordHasPoint) currentSegment = null;
+  }
+
+  const direction: MeasuredTrendDirection =
+    points.length < 2
+      ? 'not-comparable'
+      : points[points.length - 1]!.normalized.value > points[0]!.normalized.value
+        ? 'increased'
+        : points[points.length - 1]!.normalized.value < points[0]!.normalized.value
+          ? 'decreased'
+          : 'stable';
+  const directionText =
+    direction === 'not-comparable'
+      ? 'Not comparable from the available measured points.'
+      : `Measured direction: ${direction}.`;
+  return {
+    biomarkerId,
+    points,
+    nonPoints,
+    segments,
+    direction,
+    directionText,
+    generalGuidance: entry?.generalGuidance ?? [],
+  };
+}
+
+export const buildLipidComparison = buildMeasuredTrend;
+export const buildMeasuredChartModel = buildMeasuredTrend;
+export const buildLipidChartModel = buildMeasuredTrend;
