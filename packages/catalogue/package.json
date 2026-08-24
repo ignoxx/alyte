@@ -9,11 +9,13 @@
   "scripts": {
     "build": "tsx scripts/catalogue-build.ts",
     "catalogue:build": "tsx scripts/catalogue-build.ts",
+    "catalogue:review-packet": "tsx scripts/catalogue-review-packet.ts",
+    "catalogue:review-packet:freshness": "tsx scripts/catalogue-review-packet-freshness.ts",
     "catalogue:sign": "tsx scripts/catalogue-sign.ts",
     "catalogue:verify": "tsx scripts/catalogue-verify.ts",
     "catalogue:freshness": "tsx scripts/catalogue-freshness.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "npm run catalogue:freshness && tsx --test src/**/*.test.ts",
+    "test": "npm run catalogue:freshness && npm run catalogue:review-packet:freshness && tsx --test src/**/*.test.ts",
     "watch": "tsc -p tsconfig.json --watch --preserveWatchOutput"
   }
 }

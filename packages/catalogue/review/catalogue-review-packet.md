@@ -1,0 +1,1549 @@
+# Alyte qualified catalogue review packet
+
+<!-- prettier-ignore-start -->
+
+> **PENDING HUMAN REVIEW — NOT APPROVED.** This packet is generated from the versioned catalogue artifact. It records no qualified-human decision, reviewer identity, reviewer qualification, or approval. Blank decision fields are intentional. Integrity signing is not medical-content approval.
+
+This is a source-review aid for an authorized qualified human content owner. Review each Biomarker entry and each General Guidance item independently. The packet preserves the catalogue values and provenance; it does not add or resolve medical claims.
+
+## Packet metadata
+
+- packet status: `pending-human-review`
+- artifact schema version: `alyte.catalogue.artifact.v1`
+- catalogue version: `0.2.0`
+- catalogue manifest status: `review-pending`
+- signature present: `no`
+- entry count: `15`
+- General Guidance item count: `7`
+- source-set count: `22`
+
+## Human-only review boundary
+
+- An automated agent may generate this packet and check completeness/freshness, but may not approve, revise, withhold, qualify, or publish catalogue content.
+- Leave every decision field blank until an authorized reviewer records one decision and their identity, qualification, date, content version, and notes.
+- A signature proves artifact integrity only. It does not prove reviewer qualification or medical-content approval.
+- A later maintainer change must preserve this packet’s pending status until the human publication review is complete.
+
+## Entries
+
+## 1. `biomarker.alt` — ALT
+- canonical label: ALT
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `U/L`
+- accepted units:
+  - `U/L`
+- accepted specimens:
+  - `blood`
+  - `serum`
+  - `plasma`
+  - `unknown`
+- specimen compatibility groups:
+  1. `blood`
+  2. `serum`, `plasma`
+  3. `unknown`
+- aliases:
+  - `alt`
+  - `alanine aminotransferase`
+  - `alanine transaminase`
+  - `sgpt`
+  - `gpt`
+  - `alat`
+  - `alanin-aminotransferase`
+  - `alanine aminotransférase`
+  - `alanina aminotransferasa`
+  - `alanina aminotransferasi`
+  - `alanine-aminotransferase`
+  - `alanine aminotransferase ifcc`
+- unsafe aliases:
+  - `non-ifcc`
+- method/specimen constraints:
+  - policy version: `1.0.0`
+  - kind: `requires-explicit-method`
+  - allowed methods:
+    - `ifcc`
+    - `pyridoxal phosphate`
+    - `p5p`
+  - unsafe method patterns:
+    - `non-ifcc`
+  - rationale: ALT catalytic activity is comparable only when the source states a complete supported IFCC assay profile, including temperature and PLP/P5P status; incomplete or differently named assays stay preserved-only.
+  - method profiles:
+    - profile `alt-ifcc-37-p5p`: assay patterns `ifcc`; temperature `37` °C; temperature patterns `37 c`, `37 degrees`; pyridoxal phosphate `present`; pyridoxal phosphate patterns `with p5p`, `with pyridoxal phosphate`, `p5p present`
+    - profile `alt-ifcc-30-p5p`: assay patterns `ifcc`; temperature `30` °C; temperature patterns `30 c`, `30 degrees`; pyridoxal phosphate `present`; pyridoxal phosphate patterns `with p5p`, `with pyridoxal phosphate`, `p5p present`
+    - profile `alt-ifcc-37-no-p5p`: assay patterns `ifcc`; temperature `37` °C; temperature patterns `37 c`, `37 degrees`; pyridoxal phosphate `absent`; pyridoxal phosphate patterns `without p5p`, `without pyridoxal phosphate`, `no p5p`, `no pyridoxal phosphate`
+    - profile `alt-ifcc-30-no-p5p`: assay patterns `ifcc`; temperature `30` °C; temperature patterns `30 c`, `30 degrees`; pyridoxal phosphate `absent`; pyridoxal phosphate patterns `without p5p`, `without pyridoxal phosphate`, `no p5p`, `no pyridoxal phosphate`
+- exact unit conversions:
+  - (none encoded)
+- explanation (source copy; not approved for publication): Measures alanine aminotransferase catalytic activity in a blood sample. ALT is commonly included with other liver-panel measurements, but it is also present outside the liver. Exercise, medicines, specimen handling, and assay method can affect the result; one measurement cannot identify a specific reason for a change.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.medlineplus.liver-function-tests — Liver Function Tests](https://medlineplus.gov/lab-tests/liver-function-tests/)
+    - publisher: MedlinePlus, U.S. National Library of Medicine
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://medlineplus.gov/lab-tests/liver-function-tests/
+  - [source.medlineplus.alt-test — ALT Blood Test](https://medlineplus.gov/lab-tests/alt-blood-test/)
+    - publisher: MedlinePlus, U.S. National Library of Medicine
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://medlineplus.gov/lab-tests/alt-blood-test/
+  - [source.ifcc.alt-reference-procedure — IFCC primary reference procedures for catalytic activity concentrations of enzymes at 37 °C. Part 4. Reference procedure for the measurement of catalytic concentration of alanine aminotransferase](https://pubmed.ncbi.nlm.nih.gov/12241021/)
+    - publisher: International Federation of Clinical Chemistry and Laboratory Medicine
+    - publication date: `2002-07`
+    - accessed date: `2026-08-24`
+    - source kind: `professional-guideline`
+    - URL: https://pubmed.ncbi.nlm.nih.gov/12241021/
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. A qualified content owner must review wording, applicability, method identity, disagreements, and sources before publication.
+- guidance items:
+  - (none encoded)
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## 2. `biomarker.ast` — AST
+- canonical label: AST
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `U/L`
+- accepted units:
+  - `U/L`
+- accepted specimens:
+  - `blood`
+  - `serum`
+  - `plasma`
+  - `unknown`
+- specimen compatibility groups:
+  1. `blood`
+  2. `serum`, `plasma`
+  3. `unknown`
+- aliases:
+  - `ast`
+  - `aspartate aminotransferase`
+  - `aspartate transaminase`
+  - `sgot`
+  - `got`
+  - `asat`
+  - `aspartat-aminotransferase`
+  - `aspartate aminotransférase`
+  - `aspartato aminotransferasa`
+  - `aspartato aminotransferasi`
+  - `aspartaataminotransferase`
+  - `aspartate aminotransferase ifcc`
+- unsafe aliases:
+  - `non-ifcc`
+- method/specimen constraints:
+  - policy version: `1.0.0`
+  - kind: `requires-explicit-method`
+  - allowed methods:
+    - `ifcc`
+    - `pyridoxal phosphate`
+    - `p5p`
+  - unsafe method patterns:
+    - `non-ifcc`
+  - rationale: AST catalytic activity is comparable only when the source states a complete supported IFCC assay profile, including temperature and PLP/P5P status; incomplete or differently named assays stay preserved-only.
+  - method profiles:
+    - profile `ast-ifcc-37-p5p`: assay patterns `ifcc`; temperature `37` °C; temperature patterns `37 c`, `37 degrees`; pyridoxal phosphate `present`; pyridoxal phosphate patterns `with p5p`, `with pyridoxal phosphate`, `p5p present`
+    - profile `ast-ifcc-30-p5p`: assay patterns `ifcc`; temperature `30` °C; temperature patterns `30 c`, `30 degrees`; pyridoxal phosphate `present`; pyridoxal phosphate patterns `with p5p`, `with pyridoxal phosphate`, `p5p present`
+    - profile `ast-ifcc-37-no-p5p`: assay patterns `ifcc`; temperature `37` °C; temperature patterns `37 c`, `37 degrees`; pyridoxal phosphate `absent`; pyridoxal phosphate patterns `without p5p`, `without pyridoxal phosphate`, `no p5p`, `no pyridoxal phosphate`
+    - profile `ast-ifcc-30-no-p5p`: assay patterns `ifcc`; temperature `30` °C; temperature patterns `30 c`, `30 degrees`; pyridoxal phosphate `absent`; pyridoxal phosphate patterns `without p5p`, `without pyridoxal phosphate`, `no p5p`, `no pyridoxal phosphate`
+- exact unit conversions:
+  - (none encoded)
+- explanation (source copy; not approved for publication): Measures aspartate aminotransferase catalytic activity in a blood sample. AST is found in several tissues and is commonly considered with other liver-panel measurements. Exercise, medicines, specimen handling, and assay method can affect the result; one measurement cannot identify a specific reason for a change.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.medlineplus.liver-function-tests — Liver Function Tests](https://medlineplus.gov/lab-tests/liver-function-tests/)
+    - publisher: MedlinePlus, U.S. National Library of Medicine
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://medlineplus.gov/lab-tests/liver-function-tests/
+  - [source.medlineplus.ast-test — AST Test](https://medlineplus.gov/lab-tests/ast-test/)
+    - publisher: MedlinePlus, U.S. National Library of Medicine
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://medlineplus.gov/lab-tests/ast-test/
+  - [source.ifcc.ast-reference-procedure — IFCC primary reference procedures for catalytic activity concentrations of enzymes at 37 °C. Part 5. Reference procedure for the measurement of catalytic concentration of aspartate aminotransferase](https://pubmed.ncbi.nlm.nih.gov/12241022/)
+    - publisher: International Federation of Clinical Chemistry and Laboratory Medicine
+    - publication date: `2002-07`
+    - accessed date: `2026-08-24`
+    - source kind: `professional-guideline`
+    - URL: https://pubmed.ncbi.nlm.nih.gov/12241022/
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. A qualified content owner must review wording, applicability, method identity, disagreements, and sources before publication.
+- guidance items:
+  - (none encoded)
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## 3. `biomarker.ferritin` — Ferritin
+- canonical label: Ferritin
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `ng/mL`
+- accepted units:
+  - `ng/mL`
+  - `µg/L`
+  - `ug/L`
+- accepted specimens:
+  - `serum`
+  - `plasma`
+- specimen compatibility groups:
+  1. `serum`, `plasma`
+- aliases:
+  - `ferritin`
+  - `serum ferritin`
+  - `plasma ferritin`
+  - `ferritine`
+  - `ferritina`
+  - `ferrytyna`
+  - `ferritine sérique`
+- unsafe aliases:
+  - (none encoded)
+- method/specimen constraints:
+  - policy version: `1.0.0`
+  - kind: `method-agnostic`
+  - allowed methods:
+    - (none encoded)
+  - unsafe method patterns:
+    - (none encoded)
+  - rationale: The entry is total ferritin and does not require a method discriminator for comparable numeric results.
+  - method profiles: (none encoded)
+- exact unit conversions:
+  | From | To | Factor | Offset | Authority source |
+  | --- | --- | ---: | ---: | --- |
+  | `µg/L` | `ng/mL` | `1` | `0` | [source.who.ferritin-guideline — WHO guideline on use of ferritin concentrations to assess iron status in individuals and populations](https://www.who.int/publications/i/item/9789240000124) |
+  | `ng/mL` | `µg/L` | `1` | `0` | [source.who.ferritin-guideline — WHO guideline on use of ferritin concentrations to assess iron status in individuals and populations](https://www.who.int/publications/i/item/9789240000124) |
+  | `ug/L` | `ng/mL` | `1` | `0` | [source.who.ferritin-guideline — WHO guideline on use of ferritin concentrations to assess iron status in individuals and populations](https://www.who.int/publications/i/item/9789240000124) |
+  | `ng/mL` | `ug/L` | `1` | `0` | [source.who.ferritin-guideline — WHO guideline on use of ferritin concentrations to assess iron status in individuals and populations](https://www.who.int/publications/i/item/9789240000124) |
+- explanation (source copy; not approved for publication): Measures circulating ferritin, an iron-storage protein. Concentration can reflect iron stores but may also change with inflammation or infection, so the laboratory interval and collection context remain primary.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.who.ferritin-guideline — WHO guideline on use of ferritin concentrations to assess iron status in individuals and populations](https://www.who.int/publications/i/item/9789240000124)
+    - publisher: World Health Organization
+    - publication date: `2020-04-21`
+    - accessed date: `2026-08-24`
+    - source kind: `professional-guideline`
+    - URL: https://www.who.int/publications/i/item/9789240000124
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. A qualified content owner must review wording, applicability, method identity, disagreements, and sources before publication.
+- guidance items:
+  - (none encoded)
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## 4. `biomarker.ggt` — GGT
+- canonical label: GGT
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `U/L`
+- accepted units:
+  - `U/L`
+- accepted specimens:
+  - `blood`
+  - `serum`
+  - `plasma`
+  - `unknown`
+- specimen compatibility groups:
+  1. `blood`
+  2. `serum`, `plasma`
+  3. `unknown`
+- aliases:
+  - `ggt`
+  - `ggtp`
+  - `gamma-gt`
+  - `gamma gt`
+  - `gamma glutamyl transferase`
+  - `gamma-glutamyltransferase`
+  - `gamma-glutamyl transferase`
+  - `gamma-glutamyl transpeptidase`
+  - `γ-glutamyltransferase`
+  - `gamma-glutamyl transférase`
+  - `gamma glutamil transferasa`
+  - `gamma glutamil transferasi`
+  - `gama glutamil transferase`
+- unsafe aliases:
+  - `non-ifcc`
+  - `legacy`
+- method/specimen constraints:
+  - policy version: `1.0.0`
+  - kind: `requires-explicit-method`
+  - allowed methods:
+    - `ifcc`
+  - unsafe method patterns:
+    - `non-ifcc`
+    - `legacy`
+  - rationale: GGT catalytic activity is comparable only when the source states a complete supported IFCC assay profile, including temperature and PLP/P5P status; incomplete or differently named assays stay preserved-only.
+  - method profiles:
+    - profile `ggt-ifcc-37-p5p`: assay patterns `ifcc`; temperature `37` °C; temperature patterns `37 c`, `37 degrees`; pyridoxal phosphate `present`; pyridoxal phosphate patterns `with p5p`, `with pyridoxal phosphate`, `p5p present`
+    - profile `ggt-ifcc-30-p5p`: assay patterns `ifcc`; temperature `30` °C; temperature patterns `30 c`, `30 degrees`; pyridoxal phosphate `present`; pyridoxal phosphate patterns `with p5p`, `with pyridoxal phosphate`, `p5p present`
+    - profile `ggt-ifcc-37-no-p5p`: assay patterns `ifcc`; temperature `37` °C; temperature patterns `37 c`, `37 degrees`; pyridoxal phosphate `absent`; pyridoxal phosphate patterns `without p5p`, `without pyridoxal phosphate`, `no p5p`, `no pyridoxal phosphate`
+    - profile `ggt-ifcc-30-no-p5p`: assay patterns `ifcc`; temperature `30` °C; temperature patterns `30 c`, `30 degrees`; pyridoxal phosphate `absent`; pyridoxal phosphate patterns `without p5p`, `without pyridoxal phosphate`, `no p5p`, `no pyridoxal phosphate`
+- exact unit conversions:
+  - (none encoded)
+- explanation (source copy; not approved for publication): Measures gamma-glutamyl transferase catalytic activity in a blood sample. GGT is found throughout the body and is concentrated in the liver and bile-duct system. Alcohol, medicines, exercise, specimen handling, and assay method can affect the result; one measurement cannot identify a specific reason for a change.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.medlineplus.liver-function-tests — Liver Function Tests](https://medlineplus.gov/lab-tests/liver-function-tests/)
+    - publisher: MedlinePlus, U.S. National Library of Medicine
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://medlineplus.gov/lab-tests/liver-function-tests/
+  - [source.medlineplus.ggt-test — Gamma-glutamyl Transferase (GGT) Test](https://medlineplus.gov/lab-tests/gamma-glutamyl-transferase-ggt-test/)
+    - publisher: MedlinePlus, U.S. National Library of Medicine
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://medlineplus.gov/lab-tests/gamma-glutamyl-transferase-ggt-test/
+  - [source.ifcc.ggt-reference-procedure — IFCC primary reference procedures for catalytic activity concentrations of enzymes at 37 °C. Part 6. Reference procedure for the measurement of catalytic concentration of gamma-glutamyltransferase](https://pubmed.ncbi.nlm.nih.gov/12241023/)
+    - publisher: International Federation of Clinical Chemistry and Laboratory Medicine
+    - publication date: `2002-07`
+    - accessed date: `2026-08-24`
+    - source kind: `professional-guideline`
+    - URL: https://pubmed.ncbi.nlm.nih.gov/12241023/
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. A qualified content owner must review wording, applicability, method identity, disagreements, and sources before publication.
+- guidance items:
+  - (none encoded)
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## 5. `biomarker.glucose` — Glucose
+- canonical label: Glucose
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `mg/dL`
+- accepted units:
+  - `mg/dL`
+  - `mmol/L`
+- accepted specimens:
+  - `blood`
+  - `serum`
+  - `plasma`
+- specimen compatibility groups:
+  1. `blood`
+  2. `serum`, `plasma`
+- aliases:
+  - `glucose`
+  - `blood glucose`
+  - `blood sugar`
+  - `fasting glucose`
+  - `fasting blood glucose`
+  - `glukose`
+  - `blutzucker`
+  - `nüchternblutzucker`
+  - `glucose à jeun`
+  - `glycémie`
+  - `glucosa`
+  - `glicemia`
+  - `glucose nuchter`
+  - `glukoza`
+  - `gliukozė`
+- unsafe aliases:
+  - `glucose tolerance`
+  - `oral glucose tolerance`
+  - `ogtt`
+  - `glucose challenge`
+  - `glucose load`
+  - `post-load glucose`
+- method/specimen constraints:
+  - policy version: `1.0.0`
+  - kind: `method-agnostic`
+  - allowed methods:
+    - (none encoded)
+  - unsafe method patterns:
+    - `glucose tolerance`
+    - `oral glucose tolerance`
+    - `ogtt`
+    - `glucose challenge`
+    - `glucose load`
+    - `post-load glucose`
+  - rationale: The canonical entry is a direct glucose result; tolerance, challenge, and post-load forms are separate tests.
+  - method profiles: (none encoded)
+- exact unit conversions:
+  | From | To | Factor | Offset | Authority source |
+  | --- | --- | ---: | ---: | --- |
+  | `mmol/L` | `mg/dL` | `18.01801801801802` | `0` | [source.niddk.diabetes-conversions — Diabetes in America, 3rd Edition — Appendix 1: Conversions](https://www.niddk.nih.gov/-/media/Files/Strategic-Plans/Diabetes-in-America-3rd-Edition/DIA_Conversions.pdf) |
+  | `mg/dL` | `mmol/L` | `0.0555` | `0` | [source.niddk.diabetes-conversions — Diabetes in America, 3rd Edition — Appendix 1: Conversions](https://www.niddk.nih.gov/-/media/Files/Strategic-Plans/Diabetes-in-America-3rd-Edition/DIA_Conversions.pdf) |
+- explanation (source copy; not approved for publication): Measures glucose concentration in the sampled blood. Results vary with fasting status, timing after food, specimen context, and collection conditions; the laboratory interval and source context remain important.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.cdc.diabetes-testing — Diabetes Testing](https://www.cdc.gov/diabetes/diabetes-testing/index.html)
+    - publisher: Centers for Disease Control and Prevention
+    - publication date: `2024-05-15`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://www.cdc.gov/diabetes/diabetes-testing/index.html
+  - [source.niddk.diabetes-conversions — Diabetes in America, 3rd Edition — Appendix 1: Conversions](https://www.niddk.nih.gov/-/media/Files/Strategic-Plans/Diabetes-in-America-3rd-Edition/DIA_Conversions.pdf)
+    - publisher: National Institute of Diabetes and Digestive and Kidney Diseases
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://www.niddk.nih.gov/-/media/Files/Strategic-Plans/Diabetes-in-America-3rd-Edition/DIA_Conversions.pdf
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. A qualified content owner must review wording, applicability, method identity, disagreements, and sources before publication.
+- guidance items:
+  ### Guidance item `guidance.glucose.fasting-screening-us`
+  - label: Adult fasting screening comparison point
+  - description: A population screening comparison point from an identified public-health authority. It does not replace the laboratory interval or act as a personal target.
+  - thresholds:
+    - `<` `100` `mg/dL`
+  - applicability:
+    - population: `adults`
+    - jurisdiction: `US`
+    - context: `screening`
+    - purpose: `screening`
+    - sex: `all`
+    - fasting: `fasting`
+    - specimen: `plasma`
+    - limitations:
+      - `Shown only when the adult population, US jurisdiction, and required collection context are explicit.`
+      - `The issuing laboratory interval and source context remain primary.`
+  - disagreement: Screening cutoffs are context-dependent and are not resolved into an individual clinical conclusion.
+  - authority: Centers for Disease Control and Prevention
+  - publication version: `2024-05-15`
+  - review date: `null`
+  - unit: `mg/dL`
+  - boundary semantics: `exclusive`
+  - source metadata and links:
+    - [source.cdc.diabetes-testing — Diabetes Testing](https://www.cdc.gov/diabetes/diabetes-testing/index.html)
+      - publisher: Centers for Disease Control and Prevention
+      - publication date: `2024-05-15`
+      - accessed date: `2026-08-24`
+      - source kind: `public-health-authority`
+      - URL: https://www.cdc.gov/diabetes/diabetes-testing/index.html
+  - source review metadata:
+    - catalogue review status: `pending-human-publication`
+    - source content version: `0.2.0`
+    - source reviewed date: `null`
+    - source reviewer: `null`
+    - source review notes: Agent-authored draft. A qualified content owner must review wording, applicability, method identity, disagreements, and sources before publication.
+  - blank human decision fields:
+    - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+    - Qualified reviewer identity: `________________`
+    - Reviewer qualification: `________________`
+    - Review date (ISO 8601): `________________`
+    - Reviewed content version: `________________` (source content version: `0.2.0`)
+    - Reviewer notes: `________________`
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## 6. `biomarker.hba1c` — HbA1c
+- canonical label: HbA1c
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `%`
+- accepted units:
+  - `%`
+  - `mmol/mol`
+- accepted specimens:
+  - `blood`
+- specimen compatibility groups:
+  1. `blood`
+- aliases:
+  - `hba1c`
+  - `hb a1c`
+  - `a1c`
+  - `hemoglobin a1c`
+  - `glycated hemoglobin`
+  - `glycosylated hemoglobin`
+  - `glykiertes hämoglobin`
+  - `hämoglobin a1c`
+  - `hémoglobine glyquée`
+  - `hemoglobina glicosilada`
+  - `emoglobina glicata`
+  - `geglyceerd hemoglobine`
+  - `hemoglobina glikowana`
+  - `langzeitblutzucker`
+- unsafe aliases:
+  - (none encoded)
+- method/specimen constraints:
+  - policy version: `1.0.0`
+  - kind: `standardized`
+  - allowed methods:
+    - `ngsp`
+    - `ifcc`
+  - unsafe method patterns:
+    - (none encoded)
+  - rationale: NGSP and IFCC are the reviewed standardized HbA1c identity/unit systems; a clear HbA1c label and unit may omit the method.
+  - method profiles: (none encoded)
+- exact unit conversions:
+  | From | To | Factor | Offset | Authority source |
+  | --- | --- | ---: | ---: | --- |
+  | `mmol/mol` | `%` | `0.09148` | `2.152` | [source.ngsp.ifcc-hba1c-standardization — IFCC Standardization Overview](https://ngsp.org/ifcc.asp) |
+  | `%` | `mmol/mol` | `10.93` | `-23.5` | [source.ngsp.ifcc-hba1c-standardization — IFCC Standardization Overview](https://ngsp.org/ifcc.asp) |
+- explanation (source copy; not approved for publication): Measures the proportion of hemoglobin with glucose attached and reflects an approximate prior two-to-three-month period. It is distinct from a single glucose result; hemoglobin variants and conditions affecting red-cell lifespan can affect the assay result.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.cdc.diabetes-testing — Diabetes Testing](https://www.cdc.gov/diabetes/diabetes-testing/index.html)
+    - publisher: Centers for Disease Control and Prevention
+    - publication date: `2024-05-15`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://www.cdc.gov/diabetes/diabetes-testing/index.html
+  - [source.ngsp.ifcc-hba1c-standardization — IFCC Standardization Overview](https://ngsp.org/ifcc.asp)
+    - publisher: National Glycohemoglobin Standardization Program
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `professional-guideline`
+    - URL: https://ngsp.org/ifcc.asp
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. A qualified content owner must review wording, applicability, method identity, disagreements, and sources before publication.
+- guidance items:
+  ### Guidance item `guidance.hba1c.screening-us`
+  - label: Adult HbA1c screening comparison point
+  - description: A population screening comparison point from an identified public-health authority. It does not replace the laboratory interval or act as a personal target.
+  - thresholds:
+    - `<` `5.7` `%`
+  - applicability:
+    - population: `adults`
+    - jurisdiction: `US`
+    - context: `screening`
+    - purpose: `screening`
+    - sex: `all`
+    - fasting: `any`
+    - specimen: `blood`
+    - limitations:
+      - `Shown only when the adult population, US jurisdiction, and required collection context are explicit.`
+      - `The issuing laboratory interval and source context remain primary.`
+  - disagreement: Screening cutoffs are context-dependent and are not resolved into an individual clinical conclusion.
+  - authority: Centers for Disease Control and Prevention
+  - publication version: `2024-05-15`
+  - review date: `null`
+  - unit: `%`
+  - boundary semantics: `exclusive`
+  - source metadata and links:
+    - [source.cdc.diabetes-testing — Diabetes Testing](https://www.cdc.gov/diabetes/diabetes-testing/index.html)
+      - publisher: Centers for Disease Control and Prevention
+      - publication date: `2024-05-15`
+      - accessed date: `2026-08-24`
+      - source kind: `public-health-authority`
+      - URL: https://www.cdc.gov/diabetes/diabetes-testing/index.html
+  - source review metadata:
+    - catalogue review status: `pending-human-publication`
+    - source content version: `0.2.0`
+    - source reviewed date: `null`
+    - source reviewer: `null`
+    - source review notes: Agent-authored draft. A qualified content owner must review wording, applicability, method identity, disagreements, and sources before publication.
+  - blank human decision fields:
+    - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+    - Qualified reviewer identity: `________________`
+    - Reviewer qualification: `________________`
+    - Review date (ISO 8601): `________________`
+    - Reviewed content version: `________________` (source content version: `0.2.0`)
+    - Reviewer notes: `________________`
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## 7. `biomarker.hdl_c` — HDL-C
+- canonical label: HDL-C
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `mg/dL`
+- accepted units:
+  - `mg/dL`
+  - `mmol/L`
+- accepted specimens:
+  - `blood`
+  - `serum`
+  - `plasma`
+  - `unknown`
+- specimen compatibility groups:
+  1. `blood`, `serum`, `plasma`
+  2. `unknown`
+- aliases:
+  - `hdl`
+  - `hdl-c`
+  - `hdl cholesterol`
+  - `hdl-cholesterin`
+  - `cholestérol hdl`
+  - `colesterol hdl`
+  - `colesterolo hdl`
+  - `didelio tankio lipoproteinų cholesterolis`
+- unsafe aliases:
+  - (none encoded)
+- method/specimen constraints:
+  - (none encoded)
+- exact unit conversions:
+  | From | To | Factor | Offset | Authority source |
+  | --- | --- | ---: | ---: | --- |
+  | `mmol/L` | `mg/dL` | `38.67` | `0` | [source.ahrq.lipid-conversion-factors — Lipid Conversion Factors](https://www.ncbi.nlm.nih.gov/books/NBK83505/) |
+  | `mg/dL` | `mmol/L` | `0.02585983966899405` | `0` | [source.ahrq.lipid-conversion-factors — Lipid Conversion Factors](https://www.ncbi.nlm.nih.gov/books/NBK83505/) |
+- explanation (source copy; not approved for publication): Measures cholesterol carried by high-density lipoproteins. It is considered with LDL-C, triglycerides, and other context; a single HDL-C result is not interpreted on its own.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.ahrq.lipid-conversion-factors — Lipid Conversion Factors](https://www.ncbi.nlm.nih.gov/books/NBK83505/)
+    - publisher: Agency for Healthcare Research and Quality / NCBI Bookshelf
+    - publication date: `2011-10`
+    - accessed date: `2026-08-24`
+    - source kind: `reference`
+    - URL: https://www.ncbi.nlm.nih.gov/books/NBK83505/
+  - [source.cdc.ldl-hdl-triglycerides — LDL and HDL Cholesterol and Triglycerides](https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html)
+    - publisher: Centers for Disease Control and Prevention
+    - publication date: `2024-05-15`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html
+  - [source.nhlbi.blood-cholesterol-diagnosis — Blood Cholesterol — Diagnosis](https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis)
+    - publisher: National Heart, Lung, and Blood Institute / NIH
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. Clinical/content owner must review applicability, wording, and sources before publication.
+- guidance items:
+  ### Guidance item `guidance.hdl-c.screening-us-female`
+  - label: Adult screening reference point
+  - description: A population screening reference point from an identified authority. It is not a personal target and does not replace the laboratory interval.
+  - thresholds:
+    - `>=` `50` `mg/dL`
+  - applicability:
+    - population: `adults`
+    - jurisdiction: `US`
+    - context: `screening`
+    - purpose: `null`
+    - sex: `female`
+    - fasting: `any`
+    - specimen: `null`
+    - limitations:
+      - `This cited threshold applies only when the report context is female.`
+  - disagreement: Authorities use context-dependent thresholds; this baseline records the cited screening point without resolving it into a personal target.
+  - authority: CDC and NHLBI/NIH
+  - publication version: `CDC-2024-05-15; NHLBI-current-page`
+  - review date: `null`
+  - unit: `mg/dL`
+  - boundary semantics: `sex-specific`
+  - source metadata and links:
+    - [source.cdc.ldl-hdl-triglycerides — LDL and HDL Cholesterol and Triglycerides](https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html)
+      - publisher: Centers for Disease Control and Prevention
+      - publication date: `2024-05-15`
+      - accessed date: `2026-08-24`
+      - source kind: `public-health-authority`
+      - URL: https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html
+    - [source.nhlbi.blood-cholesterol-diagnosis — Blood Cholesterol — Diagnosis](https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis)
+      - publisher: National Heart, Lung, and Blood Institute / NIH
+      - publication date: `null`
+      - accessed date: `2026-08-24`
+      - source kind: `public-health-authority`
+      - URL: https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis
+  - source review metadata:
+    - catalogue review status: `pending-human-publication`
+    - source content version: `0.2.0`
+    - source reviewed date: `null`
+    - source reviewer: `null`
+    - source review notes: Agent-authored draft. Clinical/content owner must review applicability, wording, and sources before publication.
+  - blank human decision fields:
+    - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+    - Qualified reviewer identity: `________________`
+    - Reviewer qualification: `________________`
+    - Review date (ISO 8601): `________________`
+    - Reviewed content version: `________________` (source content version: `0.2.0`)
+    - Reviewer notes: `________________`
+  ### Guidance item `guidance.hdl-c.screening-us-male`
+  - label: Adult screening reference point
+  - description: A population screening reference point from an identified authority. It is not a personal target and does not replace the laboratory interval.
+  - thresholds:
+    - `>=` `40` `mg/dL`
+  - applicability:
+    - population: `adults`
+    - jurisdiction: `US`
+    - context: `screening`
+    - purpose: `null`
+    - sex: `male`
+    - fasting: `any`
+    - specimen: `null`
+    - limitations:
+      - `This cited threshold applies only when the report context is male.`
+  - disagreement: Authorities use context-dependent thresholds; this baseline records the cited screening point without resolving it into a personal target.
+  - authority: CDC and NHLBI/NIH
+  - publication version: `CDC-2024-05-15; NHLBI-current-page`
+  - review date: `null`
+  - unit: `mg/dL`
+  - boundary semantics: `sex-specific`
+  - source metadata and links:
+    - [source.cdc.ldl-hdl-triglycerides — LDL and HDL Cholesterol and Triglycerides](https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html)
+      - publisher: Centers for Disease Control and Prevention
+      - publication date: `2024-05-15`
+      - accessed date: `2026-08-24`
+      - source kind: `public-health-authority`
+      - URL: https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html
+    - [source.nhlbi.blood-cholesterol-diagnosis — Blood Cholesterol — Diagnosis](https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis)
+      - publisher: National Heart, Lung, and Blood Institute / NIH
+      - publication date: `null`
+      - accessed date: `2026-08-24`
+      - source kind: `public-health-authority`
+      - URL: https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis
+  - source review metadata:
+    - catalogue review status: `pending-human-publication`
+    - source content version: `0.2.0`
+    - source reviewed date: `null`
+    - source reviewer: `null`
+    - source review notes: Agent-authored draft. Clinical/content owner must review applicability, wording, and sources before publication.
+  - blank human decision fields:
+    - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+    - Qualified reviewer identity: `________________`
+    - Reviewer qualification: `________________`
+    - Review date (ISO 8601): `________________`
+    - Reviewed content version: `________________` (source content version: `0.2.0`)
+    - Reviewer notes: `________________`
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## 8. `biomarker.hematocrit` — Hematocrit
+- canonical label: Hematocrit
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `%`
+- accepted units:
+  - `%`
+  - `L/L`
+- accepted specimens:
+  - `blood`
+  - `unknown`
+- specimen compatibility groups:
+  1. `blood`
+  2. `unknown`
+- aliases:
+  - `hematocrit`
+  - `haematocrit`
+  - `hct`
+  - `packed cell volume`
+  - `pcv`
+  - `packed-cell volume`
+  - `hämatokrit`
+  - `hématocrite`
+  - `hematocrito`
+  - `ematocrito`
+  - `hematocriet`
+  - `hematokritas`
+  - `hematokryt`
+- unsafe aliases:
+  - `hemoglobin`
+  - `mean corpuscular volume`
+  - `mcv`
+  - `red blood cell count`
+  - `rbc`
+- method/specimen constraints:
+  - policy version: `1.0.0`
+  - kind: `method-agnostic`
+  - allowed methods:
+    - (none encoded)
+  - unsafe method patterns:
+    - `hemoglobin`
+    - `mean corpuscular volume`
+    - `mcv`
+    - `red blood cell count`
+    - `rbc`
+  - rationale: The entry is hematocrit or packed-cell volume; neighboring CBC analytes are distinct measurements.
+  - method profiles: (none encoded)
+- exact unit conversions:
+  | From | To | Factor | Offset | Authority source |
+  | --- | --- | ---: | ---: | --- |
+  | `L/L` | `%` | `100` | `0` | [source.nist.si-percentage-definitions — NIST Guide to the SI, Chapter 7: Expressing Values of Quantities](https://www.nist.gov/pml/special-publication-811/nist-guide-si-chapter-7-rules-and-style-conventions-expressing-values) |
+  | `%` | `L/L` | `0.01` | `0` | [source.nist.si-percentage-definitions — NIST Guide to the SI, Chapter 7: Expressing Values of Quantities](https://www.nist.gov/pml/special-publication-811/nist-guide-si-chapter-7-rules-and-style-conventions-expressing-values) |
+- explanation (source copy; not approved for publication): Measures the fraction of whole blood occupied by red blood cells. It is commonly reported in a complete blood count. Hydration, altitude, pregnancy, specimen handling, and laboratory method can affect the result; the issuing laboratory interval remains primary.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.medlineplus.complete-blood-count — Complete Blood Count (CBC)](https://medlineplus.gov/lab-tests/complete-blood-count-cbc/)
+    - publisher: MedlinePlus, U.S. National Library of Medicine
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://medlineplus.gov/lab-tests/complete-blood-count-cbc/
+  - [source.medlineplus.hematocrit-test — Hematocrit Test](https://medlineplus.gov/lab-tests/hematocrit-test/)
+    - publisher: MedlinePlus, U.S. National Library of Medicine
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://medlineplus.gov/lab-tests/hematocrit-test/
+  - [source.nist.si-percentage-definitions — NIST Guide to the SI, Chapter 7: Expressing Values of Quantities](https://www.nist.gov/pml/special-publication-811/nist-guide-si-chapter-7-rules-and-style-conventions-expressing-values)
+    - publisher: National Institute of Standards and Technology
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `reference`
+    - URL: https://www.nist.gov/pml/special-publication-811/nist-guide-si-chapter-7-rules-and-style-conventions-expressing-values
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. A qualified content owner must review wording, applicability, method identity, disagreements, and sources before publication.
+- guidance items:
+  - (none encoded)
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## 9. `biomarker.hemoglobin` — Hemoglobin
+- canonical label: Hemoglobin
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `g/dL`
+- accepted units:
+  - `g/dL`
+  - `g/L`
+- accepted specimens:
+  - `blood`
+  - `unknown`
+- specimen compatibility groups:
+  1. `blood`
+  2. `unknown`
+- aliases:
+  - `hemoglobin`
+  - `haemoglobin`
+  - `hgb`
+  - `hb`
+  - `hemoglobin concentration`
+  - `hämoglobin`
+  - `hämoglobinwert`
+  - `hémoglobine`
+  - `hemoglobina`
+  - `emoglobina`
+  - `hemoglobine`
+  - `hemoglobinas`
+- unsafe aliases:
+  - `hemoglobin a1c`
+  - `glycated hemoglobin`
+  - `glycosylated hemoglobin`
+  - `carboxyhemoglobin`
+  - `methemoglobin`
+  - `fetal hemoglobin`
+  - `hemoglobin variant`
+- method/specimen constraints:
+  - policy version: `1.0.0`
+  - kind: `method-agnostic`
+  - allowed methods:
+    - (none encoded)
+  - unsafe method patterns:
+    - `hemoglobin a1c`
+    - `glycated hemoglobin`
+    - `glycosylated hemoglobin`
+    - `carboxyhemoglobin`
+    - `methemoglobin`
+    - `fetal hemoglobin`
+    - `hemoglobin variant`
+  - rationale: The entry is whole-blood hemoglobin concentration; glycated, derivative, and variant hemoglobins are distinct measurements.
+  - method profiles: (none encoded)
+- exact unit conversions:
+  | From | To | Factor | Offset | Authority source |
+  | --- | --- | ---: | ---: | --- |
+  | `g/L` | `g/dL` | `0.1` | `0` | [source.nist.si-unit-definitions — NIST SI Units and Metric Prefixes](https://www.nist.gov/pml/owm/si-units-volume) |
+  | `g/dL` | `g/L` | `10` | `0` | [source.nist.si-unit-definitions — NIST SI Units and Metric Prefixes](https://www.nist.gov/pml/owm/si-units-volume) |
+- explanation (source copy; not approved for publication): Measures the concentration of hemoglobin in whole blood. It is commonly reported in a complete blood count and describes one part of the red-cell oxygen-carrying system. Age, sex, pregnancy, altitude, smoking, hydration, specimen handling, and laboratory method can affect the result; the issuing laboratory interval remains primary.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.medlineplus.complete-blood-count — Complete Blood Count (CBC)](https://medlineplus.gov/lab-tests/complete-blood-count-cbc/)
+    - publisher: MedlinePlus, U.S. National Library of Medicine
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://medlineplus.gov/lab-tests/complete-blood-count-cbc/
+  - [source.medlineplus.hemoglobin-test — Hemoglobin Test](https://medlineplus.gov/lab-tests/hemoglobin-test/)
+    - publisher: MedlinePlus, U.S. National Library of Medicine
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://medlineplus.gov/lab-tests/hemoglobin-test/
+  - [source.nist.si-unit-definitions — NIST SI Units and Metric Prefixes](https://www.nist.gov/pml/owm/si-units-volume)
+    - publisher: National Institute of Standards and Technology
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `reference`
+    - URL: https://www.nist.gov/pml/owm/si-units-volume
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. A qualified content owner must review wording, applicability, method identity, disagreements, and sources before publication.
+- guidance items:
+  - (none encoded)
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## 10. `biomarker.ldl_c` — LDL-C
+- canonical label: LDL-C
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `mg/dL`
+- accepted units:
+  - `mg/dL`
+  - `mmol/L`
+- accepted specimens:
+  - `blood`
+  - `serum`
+  - `plasma`
+  - `unknown`
+- specimen compatibility groups:
+  1. `blood`, `serum`, `plasma`
+  2. `unknown`
+- aliases:
+  - `ldl`
+  - `ldl-c`
+  - `ldl cholesterol`
+  - `ldl-cholesterin`
+  - `ldl-cholesterol`
+  - `cholestérol ldl`
+  - `colesterol ldl`
+  - `colesterolo ldl`
+  - `cholesterol ldl`
+  - `mažo tankio lipoproteinų cholesterolis`
+- unsafe aliases:
+  - (none encoded)
+- method/specimen constraints:
+  - (none encoded)
+- exact unit conversions:
+  | From | To | Factor | Offset | Authority source |
+  | --- | --- | ---: | ---: | --- |
+  | `mmol/L` | `mg/dL` | `38.67` | `0` | [source.ahrq.lipid-conversion-factors — Lipid Conversion Factors](https://www.ncbi.nlm.nih.gov/books/NBK83505/) |
+  | `mg/dL` | `mmol/L` | `0.02585983966899405` | `0` | [source.ahrq.lipid-conversion-factors — Lipid Conversion Factors](https://www.ncbi.nlm.nih.gov/books/NBK83505/) |
+- explanation (source copy; not approved for publication): Measures cholesterol carried by low-density lipoproteins. Persistently higher LDL-C is associated with cardiovascular risk; this app does not interpret an individual result.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.ahrq.lipid-conversion-factors — Lipid Conversion Factors](https://www.ncbi.nlm.nih.gov/books/NBK83505/)
+    - publisher: Agency for Healthcare Research and Quality / NCBI Bookshelf
+    - publication date: `2011-10`
+    - accessed date: `2026-08-24`
+    - source kind: `reference`
+    - URL: https://www.ncbi.nlm.nih.gov/books/NBK83505/
+  - [source.cdc.ldl-hdl-triglycerides — LDL and HDL Cholesterol and Triglycerides](https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html)
+    - publisher: Centers for Disease Control and Prevention
+    - publication date: `2024-05-15`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html
+  - [source.nhlbi.blood-cholesterol-diagnosis — Blood Cholesterol — Diagnosis](https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis)
+    - publisher: National Heart, Lung, and Blood Institute / NIH
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. Clinical/content owner must review applicability, wording, and sources before publication.
+- guidance items:
+  ### Guidance item `guidance.ldl-c.screening-us`
+  - label: Adult screening reference point
+  - description: A population screening reference point from an identified authority. It is not a personal target and does not replace the laboratory interval.
+  - thresholds:
+    - `<` `100` `mg/dL`
+  - applicability:
+    - population: `adults`
+    - jurisdiction: `US`
+    - context: `screening`
+    - purpose: `null`
+    - sex: `all`
+    - fasting: `any`
+    - specimen: `null`
+    - limitations:
+      - (none encoded)
+  - disagreement: Authorities use context-dependent thresholds; this baseline records the cited screening point without resolving it into a personal target.
+  - authority: CDC and NHLBI/NIH
+  - publication version: `CDC-2024-05-15; NHLBI-current-page`
+  - review date: `null`
+  - unit: `mg/dL`
+  - boundary semantics: `exclusive`
+  - source metadata and links:
+    - [source.cdc.ldl-hdl-triglycerides — LDL and HDL Cholesterol and Triglycerides](https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html)
+      - publisher: Centers for Disease Control and Prevention
+      - publication date: `2024-05-15`
+      - accessed date: `2026-08-24`
+      - source kind: `public-health-authority`
+      - URL: https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html
+    - [source.nhlbi.blood-cholesterol-diagnosis — Blood Cholesterol — Diagnosis](https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis)
+      - publisher: National Heart, Lung, and Blood Institute / NIH
+      - publication date: `null`
+      - accessed date: `2026-08-24`
+      - source kind: `public-health-authority`
+      - URL: https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis
+  - source review metadata:
+    - catalogue review status: `pending-human-publication`
+    - source content version: `0.2.0`
+    - source reviewed date: `null`
+    - source reviewer: `null`
+    - source review notes: Agent-authored draft. Clinical/content owner must review applicability, wording, and sources before publication.
+  - blank human decision fields:
+    - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+    - Qualified reviewer identity: `________________`
+    - Reviewer qualification: `________________`
+    - Review date (ISO 8601): `________________`
+    - Reviewed content version: `________________` (source content version: `0.2.0`)
+    - Reviewer notes: `________________`
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## 11. `biomarker.mcv` — MCV
+- canonical label: MCV
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `fL`
+- accepted units:
+  - `fL`
+- accepted specimens:
+  - `blood`
+  - `unknown`
+- specimen compatibility groups:
+  1. `blood`
+  2. `unknown`
+- aliases:
+  - `mcv`
+  - `mean corpuscular volume`
+  - `mean cell volume`
+  - `mittleres korpuskuläres volumen`
+  - `volume globulaire moyen`
+  - `volumen corpuscular medio`
+  - `volume corpuscolare medio`
+  - `gemiddeld corpusculair volume`
+  - `średnia objętość krwinki`
+  - `vidutinis eritrocitų tūris`
+- unsafe aliases:
+  - `mean corpuscular hemoglobin`
+  - `mean corpuscular hemoglobin concentration`
+  - `mch`
+  - `mchc`
+  - `red cell distribution width`
+  - `rdw`
+- method/specimen constraints:
+  - policy version: `1.0.0`
+  - kind: `method-agnostic`
+  - allowed methods:
+    - (none encoded)
+  - unsafe method patterns:
+    - `mean corpuscular hemoglobin`
+    - `mean corpuscular hemoglobin concentration`
+    - `mch`
+    - `mchc`
+    - `red cell distribution width`
+    - `rdw`
+  - rationale: The entry is mean corpuscular volume; hemoglobin indices and distribution-width indices are distinct measurements.
+  - method profiles: (none encoded)
+- exact unit conversions:
+  - (none encoded)
+- explanation (source copy; not approved for publication): Measures the average volume of red blood cells and is commonly reported as a red-cell index in a complete blood count. The result reflects the mixture of red-cell populations in the sample and can vary with age, specimen handling, and laboratory method; the issuing laboratory interval remains primary.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.medlineplus.complete-blood-count — Complete Blood Count (CBC)](https://medlineplus.gov/lab-tests/complete-blood-count-cbc/)
+    - publisher: MedlinePlus, U.S. National Library of Medicine
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://medlineplus.gov/lab-tests/complete-blood-count-cbc/
+  - [source.medlineplus.mcv-test — MCV (Mean Corpuscular Volume)](https://medlineplus.gov/lab-tests/mcv-mean-corpuscular-volume/)
+    - publisher: MedlinePlus, U.S. National Library of Medicine
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://medlineplus.gov/lab-tests/mcv-mean-corpuscular-volume/
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. A qualified content owner must review wording, applicability, method identity, disagreements, and sources before publication.
+- guidance items:
+  - (none encoded)
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## 12. `biomarker.total_cholesterol` — Total cholesterol
+- canonical label: Total cholesterol
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `mg/dL`
+- accepted units:
+  - `mg/dL`
+  - `mmol/L`
+- accepted specimens:
+  - `blood`
+  - `serum`
+  - `plasma`
+  - `unknown`
+- specimen compatibility groups:
+  1. `blood`, `serum`, `plasma`
+  2. `unknown`
+- aliases:
+  - `total cholesterol`
+  - `cholesterol total`
+  - `gesamtcholesterin`
+  - `cholestérol total`
+  - `colesterol total`
+  - `colesterolo totale`
+  - `totaal cholesterol`
+  - `cholesterol całkowity`
+  - `bendras cholesterolis`
+- unsafe aliases:
+  - (none encoded)
+- method/specimen constraints:
+  - (none encoded)
+- exact unit conversions:
+  | From | To | Factor | Offset | Authority source |
+  | --- | --- | ---: | ---: | --- |
+  | `mmol/L` | `mg/dL` | `38.67` | `0` | [source.ahrq.lipid-conversion-factors — Lipid Conversion Factors](https://www.ncbi.nlm.nih.gov/books/NBK83505/) |
+  | `mg/dL` | `mmol/L` | `0.02585983966899405` | `0` | [source.ahrq.lipid-conversion-factors — Lipid Conversion Factors](https://www.ncbi.nlm.nih.gov/books/NBK83505/) |
+- explanation (source copy; not approved for publication): Measures the total amount of cholesterol carried in blood. It is commonly included in a lipid panel with LDL-C, HDL-C, and triglycerides. Interpretation depends on the laboratory interval and broader context.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.ahrq.lipid-conversion-factors — Lipid Conversion Factors](https://www.ncbi.nlm.nih.gov/books/NBK83505/)
+    - publisher: Agency for Healthcare Research and Quality / NCBI Bookshelf
+    - publication date: `2011-10`
+    - accessed date: `2026-08-24`
+    - source kind: `reference`
+    - URL: https://www.ncbi.nlm.nih.gov/books/NBK83505/
+  - [source.cdc.ldl-hdl-triglycerides — LDL and HDL Cholesterol and Triglycerides](https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html)
+    - publisher: Centers for Disease Control and Prevention
+    - publication date: `2024-05-15`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html
+  - [source.nhlbi.blood-cholesterol-diagnosis — Blood Cholesterol — Diagnosis](https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis)
+    - publisher: National Heart, Lung, and Blood Institute / NIH
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. Clinical/content owner must review applicability, wording, and sources before publication.
+- guidance items:
+  ### Guidance item `guidance.total-cholesterol.screening-us`
+  - label: Adult screening reference point
+  - description: A population screening reference point from an identified authority. It is not a personal target and does not replace the laboratory interval.
+  - thresholds:
+    - `<` `200` `mg/dL`
+  - applicability:
+    - population: `adults`
+    - jurisdiction: `US`
+    - context: `screening`
+    - purpose: `null`
+    - sex: `all`
+    - fasting: `any`
+    - specimen: `null`
+    - limitations:
+      - (none encoded)
+  - disagreement: Authorities use context-dependent thresholds; this baseline records the cited screening point without resolving it into a personal target.
+  - authority: CDC and NHLBI/NIH
+  - publication version: `CDC-2024-05-15; NHLBI-current-page`
+  - review date: `null`
+  - unit: `mg/dL`
+  - boundary semantics: `exclusive`
+  - source metadata and links:
+    - [source.cdc.ldl-hdl-triglycerides — LDL and HDL Cholesterol and Triglycerides](https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html)
+      - publisher: Centers for Disease Control and Prevention
+      - publication date: `2024-05-15`
+      - accessed date: `2026-08-24`
+      - source kind: `public-health-authority`
+      - URL: https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html
+    - [source.nhlbi.blood-cholesterol-diagnosis — Blood Cholesterol — Diagnosis](https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis)
+      - publisher: National Heart, Lung, and Blood Institute / NIH
+      - publication date: `null`
+      - accessed date: `2026-08-24`
+      - source kind: `public-health-authority`
+      - URL: https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis
+  - source review metadata:
+    - catalogue review status: `pending-human-publication`
+    - source content version: `0.2.0`
+    - source reviewed date: `null`
+    - source reviewer: `null`
+    - source review notes: Agent-authored draft. Clinical/content owner must review applicability, wording, and sources before publication.
+  - blank human decision fields:
+    - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+    - Qualified reviewer identity: `________________`
+    - Reviewer qualification: `________________`
+    - Review date (ISO 8601): `________________`
+    - Reviewed content version: `________________` (source content version: `0.2.0`)
+    - Reviewer notes: `________________`
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## 13. `biomarker.triglycerides` — Triglycerides
+- canonical label: Triglycerides
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `mg/dL`
+- accepted units:
+  - `mg/dL`
+  - `mmol/L`
+- accepted specimens:
+  - `blood`
+  - `serum`
+  - `plasma`
+  - `unknown`
+- specimen compatibility groups:
+  1. `blood`, `serum`, `plasma`
+  2. `unknown`
+- aliases:
+  - `triglycerides`
+  - `triglyceride`
+  - `triglyzeride`
+  - `triglycérides`
+  - `triglicéridos`
+  - `trigliceridi`
+  - `triglyceriden`
+  - `triglicerydy`
+  - `trigliceridai`
+- unsafe aliases:
+  - (none encoded)
+- method/specimen constraints:
+  - (none encoded)
+- exact unit conversions:
+  | From | To | Factor | Offset | Authority source |
+  | --- | --- | ---: | ---: | --- |
+  | `mmol/L` | `mg/dL` | `88.57` | `0` | [source.ahrq.lipid-conversion-factors — Lipid Conversion Factors](https://www.ncbi.nlm.nih.gov/books/NBK83505/) |
+  | `mg/dL` | `mmol/L` | `0.011290504685559446` | `0` | [source.ahrq.lipid-conversion-factors — Lipid Conversion Factors](https://www.ncbi.nlm.nih.gov/books/NBK83505/) |
+- explanation (source copy; not approved for publication): Measures triglycerides, a type of fat transported in blood. Levels can vary with fasting state and other context, so the laboratory interval and collection context remain relevant.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.ahrq.lipid-conversion-factors — Lipid Conversion Factors](https://www.ncbi.nlm.nih.gov/books/NBK83505/)
+    - publisher: Agency for Healthcare Research and Quality / NCBI Bookshelf
+    - publication date: `2011-10`
+    - accessed date: `2026-08-24`
+    - source kind: `reference`
+    - URL: https://www.ncbi.nlm.nih.gov/books/NBK83505/
+  - [source.cdc.ldl-hdl-triglycerides — LDL and HDL Cholesterol and Triglycerides](https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html)
+    - publisher: Centers for Disease Control and Prevention
+    - publication date: `2024-05-15`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html
+  - [source.nhlbi.blood-cholesterol-diagnosis — Blood Cholesterol — Diagnosis](https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis)
+    - publisher: National Heart, Lung, and Blood Institute / NIH
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. Clinical/content owner must review applicability, wording, and sources before publication.
+- guidance items:
+  ### Guidance item `guidance.triglycerides.screening-us`
+  - label: Adult screening reference point
+  - description: A population screening reference point from an identified authority. It is not a personal target and does not replace the laboratory interval.
+  - thresholds:
+    - `<` `150` `mg/dL`
+  - applicability:
+    - population: `adults`
+    - jurisdiction: `US`
+    - context: `screening`
+    - purpose: `null`
+    - sex: `all`
+    - fasting: `any`
+    - specimen: `null`
+    - limitations:
+      - `Fasting status and other collection context can affect interpretation.`
+  - disagreement: Authorities use context-dependent thresholds; this baseline records the cited screening point without resolving it into a personal target.
+  - authority: CDC and NHLBI/NIH
+  - publication version: `CDC-2024-05-15; NHLBI-current-page`
+  - review date: `null`
+  - unit: `mg/dL`
+  - boundary semantics: `exclusive`
+  - source metadata and links:
+    - [source.cdc.ldl-hdl-triglycerides — LDL and HDL Cholesterol and Triglycerides](https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html)
+      - publisher: Centers for Disease Control and Prevention
+      - publication date: `2024-05-15`
+      - accessed date: `2026-08-24`
+      - source kind: `public-health-authority`
+      - URL: https://www.cdc.gov/cholesterol/about/ldl-and-hdl-cholesterol-and-triglycerides.html
+    - [source.nhlbi.blood-cholesterol-diagnosis — Blood Cholesterol — Diagnosis](https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis)
+      - publisher: National Heart, Lung, and Blood Institute / NIH
+      - publication date: `null`
+      - accessed date: `2026-08-24`
+      - source kind: `public-health-authority`
+      - URL: https://www.nhlbi.nih.gov/health/blood-cholesterol/diagnosis
+  - source review metadata:
+    - catalogue review status: `pending-human-publication`
+    - source content version: `0.2.0`
+    - source reviewed date: `null`
+    - source reviewer: `null`
+    - source review notes: Agent-authored draft. Clinical/content owner must review applicability, wording, and sources before publication.
+  - blank human decision fields:
+    - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+    - Qualified reviewer identity: `________________`
+    - Reviewer qualification: `________________`
+    - Review date (ISO 8601): `________________`
+    - Reviewed content version: `________________` (source content version: `0.2.0`)
+    - Reviewer notes: `________________`
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## 14. `biomarker.vitamin_b12_total` — Total vitamin B12
+- canonical label: Total vitamin B12
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `pg/mL`
+- accepted units:
+  - `pg/mL`
+  - `pmol/L`
+- accepted specimens:
+  - `serum`
+  - `plasma`
+- specimen compatibility groups:
+  1. `serum`, `plasma`
+- aliases:
+  - `vitamin b12`
+  - `vitamin b-12`
+  - `serum vitamin b12`
+  - `plasma vitamin b12`
+  - `total vitamin b12`
+  - `total cobalamin`
+  - `cobalamin`
+  - `vitamine b12`
+  - `vitamina b12`
+  - `vitamina b12 totale`
+  - `witamina b12`
+  - `kobalamina`
+- unsafe aliases:
+  - `active b12`
+  - `holotranscobalamin`
+  - `holo tc`
+  - `holo-transcobalamin`
+  - `active cobalamin`
+- method/specimen constraints:
+  - policy version: `1.0.0`
+  - kind: `requires-explicit-method`
+  - allowed methods:
+    - `immunoassay`
+    - `chemiluminescence`
+    - `eclia`
+    - `elisa`
+  - unsafe method patterns:
+    - (none encoded)
+  - rationale: Total vitamin B12 is retained conservatively when the source explicitly identifies a supported assay method.
+  - method profiles: (none encoded)
+- exact unit conversions:
+  | From | To | Factor | Offset | Authority source |
+  | --- | --- | ---: | ---: | --- |
+  | `pmol/L` | `pg/mL` | `1.3550135501355014` | `0` | [source.nih.ods.vitamin-b12-health-professional — Vitamin B12 — Health Professional Fact Sheet](https://ods.od.nih.gov/factsheets/VitaminB12-HealthProfessional/) |
+  | `pg/mL` | `pmol/L` | `0.738` | `0` | [source.nih.ods.vitamin-b12-health-professional — Vitamin B12 — Health Professional Fact Sheet](https://ods.od.nih.gov/factsheets/VitaminB12-HealthProfessional/) |
+- explanation (source copy; not approved for publication): Measures total vitamin B12 (cobalamin) in serum or plasma. Values can vary by method and laboratory; active B12 and related metabolites are distinct measurements, so this result alone does not resolve status.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.nih.ods.vitamin-b12-health-professional — Vitamin B12 — Health Professional Fact Sheet](https://ods.od.nih.gov/factsheets/VitaminB12-HealthProfessional/)
+    - publisher: National Institutes of Health, Office of Dietary Supplements
+    - publication date: `2025-07-02`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://ods.od.nih.gov/factsheets/VitaminB12-HealthProfessional/
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. A qualified content owner must review wording, applicability, method identity, disagreements, and sources before publication.
+- guidance items:
+  - (none encoded)
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## 15. `biomarker.vitamin_d_total` — Total 25-hydroxyvitamin D
+- canonical label: Total 25-hydroxyvitamin D
+- catalogue version: `0.2.0`
+- value type: `numeric`
+- canonical unit: `ng/mL`
+- accepted units:
+  - `ng/mL`
+  - `nmol/L`
+- accepted specimens:
+  - `serum`
+- specimen compatibility groups:
+  1. `serum`
+- aliases:
+  - `25-oh vitamin d`
+  - `25-oh-vitamin d`
+  - `25 hydroxyvitamin d`
+  - `25-hydroxyvitamin d`
+  - `25 oh vitamin d`
+  - `25(oh)d`
+  - `25-oh d`
+  - `total 25-hydroxyvitamin d`
+  - `calcidiol`
+  - `25-hydroxyvitamine d`
+  - `25-hidroxivitamina d`
+  - `25-idrossivitamina d`
+  - `25-hydroksywitamina d`
+  - `25-hidroksivitaminas d`
+- unsafe aliases:
+  - `vitamin d2`
+  - `vitamin d3`
+  - `ergocalciferol`
+  - `cholecalciferol`
+  - `1,25-dihydroxyvitamin d`
+  - `1,25-oh vitamin d`
+  - `calcitriol`
+  - `vitamin d total`
+  - `total vitamin d`
+- method/specimen constraints:
+  - policy version: `1.0.0`
+  - kind: `requires-explicit-method`
+  - allowed methods:
+    - `lc-ms/ms`
+    - `lc-ms`
+    - `immunoassay`
+    - `chemiluminescence`
+    - `clia`
+    - `elisa`
+  - unsafe method patterns:
+    - (none encoded)
+  - rationale: Total 25-hydroxyvitamin D is retained conservatively when the source explicitly identifies a supported assay method.
+  - method profiles: (none encoded)
+- exact unit conversions:
+  | From | To | Factor | Offset | Authority source |
+  | --- | --- | ---: | ---: | --- |
+  | `nmol/L` | `ng/mL` | `0.4` | `0` | [source.nih.ods.vitamin-d-health-professional — Vitamin D — Health Professional Fact Sheet](https://ods.od.nih.gov/factsheets/VITAMIND-HealthProfessional/) |
+  | `ng/mL` | `nmol/L` | `2.5` | `0` | [source.nih.ods.vitamin-d-health-professional — Vitamin D — Health Professional Fact Sheet](https://ods.od.nih.gov/factsheets/VITAMIND-HealthProfessional/) |
+- explanation (source copy; not approved for publication): Measures total 25-hydroxyvitamin D [25(OH)D], the main serum indicator used when assessing vitamin D status. It is distinct from 1,25-dihydroxyvitamin D; assay variability and differing authority interpretations remain relevant.
+- entry limitations: see the exact explanation, method rationale, unsafe aliases, specimen groups, and any guidance limitations above; no separate entry-level limitations field is encoded.
+- entry disagreements: no separate entry-level disagreement field is encoded; guidance disagreements are preserved below.
+- source metadata and links:
+  - [source.nih.ods.vitamin-d-health-professional — Vitamin D — Health Professional Fact Sheet](https://ods.od.nih.gov/factsheets/VITAMIND-HealthProfessional/)
+    - publisher: National Institutes of Health, Office of Dietary Supplements
+    - publication date: `null`
+    - accessed date: `2026-08-24`
+    - source kind: `public-health-authority`
+    - URL: https://ods.od.nih.gov/factsheets/VITAMIND-HealthProfessional/
+- source review metadata:
+  - catalogue review status: `pending-human-publication`
+  - source content version: `0.2.0`
+  - source reviewed date: `null`
+  - source reviewer: `null`
+  - source review notes: Agent-authored draft. A qualified content owner must review wording, applicability, method identity, disagreements, and sources before publication.
+- guidance items:
+  - (none encoded)
+- blank human decision fields:
+  - **Human decision (leave blank; select exactly one later):** `________________` (`approve` / `revise` / `withhold`)
+  - Qualified reviewer identity: `________________`
+  - Reviewer qualification: `________________`
+  - Review date (ISO 8601): `________________`
+  - Reviewed content version: `________________` (source content version: `0.2.0`)
+  - Reviewer notes: `________________`
+
+## Returning a completed review
+
+The authorized reviewer should return a copy of this packet through the maintainer-approved review channel, with exactly one `approve`, `revise`, or `withhold` decision for every entry and every guidance item, plus identity, qualification, review date, reviewed content version, and notes. Do not change the catalogue manifest, source modules, generated artifact, signatures, or approval fields as part of returning this packet. A later implementation ticket may apply explicit human decisions; until then, the checked-in catalogue remains `review-pending`.
+
+Generated by `packages/catalogue/scripts/catalogue-review-packet.ts`; do not edit the checked-in packet by hand.
+
+<!-- prettier-ignore-end -->

@@ -9,6 +9,29 @@ build-verified input; regenerate it when source content changes:
 npm run catalogue:build --workspace=@alyte/catalogue
 ```
 
+The qualified-human review packet is generated from the same deterministic source artifact. It is
+human-readable, includes every launch Biomarker and every encoded General Guidance item exactly
+once, and intentionally remains pending until an authorized reviewer records decisions:
+
+```sh
+npm run catalogue:review-packet --workspace=@alyte/catalogue
+```
+
+The checked-in packet is `packages/catalogue/review/catalogue-review-packet.md`. The catalogue
+package test (and therefore the root `npm run ci`) performs a non-mutating check that both the
+generated artifact and this packet match current source data:
+
+```sh
+npm run catalogue:review-packet:freshness --workspace=@alyte/catalogue
+```
+
+An authorized reviewer returns a copy of the packet through the maintainer-approved review
+channel, filling exactly one `approve`, `revise`, or `withhold` field for each entry and each
+guidance item, together with identity, qualification, date, content version, and notes. The
+reviewer does not edit source, manifest, generated artifact, signature, or approval status. A
+later maintainer ticket applies explicit human decisions; signing remains integrity provenance,
+not medical-content approval.
+
 The default development artifact may be unsigned and review-pending. That state is explicit in its
 manifest. Production/release consumers must call
 `validateCatalogueArtifact` with `environment: 'production'` or `'release'` and configured trusted
