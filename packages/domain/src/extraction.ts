@@ -237,6 +237,7 @@ export type ExtractionConfirmationPlan = {
     readonly measurements: readonly {
       readonly id: string;
       readonly biomarkerId: CanonicalId | null;
+      readonly panelLabel: string | null;
       readonly label: string;
       readonly value: MeasurementValue;
       readonly valueString: string;
@@ -884,6 +885,7 @@ export function buildExtractionConfirmationPlan(
     group.measurements.push({
       id: ids.measurement(row.id),
       biomarkerId: row.proposedBiomarkerId,
+      panelLabel: row.panelLabel,
       label: row.proposedLabel.trim() || row.sourceLabel,
       value: row.proposedValue,
       valueString:

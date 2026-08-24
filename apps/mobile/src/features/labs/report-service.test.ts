@@ -965,15 +965,25 @@ describe('protected Lab Report import lifecycle', () => {
       originalPath: imported.originalPath,
       importState: 'imported',
       pageCount: 1,
+      pages: [{ pageIndex: 0, derivedPath: 'protected://working-pages/shared-page.png' }],
       importedAt: '2026-08-22T10:00:00.000Z',
+    });
+    files.files.set('protected://working-pages/shared-page.png', {
+      hash: 'shared-page-hash',
+      size: 10,
+    });
+    await repository.updateReport(imported.id, {
+      pages: [{ pageIndex: 0, derivedPath: 'protected://working-pages/shared-page.png' }],
     });
     assert.equal(second.originalPath, imported.originalPath);
     await service.deleteReport(imported.id);
     assert.equal(await files.exists(imported.originalPath!), true);
+    assert.equal(await files.exists('protected://working-pages/shared-page.png'), true);
     assert.equal((await repository.getReport(imported.id))?.importState, 'deleted');
     assert.equal((await repository.getReport(second.id))?.importState, 'imported');
     await service.deleteReport(second.id);
     assert.equal(await files.exists(imported.originalPath!), false);
+    assert.equal(await files.exists('protected://working-pages/shared-page.png'), false);
   });
 
   test('deletion intent survives a file cleanup failure and remains retryable', async () => {

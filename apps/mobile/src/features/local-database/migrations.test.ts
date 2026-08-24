@@ -297,6 +297,35 @@ async function createReleasedV4Fixture(database: SqliteDatabase): Promise<void> 
 }
 
 describe('local schema forward migrations', () => {
+  for (let releasedVersion = 1; releasedVersion <= 8; releasedVersion += 1) {
+    test(`upgrades released v${releasedVersion} to v9`, async () => {
+      const database = new NodeSqliteDatabase(temporaryDatabase());
+      await createBoundary(
+        database,
+        LOCAL_MIGRATIONS.filter((migration) => migration.version <= releasedVersion),
+      ).initialize();
+      await createBoundary(database).initialize();
+      const version = await database.getAllAsync<{ version: number }>(
+        'SELECT MAX(version) AS version FROM schema_migrations;',
+      );
+      assert.equal(version[0]?.version, 9);
+      const columns = await database.getAllAsync<{ name: string }>(
+        'PRAGMA table_info(measurements);',
+      );
+      assert.ok(columns.some((column) => column.name === 'panel_label'));
+      assert.ok(columns.some((column) => column.name === 'original_state_json'));
+      assert.equal(
+        (
+          await database.getAllAsync(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'lab_combined_deletions';",
+          )
+        ).length,
+        1,
+      );
+      await database.closeAsync();
+    });
+  }
+
   test('upgrades populated released v4 data through v6 and repositories can read it', async () => {
     const database = new NodeSqliteDatabase(temporaryDatabase());
     await createReleasedV4Fixture(database);
@@ -447,7 +476,7 @@ describe('local schema forward migrations', () => {
     );
     assert.equal(versionRows[0]?.version, CURRENT_SCHEMA_VERSION);
     const requiredTables = await firstDatabase.getAllAsync<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('lab_reports', 'lab_records', 'measurements', 'intake_events', 'intake_components', 'cloud_jobs', 'app_preferences', 'intake_capture_recovery', 'extraction_drafts', 'extraction_draft_rows');",
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('lab_reports', 'lab_records', 'measurements', 'intake_events', 'intake_components', 'cloud_jobs', 'app_preferences', 'intake_capture_recovery', 'extraction_drafts', 'extraction_draft_rows', 'lab_combined_deletions');",
     );
     assert.deepEqual(requiredTables.map((table) => table.name).sort(), [
       'app_preferences',
@@ -457,6 +486,7 @@ describe('local schema forward migrations', () => {
       'intake_capture_recovery',
       'intake_components',
       'intake_events',
+      'lab_combined_deletions',
       'lab_records',
       'lab_reports',
       'measurements',

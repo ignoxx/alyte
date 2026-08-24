@@ -19,7 +19,7 @@ type CallbackMigration = {
 
 export type Migration = SqlMigration | CallbackMigration;
 
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 const INTAKE_CAPTURE_RECOVERY_DDL = `
   CREATE TABLE IF NOT EXISTS intake_capture_recovery (
@@ -359,6 +359,33 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
         if (!existing.has(name))
           await database.execAsync(`ALTER TABLE extraction_draft_rows ADD COLUMN ${name} ${type};`);
       }
+    },
+  },
+  {
+    version: 9,
+    apply: async (database) => {
+      const columns = await database.getAllAsync<{ name: string }>(
+        'PRAGMA table_info(measurements);',
+      );
+      if (columns.length > 0 && !columns.some((column) => column.name === 'panel_label')) {
+        await database.execAsync('ALTER TABLE measurements ADD COLUMN panel_label TEXT;');
+      }
+      if (columns.length > 0 && !columns.some((column) => column.name === 'original_state_json')) {
+        await database.execAsync('ALTER TABLE measurements ADD COLUMN original_state_json TEXT;');
+      }
+      await database.execAsync(`
+        CREATE TABLE IF NOT EXISTS lab_combined_deletions (
+          id TEXT PRIMARY KEY NOT NULL,
+          record_id TEXT NOT NULL,
+          report_id TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('requested', 'source-complete', 'complete')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(record_id, report_id)
+        );
+        CREATE INDEX IF NOT EXISTS lab_combined_deletions_state_idx
+          ON lab_combined_deletions(state, updated_at ASC);
+      `);
     },
   },
 ];

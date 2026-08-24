@@ -74,6 +74,8 @@ type MeasurementRow = {
   current_unit: unknown;
   current_reference_interval: unknown;
   current_flag: unknown;
+  panel_label: unknown;
+  original_state_json: unknown;
   source_page_index: unknown;
   source_bbox_json: unknown;
   source_orientation: unknown;
@@ -504,14 +506,33 @@ export function decodeMeasurementRow(row: MeasurementRow): Omit<Measurement, 'co
   const current = snapshotFromUnknown(
     parseJson(row.current_value_json, 'current measurement value'),
   );
+  const source = sourceLocationFromUnknown(row);
+  const provenance = enumValue(row.provenance, provenances, 'measurement provenance');
+  const reviewState = enumValue(row.review_state, reviewStates, 'measurement review state');
+  const biomarkerId =
+    row.biomarker_id === null || row.biomarker_id === undefined
+      ? null
+      : canonicalId(requiredString(row.biomarker_id, 'biomarker id'));
+  const specimenType = enumValue(row.specimen_type, specimenTypes, 'measurement specimen type');
+  const originalState =
+    row.original_state_json === null || row.original_state_json === undefined
+      ? { biomarkerId, specimenType, snapshot: original, reviewState, provenance, source }
+      : correctionStateFromUnknown(
+          parseJson(row.original_state_json, 'original measurement state'),
+          {
+            biomarkerId,
+            specimenType,
+            reviewState,
+            provenance,
+            source,
+          },
+        );
   return {
     id: requiredString(row.id, 'measurement id'),
     labRecordId: requiredString(row.lab_record_id, 'measurement lab record id'),
-    biomarkerId:
-      row.biomarker_id === null || row.biomarker_id === undefined
-        ? null
-        : canonicalId(requiredString(row.biomarker_id, 'biomarker id')),
-    specimenType: enumValue(row.specimen_type, specimenTypes, 'measurement specimen type'),
+    biomarkerId,
+    specimenType,
+    panelLabel: nullableString(row.panel_label, 'measurement panel label'),
     original: {
       ...original,
       label: requiredString(row.original_label, 'original measurement label'),
@@ -523,6 +544,7 @@ export function decodeMeasurementRow(row: MeasurementRow): Omit<Measurement, 'co
       ),
       flag: nullableString(row.original_flag, 'original laboratory flag'),
     },
+    originalState,
     current: {
       ...current,
       label: requiredString(row.current_label, 'current measurement label'),
@@ -537,9 +559,9 @@ export function decodeMeasurementRow(row: MeasurementRow): Omit<Measurement, 'co
       ),
       flag: nullableString(row.current_flag, 'current laboratory flag'),
     },
-    provenance: enumValue(row.provenance, provenances, 'measurement provenance'),
-    reviewState: enumValue(row.review_state, reviewStates, 'measurement review state'),
-    source: sourceLocationFromUnknown(row),
+    provenance,
+    reviewState,
+    source,
   };
 }
 
@@ -654,7 +676,18 @@ export type LabRepository = {
   createRecord(input: CreateLabRecordInput): Promise<LabRecord>;
   updateRecord(id: string, input: UpdateLabRecordInput): Promise<LabRecord>;
   correctMeasurement(id: string, input: CorrectMeasurementInput): Promise<Measurement>;
+  deleteMeasurement(id: string): Promise<void>;
   deleteRecord(id: string): Promise<void>;
+  requestCombinedDeletion(recordId: string, reportId: string): Promise<void>;
+  markCombinedDeletionSourceComplete(recordId: string, reportId: string): Promise<void>;
+  completeCombinedDeletion(recordId: string, reportId: string): Promise<void>;
+  listPendingCombinedDeletions(): Promise<
+    readonly {
+      recordId: string;
+      reportId: string;
+      state: 'requested' | 'source-complete';
+    }[]
+  >;
   createExtractionDraft(input: {
     readonly id?: string;
     readonly reportId: string;
@@ -724,7 +757,7 @@ export function createLabRepository(
         original_label, original_value_string, original_value_json, original_unit,
         original_reference_interval, original_flag, current_label, current_value_string,
         current_value_json, current_unit, current_reference_interval, current_flag,
-        source_page_index, source_bbox_json, source_orientation,
+        panel_label, original_state_json, source_page_index, source_bbox_json, source_orientation,
         provenance, review_state, created_at, updated_at
        FROM measurements WHERE lab_record_id = ? ORDER BY created_at ASC;`,
       recordId,
@@ -739,6 +772,12 @@ export function createLabRepository(
         );
         return {
           ...measurement,
+          originalState:
+            row.original_state_json === null || row.original_state_json === undefined
+              ? correctionRows[0] === undefined
+                ? measurement.originalState
+                : decodeCorrectionRow(correctionRows[0], measurement).previous
+              : measurement.originalState,
           corrections: correctionRows.map((correctionRow) =>
             decodeCorrectionRow(correctionRow, measurement),
           ),
@@ -795,9 +834,9 @@ export function createLabRepository(
             id, lab_record_id, biomarker_id, specimen_type, original_label, original_value_string,
             original_value_json, original_unit, original_reference_interval, original_flag,
             current_label, current_value_string, current_value_json, current_unit,
-            current_reference_interval, current_flag, source_page_index, source_bbox_json,
+            current_reference_interval, current_flag, panel_label, original_state_json, source_page_index, source_bbox_json,
             source_orientation, provenance, review_state, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
           measurementId,
           recordId,
           measurementInput.biomarkerId ?? null,
@@ -814,6 +853,15 @@ export function createLabRepository(
           snapshot.unit,
           snapshot.referenceInterval,
           snapshot.flag,
+          measurementInput.panelLabel ?? null,
+          JSON.stringify({
+            biomarkerId: measurementInput.biomarkerId ?? null,
+            specimenType: measurementInput.specimenType ?? input.specimenType ?? 'unknown',
+            snapshot: original,
+            reviewState,
+            provenance,
+            source: measurementInput.source ?? null,
+          }),
           measurementInput.source?.pageIndex ?? null,
           measurementInput.source === undefined || measurementInput.source === null
             ? null
@@ -881,7 +929,7 @@ export function createLabRepository(
           original_label, original_value_string, original_value_json, original_unit,
           original_reference_interval, original_flag, current_label, current_value_string,
           current_value_json, current_unit, current_reference_interval, current_flag,
-          source_page_index, source_bbox_json, source_orientation,
+          panel_label, original_state_json, source_page_index, source_bbox_json, source_orientation,
           provenance, review_state, created_at, updated_at
          FROM measurements WHERE id = ?;`,
         id,
@@ -1027,6 +1075,99 @@ export function createLabRepository(
         throw new Error('Lab Record deletion left orphaned correction history');
       }
     });
+  }
+
+  async function deleteMeasurement(id: string): Promise<void> {
+    await initialize();
+    await withWrite(async () => {
+      const result = await database.runAsync('DELETE FROM measurements WHERE id = ?;', id);
+      if (result.changes > 1) throw new Error('Measurement deletion affected multiple rows');
+      const corrections = await database.getAllAsync<{ id: string }>(
+        'SELECT id FROM measurement_corrections WHERE measurement_id = ?;',
+        id,
+      );
+      if (corrections.length > 0) throw new Error('Measurement deletion left correction history');
+    });
+  }
+
+  async function assertRecordReportLink(recordId: string, reportId: string): Promise<void> {
+    const rows = await database.getAllAsync<{ lab_report_id: unknown }>(
+      'SELECT lab_report_id FROM lab_records WHERE id = ?;',
+      recordId,
+    );
+    if (rows[0]?.lab_report_id !== reportId)
+      throw new Error('Lab Record source association changed during deletion');
+  }
+
+  async function requestCombinedDeletion(recordId: string, reportId: string): Promise<void> {
+    await initialize();
+    await withWrite(async () => {
+      await assertRecordReportLink(recordId, reportId);
+      const timestamp = now();
+      await database.runAsync(
+        `INSERT INTO lab_combined_deletions (id, record_id, report_id, state, created_at, updated_at)
+         VALUES (?, ?, ?, 'requested', ?, ?)
+         ON CONFLICT(record_id, report_id) DO UPDATE SET updated_at = excluded.updated_at;`,
+        makeId('lab-combined-deletion'),
+        recordId,
+        reportId,
+        timestamp,
+        timestamp,
+      );
+    });
+  }
+
+  async function markCombinedDeletionSourceComplete(
+    recordId: string,
+    reportId: string,
+  ): Promise<void> {
+    await initialize();
+    await withWrite(async () => {
+      await assertRecordReportLink(recordId, reportId);
+      const result = await database.runAsync(
+        `UPDATE lab_combined_deletions SET state = 'source-complete', updated_at = ?
+         WHERE record_id = ? AND report_id = ? AND state IN ('requested', 'source-complete');`,
+        now(),
+        recordId,
+        reportId,
+      );
+      if (result.changes !== 1) throw new Error('Combined deletion intent was not found');
+    });
+  }
+
+  async function completeCombinedDeletion(recordId: string, reportId: string): Promise<void> {
+    await initialize();
+    await withWrite(async () => {
+      const result = await database.runAsync(
+        `UPDATE lab_combined_deletions SET state = 'complete', updated_at = ?
+         WHERE record_id = ? AND report_id = ? AND state = 'source-complete';`,
+        now(),
+        recordId,
+        reportId,
+      );
+      if (result.changes !== 1) throw new Error('Combined deletion could not be completed');
+    });
+  }
+
+  async function listPendingCombinedDeletions() {
+    await initialize();
+    const rows = await database.getAllAsync<{
+      record_id: unknown;
+      report_id: unknown;
+      state: unknown;
+    }>(
+      `SELECT record_id, report_id, state FROM lab_combined_deletions
+       WHERE state IN ('requested', 'source-complete') ORDER BY created_at ASC;`,
+    );
+    return rows.map((row) => ({
+      recordId: requiredString(row.record_id, 'combined deletion record id'),
+      reportId: requiredString(row.report_id, 'combined deletion report id'),
+      state: enumValue(
+        row.state,
+        ['requested', 'source-complete'] as const,
+        'combined deletion state',
+      ),
+    }));
   }
 
   const extractionDraftColumns = `id, report_id, state, ocr_contract_version, parser_version,
@@ -1247,9 +1388,9 @@ export function createLabRepository(
               id, lab_record_id, biomarker_id, specimen_type, original_label, original_value_string,
               original_value_json, original_unit, original_reference_interval, original_flag,
               current_label, current_value_string, current_value_json, current_unit,
-              current_reference_interval, current_flag, source_page_index, source_bbox_json,
+              current_reference_interval, current_flag, panel_label, original_state_json, source_page_index, source_bbox_json,
               source_orientation, provenance, review_state, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
             measurement.id,
             planned.id,
             measurement.biomarkerId,
@@ -1273,6 +1414,15 @@ export function createLabRepository(
             measurement.unit,
             measurement.referenceInterval,
             measurement.flag,
+            measurement.panelLabel,
+            JSON.stringify({
+              biomarkerId: measurement.biomarkerId,
+              specimenType: planned.specimenType,
+              snapshot: measurement.original,
+              reviewState: measurement.reviewState,
+              provenance: measurement.provenance,
+              source: measurement.source,
+            }),
             measurement.source.pageIndex,
             JSON.stringify({
               ...measurement.source.boundingBox,
@@ -1357,7 +1507,12 @@ export function createLabRepository(
     createRecord,
     updateRecord,
     correctMeasurement,
+    deleteMeasurement,
     deleteRecord,
+    requestCombinedDeletion,
+    markCombinedDeletionSourceComplete,
+    completeCombinedDeletion,
+    listPendingCombinedDeletions,
     createExtractionDraft,
     getExtractionDraft,
     getExtractionDraftForReport,

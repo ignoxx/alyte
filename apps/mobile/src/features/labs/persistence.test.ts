@@ -12,6 +12,7 @@ import {
 } from '@alyte/domain';
 import { CURRENT_SCHEMA_VERSION, createLabRepository, type SqliteDatabase } from './persistence';
 import { ProtectionError, type DatabaseProtection, type ProtectionOptions } from './protection';
+import { createLabsService } from './service';
 
 class NodeSqliteDatabase implements SqliteDatabase {
   readonly databasePath: string;
@@ -163,7 +164,11 @@ describe('protected manual Lab Record persistence', () => {
       reportId: 'report-extraction',
       collectionDate: { kind: 'missing' },
       rows: [
-        ...rows.map((row) => ({ ...row, decision: 'preserve' as const })),
+        ...rows.map((row) => ({
+          ...row,
+          panelLabel: 'Synthetic lipid panel',
+          decision: 'preserve' as const,
+        })),
         ...rows.map((row) => ({
           ...row,
           id: `${row.id}-skipped`,
@@ -192,6 +197,7 @@ describe('protected manual Lab Record persistence', () => {
     assert.equal(records[0]?.measurements[0]?.original.valueString, '3,8');
     assert.equal(records[0]?.measurements[0]?.original.value.kind, 'numeric');
     assert.equal(records[0]?.measurements[0]?.current.valueString, '3.8');
+    assert.equal(records[0]?.measurements[0]?.panelLabel, 'Synthetic lipid panel');
     const repeated = await relaunched.repository.confirmExtractionDraft(draft.id);
     assert.deepEqual(
       repeated.map((record) => record.id),
@@ -219,6 +225,10 @@ describe('protected manual Lab Record persistence', () => {
     assert.equal(preservedDraft?.rows[0]?.sourceText, 'LDL-C 3,8 mmol/L');
     assert.equal(preservedDraft?.rows[1]?.decision, 'skip');
     assert.equal(preservedDraft?.rows[1]?.sourceText, 'LDL-C 3,8 mmol/L');
+    assert.equal(
+      (await relaunched.repository.getRecord(records[0]!.id))?.measurements[0]?.panelLabel,
+      'Synthetic lipid panel',
+    );
     await relaunched.repository.close();
   });
 
@@ -444,6 +454,15 @@ describe('protected manual Lab Record persistence', () => {
     assert.equal(reopened?.measurements[0]?.current.unit, 'mg/dL');
     assert.equal(reopened?.measurements[0]?.specimenType, 'serum');
     assert.equal(reopened?.measurements[0]?.reviewState, 'needs-review');
+    assert.equal(
+      reopened?.measurements[0]?.originalState.biomarkerId,
+      canonicalId('biomarker.ldl_c'),
+    );
+    assert.equal(reopened?.measurements[0]?.originalState.specimenType, 'unknown');
+    assert.equal(reopened?.measurements[0]?.originalState.snapshot.valueString, '3.2');
+    assert.deepEqual(reopened?.measurements[0]?.originalState.source?.observationIds, [
+      'manual-source',
+    ]);
     assert.equal(reopened?.measurements[0]?.corrections[0]?.next.snapshot.valueString, '3.8');
     await reopenedRepository.repository.close();
   });
@@ -468,6 +487,137 @@ describe('protected manual Lab Record persistence', () => {
     assert.deepEqual(await repository.getRecord('lab-record-delete'), null);
     assert.equal((await database.getAllAsync('SELECT id FROM measurements')).length, 0);
     assert.equal((await database.getAllAsync('SELECT id FROM measurement_corrections')).length, 0);
+    await repository.close();
+  });
+
+  test('Measurement deletion cascades only its correction chain', async () => {
+    const { repository, database } = createRepository();
+    await repository.createRecord({
+      id: 'lab-record-measurement-delete',
+      collectionDate: { kind: 'missing' },
+      measurements: [
+        {
+          id: 'measurement-delete-one',
+          label: 'Synthetic one',
+          value: { kind: 'numeric', value: 1 },
+        },
+        { id: 'measurement-keep', label: 'Synthetic two', value: { kind: 'numeric', value: 2 } },
+      ],
+    });
+    await repository.correctMeasurement('measurement-delete-one', {
+      value: { kind: 'numeric', value: 3 },
+    });
+    await repository.deleteMeasurement('measurement-delete-one');
+    assert.deepEqual(
+      (await repository.getRecord('lab-record-measurement-delete'))?.measurements.map(
+        (item) => item.id,
+      ),
+      ['measurement-keep'],
+    );
+    assert.equal(
+      (
+        await database.getAllAsync(
+          'SELECT id FROM measurement_corrections WHERE measurement_id = ?',
+          'measurement-delete-one',
+        )
+      ).length,
+      0,
+    );
+    await repository.close();
+  });
+
+  test('combined deletion intent survives restart and revalidates the record-source link', async () => {
+    const { repository, databasePath } = createRepository();
+    await repository.createReport({
+      id: 'report-combined',
+      sourceType: 'pdf',
+      originalFilename: 'synthetic.pdf',
+      mimeType: 'application/pdf',
+      importState: 'imported',
+    });
+    await repository.createRecord({
+      id: 'record-combined',
+      labReportId: 'report-combined',
+      collectionDate: { kind: 'missing' },
+      measurements: [],
+    });
+    await repository.requestCombinedDeletion('record-combined', 'report-combined');
+    await repository.close();
+    const reopened = createRepository(databasePath);
+    assert.deepEqual(await reopened.repository.listPendingCombinedDeletions(), [
+      { recordId: 'record-combined', reportId: 'report-combined', state: 'requested' },
+    ]);
+    await reopened.repository.updateRecord('record-combined', {
+      labReportId: null,
+      collectionDate: { kind: 'missing' },
+      specimenType: 'unknown',
+      laboratoryName: null,
+      notes: null,
+    });
+    await assert.rejects(
+      reopened.repository.markCombinedDeletionSourceComplete('record-combined', 'report-combined'),
+      /association changed/,
+    );
+    await reopened.repository.close();
+  });
+
+  test('deletion plans expose sibling impact and combined cleanup retries without losing records', async () => {
+    const { repository } = createRepository();
+    await repository.createReport({
+      id: 'report-shared-records',
+      sourceType: 'pdf',
+      originalFilename: 'synthetic.pdf',
+      mimeType: 'application/pdf',
+      originalPath: 'protected://original-reports/synthetic.pdf',
+      importState: 'imported',
+    });
+    for (const id of ['record-target', 'record-sibling']) {
+      await repository.createRecord({
+        id,
+        labReportId: 'report-shared-records',
+        collectionDate: { kind: 'missing' },
+        measurements: [
+          {
+            id: `measurement-${id}`,
+            label: 'Synthetic result',
+            value: { kind: 'numeric', value: 1 },
+          },
+        ],
+      });
+    }
+    let failSource = true;
+    const service = createLabsService({
+      repositoryFactory: async () => repository,
+      deleteSource: async (reportId) => {
+        await repository.requestReportDeletion(reportId);
+        if (failSource) {
+          await repository.failReportDeletion(reportId, 'source-cleanup-failed');
+          throw new Error('synthetic cleanup failure');
+        }
+        await repository.completeReportDeletion(reportId);
+      },
+    });
+    const plan = await service.planDeletion({
+      kind: 'record-plus-source',
+      recordId: 'record-target',
+    });
+    assert.deepEqual(plan.linkedRecordIdsAffectedBySourceDeletion, ['record-sibling']);
+    await assert.rejects(
+      service.executeDeletion({ kind: 'record-plus-source', recordId: 'record-target' }),
+      /synthetic cleanup failure/,
+    );
+    assert.notEqual(await repository.getRecord('record-target'), null);
+    assert.equal((await service.getRecordDetail('record-sibling'))?.source.kind, 'deletion-failed');
+    failSource = false;
+    const relaunched = createLabsService({
+      repositoryFactory: async () => repository,
+      deleteSource: async (reportId) =>
+        repository.completeReportDeletion(reportId).then(() => undefined),
+    });
+    await relaunched.listRecords();
+    assert.equal(await repository.getRecord('record-target'), null);
+    assert.notEqual(await repository.getRecord('record-sibling'), null);
+    assert.equal((await service.getRecordDetail('record-sibling'))?.source.kind, 'deleted');
     await repository.close();
   });
 

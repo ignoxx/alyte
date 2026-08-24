@@ -81,6 +81,7 @@ export type LabReportRepository = {
   reconcileInterruptedReports(): Promise<void>;
   listDeletionCandidates(): Promise<readonly LabReport[]>;
   countReportsReferencingPath(path: string, excludingId?: string): Promise<number>;
+  countProtectedPathReferences(path: string, excludingReportId: string): Promise<number>;
   getSanitizedReport(reportId: string): Promise<SanitizedReport | null>;
   saveSanitizedReport(input: CreateSanitizedReportInput): Promise<SanitizedReport>;
   updateSanitizedReport(id: string, input: UpdateSanitizedReportInput): Promise<SanitizedReport>;
@@ -488,13 +489,26 @@ export function createLabReportRepository(
   }
 
   async function completeReportDeletion(id: string): Promise<LabReport> {
-    return updateReport(id, {
-      importState: 'deleted',
-      originalPath: null,
-      deletionState: 'complete',
-      deletionError: null,
-      failureReason: 'user-deleted',
+    await initialize();
+    await withWrite(async () => {
+      const result = await database.runAsync(
+        `UPDATE lab_reports SET import_state = 'deleted', original_path = NULL,
+         deletion_state = 'complete', deletion_error = NULL, failure_reason = 'user-deleted',
+         updated_at = ? WHERE id = ?;`,
+        now(),
+        id,
+      );
+      if (result.changes !== 1) throw new Error('Lab Report deletion completion failed');
+      await database.runAsync(
+        'UPDATE lab_report_pages SET derived_path = NULL WHERE report_id = ?;',
+        id,
+      );
+      // Draft OCR/source payload is not a confirmed user record and must not outlive source deletion.
+      await database.runAsync('DELETE FROM extraction_drafts WHERE report_id = ?;', id);
     });
+    const report = await getReport(id);
+    if (report === null) throw new Error('Deleted Lab Report tombstone was not found');
+    return report;
   }
 
   async function deleteReport(id: string): Promise<void> {
@@ -534,6 +548,32 @@ export function createLabReportRepository(
     const count = rows[0]?.count;
     if (typeof count !== 'number')
       throw new Error('Invalid Lab Report reference count in local database');
+    return count;
+  }
+
+  async function countProtectedPathReferences(
+    path: string,
+    excludingReportId: string,
+  ): Promise<number> {
+    await initialize();
+    const rows = await database.getAllAsync<{ count: unknown }>(
+      `SELECT COUNT(*) AS count FROM (
+         SELECT id FROM lab_reports WHERE original_path = ? AND id <> ? AND import_state <> 'deleted'
+         UNION ALL
+         SELECT id FROM lab_report_pages WHERE derived_path = ? AND report_id <> ?
+         UNION ALL
+         SELECT id FROM sanitized_report_derivatives
+           WHERE artifact_path = ? AND report_id <> ? AND verification_state <> 'deleted'
+       );`,
+      path,
+      excludingReportId,
+      path,
+      excludingReportId,
+      path,
+      excludingReportId,
+    );
+    const count = rows[0]?.count;
+    if (typeof count !== 'number') throw new Error('Invalid protected path reference count');
     return count;
   }
 
@@ -692,6 +732,7 @@ export function createLabReportRepository(
     reconcileInterruptedReports,
     listDeletionCandidates,
     countReportsReferencingPath,
+    countProtectedPathReferences,
     getSanitizedReport,
     saveSanitizedReport,
     updateSanitizedReport,

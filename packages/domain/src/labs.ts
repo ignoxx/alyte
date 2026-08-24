@@ -76,7 +76,10 @@ export type Measurement = {
   readonly labRecordId: string;
   readonly biomarkerId: CanonicalId | null;
   readonly specimenType: SpecimenType;
+  readonly panelLabel: string | null;
   readonly original: MeasurementSnapshot;
+  /** Immutable full state captured when the Measurement first entered confirmed history. */
+  readonly originalState: MeasurementCorrectionState;
   readonly current: MeasurementSnapshot;
   readonly provenance: MeasurementProvenance;
   readonly reviewState: MeasurementReviewState;
@@ -100,6 +103,7 @@ export type CreateMeasurementInput = {
   readonly id?: string;
   readonly biomarkerId?: CanonicalId | null;
   readonly specimenType?: SpecimenType;
+  readonly panelLabel?: string | null;
   readonly label: string;
   readonly value: MeasurementValue;
   readonly valueString?: string;
@@ -112,6 +116,107 @@ export type CreateMeasurementInput = {
   /** Source-shaped value is immutable provenance; current fields remain separately normalized. */
   readonly original?: MeasurementSnapshot;
 };
+
+export type ComparableBiomarkerConstraint = {
+  readonly id: string;
+  readonly specimens: readonly SpecimenType[];
+  readonly units: readonly string[];
+};
+
+export type LabRecordSourceState =
+  | { readonly kind: 'manual' }
+  | { readonly kind: 'retained'; readonly reportId: string }
+  | { readonly kind: 'deletion-pending'; readonly reportId: string }
+  | { readonly kind: 'deletion-failed'; readonly reportId: string }
+  | { readonly kind: 'deleted'; readonly reportId: string };
+
+export type MeasurementSupportState =
+  | { readonly kind: 'comparable-supported'; readonly canonicalId: CanonicalId }
+  | {
+      readonly kind: 'preserved-only';
+      readonly reason:
+        | 'unmapped'
+        | 'unsupported-canonical-id'
+        | 'unconfirmed'
+        | 'non-numeric-value'
+        | 'missing-unit'
+        | 'incompatible-unit'
+        | 'incompatible-specimen';
+    };
+
+export type LabRecordDetail = {
+  readonly id: string;
+  readonly collectionDate: LabDateState;
+  readonly specimenType: SpecimenType;
+  readonly laboratoryName: string | null;
+  readonly source: LabRecordSourceState;
+  readonly chronology: { readonly kind: 'eligible' } | { readonly kind: 'date-missing' };
+  readonly summary: {
+    readonly measurementCount: number;
+    readonly flaggedCount: number;
+    readonly comparableCount: number;
+    readonly preservedOnlyCount: number;
+  };
+  readonly measurements: readonly (Measurement & { readonly support: MeasurementSupportState })[];
+};
+
+export function measurementSupportState(
+  measurement: Measurement,
+  catalogue: readonly ComparableBiomarkerConstraint[],
+): MeasurementSupportState {
+  if (measurement.biomarkerId === null) return { kind: 'preserved-only', reason: 'unmapped' };
+  const entry = catalogue.find((candidate) => candidate.id === measurement.biomarkerId);
+  if (entry === undefined) return { kind: 'preserved-only', reason: 'unsupported-canonical-id' };
+  if (measurement.current.value.kind !== 'numeric')
+    return { kind: 'preserved-only', reason: 'non-numeric-value' };
+  if (measurement.reviewState !== 'confirmed')
+    return { kind: 'preserved-only', reason: 'unconfirmed' };
+  if (measurement.current.unit === null) return { kind: 'preserved-only', reason: 'missing-unit' };
+  if (!entry.units.includes(measurement.current.unit))
+    return { kind: 'preserved-only', reason: 'incompatible-unit' };
+  if (!entry.specimens.includes(measurement.specimenType))
+    return { kind: 'preserved-only', reason: 'incompatible-specimen' };
+  return { kind: 'comparable-supported', canonicalId: measurement.biomarkerId };
+}
+
+export function buildLabRecordDetail(
+  record: LabRecord,
+  source: LabRecordSourceState,
+  catalogue: readonly ComparableBiomarkerConstraint[],
+): LabRecordDetail {
+  if (record.labReportId === null && source.kind !== 'manual') {
+    throw new Error('A manual Lab Record cannot claim report provenance');
+  }
+  if (
+    record.labReportId !== null &&
+    (source.kind === 'manual' || source.reportId !== record.labReportId)
+  ) {
+    throw new Error('Lab Record source provenance does not match its report');
+  }
+  const measurements = record.measurements.map((measurement) => ({
+    ...measurement,
+    support: measurementSupportState(measurement, catalogue),
+  }));
+  const comparableCount = measurements.filter(
+    (measurement) => measurement.support.kind === 'comparable-supported',
+  ).length;
+  return {
+    id: record.id,
+    collectionDate: record.collectionDate,
+    specimenType: record.specimenType,
+    laboratoryName: record.laboratoryName,
+    source,
+    chronology:
+      record.collectionDate.kind === 'known' ? { kind: 'eligible' } : { kind: 'date-missing' },
+    summary: {
+      measurementCount: measurements.length,
+      flaggedCount: measurements.filter((measurement) => measurement.current.flag !== null).length,
+      comparableCount,
+      preservedOnlyCount: measurements.length - comparableCount,
+    },
+    measurements,
+  };
+}
 
 export type CreateLabRecordInput = {
   readonly id?: string;

@@ -422,30 +422,28 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }
     try {
       const sanitized = await reportRepository.getSanitizedReport(report.id);
+      const protectedPaths = [
+        report.originalPath,
+        ...report.pages.map((page) => page.derivedPath),
+        sanitized?.artifactPath ?? null,
+      ].filter((path): path is string => path !== null);
       if (sanitized?.artifactPath !== null && sanitized?.artifactPath !== undefined) {
         await reportRepository.updateSanitizedReport(sanitized.id, {
           verificationState: 'failed',
           failureReason: 'sanitized-delete-pending',
           deletedAt: now(),
         });
-        await fileService.remove(sanitized.artifactPath);
-        if (await fileService.exists(sanitized.artifactPath)) {
-          throw new Error('Sanitized Report remained after deletion');
-        }
       }
-      if (sanitized !== null) await reportRepository.deleteSanitizedReport(sanitized.id);
-      if (report.originalPath !== null) {
-        const references = await reportRepository.countReportsReferencingPath(
-          report.originalPath,
-          report.id,
-        );
+      for (const path of new Set(protectedPaths)) {
+        const references = await reportRepository.countProtectedPathReferences(path, report.id);
         if (references === 0) {
-          await fileService.remove(report.originalPath);
-          if (await fileService.exists(report.originalPath)) {
-            throw new Error('Original Report remained after deletion');
+          await fileService.remove(path);
+          if (await fileService.exists(path)) {
+            throw new Error('Protected report artifact remained after deletion');
           }
         }
       }
+      if (sanitized !== null) await reportRepository.deleteSanitizedReport(sanitized.id);
       await reportRepository.completeReportDeletion(report.id);
     } catch (error) {
       await reportRepository.failReportDeletion(report.id, 'source-cleanup-failed');
