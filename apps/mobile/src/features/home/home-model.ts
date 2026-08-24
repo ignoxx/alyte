@@ -1,6 +1,7 @@
 import { comparableBiomarkers } from '@alyte/catalogue';
 import {
   buildMeasuredTrend,
+  classifyMeasuredPointChange,
   canonicalId,
   type IntakeEvent,
   type LabDateState,
@@ -9,6 +10,7 @@ import {
   type MeasuredTrendPoint,
 } from '@alyte/domain';
 import { listHistoryEntries } from '../labs/biomarker-history-model';
+import { summarizeLabReport } from '../labs/lab-read-model';
 
 /**
  * Home requests one device-local day. Keep ordering pure so the screen remains a small composition
@@ -30,7 +32,7 @@ export function homeHasLocalHistory(
 export type HomeReportRow = {
   readonly kind: 'report' | 'record';
   readonly id: string;
-  readonly title: string;
+  readonly title: string | null;
   readonly date: LabDateState;
   readonly measurementCount: number;
   readonly sourceType: LabReport['sourceType'] | null;
@@ -47,7 +49,9 @@ export type HomeMeasuredChange = {
 export type HomeLabViewModel = {
   readonly latestReport: HomeReportRow | null;
   readonly recentReports: readonly HomeReportRow[];
+  readonly recentRecords: readonly HomeReportRow[];
   readonly pendingImports: readonly LabReport[];
+  readonly openDraftCount: number;
   readonly reviewCount: number;
   readonly measuredChanges: readonly HomeMeasuredChange[];
 };
@@ -56,30 +60,14 @@ function knownDate(row: HomeReportRow): string {
   return row.date.kind === 'known' ? row.date.value : '';
 }
 
-function sourceDate(report: LabReport, records: readonly LabRecord[]): LabDateState {
-  const linked = records.filter((record) => report.labRecordIds.includes(record.id));
-  const latest = [...linked]
-    .filter((record) => record.collectionDate.kind === 'known')
-    .sort((left, right) => {
-      if (left.collectionDate.kind !== 'known' || right.collectionDate.kind !== 'known') return 0;
-      return right.collectionDate.value.localeCompare(left.collectionDate.value);
-    })[0];
-  return latest?.collectionDate ?? { kind: 'missing' };
-}
-
-function reportMeasurementCount(report: LabReport, records: readonly LabRecord[]): number {
-  return records
-    .filter((record) => report.labRecordIds.includes(record.id))
-    .reduce((count, record) => count + record.measurements.length, 0);
-}
-
 function reportRow(report: LabReport, records: readonly LabRecord[]): HomeReportRow {
+  const summary = summarizeLabReport(report, records);
   return {
     kind: 'report',
     id: report.id,
     title: report.originalFilename,
-    date: sourceDate(report, records),
-    measurementCount: reportMeasurementCount(report, records),
+    date: summary.collectionDate,
+    measurementCount: summary.measurementCount,
     sourceType: report.sourceType,
   };
 }
@@ -88,11 +76,18 @@ function recordRow(record: LabRecord): HomeReportRow {
   return {
     kind: 'record',
     id: record.id,
-    title: record.laboratoryName ?? 'Lab Record',
+    title: record.laboratoryName,
     date: record.collectionDate,
     measurementCount: record.measurements.length,
     sourceType: null,
   };
+}
+
+function compareHomeRows(left: HomeReportRow, right: HomeReportRow): number {
+  const leftDate = knownDate(left);
+  const rightDate = knownDate(right);
+  if (leftDate !== rightDate) return rightDate.localeCompare(leftDate);
+  return right.id.localeCompare(left.id);
 }
 
 function latestPoints(
@@ -111,24 +106,24 @@ function latestPoints(
 export function buildHomeLabViewModel(
   reports: readonly LabReport[],
   records: readonly LabRecord[],
+  openDraftCount = 0,
 ): HomeLabViewModel {
   const reportRows = reports
     .filter((report) => report.importState !== 'deleted')
     .map((report) => reportRow(report, records))
-    .sort((left, right) => {
-      const leftDate = knownDate(left);
-      const rightDate = knownDate(right);
-      if (leftDate !== rightDate) return rightDate.localeCompare(leftDate);
-      return right.id.localeCompare(left.id);
-    });
-  const fallbackRows = [...records].map(recordRow).sort((left, right) => {
-    const leftDate = knownDate(left);
-    const rightDate = knownDate(right);
-    if (leftDate !== rightDate) return rightDate.localeCompare(leftDate);
-    return right.id.localeCompare(left.id);
-  });
-  const recentReports = (reportRows.length > 0 ? reportRows : fallbackRows).slice(0, 3);
-  const latestReport = recentReports[0] ?? null;
+    .sort(compareHomeRows);
+  const sourceRecordIds = new Set(
+    reports
+      .filter((report) => report.importState !== 'deleted')
+      .flatMap((report) => report.labRecordIds),
+  );
+  const recentRecords = records
+    .filter((record) => record.labReportId === null && !sourceRecordIds.has(record.id))
+    .map(recordRow)
+    .sort(compareHomeRows)
+    .slice(0, 3);
+  const recentReports = reportRows.slice(0, 3);
+  const latestReport = reportRows[0] ?? null;
   const pendingImports = reports.filter(
     (report) => report.importState !== 'imported' && report.importState !== 'deleted',
   );
@@ -149,12 +144,7 @@ export function buildHomeLabViewModel(
       );
       const points = latestPoints(trend.points);
       if (points === null) return [];
-      const direction =
-        points.latest.normalized.value > points.previous.normalized.value
-          ? 'increased'
-          : points.latest.normalized.value < points.previous.normalized.value
-            ? 'decreased'
-            : 'stable';
+      const direction = classifyMeasuredPointChange(points.previous, points.latest);
       return [
         { biomarkerId: entry.biomarkerId, label: entry.canonicalLabel, ...points, direction },
       ];
@@ -165,5 +155,13 @@ export function buildHomeLabViewModel(
     })
     .slice(0, 3);
 
-  return { latestReport, recentReports, pendingImports, reviewCount, measuredChanges };
+  return {
+    latestReport,
+    recentReports,
+    recentRecords,
+    pendingImports,
+    openDraftCount: Math.max(0, openDraftCount),
+    reviewCount,
+    measuredChanges,
+  };
 }

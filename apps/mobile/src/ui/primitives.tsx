@@ -110,7 +110,7 @@ export const ScreenScrollView = forwardRef<ScrollView, ScreenScrollViewProps>(
 
 type AppButtonProps = Omit<PressableProps, 'children'> & {
   label: string;
-  icon?: AppIconName;
+  children?: ReactNode;
   accessibilityLabel?: string;
   labelMaxFontSizeMultiplier?: number;
   tone?: 'primary' | 'secondary' | 'quiet';
@@ -118,7 +118,7 @@ type AppButtonProps = Omit<PressableProps, 'children'> & {
 
 export function AppButton({
   label,
-  icon,
+  children,
   accessibilityLabel = label,
   labelMaxFontSizeMultiplier,
   tone = 'primary',
@@ -141,13 +141,7 @@ export function AppButton({
       ]}
       {...props}
     >
-      {icon !== undefined && (
-        <AppIcon
-          color={tone === 'primary' ? colors.onAccent : colors.accent}
-          name={icon}
-          size={17}
-        />
-      )}
+      {children}
       <AppText
         maxFontSizeMultiplier={labelMaxFontSizeMultiplier}
         numberOfLines={labelMaxFontSizeMultiplier === undefined ? undefined : 1}

@@ -392,6 +392,7 @@ describe('protected Lab Report import lifecycle', () => {
     const report = (await service.importPdf(source('extraction-pdf')))!.report;
     await prepareSanitizedExtraction(service, report.id);
     const draft = await service.startExtraction(report.id);
+    assert.equal(await service.countOpenExtractionDrafts(), 1);
     assert.equal(draft.rows.length, 1);
     assert.equal(draft.rows[0]?.source.pageIndex, 0);
     assert.equal(draft.rows[0]?.sourceValueString, '3,8');
@@ -405,6 +406,7 @@ describe('protected Lab Report import lifecycle', () => {
     await service.updateExtractionRow(corrected.id, { decision: 'resolve' });
     const records = await service.confirmExtraction(draft.id);
     assert.equal(records.length, 1);
+    assert.equal(await service.countOpenExtractionDrafts(), 0);
     assert.equal(records[0]?.measurements[0]?.original.valueString, '3,8');
   });
 

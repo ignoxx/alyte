@@ -214,3 +214,61 @@ test('Quiet Home keeps unfinished import and review work visible without creatin
   assert.equal(model.reviewCount, 1);
   assert.equal(model.measuredChanges.length, 0);
 });
+
+test('Quiet Home includes an open persisted Extraction Draft before a Lab Record exists', () => {
+  const model = buildHomeLabViewModel(
+    [report('draft-report', 'missing-record', '2026-08-18')],
+    [],
+    1,
+  );
+
+  assert.equal(model.latestReport?.id, 'draft-report');
+  assert.equal(model.latestReport?.measurementCount, 0);
+  assert.equal(model.openDraftCount, 1);
+  assert.equal(model.recentRecords.length, 0);
+});
+
+test('Quiet Home keeps manual records in record history instead of report sections', () => {
+  const manual = {
+    ...labRecord('manual', '2026-08-19', []),
+    labReportId: null,
+    laboratoryName: null,
+  };
+  const sourceRecord = labRecord('source', '2026-08-20', []);
+  const sourceReport = report('source-report', sourceRecord.id, '2026-08-20');
+
+  const manualOnly = buildHomeLabViewModel([], [manual]);
+  assert.equal(manualOnly.latestReport, null);
+  assert.equal(manualOnly.recentReports.length, 0);
+  assert.equal(manualOnly.recentRecords[0]?.id, 'manual');
+  assert.equal(manualOnly.recentRecords[0]?.title, null);
+
+  const mixed = buildHomeLabViewModel([sourceReport], [sourceRecord, manual]);
+  assert.equal(mixed.latestReport?.id, 'source-report');
+  assert.deepEqual(
+    mixed.recentReports.map((row) => row.id),
+    ['source-report'],
+  );
+  assert.deepEqual(
+    mixed.recentRecords.map((row) => row.id),
+    ['manual'],
+  );
+});
+
+test('Quiet Home compares the latest compatible point with its immediate predecessor', () => {
+  const records = [
+    labRecord('first', '2026-01-01', [measurement('first-ldl', 'first', 'biomarker.ldl_c', 100)]),
+    labRecord('middle', '2026-04-01', [
+      measurement('middle-ldl', 'middle', 'biomarker.ldl_c', 200),
+    ]),
+    labRecord('latest', '2026-08-18', [
+      measurement('latest-ldl', 'latest', 'biomarker.ldl_c', 150),
+    ]),
+  ];
+
+  const model = buildHomeLabViewModel([], records);
+  assert.equal(
+    model.measuredChanges.find((change) => change.biomarkerId === 'biomarker.ldl_c')?.direction,
+    'decreased',
+  );
+});

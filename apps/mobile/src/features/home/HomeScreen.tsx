@@ -45,16 +45,17 @@ function changeDirection(change: HomeMeasuredChange): string {
 }
 
 function ReportRow({ row, locale }: { readonly row: HomeReportRow; readonly locale: string }) {
+  const title = row.title ?? t('home.manualRecord');
   return (
     <View
-      accessibilityLabel={`${row.title}, ${reportDetail(row, locale)}`}
+      accessibilityLabel={`${title}, ${reportDetail(row, locale)}`}
       accessible
       style={styles.reportRow}
     >
       <AppIcon name={row.kind === 'report' ? 'doc' : 'labs'} size={22} />
       <View style={styles.rowBody}>
         <AppText numberOfLines={2} variant="heading">
-          {row.title}
+          {title}
         </AppText>
         <AppText style={styles.muted}>{reportDetail(row, locale)}</AppText>
       </View>
@@ -72,24 +73,27 @@ function EmptyHome({ onImport }: { readonly onImport: () => void }) {
         {t('home.emptyTitle')}
       </AppText>
       <AppText style={styles.emptyBody}>{t('home.emptyBody')}</AppText>
-      <AppButton
-        icon="plus"
-        label={t('home.importAction')}
-        onPress={onImport}
-        style={styles.importButton}
-      />
+      <AppButton label={t('home.importAction')} onPress={onImport} style={styles.importButton}>
+        <AppIcon color={colors.onAccent} name="plus" size={17} />
+      </AppButton>
     </View>
   );
 }
 
 function PendingWork({ model }: { readonly model: HomeLabViewModel }) {
-  if (model.pendingImports.length === 0 && model.reviewCount === 0) return null;
+  if (model.pendingImports.length === 0 && model.openDraftCount === 0 && model.reviewCount === 0)
+    return null;
   return (
     <View accessibilityRole="summary" style={styles.pendingWork}>
       <AppText variant="heading">{t('home.reviewWork')}</AppText>
       {model.pendingImports.length > 0 && (
         <AppText style={styles.muted}>
           {t('home.pendingImports').replace('{count}', String(model.pendingImports.length))}
+        </AppText>
+      )}
+      {model.openDraftCount > 0 && (
+        <AppText style={styles.muted}>
+          {t('home.pendingDrafts').replace('{count}', String(model.openDraftCount))}
         </AppText>
       )}
       {model.reviewCount > 0 && (
@@ -111,18 +115,21 @@ function PopulatedHome({
   readonly onImport: () => void;
 }) {
   const latest = model.latestReport;
-  if (latest === null) return <EmptyHome onImport={onImport} />;
+  const latestRecord = model.recentRecords[0] ?? null;
+  const latestItem = latest ?? latestRecord;
+  if (latestItem === null) return <EmptyHome onImport={onImport} />;
+  const title = latestItem.title ?? t('home.manualRecord');
   return (
     <View style={styles.sections}>
       <AppText style={styles.eyebrow} variant="caption">
-        {t('home.latestReport')}
+        {t(latest === null ? 'home.latestRecord' : 'home.latestReport')}
       </AppText>
       <AppText style={styles.heroDate} variant="display">
-        {dateLabel(latest.date, locale)}
+        {dateLabel(latestItem.date, locale)}
       </AppText>
       <AppText style={styles.muted} numberOfLines={2}>
-        {latest.title} ·{' '}
-        {t('home.measurementsCount').replace('{count}', String(latest.measurementCount))}
+        {title} ·{' '}
+        {t('home.measurementsCount').replace('{count}', String(latestItem.measurementCount))}
       </AppText>
       <View style={styles.rule} />
       <PendingWork model={model} />
@@ -150,18 +157,29 @@ function PopulatedHome({
           ))}
         </View>
       )}
-      <View style={styles.section}>
-        <AppText variant="title">{t('home.recentReports')}</AppText>
-        {model.recentReports.map((row) => (
-          <ReportRow key={`${row.kind}-${row.id}`} locale={locale} row={row} />
-        ))}
-      </View>
+      {model.recentReports.length > 0 && (
+        <View style={styles.section}>
+          <AppText variant="title">{t('home.recentReports')}</AppText>
+          {model.recentReports.map((row) => (
+            <ReportRow key={`${row.kind}-${row.id}`} locale={locale} row={row} />
+          ))}
+        </View>
+      )}
+      {model.recentRecords.length > 0 && (
+        <View style={styles.section}>
+          <AppText variant="title">{t('home.recordHistory')}</AppText>
+          {model.recentRecords.map((row) => (
+            <ReportRow key={`${row.kind}-${row.id}`} locale={locale} row={row} />
+          ))}
+        </View>
+      )}
       <AppButton
-        icon="plus"
         label={t('home.importAnotherAction')}
         onPress={onImport}
         style={styles.importButton}
-      />
+      >
+        <AppIcon color={colors.onAccent} name="plus" size={17} />
+      </AppButton>
     </View>
   );
 }
@@ -178,11 +196,12 @@ export function HomeScreen() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextReports, nextRecords] = await Promise.all([
+      const [nextReports, nextRecords, nextDraftCount] = await Promise.all([
         reports.listReports(),
         labs.listRecords(),
+        reports.countOpenExtractionDrafts(),
       ]);
-      setModel(buildHomeLabViewModel(nextReports, nextRecords));
+      setModel(buildHomeLabViewModel(nextReports, nextRecords, nextDraftCount));
       setError(false);
     } catch {
       setError(true);
@@ -207,7 +226,7 @@ export function HomeScreen() {
         {!loading &&
           !error &&
           model !== null &&
-          (model.latestReport === null ? (
+          (model.latestReport === null && model.recentRecords.length === 0 ? (
             <EmptyHome onImport={openImport} />
           ) : (
             <PopulatedHome locale={locale} model={model} onImport={openImport} />
@@ -244,7 +263,7 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { textAlign: 'center' },
   emptyBody: { color: colors.mutedInk, textAlign: 'center' },
-  importButton: { alignSelf: 'stretch', marginTop: spacing.sm },
+  importButton: { alignSelf: 'stretch' },
   eyebrow: {
     color: colors.mutedInk,
     fontWeight: '700',

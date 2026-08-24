@@ -15,7 +15,7 @@ function systemColor(name: string, fallback: string): ColorValue {
 }
 
 function quietAccent(light: string, dark: string, fallback: string): ColorValue {
-  return Platform.OS === 'ios' ? DynamicColorIOS({ light, dark }) : fallback;
+  return process.env.EXPO_OS === 'ios' ? DynamicColorIOS({ light, dark }) : fallback;
 }
 
 export const colors = {

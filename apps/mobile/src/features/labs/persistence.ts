@@ -696,6 +696,7 @@ export type LabRepository = {
     readonly rows: readonly ExtractionDraftRow[];
     readonly now?: string;
   }): Promise<ExtractionDraft>;
+  countOpenExtractionDrafts(): Promise<number>;
   getExtractionDraft(id: string): Promise<ExtractionDraft | null>;
   getExtractionDraftForReport(reportId: string): Promise<ExtractionDraft | null>;
   updateExtractionDraftRow(
@@ -1215,6 +1216,20 @@ export function createLabRepository(
     return row === undefined ? null : extractionDraftFromDb(row, await extractionRowsFor(id));
   }
 
+  async function countOpenExtractionDrafts(): Promise<number> {
+    await initialize();
+    const rows = await database.getAllAsync<{ count: unknown }>(
+      `SELECT COUNT(*) AS count
+       FROM extraction_drafts AS draft
+       INNER JOIN lab_reports AS report ON report.id = draft.report_id
+       WHERE draft.state = 'draft' AND report.import_state <> 'deleted';`,
+    );
+    const count = rows[0]?.count;
+    if (typeof count !== 'number')
+      throw new Error('Invalid Extraction Draft count in local database');
+    return count;
+  }
+
   async function getExtractionDraftForReport(reportId: string): Promise<ExtractionDraft | null> {
     await initialize();
     const rows = await database.getAllAsync<ExtractionDraftDb>(
@@ -1534,6 +1549,7 @@ export function createLabRepository(
     finalizeCombinedDeletion,
     listPendingCombinedDeletions,
     createExtractionDraft,
+    countOpenExtractionDrafts,
     getExtractionDraft,
     getExtractionDraftForReport,
     updateExtractionDraftRow,

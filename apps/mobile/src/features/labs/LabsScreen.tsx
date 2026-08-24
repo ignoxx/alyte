@@ -10,6 +10,7 @@ import { t } from '../../localization';
 import { AppButton, AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { listHistoryEntries } from './biomarker-history-model';
+import { summarizeLabReport } from './lab-read-model';
 import { openReportImportFromStack } from '../../navigation/parent-tab';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
@@ -38,23 +39,13 @@ function reportStateLabel(report: LabReport): string {
   );
 }
 
-function latestCollectionDate(report: LabReport, records: readonly LabRecord[]): string | null {
-  const dates = records
-    .filter((record) => report.labRecordIds.includes(record.id))
-    .flatMap((record) =>
-      record.collectionDate.kind === 'known' ? [record.collectionDate.value] : [],
-    )
-    .sort((left, right) => right.localeCompare(left));
-  return dates[0] ?? null;
-}
-
 function reportDetail(report: LabReport, records: readonly LabRecord[], locale: string): string {
-  const date = latestCollectionDate(report, records);
-  const dateLabel = date === null ? t('labs.recordDateMissing') : formatLocaleDate(date, locale);
-  const count = records
-    .filter((record) => report.labRecordIds.includes(record.id))
-    .reduce((total, record) => total + record.measurements.length, 0);
-  return `${dateLabel} · ${reportSourceLabel(report)} · ${t('labs.recordMeasurements').replace('{count}', String(count))}`;
+  const summary = summarizeLabReport(report, records);
+  const dateLabel =
+    summary.collectionDate.kind === 'known'
+      ? formatLocaleDate(summary.collectionDate.value, locale)
+      : t('labs.recordDateMissing');
+  return `${dateLabel} · ${reportSourceLabel(report)} · ${t('labs.recordMeasurements').replace('{count}', String(summary.measurementCount))}`;
 }
 
 export function LabsScreen() {
@@ -112,21 +103,23 @@ export function LabsScreen() {
             <AppText variant="title">{t('labs.emptyTitle')}</AppText>
             <AppText style={styles.emptyBody}>{t('labs.emptyBody')}</AppText>
             <AppButton
-              icon="plus"
               label={t('labs.action')}
               onPress={() => openReportImportFromStack(navigation)}
               style={styles.importButton}
-            />
+            >
+              <AppIcon color={colors.onAccent} name="plus" size={17} />
+            </AppButton>
           </View>
         )}
         {!loading && !error && hasData && (
           <View style={styles.sections}>
             <AppButton
-              icon="plus"
               label={t('labs.action')}
               onPress={() => openReportImportFromStack(navigation)}
               style={styles.importButton}
-            />
+            >
+              <AppIcon color={colors.onAccent} name="plus" size={17} />
+            </AppButton>
             {reports.length > 0 && (
               <View style={styles.section}>
                 <AppText variant="label" style={styles.sectionLabel}>
@@ -245,7 +238,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   emptyBody: { color: colors.mutedInk, textAlign: 'center' },
-  importButton: { alignSelf: 'stretch', marginTop: spacing.sm },
+  importButton: { alignSelf: 'stretch' },
   manualAction: { alignSelf: 'flex-start' },
   listRow: {
     alignItems: 'center',

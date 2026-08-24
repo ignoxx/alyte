@@ -502,6 +502,16 @@ export type MeasuredTrendNonPoint = {
 
 export type MeasuredTrendDirection = 'increased' | 'decreased' | 'stable' | 'not-comparable';
 
+/** Classify a change between two adjacent compatible measured points. */
+export function classifyMeasuredPointChange(
+  previous: Pick<MeasuredTrendPoint, 'normalized'>,
+  latest: Pick<MeasuredTrendPoint, 'normalized'>,
+): Exclude<MeasuredTrendDirection, 'not-comparable'> {
+  if (latest.normalized.value > previous.normalized.value) return 'increased';
+  if (latest.normalized.value < previous.normalized.value) return 'decreased';
+  return 'stable';
+}
+
 export type MeasuredTrend = {
   readonly biomarkerId: CanonicalId;
   readonly points: readonly MeasuredTrendPoint[];

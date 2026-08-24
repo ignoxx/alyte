@@ -148,6 +148,7 @@ export type LabReportsService = {
   deleteSanitizedReport(id: string): Promise<void>;
   deleteReport(id: string): Promise<void>;
   startExtraction(id: string, passwordRequest?: PasswordRequest): Promise<ExtractionDraft>;
+  countOpenExtractionDrafts(): Promise<number>;
   getExtractionDraft(id: string): Promise<ExtractionDraft | null>;
   updateExtractionRow(id: string, patch: ExtractionDraftRowPatch): Promise<ExtractionDraftRow>;
   confirmExtraction(id: string): Promise<readonly LabRecord[]>;
@@ -1292,6 +1293,11 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     return (await repository()).getExtractionDraft(id);
   }
 
+  async function countOpenExtractionDrafts(): Promise<number> {
+    await ensureInitialized();
+    return (await repository()).countOpenExtractionDrafts();
+  }
+
   async function updateExtractionRow(
     id: string,
     patch: ExtractionDraftRowPatch,
@@ -1326,6 +1332,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     deleteSanitizedReport,
     deleteReport,
     startExtraction,
+    countOpenExtractionDrafts,
     getExtractionDraft,
     updateExtractionRow,
     confirmExtraction,
