@@ -121,19 +121,24 @@ headroom rather than treating it as abuse.
 - User-configured providers, BYOK, custom OpenAI-compatible endpoints, and an open-source backend are
   post-MVP. The internal backend boundary may remain provider-neutral without exposing credentials
   or routing controls to users at launch.
-- Core local functionality does not require Apple Intelligence or an on-device generative model.
-  PDFKit, Vision document recognition, deterministic parsing, charts, reviewed content, redaction,
-  record management, and export have the same functional contract on every supported device,
-  allowing only reasonable performance differences. A supported on-device model may improve
-  candidate mapping or translation, but its absence cannot collapse the account-free product.
-- Optional local semantic models are replaceable model packs rather than one hard-coded model.
-  Development builds may compare several compatible packs against the same synthetic fixtures;
-  release builds expose only an Alyte-recommended pack plus its download, storage, and deletion
-  controls. When possible, Alyte downloads an exact allowlisted file directly from a public,
-  ungated Hugging Face repository at a pinned commit. The app shows the model, publisher, license,
-  download size, and source before download and verifies the expected SHA-256 before activation.
-  The first release does not ask for or embed a Hugging Face account token, use a gated model, or
-  silently follow a moving branch such as `main`.
+- Core local functionality does not require Apple Intelligence or a model bundled in the App Store
+  binary. PDFKit, Vision recognition, privacy review, existing history, charts, reviewed content,
+  record management, manual entry, and export remain account-free and available before a model is
+  installed. A verified local semantic model pack is required before a person starts a new
+  automated Lab Report extraction.
+- The first release supports one Alyte-recommended pack: Qwen 3.5 0.8B. Alyte downloads its exact
+  allowlisted file only after installation from a public, ungated Hugging Face repository at a
+  pinned commit; model weights are never bundled with the app. The app shows the model, publisher,
+  license, download size, device-space requirement, and source before download and verifies the
+  expected SHA-256 before activation. It does not ask for or embed a Hugging Face account token,
+  use a gated model, silently follow a moving branch such as `main`, or expose an experimental
+  model picker.
+- Onboarding may offer the free model download but always permits `Skip for now`. If no verified
+  pack is installed when the person first requests automated extraction, Alyte presents the same
+  download disclosure as a contextual gate and begins extraction only after activation. Offline,
+  failed, or insufficient-space downloads remain retryable without blocking access to the rest of
+  the local app. After extraction begins, an inference/runtime failure falls back to Vision
+  structure, locale parsing, aliases, deterministic validation, and focused review.
 
 ## Laboratory-history model
 
@@ -521,9 +526,9 @@ messages, medication reminders, biomarker warnings, and inferred-health alerts a
   ongoing processing cost.
 - Local Lab Reports, local OCR, manual Lab Records, supported Measured Trends, manual Intake Events,
   local export, and account-free use are not held behind a subscription.
-- Downloading an optional local semantic model pack does not require an Alyte account or paid
+- Downloading the required local semantic model pack does not require an Alyte account or paid
   entitlement. Deleting it does not delete Lab Reports, Lab Records, Measurements, or Extraction
-  Drafts, and extraction continues through the deterministic local fallback.
+  Drafts; it blocks only new automated extraction until the pack is downloaded and verified again.
 - Cloud report extraction and Intake Image analysis require a paid entitlement.
 - Launch offers one `Cloud Plus` subscription with monthly and annual billing and an included
   monthly Cloud Analysis allowance. A bounded starter purchase and a way for subscribers to obtain
@@ -592,8 +597,11 @@ messages, medication reminders, biomarker warnings, and inferred-health alerts a
   the optional paid cloud boundary plus adult-only/non-diagnostic scope.
 - Onboarding leads directly into the local app and never forces account creation or a paywall.
 - The already-shipped onboarding is not presumed final: the release pass must verify that each
-  screen earns its place, emphasizes the two-report outcome over implementation details, and avoids
-  model downloads, permissions, account creation, and payment until they are contextually needed.
+  screen earns its place and emphasizes the two-report outcome over implementation details.
+- Onboarding may disclose and offer the Qwen 3.5 0.8B download, including its source, license, size,
+  and device-space requirement, but `Skip for now` enters the OCR-only local app. The download
+  becomes required contextually when the person first starts automated Lab Report extraction.
+  Permissions, account creation, and payment remain deferred until contextually needed.
 - Detailed teaching is contextual and appears when the person first imports, verifies, analyzes,
   or explores evidence rather than lengthening the opening tour.
 - Settings provides clear Contact, Feedback, and Billing Help actions for complaints or assistance.

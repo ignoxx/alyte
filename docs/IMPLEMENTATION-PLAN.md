@@ -70,9 +70,9 @@ Build:
 - verified Sanitized Report creation before extraction;
 - Vision document/table recognition, measurement-candidate filtering, locale parsing, alias mapping,
   unit normalization, and preservation of every credible result;
-- a bounded comparison of interchangeable on-device semantic models using identical structured OCR
-  fixtures, followed only by a model-pack manager and production mapper if the evidence clears the
-  precision, memory, latency, thermal, license, and download-size gates;
+- a bounded Qwen 3.5 0.8B feasibility benchmark using structured OCR fixtures, followed only by a
+  post-install model-pack manager and production mapper if the evidence clears the precision,
+  memory, latency, thermal, license, and download-size gates;
 - section/table/row specimen context so mixed blood, serum, plasma, urine, and unknown results are
   not assigned one report-wide specimen;
 - English, German, and Lithuanian fixtures first, followed by the remaining declared languages;
@@ -294,11 +294,12 @@ Cloud Plus passes Gate C.
    preview, verification.
 5. **Candidate extraction** — Vision document/tables, measurement filtering, locale parsing,
    Lithuanian fixtures, per-section specimen context, deterministic validation, a provider-neutral
-   semantic mapper, and identical-fixture evaluation of candidate on-device models through #50.
-6. **Optional local model packs** — direct public/ungated Hugging Face download from immutable
-   revisions, reviewed manifest/license, checksum verification, storage/load/delete lifecycle,
-   developer-only model selection, one production recommendation, and deterministic no-model
-   fallback through #51, followed by constrained extraction integration through #52.
+   semantic mapper, and structured-fixture Qwen 3.5 0.8B feasibility evaluation through #50.
+6. **Required extraction model pack** — no bundled weights; onboarding offer with `Skip for now`;
+   contextual download gate before first automated extraction; direct public/ungated Hugging Face
+   download from an immutable revision; reviewed manifest/license, checksum verification, and
+   storage/load/delete lifecycle through #51; followed by constrained extraction integration and
+   deterministic inference-failure fallback through #52.
 7. **Laboratory history and review** — compact draft, Reports, Records, Measurements, manual entry,
    source inspection, correction, provenance.
 8. **Comparison** — canonical aliases, units, trends, missing/incompatible behavior.

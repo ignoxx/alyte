@@ -142,7 +142,7 @@ Build narrow, typed modules rather than one general native bridge.
 
 `AlyteLocalModels`:
 
-- owns optional on-device semantic model-pack discovery, download state, integrity verification,
+- owns on-device semantic model-pack discovery, download state, integrity verification,
   activation, load/unload, inference cancellation, and deletion behind one typed Expo module;
 - consumes a versioned Alyte manifest containing the Hugging Face repository, immutable commit,
   exact allowlisted filenames, publisher, license, runtime/quantization, byte size, SHA-256,
@@ -153,10 +153,12 @@ Build narrow, typed modules rather than one general native bridge.
   gated repositories that would require a user or bundled access token;
 - stores completed packs under Application Support, excludes them from iCloud Backup, stages
   partial downloads separately, and atomically promotes a verified pack;
+- never bundles model weights in the application binary and exposes Qwen 3.5 0.8B as the sole
+  first-release pack;
 - loads at most one pack at a time, releases it under memory or thermal pressure, and exposes
   observable not-installed, downloading, verifying, ready, loaded, failed, and deleting states;
-- permits multiple selectable packs only in development/evaluation builds while release builds
-  expose one recommended pack and user-visible storage/delete controls; and
+- permits onboarding to defer installation while requiring a verified pack before new automated
+  extraction, and exposes user-visible storage, retry, and delete controls; and
 - never logs structured OCR input, prompts, generated tokens, or model results.
 
 `AlytePDF`:
@@ -300,11 +302,10 @@ Raw OCR or PDF text observations are retained only as internal provenance. They 
 a draft row. Unknown measurement-shaped results remain preserved even when they cannot be mapped;
 unrelated headers, addresses, licences, and prose do not become user review work.
 
-The semantic mapper remains provider- and model-neutral. Candidate model packs are benchmarked
-against identical structured OCR fixtures before one is recommended for release; no model name is
-part of the Extraction Draft contract. The iOS 26 Foundation Models framework may remain an
-optional accelerator where available, but it is not the local contract and does not replace a
-downloadable pack for unsupported languages. Chunk every semantic request by table and bounded row
+The semantic mapper remains provider-neutral above the native runtime even though the first release
+validates and ships one pack, Qwen 3.5 0.8B. The model name is not part of the Extraction Draft
+contract. The iOS 26 Foundation Models framework may remain an optional accelerator where
+available, but it is not the local contract. Chunk every semantic request by table and bounded row
 count, accept only source identifiers that exist, reject duplicate source-row consumption, and
 never let a model author authoritative numbers, units, ranges, conversions, translations, or
 medical explanations. The catalogue owns localized display names while exact source labels remain
@@ -312,9 +313,10 @@ provenance.
 
 Model weights are executable inputs even when they contain no health record. Alyte therefore
 accepts only manifest-pinned inference formats from reviewed repositories and never loads pickle or
-arbitrary code from the Hub. Download availability is an enhancement boundary: missing, deleted,
-corrupt, incompatible, or interrupted packs fall back to Vision structure, locale parsing, aliases,
-deterministic validation, and focused user review without blocking local mode.
+arbitrary code from the Hub. A missing, deleted, corrupt, incompatible, or interrupted pack does not
+block launch or existing local history, but it prevents a new automated extraction until a verified
+pack is ready. Once an extraction has started, runtime or inference failure falls back to Vision
+structure, locale parsing, aliases, deterministic validation, and focused user review.
 
 Cloud report extraction is a fallback for selected, sanitized pages. It produces another editable
 Extraction Draft and never bypasses review.
