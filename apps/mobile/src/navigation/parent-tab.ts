@@ -36,6 +36,9 @@ export function dispatchHomeQuickAction(
       navigation.navigate('Labs', {
         screen: 'LabReportDetail',
         params: { reportId: action.reportId },
+        // React Navigation's nested pop option returns to an existing detail route for this
+        // report instead of appending a duplicate beneath an open Extraction Draft.
+        pop: true,
       });
       return;
     case 'log-intake':

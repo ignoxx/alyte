@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { StackActions, StackRouter } from '@react-navigation/routers';
+import { CommonActions, StackActions, StackRouter } from '@react-navigation/routers';
 import type { ParamListBase, StackNavigationState } from '@react-navigation/routers';
 import {
   extractionEditorDestination,
@@ -152,9 +152,57 @@ test('Home quick actions dispatch to sibling tabs and preserve the Log edit push
 
   assert.deepEqual(calls, [
     ['ReportImport'],
-    ['Labs', { screen: 'LabReportDetail', params: { reportId: 'report-42' } }],
+    ['Labs', { screen: 'LabReportDetail', params: { reportId: 'report-42' }, pop: true }],
     ['Log', { screen: 'IntakeEntry' }],
     ['SnapCapture'],
     ['Log', { screen: 'IntakeEntry', params: { eventId: 'event-42' } }],
   ]);
+});
+
+test('Continue report pops to the one existing detail route and leaves a clean Labs Back path', () => {
+  const router = StackRouter({ initialRouteName: 'LabsRoot' });
+  const options = {
+    routeNames: ['LabsRoot', 'LabReportDetail', 'ExtractionDraft'],
+    routeParamList: {},
+    routeGetIdList: {},
+  };
+  let state = router.getInitialState(options) as StackNavigationState<ParamListBase>;
+  state = router.getStateForAction(
+    state,
+    StackActions.push('LabReportDetail', { reportId: 'report-R' }) as never,
+    options,
+  ) as StackNavigationState<ParamListBase>;
+  state = router.getStateForAction(
+    state,
+    StackActions.push('ExtractionDraft', {
+      reportId: 'report-R',
+      draftId: 'draft-R',
+    }) as never,
+    options,
+  ) as StackNavigationState<ParamListBase>;
+
+  const continued = router.getStateForAction(
+    state,
+    CommonActions.navigate('LabReportDetail', { reportId: 'report-R' }, { pop: true }) as never,
+    options,
+  );
+
+  assert.deepEqual(
+    continued?.routes.map((route) => [route.name, route.params]),
+    [
+      ['LabsRoot', undefined],
+      ['LabReportDetail', { reportId: 'report-R' }],
+    ],
+  );
+  const afterBack = continued
+    ? router.getStateForAction(
+        continued as StackNavigationState<ParamListBase>,
+        StackActions.pop() as never,
+        options,
+      )
+    : null;
+  assert.deepEqual(
+    afterBack?.routes.map((route) => route.name),
+    ['LabsRoot'],
+  );
 });
