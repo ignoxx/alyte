@@ -153,7 +153,7 @@ Build narrow, typed modules rather than one general native bridge.
   gated repositories that would require a user or bundled access token;
 - stores completed packs under Application Support, excludes them from iCloud Backup, stages
   partial downloads separately, and atomically promotes a verified pack;
-- never bundles model weights in the application binary and exposes Qwen 3.5 0.8B as the sole
+- never bundles model weights in the application binary and exposes Gemma 4 E2B (Q4_0) as the sole
   first-release pack;
 - loads at most one pack at a time, releases it under memory or thermal pressure, and exposes
   observable not-installed, downloading, verifying, ready, loaded, failed, and deleting states;
@@ -305,7 +305,7 @@ a draft row. Unknown measurement-shaped results remain preserved even when they 
 unrelated headers, addresses, licences, and prose do not become user review work.
 
 The semantic mapper remains provider-neutral above the native runtime even though the first release
-validates and ships one pack, Qwen 3.5 0.8B. The model name is not part of the Extraction Draft
+validates and ships one pack, Gemma 4 E2B (Q4_0). The model name is not part of the Extraction Draft
 contract. The iOS 26 Foundation Models framework may remain an optional accelerator where
 available, but it is not the local contract. Chunk every semantic request by table and bounded row
 count, accept only source identifiers that exist, reject duplicate source-row consumption, and

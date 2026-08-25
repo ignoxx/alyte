@@ -70,9 +70,10 @@ Build:
 - verified Sanitized Report creation before extraction;
 - Vision document/table recognition, measurement-candidate filtering, locale parsing, alias mapping,
   unit normalization, and preservation of every credible result;
-- a bounded Qwen 3.5 0.8B feasibility benchmark using structured OCR fixtures, followed only by a
-  post-install model-pack manager and production mapper if the evidence clears the precision,
-  memory, latency, thermal, license, and download-size gates;
+- bounded Qwen 3.5 0.8B and Gemma 4 E2B feasibility benchmarks using structured OCR fixtures,
+  followed only by a post-install model-pack manager and production mapper when the maintainer
+  accepts the measured precision, review burden, memory, latency, thermal, license, and download-size
+  trade-offs;
 - section/table/row specimen context so mixed blood, serum, plasma, urine, and unknown results are
   not assigned one report-wide specimen;
 - English, German, and Lithuanian fixtures first, followed by the remaining declared languages;
@@ -294,9 +295,9 @@ Cloud Plus passes Gate C.
    preview, verification.
 5. **Candidate extraction** — Vision document/tables, measurement filtering, locale parsing,
    Lithuanian fixtures, per-section specimen context, deterministic validation, a provider-neutral
-   semantic mapper, and structured-fixture Qwen 3.5 0.8B feasibility evaluation through #50.
-6. **Required extraction model pack** — no bundled weights; explicit selection and verified Qwen
-   3.5 0.8B download before onboarding completes; contextual reinstall gate after later deletion;
+   semantic mapper, and structured-fixture candidate evaluation through #50 and #66.
+6. **Required extraction model pack** — no bundled weights; explicit selection and verified Gemma
+   4 E2B (Q4_0) download before onboarding completes; contextual reinstall gate after later deletion;
    direct public/ungated Hugging Face download from an immutable revision; reviewed
    manifest/license, checksum verification, and storage/load/delete lifecycle through #51; followed
    by constrained extraction integration and deterministic inference-failure fallback through #52.
