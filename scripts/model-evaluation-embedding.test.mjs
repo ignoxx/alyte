@@ -12,6 +12,10 @@ const project = fs.readFileSync(
   'utf8',
 );
 const runner = fs.readFileSync('scripts/run-model-evaluation-device.sh', 'utf8');
+const nativeTests = fs.readFileSync(
+  'apps/model-evaluation/Tests/AlyteModelEvaluationTests/MetricRecorderTests.swift',
+  'utf8',
+);
 const llamaShim = fs.readFileSync(
   'apps/model-evaluation/Sources/AlyteModelEvaluation/AlyteLlamaShim.c',
   'utf8',
@@ -71,12 +75,30 @@ test('device runner selects the pinned candidate artifact and external contract'
   assert.match(runner, /source_model_revision="3e22461f65e89153144f8adb70e3b8c2cc9845a7"/);
   assert.match(runner, /expected_prompt_bundle_version="alyte\.gemma4-e2b-evaluation\.prompt\.v2"/);
   assert.match(runner, /contract_optional_field promptBundleVersion/);
+  assert.match(runner, /contract_resource_basename="\$\{contract_filename%\.json\}"/);
+  assert.match(
+    runner,
+    /ALYTE_MODEL_EVAL_CONTRACT_RESOURCE_BASENAME="\$\{contract_resource_basename\}"/,
+  );
+  assert.match(runner, /embedded_contract_match_count/);
+  assert.match(
+    runner,
+    /Embedded contract resource does not exactly match the selected external contract/,
+  );
   assert.match(runner, /runtime_repository="ggml-org\/llama\.cpp"/);
   assert.match(runner, /runtime_revision="bb4caa7540188872173c44d161602d9271386413"/);
   assert.match(runner, /contract_source_model_field/);
   assert.match(runner, /Evaluation contract provenance does not match candidate/);
   assert.match(runner, /ALYTE_MODEL_EVAL_CANDIDATE="\$\{candidate\}"/);
   assert.match(runner, /--destination "\$\{device_relative_directory\}\/\$\{model_filename\}"/);
+});
+
+test('XCTest resolves only the configured contract resource and fails closed on ambiguity', () => {
+  assert.match(nativeTests, /configuredValue\("ALYTE_MODEL_EVAL_CONTRACT_RESOURCE_BASENAME"\)/);
+  assert.match(nativeTests, /urls\(forResourcesWithExtension: "json", subdirectory: nil\)/);
+  assert.match(nativeTests, /contractURLs\.count == 1/);
+  assert.match(nativeTests, /EvaluationContract\.load\(from: contractURL\)/);
+  assert.doesNotMatch(nativeTests, /forResource: "evaluation-contract-v1"/);
 });
 
 test('device runner separates CoreDevice and Xcode destination IDs and accepts connected devices', () => {

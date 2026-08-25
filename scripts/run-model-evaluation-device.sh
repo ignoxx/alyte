@@ -72,6 +72,17 @@ if [[ ! -f "${contract_path}" ]]; then
   print -u2 "Missing ${candidate} evaluation contract: ${contract_path}"
   exit 2
 fi
+contract_filename="${contract_path##*/}"
+if [[ "${contract_filename}" != *.json ]]; then
+  print -u2 "Evaluation contract filename must end in .json: ${contract_filename}"
+  exit 2
+fi
+contract_resource_basename="${contract_filename%.json}"
+if [[ -z "${contract_resource_basename}" || ! "${contract_resource_basename}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  print -u2 "Evaluation contract filename has an unsafe resource basename: ${contract_filename}"
+  exit 2
+fi
+contract_resource_filename="${contract_resource_basename}.json"
 contract_field() {
   node -e 'const value=process.argv[2].split(".").reduce((object, key) => object?.[key], JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))); if (typeof value !== "string") process.exit(1); process.stdout.write(value)' "${contract_path}" "$1"
 }
@@ -303,6 +314,7 @@ xcodebuild \
   ALYTE_MODEL_EVAL_DEVICE_MODEL="${eval_device_model}" \
   ALYTE_MODEL_EVAL_CANDIDATE="${candidate}" \
   ALYTE_MODEL_EVAL_CONTRACT_PATH="${contract_path}" \
+  ALYTE_MODEL_EVAL_CONTRACT_RESOURCE_BASENAME="${contract_resource_basename}" \
   ALYTE_MODEL_EVAL_MODEL_PATH="${test_model_relative_path}" \
   ALYTE_MODEL_EVAL_AGGREGATE_PATH="${test_aggregate_relative_path}" \
   SWIFT_ACTIVE_COMPILATION_CONDITIONS="ALYTE_LLAMA_EVAL" \
@@ -357,8 +369,22 @@ if [[ ! -f "${test_info}" ]]; then
   exit 2
 fi
 if [[ "$(plutil -extract ALYTE_MODEL_EVAL_MODEL_PATH raw -o - "${test_info}")" != "${test_model_relative_path}" ||
-      "$(plutil -extract ALYTE_MODEL_EVAL_AGGREGATE_PATH raw -o - "${test_info}")" != "${test_aggregate_relative_path}" ]]; then
-  print -u2 "XCTest inputs are not container-relative"
+      "$(plutil -extract ALYTE_MODEL_EVAL_AGGREGATE_PATH raw -o - "${test_info}")" != "${test_aggregate_relative_path}" ||
+      "$(plutil -extract ALYTE_MODEL_EVAL_CONTRACT_RESOURCE_BASENAME raw -o - "${test_info}")" != "${contract_resource_basename}" ]]; then
+  print -u2 "XCTest path/resource settings do not match the runner inputs"
+  exit 2
+fi
+test_bundle="${app_path}/PlugIns/AlyteModelEvaluationTests.xctest"
+embedded_contract_path="${test_bundle}/${contract_resource_filename}"
+embedded_contract_match_count="$(find "${test_bundle}" -type f -name "${contract_resource_filename}" -print | wc -l | tr -d ' ')"
+if [[ "${embedded_contract_match_count}" != "1" || ! -f "${embedded_contract_path}" ]]; then
+  print -u2 "XCTest bundle must contain exactly one configured contract resource: ${contract_resource_filename}"
+  exit 2
+fi
+external_contract_sha256="$(shasum -a 256 "${contract_path}" | awk '{print $1}')"
+embedded_contract_sha256="$(shasum -a 256 "${embedded_contract_path}" | awk '{print $1}')"
+if [[ -z "${external_contract_sha256}" || "${external_contract_sha256}" != "${embedded_contract_sha256}" ]]; then
+  print -u2 "Embedded contract resource does not exactly match the selected external contract"
   exit 2
 fi
 

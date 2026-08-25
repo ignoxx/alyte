@@ -161,13 +161,24 @@ final class MetricRecorderTests: XCTestCase {
             XCTFail("device mode requires the pinned llama.cpp XCFramework")
             return
         }
-        guard let contractURL = Bundle(for: MetricRecorderTests.self).url(
-            forResource: "evaluation-contract-v1",
-            withExtension: "json"
-        ) else {
-            XCTFail("canonical evaluation contract resource is missing")
+        guard let contractResourceBasename = configuredValue("ALYTE_MODEL_EVAL_CONTRACT_RESOURCE_BASENAME"),
+              !contractResourceBasename.isEmpty else {
+            XCTFail("device mode requires the configured contract resource basename")
             return
         }
+        guard contractResourceBasename.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil else {
+            XCTFail("contract resource basename is unsafe")
+            return
+        }
+        let testBundle = Bundle(for: MetricRecorderTests.self)
+        let contractURLs = (testBundle.urls(forResourcesWithExtension: "json", subdirectory: nil) ?? []).filter {
+            $0.deletingPathExtension().lastPathComponent == contractResourceBasename
+        }
+        guard contractURLs.count == 1, let contractURL = contractURLs.first else {
+            XCTFail("expected exactly one embedded contract resource named \(contractResourceBasename).json")
+            return
+        }
+        _ = try EvaluationContract.load(from: contractURL)
         let modelURL: URL
         let aggregateURL: URL
         do {
