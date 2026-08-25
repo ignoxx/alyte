@@ -72,3 +72,10 @@ export const multilingualLabTableFixtures = Object.freeze({
   en: Object.freeze(['Collection date 20.08.2026', 'LDL cholesterol 118 mg/dL <115 H']),
   de: Object.freeze(['Probenentnahme 20.08.2026', 'LDL-Cholesterin 3,8 mmol/L <3,0 H']),
 });
+
+export {
+  metabolicLabReportFixtures,
+  type MetabolicLabReportFixture,
+  type SyntheticOCRObservation,
+  type SyntheticLabSpecimen,
+} from './metabolic-lab-reports.js';

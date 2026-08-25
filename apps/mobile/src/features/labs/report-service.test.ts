@@ -6,9 +6,11 @@ import { afterEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type {
   ExtractionSemanticMapper,
+  ExtractionAliasEntry,
   LabReportSourceIntegrity,
   VisionOCRResult,
 } from '@alyte/domain';
+import { decodeVisionOCRResult } from '@alyte/domain';
 import { createLabRepository, type LabRepository, type SqliteDatabase } from './persistence';
 import {
   type LabSourceSelection,
@@ -27,9 +29,9 @@ import type { VisionOCR } from './vision';
 import type { DatabaseProtection } from './protection';
 import { addRedaction } from '@alyte/domain';
 import { createSanitizationRecipe } from '@alyte/domain';
-import { groupObservationsIntoRows } from '@alyte/domain';
+import { groupObservationsIntoRows, parseLabDate } from '@alyte/domain';
 import { comparableBiomarkers } from '@alyte/catalogue';
-import { multilingualLabTableFixtures } from '@alyte/fixtures';
+import { metabolicLabReportFixtures, multilingualLabTableFixtures } from '@alyte/fixtures';
 import { createLabsService } from './service';
 
 class NodeSqliteDatabase implements SqliteDatabase {
@@ -363,6 +365,76 @@ describe('protected Lab Report import lifecycle', () => {
       }),
     );
     assert.deepEqual(counts, { lt: 2, en: 1, de: 1 });
+  });
+
+  test('extracts metabolic report fixtures through the production catalogue aliases', () => {
+    const aliases: readonly ExtractionAliasEntry[] = comparableBiomarkers.map((entry) => ({
+      id: entry.id,
+      aliases: entry.aliases,
+      specimens: entry.specimens,
+      units: entry.units,
+      ...(entry.unsafeAliases === undefined ? {} : { unsafeAliases: entry.unsafeAliases }),
+      ...(entry.methodPolicy === undefined
+        ? {}
+        : {
+            methodPolicy: {
+              version: entry.methodPolicy.version,
+              kind: entry.methodPolicy.kind,
+              allowedMethods: entry.methodPolicy.allowedMethods,
+              unsafePatterns: entry.methodPolicy.unsafePatterns,
+              ...(entry.methodPolicy.profiles === undefined
+                ? {}
+                : { profiles: entry.methodPolicy.profiles }),
+            },
+          }),
+    }));
+
+    for (const fixture of metabolicLabReportFixtures) {
+      const ocr = decodeVisionOCRResult({
+        contractVersion: 'alyte.vision.document.v2',
+        pageIndex: 0,
+        orientation: 0,
+        observations: fixture.observations,
+      });
+      const rows = groupObservationsIntoRows(ocr.observations, {
+        aliases,
+        locale: fixture.locale,
+        collectionDate: parseLabDate(fixture.collectionDateText, fixture.locale) ?? {
+          kind: 'missing',
+        },
+        specimenType: fixture.specimenType,
+      });
+      const rowByObservation = new Map(rows.map((row) => [row.id, row]));
+
+      assert.deepEqual(
+        fixture.expected.credible.map(({ observationId }) => rowByObservation.has(observationId)),
+        fixture.expected.credible.map(() => true),
+        fixture.id,
+      );
+      for (const expected of fixture.expected.credible) {
+        const row = rowByObservation.get(expected.observationId);
+        assert.equal(row?.proposedBiomarkerId, expected.biomarkerId, fixture.id);
+        assert.equal(
+          row?.reviewState,
+          'ready',
+          `${fixture.id}:${expected.observationId}:${row?.reviewReasons.join(',') ?? 'missing'}`,
+        );
+        assert.equal(row?.proposedSpecimenType, fixture.specimenType, fixture.id);
+        assert.equal(row?.collectionDate.kind, 'known', fixture.id);
+      }
+
+      for (const expected of fixture.expected.needsReview) {
+        const row = rowByObservation.get(expected.observationId);
+        assert.ok(row, `${fixture.id}: expected review row ${expected.observationId}`);
+        assert.equal(row?.proposedBiomarkerId, expected.biomarkerId, fixture.id);
+        assert.ok(row?.reviewReasons.includes(expected.reason), fixture.id);
+        assert.equal(row?.reviewState, 'needs-review', fixture.id);
+      }
+
+      for (const excludedId of fixture.expected.excludedObservationIds) {
+        assert.equal(rowByObservation.has(excludedId), false, `${fixture.id}: ${excludedId}`);
+      }
+    }
   });
 
   test('local extraction creates an editable draft from untrusted OCR with source provenance', async () => {
