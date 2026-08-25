@@ -649,8 +649,16 @@ describe('protected Lab Report import lifecycle', () => {
           `${fixture.id}:${expected.observationId} table context`,
         );
         const planned = plannedMeasurements.get(expected.observationId);
-        assert.ok(planned, `${fixture.id}: review confirmation plan ${expected.observationId}`);
-        assert.equal(planned?.biomarkerId, expected.biomarkerId, fixture.id);
+        if (row?.decision === 'skip') {
+          assert.equal(
+            planned,
+            undefined,
+            `${fixture.id}: unsafe review row is excluded by default`,
+          );
+        } else {
+          assert.ok(planned, `${fixture.id}: review confirmation plan ${expected.observationId}`);
+          assert.equal(planned?.biomarkerId, expected.biomarkerId, fixture.id);
+        }
       }
 
       for (const excludedId of fixture.expected.excludedObservationIds) {
@@ -800,16 +808,13 @@ describe('protected Lab Report import lifecycle', () => {
       assert.equal(rowByObservation.has(excludedObservationId), false, excludedObservationId);
     }
 
-    // Rows with a confirmation-blocking exception remain available for review but must be
-    // explicitly excluded before this fixture can be confirmed.
+    // Unsafe rows remain visible for review but are excluded before the person takes any action.
     for (const observationId of [
       'safety-incompatible-unit',
       'safety-ambiguous-sibling',
       'safety-incompatible-ast-unit',
     ]) {
-      await service.updateExtractionRow(rowByObservation.get(observationId)!.id, {
-        decision: 'skip',
-      });
+      assert.equal(rowByObservation.get(observationId)?.decision, 'skip', observationId);
     }
 
     const records = await service.confirmExtraction(draft.id);
@@ -1042,8 +1047,19 @@ describe('protected Lab Report import lifecycle', () => {
     assert.deepEqual(draft.rows[0]?.proposedValue, { kind: 'numeric', value: 9.839 });
     assert.equal(draft.rows[0]?.proposedUnit, null);
     assert.ok(draft.rows[0]?.reviewReasons.includes('missing-unit'));
-    assert.equal(draft.rows[0]?.decision, 'unresolved');
-    await assert.rejects(service.confirmExtraction(draft.id), /unresolved required fields/);
+    assert.equal(draft.rows[0]?.decision, 'skip');
+    await assert.rejects(
+      service.confirmExtraction(draft.id),
+      /At least one extraction row must be included/,
+    );
+    const corrected = await service.updateExtractionRow(draft.rows[0]!.id, {
+      proposedUnit: 'mmol/L',
+    });
+    assert.equal(corrected.decision, 'skip');
+    assert.equal(corrected.reviewReasons.includes('missing-unit'), false);
+    await service.updateExtractionRow(corrected.id, { decision: 'preserve' });
+    const records = await service.confirmExtraction(draft.id);
+    assert.equal(records.length, 1);
   });
 
   test('does not confirm an extracted value with a biomarker-incompatible unit', async () => {
@@ -1073,8 +1089,11 @@ describe('protected Lab Report import lifecycle', () => {
     await prepareSanitizedExtraction(service, report.id);
     const draft = await service.startExtraction(report.id);
     assert.ok(draft.rows[0]?.reviewReasons.includes('incompatible-unit'));
-    assert.equal(draft.rows[0]?.decision, 'unresolved');
-    await assert.rejects(service.confirmExtraction(draft.id), /unresolved required fields/);
+    assert.equal(draft.rows[0]?.decision, 'skip');
+    await assert.rejects(
+      service.confirmExtraction(draft.id),
+      /At least one extraction row must be included/,
+    );
   });
 
   test('classifies a readable report with no plausible Measurements separately from source failure', async () => {

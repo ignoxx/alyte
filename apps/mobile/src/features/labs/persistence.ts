@@ -1482,6 +1482,8 @@ export function createLabRepository(
         record: (key) => makeId(`lab-record-${key.replace(/[^a-z0-9]+/gi, '-')}`),
         measurement: (rowId) => makeId(`measurement-${rowId}`),
       });
+      if (plan.records.length === 0)
+        throw new Error('At least one extraction row must be included');
       const createdAt = now();
       for (const planned of plan.records) {
         await database.runAsync(

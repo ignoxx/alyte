@@ -188,7 +188,7 @@
     "extractionNoMeasurementsError": "Local OCR found no plausible Measurements in this report. The report remains available, and no Extraction Draft was created.",
     "extractionAlreadyConfirmed": "Local extraction is already confirmed for this report. The existing Lab Records remain available below.",
     "extractionIntro": "Alyte found measurement-shaped results on this iPhone. Review the exceptions, then confirm the complete report.",
-    "extractionCompactIntro": "Valid Measurements are included. Open any row to compare its exact source, correct it, or skip it.",
+    "extractionCompactIntro": "Review each proposed Measurement. Open any row to compare its exact source, correct it, or skip it.",
     "extractionSummary": "{count} measurements found · {review} need review",
     "extractionSearch": "Search measurements",
     "extractionFilterAll": "All {count}",

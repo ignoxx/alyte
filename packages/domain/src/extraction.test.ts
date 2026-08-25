@@ -6,6 +6,7 @@ import {
   decodeVisionOCRResult,
   EXTRACTION_PARSER_VERSION,
   extractionReviewBlocksConfirmation,
+  extractionReviewRequiresAttention,
   groupObservationsIntoRows,
   parseComparatorValue,
   parseLabDate,
@@ -343,7 +344,9 @@ describe('local extraction domain', () => {
     assert.equal(row?.proposedBiomarkerId, 'biomarker.ldl_c');
     assert.ok(row?.reviewReasons.includes('unsupported-layout'));
     assert.equal(row?.proposedValue.kind, 'free_text');
-    assert.equal(row?.decision, 'unresolved');
+    assert.equal(row?.decision, 'skip');
+    assert.equal(extractionReviewRequiresAttention(row!), true);
+    assert.equal(extractionReviewBlocksConfirmation(row!), false);
     const edited = revalidateExtractionRow(
       row!,
       { proposedValue: { kind: 'numeric', value: 118 }, decision: 'preserve' },
@@ -351,24 +354,23 @@ describe('local extraction domain', () => {
     );
     assert.ok(edited.reviewReasons.includes('unsupported-layout'));
     assert.equal(edited.decision, 'preserve');
-    assert.throws(
-      () =>
-        buildExtractionConfirmationPlan(
-          {
-            id: 'ambiguous-draft',
-            reportId: 'synthetic-report',
-            state: 'draft',
-            ocrContractVersion: 'alyte.vision.document.v2',
-            parserVersion: EXTRACTION_PARSER_VERSION,
-            collectionDate: { kind: 'known', value: '2026-08-20' },
-            rows: row === undefined ? [] : [row],
-            createdAt: '2026-08-20T00:00:00.000Z',
-            updatedAt: '2026-08-20T00:00:00.000Z',
-            confirmedAt: null,
-          },
-          { record: () => 'record', measurement: () => 'measurement' },
-        ),
-      /unresolved required fields/,
+    assert.equal(
+      buildExtractionConfirmationPlan(
+        {
+          id: 'ambiguous-draft',
+          reportId: 'synthetic-report',
+          state: 'draft',
+          ocrContractVersion: 'alyte.vision.document.v2',
+          parserVersion: EXTRACTION_PARSER_VERSION,
+          collectionDate: { kind: 'known', value: '2026-08-20' },
+          rows: row === undefined ? [] : [row],
+          createdAt: '2026-08-20T00:00:00.000Z',
+          updatedAt: '2026-08-20T00:00:00.000Z',
+          confirmedAt: null,
+        },
+        { record: () => 'record', measurement: () => 'measurement' },
+      ).records.length,
+      0,
     );
   });
 
@@ -390,24 +392,24 @@ describe('local extraction domain', () => {
     assert.equal(row?.proposedBiomarkerId, 'biomarker.ldl_c');
     assert.ok(row?.reviewReasons.includes('incompatible-unit'));
     assert.equal(row?.reviewState, 'needs-review');
-    assert.throws(
-      () =>
-        buildExtractionConfirmationPlan(
-          {
-            id: 'incompatible-unit-draft',
-            reportId: 'synthetic-report',
-            state: 'draft',
-            ocrContractVersion: 'alyte.vision.document.v2',
-            parserVersion: EXTRACTION_PARSER_VERSION,
-            collectionDate: { kind: 'known', value: '2026-08-20' },
-            rows: row === undefined ? [] : [row],
-            createdAt: '2026-08-20T00:00:00.000Z',
-            updatedAt: '2026-08-20T00:00:00.000Z',
-            confirmedAt: null,
-          },
-          { record: () => 'record', measurement: () => 'measurement' },
-        ),
-      /unresolved required fields/,
+    assert.equal(row?.decision, 'skip');
+    assert.equal(
+      buildExtractionConfirmationPlan(
+        {
+          id: 'incompatible-unit-draft',
+          reportId: 'synthetic-report',
+          state: 'draft',
+          ocrContractVersion: 'alyte.vision.document.v2',
+          parserVersion: EXTRACTION_PARSER_VERSION,
+          collectionDate: { kind: 'known', value: '2026-08-20' },
+          rows: row === undefined ? [] : [row],
+          createdAt: '2026-08-20T00:00:00.000Z',
+          updatedAt: '2026-08-20T00:00:00.000Z',
+          confirmedAt: null,
+        },
+        { record: () => 'record', measurement: () => 'measurement' },
+      ).records.length,
+      0,
     );
   });
 
@@ -435,26 +437,26 @@ describe('local extraction domain', () => {
     assert.equal(row?.proposedUnit, null);
     assert.ok(row?.reviewReasons.includes('missing-unit'));
     assert.equal(row?.reviewState, 'needs-review');
-    assert.equal(row?.decision, 'unresolved');
-    assert.equal(row === undefined ? false : extractionReviewBlocksConfirmation(row), true);
-    assert.throws(
-      () =>
-        buildExtractionConfirmationPlan(
-          {
-            id: 'multi-row-draft',
-            reportId: 'synthetic-report',
-            state: 'draft',
-            ocrContractVersion: 'alyte.vision.document.v2',
-            parserVersion: EXTRACTION_PARSER_VERSION,
-            collectionDate: { kind: 'known', value: '2026-08-20' },
-            rows: row === undefined ? [] : [row],
-            createdAt: '2026-08-20T00:00:00.000Z',
-            updatedAt: '2026-08-20T00:00:00.000Z',
-            confirmedAt: null,
-          },
-          { record: () => 'record', measurement: () => 'measurement' },
-        ),
-      /unresolved required fields/,
+    assert.equal(row?.decision, 'skip');
+    assert.equal(row === undefined ? false : extractionReviewRequiresAttention(row), true);
+    assert.equal(row === undefined ? false : extractionReviewBlocksConfirmation(row), false);
+    assert.equal(
+      buildExtractionConfirmationPlan(
+        {
+          id: 'multi-row-draft',
+          reportId: 'synthetic-report',
+          state: 'draft',
+          ocrContractVersion: 'alyte.vision.document.v2',
+          parserVersion: EXTRACTION_PARSER_VERSION,
+          collectionDate: { kind: 'known', value: '2026-08-20' },
+          rows: row === undefined ? [] : [row],
+          createdAt: '2026-08-20T00:00:00.000Z',
+          updatedAt: '2026-08-20T00:00:00.000Z',
+          confirmedAt: null,
+        },
+        { record: () => 'record', measurement: () => 'measurement' },
+      ).records.length,
+      0,
     );
   });
 

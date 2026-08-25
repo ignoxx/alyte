@@ -7,13 +7,17 @@ import {
   type RouteProp,
 } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { parseComparatorValue, type ExtractionDraftRow } from '@alyte/domain';
+import {
+  extractionReviewRequiresAttention,
+  parseComparatorValue,
+  type ExtractionDraftRow,
+} from '@alyte/domain';
 import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import { colors, spacing } from '../../theme';
-import { extractionNeedsResolution, sourceRegionPresentation } from './extraction-ui-model';
+import { sourceRegionPresentation } from './extraction-ui-model';
 
 type EditorRoute = RouteProp<RootStackParamList, 'ExtractionMeasurementEditor'>;
 type EditorNavigation = NativeStackNavigationProp<
@@ -133,7 +137,7 @@ export function ExtractionMeasurementEditorScreen() {
   async function choose(decision: 'preserve' | 'resolve' | 'skip') {
     const saved = decision !== 'skip' && dirty ? await save() : row;
     if (saved === null) return;
-    if (decision !== 'skip' && extractionNeedsResolution(saved)) {
+    if (decision !== 'skip' && extractionReviewRequiresAttention(saved)) {
       Alert.alert(t('labs.extractionEditErrorTitle'), t('labs.extractionRequiredFieldsError'));
       return;
     }

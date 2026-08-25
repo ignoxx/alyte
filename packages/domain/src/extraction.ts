@@ -97,20 +97,29 @@ const REQUIRED_EXTRACTION_REVIEW_REASONS = new Set<ExtractionReviewReason>([
   'unsupported-layout',
 ]);
 
+const AUTO_EXCLUDED_EXTRACTION_REVIEW_REASONS = new Set<ExtractionReviewReason>([
+  'missing-unit',
+  'incompatible-unit',
+  'unsupported-layout',
+]);
+
+export function extractionReviewRequiresAttention(
+  row: Pick<ExtractionDraftRow, 'reviewReasons'>,
+): boolean {
+  return row.reviewReasons.some((reason) => REQUIRED_EXTRACTION_REVIEW_REASONS.has(reason));
+}
+
 export function extractionReviewBlocksConfirmation(
   row: Pick<ExtractionDraftRow, 'decision' | 'reviewReasons'>,
 ): boolean {
-  return (
-    row.decision !== 'skip' &&
-    row.reviewReasons.some((reason) => REQUIRED_EXTRACTION_REVIEW_REASONS.has(reason))
-  );
+  return row.decision !== 'skip' && extractionReviewRequiresAttention(row);
 }
 
 function defaultExtractionDecision(
   reasons: readonly ExtractionReviewReason[],
 ): ExtractionRowDecision {
-  return reasons.some((reason) => REQUIRED_EXTRACTION_REVIEW_REASONS.has(reason))
-    ? 'unresolved'
+  return reasons.some((reason) => AUTO_EXCLUDED_EXTRACTION_REVIEW_REASONS.has(reason))
+    ? 'skip'
     : reasons.length === 0
       ? 'resolve'
       : 'preserve';

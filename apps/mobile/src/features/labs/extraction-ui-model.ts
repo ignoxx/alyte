@@ -1,5 +1,6 @@
 import {
   extractionReviewBlocksConfirmation,
+  extractionReviewRequiresAttention,
   type ExtractionDraftRow,
   type ExtractionRowDecision,
 } from '@alyte/domain';
@@ -16,10 +17,8 @@ export type ExtractionReviewSection = {
   }[];
 };
 
-export function extractionNeedsResolution(
-  row: Pick<ExtractionDraftRow, 'decision' | 'reviewReasons'>,
-): boolean {
-  return extractionReviewBlocksConfirmation(row);
+export function extractionNeedsResolution(row: Pick<ExtractionDraftRow, 'reviewReasons'>): boolean {
+  return extractionReviewRequiresAttention(row);
 }
 
 export type ExtractionDecisionPresentation = {
@@ -48,8 +47,17 @@ export function canConfirmExtraction(
 ): boolean {
   return (
     rows.some((row) => row.decision !== 'skip') &&
-    rows.every((row) => !extractionNeedsResolution(row))
+    rows.every((row) => !extractionReviewBlocksConfirmation(row))
   );
+}
+
+export function extractionReviewCounts(
+  rows: readonly Pick<ExtractionDraftRow, 'decision' | 'reviewReasons'>[],
+): { readonly included: number; readonly needsReview: number } {
+  return {
+    included: rows.filter((row) => row.decision !== 'skip').length,
+    needsReview: rows.filter(extractionNeedsResolution).length,
+  };
 }
 
 export function filterExtractionRows(

@@ -12,6 +12,7 @@ import {
   buildExtractionReviewSections,
   canConfirmExtraction,
   extractionNeedsResolution,
+  extractionReviewCounts,
   filterExtractionRows,
   type ExtractionReviewFilter,
 } from './extraction-ui-model';
@@ -54,12 +55,11 @@ function flattenSections(rows: readonly ExtractionDraftRow[]): readonly ListSect
 }
 
 function rowAccessibilityLabel(row: ExtractionDraftRow): string {
-  const state =
-    row.decision === 'skip'
+  const state = extractionNeedsResolution(row)
+    ? t('labs.extractionNeedsReview')
+    : row.decision === 'skip'
       ? t('labs.extractionSkipped')
-      : extractionNeedsResolution(row)
-        ? t('labs.extractionNeedsReview')
-        : t('labs.extractionIncluded');
+      : t('labs.extractionIncluded');
   const sourceLabel = row.sourceLabel === row.proposedLabel ? '' : ` ${row.sourceLabel}.`;
   const range = row.proposedReferenceInterval
     ? ` ${t('labs.measurementReference')}: ${row.proposedReferenceInterval}.`
@@ -119,8 +119,9 @@ export function ExtractionDraftScreen() {
     [draft?.rows, filter, search],
   );
   const sections = useMemo(() => flattenSections(visibleRows), [visibleRows]);
-  const needsReview = draft?.rows.filter(extractionNeedsResolution).length ?? 0;
-  const included = draft?.rows.filter((row) => row.decision !== 'skip').length ?? 0;
+  const counts = extractionReviewCounts(draft?.rows ?? []);
+  const needsReview = counts.needsReview;
+  const included = counts.included;
   const canConfirm = draft !== null && canConfirmExtraction(draft.rows);
 
   const confirm = useCallback(async () => {

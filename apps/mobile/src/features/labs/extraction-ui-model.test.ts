@@ -6,6 +6,7 @@ import {
   canConfirmExtraction,
   extractionDecisionPresentation,
   extractionNeedsResolution,
+  extractionReviewCounts,
   filterExtractionRows,
   sourceRegionPresentation,
 } from './extraction-ui-model';
@@ -73,6 +74,17 @@ test('Extraction confirmation includes valid rows by default and gates only true
   });
   assert.equal(extractionNeedsResolution(ambiguous), true);
   assert.equal(canConfirmExtraction([ambiguous]), false);
+  const skippedUnsafe = row({
+    id: 'skipped-unsafe',
+    decision: 'skip',
+    reviewReasons: ['unsupported-layout'],
+    reviewState: 'needs-review',
+  });
+  assert.equal(extractionNeedsResolution(skippedUnsafe), true);
+  assert.deepEqual(extractionReviewCounts([skippedUnsafe]), { included: 0, needsReview: 1 });
+  assert.deepEqual(filterExtractionRows([skippedUnsafe], '', 'all'), [skippedUnsafe]);
+  assert.deepEqual(filterExtractionRows([skippedUnsafe], '', 'needs-review'), [skippedUnsafe]);
+  assert.equal(canConfirmExtraction([row(), skippedUnsafe]), true);
   assert.equal(
     canConfirmExtraction([
       row({ id: 'kept', decision: 'preserve', reviewReasons: ['unsupported-alias'] }),

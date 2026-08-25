@@ -282,12 +282,12 @@ describe('protected manual Lab Record persistence', () => {
 
     await assert.rejects(
       repository.confirmExtractionDraft(draft.id, aliases),
-      /unresolved required fields/,
+      /At least one extraction row must be included/,
     );
     const reopened = await repository.getExtractionDraft(draft.id, aliases);
     assert.equal(reopened?.parserVersion, EXTRACTION_PARSER_VERSION);
     assert.ok(reopened?.rows[0]?.reviewReasons.includes('unsupported-layout'));
-    assert.equal(reopened?.rows[0]?.decision, 'unresolved');
+    assert.equal(reopened?.rows[0]?.decision, 'skip');
     assert.equal(
       (
         await database.getAllAsync<{ parser_version: string }>(
