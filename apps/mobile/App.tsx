@@ -98,6 +98,7 @@ function AppContent({ services }: { readonly services: AlyteServices }) {
           <RootNavigator services={services} />
         ) : (
           <OnboardingScreen
+            model={services.models}
             onComplete={() => {
               void services.intake
                 .setLocalPreference(ONBOARDING_COMPLETED_PREFERENCE, 'true')

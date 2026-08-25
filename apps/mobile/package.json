@@ -18,6 +18,7 @@
     "@alyte/domain": "0.1.0",
     "@alyte/fixtures": "0.1.0",
     "@alyte/image": "file:modules/alyte-image",
+    "@alyte/local-models": "file:modules/alyte-local-models",
     "@alyte/protection": "file:modules/alyte-protection",
     "@alyte/pdf": "file:modules/alyte-pdf",
     "@alyte/vision": "file:modules/alyte-vision",

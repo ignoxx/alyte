@@ -19,6 +19,7 @@ import { MeasurementCorrectionScreen } from '../features/labs/MeasurementCorrect
 import { LabDeletionScreen } from '../features/labs/LabDeletionScreen';
 import { RecordSourcePreviewScreen } from '../features/labs/RecordSourcePreviewScreen';
 import { FullExportScreen } from '../features/settings/FullExportScreen';
+import { LocalModelInstallScreen } from '../features/onboarding/LocalModelInstallScreen';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const MainTabs = createNativeBottomTabNavigator<MainTabParamList>();
@@ -183,6 +184,11 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
         <RootStack.Screen name="MainTabs">
           {() => <MainTabNavigator extensions={extensions} services={services} />}
         </RootStack.Screen>
+        <RootStack.Screen
+          name="ModelInstall"
+          component={LocalModelInstallScreen}
+          options={{ presentation: 'fullScreenModal', headerShown: false }}
+        />
         <RootStack.Screen
           name={reportImportDestination.route}
           component={LabReportImportRoute}

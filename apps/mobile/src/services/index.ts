@@ -21,6 +21,11 @@ import {
   type LocalControlsService,
 } from '../features/local-controls/service';
 import {
+  createFakeLocalModelNativeModule,
+  createLocalModelService,
+  type LocalModelService,
+} from '../features/local-models/native';
+import {
   missingShowcaseIntakeInputs,
   seedShowcaseLabRecords,
   showcaseIntakeInputs,
@@ -35,6 +40,7 @@ export interface AlyteServices {
   readonly intake: IntakeService;
   readonly export: LocalExportService;
   readonly controls: LocalControlsService;
+  readonly models: LocalModelService;
 }
 
 export function runtimeVariant(): RuntimeVariant {
@@ -71,6 +77,11 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     variant,
     appVersion: '0.1.0',
   });
+  const fakeModelState = process.env.EXPO_PUBLIC_LOCAL_MODEL_FAKE === 'true';
+  const models =
+    fakeModelState && variant !== 'production'
+      ? createLocalModelService({ native: createFakeLocalModelNativeModule() })
+      : createLocalModelService();
 
   if (showcase !== null) {
     void seedShowcaseLabRecords(labs);
@@ -89,6 +100,7 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     intake,
     export: exportService,
     controls,
+    models,
   };
 }
 

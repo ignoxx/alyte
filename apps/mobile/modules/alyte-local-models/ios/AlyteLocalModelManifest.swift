@@ -1,0 +1,111 @@
+import Foundation
+
+enum AlyteLocalModelManifest {
+  static let version = "alyte.local-model.manifest.v1"
+  static let packID = "gemma-4-e2b-it-q4-0"
+  static let sourceRepository = "google/gemma-4-E2B-it"
+  static let sourceRevision = "3e22461f65e89153144f8adb70e3b8c2cc9845a7"
+  static let artifactRepository = "ggml-org/gemma-4-E2B-it-GGUF"
+  static let artifactRevision = "b4243c156154b6dca9324415f8c7ccc098b4aed1"
+  static let filename = "gemma-4-E2B-it-Q4_0.gguf"
+  static let artifactURL = "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/b4243c156154b6dca9324415f8c7ccc098b4aed1/gemma-4-E2B-it-Q4_0.gguf?download=true"
+  static let bytes: Int64 = 2_841_481_184
+  static let sha256 = "8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52"
+  static let publisher = "Google / ggml-org"
+  static let license = "Apache-2.0"
+  static let format = "GGUF"
+  static let quantization = "Q4_0"
+  static let runtimeID = "llama.cpp"
+  static let runtimeRepository = "ggml-org/llama.cpp"
+  static let runtimeRevision = "bb4caa7540188872173c44d161602d9271386413"
+  static let promptBundle = "alyte.gemma4-e2b-evaluation.prompt.v2"
+  static let semanticSchema = "alyte.semantic-mapper.v1"
+  static let languages = ["en", "de", "lt", "fr", "es", "it", "pt", "nl", "pl"]
+  static let minimumIOS = "26.0"
+  static let minimumFreeBytes: Int64 = 6_000_000_000
+  static let minimumMemoryBytes: Int64 = 4_000_000_000
+
+  // Redirects resolve to one of these public Hugging Face CDN origins. This is intentionally an
+  // exact host list; accepting `*.hf.co`, arbitrary HTTPS, or a moving Hub revision would make the
+  // downloaded bytes outside the reviewed contract.
+  static let allowedHosts = [
+    "huggingface.co",
+    "cdn-lfs.huggingface.co",
+    "cdn-lfs-us-1.hf.co",
+    "cdn-lfs-eu-1.hf.co",
+    "cdn-lfs.hf.co",
+    "cas-bridge.xethub.hf.co",
+  ]
+
+  static var expectedURL: URL { URL(string: artifactURL)! }
+
+  static func publicManifest() -> [String: Any] {
+    [
+      "manifestVersion": version,
+      "pack": [
+        "id": packID,
+        "source": ["repository": sourceRepository, "revision": sourceRevision],
+        "artifact": [
+          "repository": artifactRepository,
+          "revision": artifactRevision,
+          "filename": filename,
+          "url": artifactURL,
+          "bytes": bytes,
+          "sha256": sha256,
+        ],
+        "publisher": publisher,
+        "license": license,
+        "format": format,
+        "quantization": quantization,
+      ],
+      "runtime": ["id": runtimeID, "repository": runtimeRepository, "revision": runtimeRevision],
+      "compatibility": [
+        "languages": languages,
+        "promptBundle": promptBundle,
+        "semanticSchema": semanticSchema,
+      ],
+      "requirements": [
+        "minimumIOS": minimumIOS,
+        "minimumFreeBytes": minimumFreeBytes,
+        "minimumMemoryBytes": minimumMemoryBytes,
+      ],
+      "allowlist": ["hosts": allowedHosts, "files": [filename]],
+    ]
+  }
+
+  static func isAllowedRedirect(_ url: URL) -> Bool {
+    guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased(), allowedHosts.contains(host),
+          url.user == nil, url.password == nil else { return false }
+    return true
+  }
+}
+
+enum AlyteLocalModelFailure: String {
+  case offline = "offline"
+  case insufficientSpace = "insufficient-space"
+  case upstreamMissing = "upstream-missing"
+  case httpFailed = "http-failed"
+  case redirectRejected = "redirect-rejected"
+  case sizeMismatch = "size-mismatch"
+  case checksumMismatch = "checksum-mismatch"
+  case incompatible = "incompatible"
+  case cancelled = "cancelled"
+  case unavailable = "unavailable"
+  case runtimeFailed = "runtime-failed"
+  case storageProtection = "storage-protection"
+  case unknown = "unknown"
+}
+
+enum AlyteLocalModelError: Error {
+  case unsupportedPack
+  case invalidManifest
+  case unavailable(AlyteLocalModelFailure)
+  case failed(AlyteLocalModelFailure)
+
+  var failure: AlyteLocalModelFailure {
+    switch self {
+    case .unsupportedPack, .invalidManifest: return .incompatible
+    case .unavailable(let value), .failed(let value): return value
+    }
+  }
+}

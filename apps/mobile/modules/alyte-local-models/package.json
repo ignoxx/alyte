@@ -1,0 +1,12 @@
+{
+  "name": "@alyte/local-models",
+  "version": "0.1.0",
+  "private": true,
+  "files": [
+    "ios",
+    "expo-module.config.json"
+  ],
+  "peerDependencies": {
+    "expo": "*"
+  }
+}

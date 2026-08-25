@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import {
   ActionSheetIOS,
   Alert,
@@ -33,6 +33,7 @@ import {
 } from './report-service';
 import type { LabReportPreview } from './report-service';
 import { formatReportPageCount } from './report-detail-model';
+import { canStartAutomatedExtraction, type LocalModelSnapshot } from '../local-models/model';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
 type DetailRoute = RouteProp<LabsStackParamList, 'LabReportDetail'>;
@@ -64,7 +65,7 @@ function formatBytes(value: number | null): string {
 export function LabReportDetailScreen() {
   const navigation = useNavigation<Navigation>();
   const route = useRoute<DetailRoute>();
-  const { reports } = useServices();
+  const { reports, models } = useServices();
   const [report, setReport] = useState<LabReport | null>(null);
   const [integrity, setIntegrity] = useState<
     'verified' | 'missing' | 'mismatch' | 'not-verifiable'
@@ -78,6 +79,7 @@ export function LabReportDetailScreen() {
   const [preview, setPreview] = useState<LabReportPreview | null>(null);
   const [previewError, setPreviewError] = useState(false);
   const [extractionReady, setExtractionReady] = useState(false);
+  const [modelSnapshot, setModelSnapshot] = useState<LocalModelSnapshot | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -108,6 +110,23 @@ export function LabReportDetailScreen() {
       void load();
     }, [load]),
   );
+
+  useEffect(() => {
+    let active = true;
+    const unsubscribe = models.subscribe((next) => {
+      if (active) setModelSnapshot(next);
+    });
+    void models
+      .getState()
+      .then((next) => {
+        if (active) setModelSnapshot(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [models]);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -172,10 +191,18 @@ export function LabReportDetailScreen() {
 
   async function extractLocally() {
     if (report === null) return;
+    if (modelSnapshot === null || !canStartAutomatedExtraction(modelSnapshot)) {
+      navigation
+        .getParent<NativeStackNavigationProp<RootStackParamList>>()
+        ?.getParent<NativeStackNavigationProp<RootStackParamList>>()
+        ?.navigate('ModelInstall');
+      return;
+    }
     setBusy(true);
     setError(false);
     setExtractionError(null);
     try {
+      await models.load();
       const draft = await reports.startExtraction(report.id, promptPassword());
       navigation.navigate('ExtractionDraft', { reportId: report.id, draftId: draft.id });
     } catch (caught) {
@@ -312,9 +339,16 @@ export function LabReportDetailScreen() {
                 <>
                   <AppText variant="heading">{t('labs.extractionStart')}</AppText>
                   <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
+                  {(modelSnapshot === null || !canStartAutomatedExtraction(modelSnapshot)) && (
+                    <AppText style={styles.body}>{t('labs.extractionModelRequired')}</AppText>
+                  )}
                   <AppButton
                     disabled={busy}
-                    label={t('labs.extractionStart')}
+                    label={
+                      modelSnapshot === null || !canStartAutomatedExtraction(modelSnapshot)
+                        ? t('labs.extractionModelAction')
+                        : t('labs.extractionStart')
+                    }
                     onPress={() => void extractLocally()}
                     style={styles.extractButton}
                   />

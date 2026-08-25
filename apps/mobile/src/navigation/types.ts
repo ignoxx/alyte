@@ -42,6 +42,7 @@ export type LogStackParamList = {
 
 export type RootStackParamList = {
   MainTabs: NavigatorScreenParams<MainTabParamList> | undefined;
+  ModelInstall: undefined;
   ReportImport: undefined;
   SnapCapture: undefined;
   PrivacyWorkspace: { readonly reportId: string };
