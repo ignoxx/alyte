@@ -69,10 +69,12 @@ async function databaseFixture() {
     idGenerator: (prefix) => `${prefix}-test`,
   });
   await boundary.initialize();
+  await database.execAsync('PRAGMA foreign_keys = ON;');
   return database;
 }
 
 function filesFixture(options: { readonly failPath?: string } = {}) {
+  let failPath = options.failPath;
   const removed: string[] = [];
   const owned = new Set([
     'protected://original-reports/report.pdf',
@@ -86,7 +88,7 @@ function filesFixture(options: { readonly failPath?: string } = {}) {
     removed,
     files: {
       async remove(path: string) {
-        if (path === options.failPath) throw new Error('synthetic file failure');
+        if (path === failPath) throw new Error('synthetic file failure');
         removed.push(path);
         owned.delete(path);
       },
@@ -97,9 +99,12 @@ function filesFixture(options: { readonly failPath?: string } = {}) {
         return [...owned];
       },
       async removeOwnedFile(path: string) {
-        if (path === options.failPath) throw new Error('synthetic file failure');
+        if (path === failPath) throw new Error('synthetic file failure');
         removed.push(path);
         owned.delete(path);
+      },
+      setFailPath(path: string | undefined) {
+        failPath = path;
       },
     },
   };
@@ -161,6 +166,11 @@ function serviceFor(database: NodeDatabase, files: ReturnType<typeof filesFixtur
 test('builds a count-only snapshot, binds execution to a plan hash, and preserves control preferences', async () => {
   const database = await databaseFixture();
   await seedHealth(database);
+  await database.runAsync(
+    `INSERT INTO lab_combined_deletions
+      (id, record_id, report_id, state, created_at, updated_at)
+     VALUES ('combined-1', 'record-1', 'report-1', 'requested', '2026-08-25', '2026-08-25');`,
+  );
   const fileFixture = filesFixture();
   const service = serviceFor(database, fileFixture);
 
@@ -194,6 +204,7 @@ test('builds a count-only snapshot, binds execution to a plan hash, and preserve
     'completed',
   );
   assert.equal((await database.getAllAsync('SELECT id FROM local_deletion_operations')).length, 1);
+  assert.equal((await database.getAllAsync('SELECT id FROM lab_combined_deletions')).length, 0);
   assert.ok(fileFixture.removed.includes('protected://original-reports/report.pdf'));
   assert.ok(fileFixture.removed.includes('protected://intake-media/event.jpg'));
   await database.closeAsync();
@@ -223,6 +234,21 @@ test('retains a retryable failed operation when a protected file cannot be remov
   assert.equal(failed.state, 'failed');
   assert.deepEqual(failed.failureCategories, ['file-failed']);
   assert.equal((await database.getAllAsync('SELECT id FROM lab_reports')).length, 1);
+  await database.closeAsync();
+});
+
+test('retry resumes the durable failed operation identity and completes after the file recovers', async () => {
+  const database = await databaseFixture();
+  await seedHealth(database);
+  const fileFixture = filesFixture({ failPath: 'protected://original-reports/report.pdf' });
+  const service = serviceFor(database, fileFixture);
+  const failed = await service.execute(await service.preview('reports'));
+  assert.equal(failed.state, 'failed');
+  fileFixture.files.setFailPath(undefined);
+  const retried = await service.retry(failed.operationId);
+  assert.equal(retried.state, 'completed');
+  assert.equal(retried.operationId, failed.operationId);
+  assert.equal((await database.getAllAsync('SELECT id FROM local_deletion_operations')).length, 1);
   await database.closeAsync();
 });
 
@@ -268,6 +294,10 @@ test('reference-counts shared media and removes report working pages', async () 
 test('media deletion removes bytes and jobs while retaining structured report/event rows', async () => {
   const database = await databaseFixture();
   await seedHealth(database);
+  await database.runAsync(
+    `INSERT INTO lab_report_pages (id, report_id, page_index, derived_path)
+     VALUES ('page-media', 'report-1', 0, 'protected://working-pages/report-page.png');`,
+  );
   const fileFixture = filesFixture();
   const service = serviceFor(database, fileFixture);
   const plan = await service.preview('media');
@@ -291,6 +321,15 @@ test('media deletion removes bytes and jobs while retaining structured report/ev
   )[0];
   assert.equal(report?.original_path, null);
   assert.equal(report?.import_state, 'imported');
+  assert.equal(
+    (
+      await database.getAllAsync<{ derived_path: string | null }>(
+        'SELECT derived_path FROM lab_report_pages WHERE id = ?;',
+        'page-media',
+      )
+    )[0]?.derived_path,
+    null,
+  );
   assert.equal(event?.source_media_path, null);
   assert.equal((await database.getAllAsync('SELECT id FROM cloud_jobs')).length, 0);
   assert.equal(

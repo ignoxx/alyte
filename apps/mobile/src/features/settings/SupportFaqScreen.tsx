@@ -1,5 +1,4 @@
-import { Collapsible } from '@expo/ui';
-import { Host } from '@expo/ui/swift-ui';
+import { Collapsible, Host } from '@expo/ui';
 import { useState } from 'react';
 import { Alert, Linking, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -15,12 +14,18 @@ const faqItems = [
   ['faqDeleteTitle', 'faqDeleteBody'],
 ] as const;
 
+export function supportMailto(): string {
+  const subject = encodeURIComponent(t('settings.supportMailSubject'));
+  const body = encodeURIComponent(t('settings.supportMailBody'));
+  return `mailto:support@alyte.app?subject=${subject}&body=${body}`;
+}
+
 export function SupportFaqScreen() {
   const navigation = useNavigation<any>();
   const [expanded, setExpanded] = useState<number | null>(null);
 
   async function contactSupport() {
-    const url = 'mailto:support@alyte.app?subject=Alyte%20support';
+    const url = supportMailto();
     if (await Linking.canOpenURL(url)) {
       await Linking.openURL(url);
     } else {

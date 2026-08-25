@@ -25,6 +25,30 @@ function availableLabel(count: number): string {
   return t('settings.exportCount').replace('{count}', count.toLocaleString());
 }
 
+function selectedLabel(selected: number, available: number): string {
+  return t('settings.exportSelectedCount')
+    .replace('{selected}', selected.toLocaleString())
+    .replace('{available}', available.toLocaleString());
+}
+
+function progressLabel(progress: LocalExportProgress | null): string {
+  if (progress === null) return t('settings.exportProgressPreparing');
+  const phaseKey: Record<LocalExportProgress['phase'], string> = {
+    staging: 'settings.exportProgressStaging',
+    archiving: 'settings.exportProgressArchiving',
+    promoting: 'settings.exportProgressPromoting',
+    ready: 'settings.exportProgressReady',
+    cancelled: 'settings.exportCancelledTitle',
+    failed: 'settings.exportFailedTitle',
+  };
+  const phase = t(phaseKey[progress.phase]);
+  if (progress.totalEntries <= 0) return phase;
+  return `${phase} · ${t('settings.exportProgressPercent').replace(
+    '{percent}',
+    Math.round((progress.completedEntries / progress.totalEntries) * 100).toLocaleString(),
+  )}`;
+}
+
 function ExportToggle({
   title,
   count,
@@ -45,7 +69,11 @@ function ExportToggle({
         </AppText>
       </View>
       <Host matchContents>
-        <Switch value={value} onValueChange={onValueChange} label="" />
+        <Switch
+          value={value}
+          onValueChange={onValueChange}
+          label={`${title}, ${availableLabel(count)}`}
+        />
       </Host>
     </View>
   );
@@ -55,6 +83,8 @@ export function FullExportScreen() {
   const services = useServices();
   const navigation = useNavigation<any>();
   const [media, setMedia] = useState<ExportMediaSummary | null>(null);
+  const [mediaStatus, setMediaStatus] = useState<'loading' | 'ready' | 'unavailable'>('loading');
+  const [mediaRetry, setMediaRetry] = useState(0);
   const [stage, setStage] = useState<ExportStage>('selection');
   const [includeOriginal, setIncludeOriginal] = useState(false);
   const [includeSanitized, setIncludeSanitized] = useState(false);
@@ -67,18 +97,25 @@ export function FullExportScreen() {
 
   useEffect(() => {
     let active = true;
+    setMediaStatus('loading');
     void services.controls
       .exportMediaSummary()
       .then((summary) => {
-        if (active) setMedia(summary);
+        if (active) {
+          setMedia(summary);
+          setMediaStatus('ready');
+        }
       })
       .catch(() => {
-        if (active) setMedia(null);
+        if (active) {
+          setMedia(null);
+          setMediaStatus('unavailable');
+        }
       });
     return () => {
       active = false;
     };
-  }, [services.controls]);
+  }, [mediaRetry, services.controls]);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -216,7 +253,22 @@ export function FullExportScreen() {
                 onValueChange={setIncludeIntake}
               />
             </View>
-            <AppButton label={t('settings.exportContinue')} onPress={() => setStage('preview')} />
+            {mediaStatus === 'unavailable' && (
+              <AppSurface tone="soft" style={styles.unavailableSurface}>
+                <AppText variant="label">{t('settings.exportMediaUnavailable')}</AppText>
+                <AppText style={styles.muted}>{t('settings.exportMediaUnavailableBody')}</AppText>
+                <AppButton
+                  label={t('settings.exportMediaRetry')}
+                  tone="secondary"
+                  onPress={() => setMediaRetry((value) => value + 1)}
+                />
+              </AppSurface>
+            )}
+            <AppButton
+              label={t('settings.exportContinue')}
+              disabled={mediaStatus !== 'ready'}
+              onPress={() => setStage('preview')}
+            />
           </>
         )}
         {stage === 'preview' && (
@@ -234,15 +286,27 @@ export function FullExportScreen() {
               <AppText>{t('settings.exportStructured')}</AppText>
               <AppText>
                 {t('settings.exportOriginalReports')}:{' '}
-                {includeOriginal ? t('settings.exportOn') : t('settings.exportOff')}
+                {includeOriginal
+                  ? selectedLabel(
+                      media?.counts.originalReports ?? 0,
+                      media?.counts.originalReports ?? 0,
+                    )
+                  : t('settings.exportOff')}
               </AppText>
               <AppText>
                 {t('settings.exportSanitizedReports')}:{' '}
-                {includeSanitized ? t('settings.exportOn') : t('settings.exportOff')}
+                {includeSanitized
+                  ? selectedLabel(
+                      media?.counts.sanitizedReports ?? 0,
+                      media?.counts.sanitizedReports ?? 0,
+                    )
+                  : t('settings.exportOff')}
               </AppText>
               <AppText>
                 {t('settings.exportIntakeImages')}:{' '}
-                {includeIntake ? t('settings.exportOn') : t('settings.exportOff')}
+                {includeIntake
+                  ? selectedLabel(media?.counts.intakeImages ?? 0, media?.counts.intakeImages ?? 0)
+                  : t('settings.exportOff')}
               </AppText>
             </View>
             <AppButton label={t('settings.exportCreate')} onPress={startExport} />
@@ -255,12 +319,8 @@ export function FullExportScreen() {
             </AppText>
             <AppText style={styles.intro}>{t('settings.exportProgress')}</AppText>
             <AppSurface style={styles.progressSurface}>
-              <AppText selectable>
-                {progress === null
-                  ? '0%'
-                  : progress.totalEntries > 0
-                    ? `${Math.round((progress.completedEntries / progress.totalEntries) * 100)}%`
-                    : progress.phase}
+              <AppText selectable accessibilityLabel={progressLabel(progress)}>
+                {progressLabel(progress)}
               </AppText>
             </AppSurface>
             <AppButton
@@ -326,6 +386,7 @@ const styles = StyleSheet.create({
   },
   toggleCopy: { flex: 1, gap: spacing.xs },
   warningSurface: { gap: spacing.md, marginBottom: spacing.lg },
+  unavailableSurface: { gap: spacing.sm, marginBottom: spacing.lg },
   warningText: { color: colors.danger },
   previewList: { gap: spacing.md, marginBottom: spacing.lg },
   progressSurface: { alignItems: 'center', marginBottom: spacing.lg, paddingVertical: spacing.xl },

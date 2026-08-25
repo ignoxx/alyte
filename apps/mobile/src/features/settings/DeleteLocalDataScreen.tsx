@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
-import { usePreventRemove } from '@react-navigation/native';
+import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { useServices } from '../../services';
-import { AppButton, AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
+import { AppButton, AppIcon, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import {
   LOCAL_DELETION_SCOPES,
@@ -31,11 +31,11 @@ const countCopy: Record<keyof LocalDataCounts, string> = {
   extractionDrafts: 'settings.deleteCategoryDrafts',
   extractionRows: 'settings.deleteCategoryDrafts',
   intakeEvents: 'settings.deleteCategoryIntakeEvents',
-  intakeComponents: 'settings.deleteCategoryIntakeEvents',
+  intakeComponents: 'settings.deleteCategoryIntakeComponents',
   intakeImages: 'settings.deleteCategoryIntakeImages',
   cloudJobs: 'settings.deleteCategoryCloudJobs',
   captureRecoveries: 'settings.deleteCategoryCaptureRecoveries',
-  combinedDeletions: 'settings.deleteCategoryRecords',
+  combinedDeletions: 'settings.deleteCategoryCombinedDeletions',
   exportJobs: 'settings.deleteCategoryExportJobs',
   sanitizationDrafts: 'settings.deleteCategoryDrafts',
 };
@@ -73,11 +73,14 @@ function CountBlock({
 
 export function DeleteLocalDataScreen() {
   const services = useServices();
+  const navigation = useNavigation<any>();
   const [scope, setScope] = useState<LocalDeletionScope>('reports');
   const [plan, setPlan] = useState<DeletionPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [failure, setFailure] = useState(false);
+  const [failedOperationId, setFailedOperationId] = useState<string | null>(null);
+  const [completed, setCompleted] = useState(false);
 
   usePreventRemove(working, ({ data }) => {
     Alert.alert(t('settings.deleteWorking'), t('settings.deleteConfirmBody'), [
@@ -91,6 +94,8 @@ export function DeleteLocalDataScreen() {
     let active = true;
     setLoading(true);
     setFailure(false);
+    setFailedOperationId(null);
+    setCompleted(false);
     void services.controls
       .preview(scope)
       .then((nextPlan) => {
@@ -116,22 +121,33 @@ export function DeleteLocalDataScreen() {
       {
         text: t('settings.deleteConfirm'),
         style: 'destructive',
-        onPress: () => void runDeletion(plan),
+        onPress: () => void runDeletion(plan, failure ? failedOperationId : null),
       },
     ]);
   }
 
-  async function runDeletion(currentPlan: DeletionPlan) {
+  async function runDeletion(currentPlan: DeletionPlan, retryOperationId: string | null) {
     setWorking(true);
     setFailure(false);
     try {
-      const result = await services.controls.execute(currentPlan);
+      const result =
+        retryOperationId === null
+          ? await services.controls.execute(currentPlan)
+          : await services.controls.retry(retryOperationId);
       if (result.state === 'completed') {
+        setCompleted(true);
+        setFailedOperationId(null);
         // Rebuild the plan so the preview remains deterministic after a successful operation and
         // a second tap cannot attempt to apply the stale pre-deletion hash.
-        setPlan(await services.controls.preview(scope));
+        try {
+          setPlan(await services.controls.preview(scope));
+        } catch {
+          // A completed deletion still has an observable success state even if refreshing the
+          // count-only preview is temporarily unavailable.
+        }
       } else {
         setFailure(true);
+        setFailedOperationId(result.operationId);
       }
     } catch {
       setFailure(true);
@@ -187,15 +203,28 @@ export function DeleteLocalDataScreen() {
           <>
             <CountBlock title={t('settings.willBeDeleted')} counts={deletedCounts(plan)} />
             <CountBlock title={t('settings.willRemain')} counts={plan.willRemain} />
+            {completed && (
+              <AppSurface tone="soft" style={styles.successSurface}>
+                <AppText variant="label">{t('settings.deleteCompletedStatus')}</AppText>
+                <AppText style={styles.muted}>{t('settings.deleteSuccessBody')}</AppText>
+                <AppButton
+                  label={t('settings.deleteDone')}
+                  tone="secondary"
+                  onPress={() => navigation.goBack()}
+                />
+              </AppSurface>
+            )}
             {failure && <AppText style={styles.failure}>{t('settings.deleteFailureBody')}</AppText>}
             {working ? (
               <AppText style={styles.muted}>{t('settings.deleteWorking')}</AppText>
             ) : (
-              <AppButton
-                label={failure ? t('settings.deleteRetry') : t('settings.deleteConfirm')}
-                tone="primary"
-                onPress={confirmDeletion}
-              />
+              !completed && (
+                <AppButton
+                  label={failure ? t('settings.deleteRetry') : t('settings.deleteConfirm')}
+                  tone="primary"
+                  onPress={confirmDeletion}
+                />
+              )
             )}
           </>
         ) : null}
@@ -254,5 +283,6 @@ const styles = StyleSheet.create({
   countRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
   count: { color: colors.ink, fontVariant: ['tabular-nums'] },
   failure: { color: colors.danger, marginBottom: spacing.md },
+  successSurface: { gap: spacing.sm, marginBottom: spacing.md },
   scopeFootnote: { color: colors.mutedInk, marginTop: spacing.md },
 });
