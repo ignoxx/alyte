@@ -593,7 +593,10 @@ canonical IDs, decimal parsing, unit conversion, comparison compatibility, and G
 Full Export is generated locally from one consistent database transaction/snapshot. It includes a
 versioned manifest, structured JSON, human-readable CSVs, catalogue/version metadata, corrections,
 feedback, and optionally selected originals, sanitized reports, and intake media. The export warns
-that it may contain sensitive data before opening the system share sheet.
+that it may contain sensitive data before opening the system share sheet. The shareable artifact is
+a portable `.zip` created through the pinned native export adapter, verified before atomic
+promotion, protected with iOS Data Protection, excluded from backup, and removed with all staging
+files after the share lifecycle ends.
 
 Restoring an export and password-encrypting the archive are post-MVP unless the protected schedule
 finishes early. Ordinary export, local deletion, cloud account export, and cloud account deletion
