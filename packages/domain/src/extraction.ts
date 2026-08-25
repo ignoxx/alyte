@@ -636,7 +636,7 @@ function findAliasMatches(
 
 function findUnitInText(sourceText: string): string | null {
   const match = sourceText.match(
-    /(?:mg\s*\/\s*dL?|mmol\s*\/\s*L|g\s*\/\s*dL?|g\s*\/\s*L|ng\s*\/\s*mL|nmol\s*\/\s*L|µ?g\s*\/\s*L|pg\s*\/\s*mL|pmol\s*\/\s*L|IU\s*\/\s*L|U\s*\/\s*L|fL|%|mmol\s*\/\s*mol)/iu,
+    /(?:mg\s*\/\s*dL?|mmol\s*\/\s*L|g\s*\/\s*dL?|g\s*\/\s*L|ng\s*\/\s*mL|nmol\s*\/\s*L|µ?g\s*\/\s*L|pg\s*\/\s*mL|pmol\s*\/\s*L|IU\s*\/\s*L|U\s*\/\s*L|L\s*\/\s*L|fL|%|mmol\s*\/\s*mol)/iu,
   );
   return normalizeUnit(match?.[0] ?? null);
 }

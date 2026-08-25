@@ -80,3 +80,13 @@ export {
   type SyntheticOCRObservation,
   type SyntheticLabSpecimen,
 } from './metabolic-lab-reports.js';
+export {
+  allBloodLiverLabReportFixtures,
+  bloodLiverLabReportFixtures,
+  bloodLiverSafetyReportFixture,
+  type BloodLiverExpectedMeasurement,
+  type BloodLiverExpectedReview,
+  type BloodLiverFixtureSpecimen,
+  type BloodLiverLabReportFixture,
+  type BloodLiverOCRObservation,
+} from './blood-liver-lab-reports.js';
