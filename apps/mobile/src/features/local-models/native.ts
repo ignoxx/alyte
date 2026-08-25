@@ -94,6 +94,7 @@ export function createFakeLocalModelNativeModule(): NativeLocalModelsModule {
     failure: null,
   };
   const listeners = new Set<(value: unknown) => void>();
+  let cancellationRequested = false;
   const emit = (next: Record<string, unknown>) => {
     state = next;
     listeners.forEach((listener) => listener(state));
@@ -108,6 +109,7 @@ export function createFakeLocalModelNativeModule(): NativeLocalModelsModule {
     new Promise<void>((resolve) => {
       setTimeout(resolve, milliseconds);
     });
+  const transferPhaseDelay = 1_200;
 
   return {
     getManifest: () => productionLocalModelManifest,
@@ -115,16 +117,20 @@ export function createFakeLocalModelNativeModule(): NativeLocalModelsModule {
     startDownload: async (packId) => {
       ensurePack(packId);
       if (state.state === 'ready' || state.state === 'loaded') return state;
+      cancellationRequested = false;
       emit({ ...state, state: 'downloading', failure: null, bytesReceived: 0 });
-      await wait(80);
+      await wait(transferPhaseDelay);
+      if (cancellationRequested) return state;
       emit({
         ...state,
         state: 'downloading',
         bytesReceived: Math.floor(productionLocalModelManifest.pack.artifact.bytes / 2),
       });
-      await wait(80);
+      await wait(transferPhaseDelay);
+      if (cancellationRequested) return state;
       emit({ ...state, state: 'verifying' });
-      await wait(80);
+      await wait(transferPhaseDelay);
+      if (cancellationRequested) return state;
       return emit({
         ...state,
         state: 'ready',
@@ -133,15 +139,17 @@ export function createFakeLocalModelNativeModule(): NativeLocalModelsModule {
         failure: null,
       });
     },
-    cancelDownload: async () =>
-      emit({
+    cancelDownload: async () => {
+      cancellationRequested = true;
+      return emit({
         ...state,
         state: 'not-installed',
         bytesReceived: 0,
         storageBytes: 0,
         loaded: false,
         failure: null,
-      }),
+      });
+    },
     load: async (packId) => {
       ensurePack(packId);
       if (state.state !== 'ready' && state.state !== 'loaded') {
@@ -181,10 +189,4 @@ function resolveNativeModule(): NativeLocalModelsModule | null {
   } catch {
     return null;
   }
-}
-
-export function disposeLocalModelService(service: LocalModelService): void {
-  // Native listener ownership is deliberately hidden from screens. The service is process-wide;
-  // this function exists for tests and future service-container teardown.
-  void service;
 }

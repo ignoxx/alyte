@@ -18,12 +18,15 @@ export const LOCAL_MODEL_FAILURES = [
   'upstream-missing',
   'http-failed',
   'redirect-rejected',
+  'range-rejected',
   'size-mismatch',
   'checksum-mismatch',
   'incompatible',
   'cancelled',
   'unavailable',
   'runtime-failed',
+  'storage-protection',
+  'interrupted',
   'unknown',
 ] as const;
 export type LocalModelFailure = (typeof LOCAL_MODEL_FAILURES)[number];

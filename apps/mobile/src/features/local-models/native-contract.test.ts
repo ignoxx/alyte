@@ -10,6 +10,8 @@ const nativeRoot = resolve(mobileRoot, 'modules/alyte-local-models/ios');
 const manifestSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModelManifest.swift'), 'utf8');
 const storeSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModelStore.swift'), 'utf8');
 const moduleSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModelsModule.swift'), 'utf8');
+const podspecSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModels.podspec'), 'utf8');
+const runtimeSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModelRuntime.c'), 'utf8');
 
 test('native manifest mirrors the immutable production pack contract', () => {
   for (const value of [
@@ -20,6 +22,8 @@ test('native manifest mirrors the immutable production pack contract', () => {
     '2_841_481_184',
     '8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52',
     'bb4caa7540188872173c44d161602d9271386413',
+    'alyte.semantic-mapper.prompt.v1',
+    'alyte.semantic-mapper.v1',
   ]) {
     assert.equal(manifestSource.includes(value), true, value);
   }
@@ -35,7 +39,7 @@ test('native store owns resumable verification, protection, promotion, and relea
     'SHA256',
     'FileProtectionType.complete',
     'isExcludedFromBackup',
-    'moveItem(at: partial, to: ready)',
+    'replaceItemAt(ready, withItemAt: partial',
     'didReceiveMemoryWarningNotification',
     'thermalStateDidChangeNotification',
     'releaseForBackground',
@@ -44,6 +48,29 @@ test('native store owns resumable verification, protection, promotion, and relea
   }
   assert.equal(storeSource.includes('Authorization")'), true);
   assert.equal(storeSource.includes('Cookie")'), true);
+  assert.equal(storeSource.includes('loadedHandle'), false);
+  assert.equal(storeSource.includes('resumeURL'), false);
   assert.equal(storeSource.includes('.gguf"'), false);
   assert.equal(moduleSource.includes('OnAppEntersBackground'), true);
+});
+
+test('device and production builds cannot silently omit the pinned runtime', () => {
+  for (const value of [
+    'ALYTE_LOCAL_MODEL_RUNTIME_XCFRAMEWORK',
+    'ALYTE_LOCAL_MODEL_ALLOW_SIMULATOR_FAKE',
+    'ALYTE_LOCAL_MODEL_SIMULATOR',
+    'deviceBinarySha256',
+    'ALYTE_LLAMA_RUNTIME',
+    'Verify pinned Alyte llama.cpp runtime',
+  ]) {
+    assert.equal(podspecSource.includes(value), true, value);
+  }
+  assert.equal(
+    podspecSource.includes(
+      "raise 'AlyteLocalModels requires ALYTE_LOCAL_MODEL_RUNTIME_XCFRAMEWORK",
+    ),
+    true,
+  );
+  assert.equal(runtimeSource.includes('#if defined(ALYTE_LLAMA_RUNTIME)'), true);
+  assert.equal(runtimeSource.includes('llama_model_load_from_file'), true);
 });

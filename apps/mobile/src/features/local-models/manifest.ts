@@ -5,7 +5,7 @@
  */
 export const LOCAL_MODEL_MANIFEST_VERSION = 'alyte.local-model.manifest.v1' as const;
 export const LOCAL_MODEL_PACK_ID = 'gemma-4-e2b-it-q4-0' as const;
-export const LOCAL_MODEL_PROMPT_BUNDLE = 'alyte.gemma4-e2b-evaluation.prompt.v2' as const;
+export const LOCAL_MODEL_PROMPT_BUNDLE = 'alyte.semantic-mapper.prompt.v1' as const;
 export const LOCAL_MODEL_SCHEMA = 'alyte.semantic-mapper.v1' as const;
 export const LOCAL_MODEL_RUNTIME_REVISION = 'bb4caa7540188872173c44d161602d9271386413' as const;
 

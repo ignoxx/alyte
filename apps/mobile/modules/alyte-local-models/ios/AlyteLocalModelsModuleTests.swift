@@ -1,4 +1,5 @@
 import XCTest
+import Foundation
 @testable import AlyteLocalModels
 
 final class AlyteLocalModelsModuleTests: XCTestCase {
@@ -10,7 +11,7 @@ final class AlyteLocalModelsModuleTests: XCTestCase {
       "8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52"
     )
     XCTAssertEqual(AlyteLocalModelManifest.runtimeRevision, "bb4caa7540188872173c44d161602d9271386413")
-    XCTAssertTrue(AlyteLocalModelManifest.artifactURL.contains("/resolve/(AlyteLocalModelManifest.artifactRevision)/"))
+    XCTAssertTrue(AlyteLocalModelManifest.artifactURL.contains("/resolve/\(AlyteLocalModelManifest.artifactRevision)/"))
     XCTAssertFalse(AlyteLocalModelManifest.artifactURL.contains("/main/"))
   }
 

@@ -9,8 +9,59 @@ Pod::Spec.new do |s|
   s.source         = { git: '' }
   s.static_framework = true
   s.dependency 'ExpoModulesCore'
-  s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
-  s.source_files = '**/*.{h,m,mm,swift,hpp,cpp}'
+  runtime_xcframework = ENV['ALYTE_LOCAL_MODEL_RUNTIME_XCFRAMEWORK'] || ENV['ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK']
+  runtime_manifest = runtime_xcframework && "#{runtime_xcframework}.alyte-eval.json"
+  allow_simulator_fake = ENV['ALYTE_LOCAL_MODEL_ALLOW_SIMULATOR_FAKE'] == '1' &&
+    ENV['ALYTE_LOCAL_MODEL_SIMULATOR'] == '1' &&
+    ENV['APP_VARIANT'] != 'production'
+  if runtime_xcframework && File.directory?(runtime_xcframework)
+    require 'digest'
+    require 'json'
+    raise 'Pinned llama.cpp runtime identity manifest is required' unless runtime_manifest && File.file?(runtime_manifest)
+    identity = JSON.parse(File.read(runtime_manifest))
+    expected_revision = 'bb4caa7540188872173c44d161602d9271386413'
+    expected_framework = File.expand_path(runtime_xcframework)
+    unless identity['runtimeRepository'] == 'ggml-org/llama.cpp' &&
+        identity['runtimeRelease'] == 'v0.2.0' &&
+        identity['runtimeRevision'] == expected_revision &&
+        identity['sourceRevision'] == expected_revision &&
+        identity['platform'] == 'ios-device' &&
+        identity['module'] == 'llama' &&
+        File.expand_path(identity['frameworkPath'].to_s) == expected_framework
+      raise 'AlyteLocalModels requires the exact pinned llama.cpp runtime'
+    end
+    device_framework = File.join(runtime_xcframework, 'ios-arm64', 'llama.framework')
+    device_binary = File.join(device_framework, 'llama')
+    device_header = File.join(device_framework, 'Headers', 'llama.h')
+    raise "Missing pinned llama framework at #{device_framework}" unless File.directory?(device_framework)
+    raise "Missing pinned llama runtime header at #{device_header}" unless File.file?(device_header)
+    raise "Missing pinned llama runtime binary at #{device_binary}" unless File.file?(device_binary)
+    unless identity['deviceBinarySha256'] == Digest::SHA256.file(device_binary).hexdigest
+      raise 'Pinned llama.cpp runtime binary checksum does not match its identity manifest'
+    end
+    s.vendored_frameworks = device_framework
+    s.pod_target_xcconfig = {
+      'DEFINES_MODULE' => 'YES',
+      'SWIFT_ACTIVE_COMPILATION_CONDITIONS' => '$(inherited) ALYTE_LLAMA_RUNTIME',
+      'OTHER_CFLAGS' => '$(inherited) -DALYTE_LLAMA_RUNTIME',
+      'HEADER_SEARCH_PATHS' => "$(inherited) #{File.join(device_framework, 'Headers')}",
+      'FRAMEWORK_SEARCH_PATHS' => "$(inherited) #{File.dirname(device_framework)}",
+    }
+    runtime_checker = File.expand_path('../../../../..', __dir__) + '/scripts/check-local-model-runtime.mjs'
+    s.script_phase = {
+      :name => 'Verify pinned Alyte llama.cpp runtime',
+      :script => <<-SCRIPT,
+set -eu
+/usr/bin/env node "#{runtime_checker}" --variant "${APP_VARIANT:-development}" --runtime-path "#{File.expand_path(runtime_xcframework)}"
+SCRIPT
+      :execution_position => :before_compile,
+    }
+  elsif allow_simulator_fake
+    s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
+  else
+    raise 'AlyteLocalModels requires ALYTE_LOCAL_MODEL_RUNTIME_XCFRAMEWORK built from the exact pinned llama.cpp revision; simulator-only fake builds must set ALYTE_LOCAL_MODEL_ALLOW_SIMULATOR_FAKE=1 and ALYTE_LOCAL_MODEL_SIMULATOR=1'
+  end
+  s.source_files = '**/*.{h,m,mm,c,swift,hpp,cpp}'
   s.exclude_files = '**/*Tests.swift'
   s.test_spec 'Tests' do |test_spec|
     test_spec.source_files = '*Tests.swift'

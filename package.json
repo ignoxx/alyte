@@ -29,9 +29,13 @@
     "test:native:protection": "bash scripts/run-native-protection-tests.sh",
     "test:native:image": "bash scripts/run-native-image-tests.sh",
     "test:native:vision": "bash scripts/run-native-vision-tests.sh",
+    "test:native:local-models": "bash scripts/run-native-local-model-tests.sh",
+    "test:local-model-runtime": "node --test scripts/local-model-runtime-config.test.mjs",
+    "ios:local-model-runtime:check": "node scripts/check-local-model-runtime.mjs",
+    "ios:local-model-runtime:build": "bash scripts/build-local-model-runtime.sh",
     "contract:check": "npm run build --workspace=@alyte/contracts && npm run contract:check --workspace=@alyte/contracts",
     "ios:config:check": "node scripts/check-expo-config.mjs",
-    "ci": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test && npm run test:mobile-bundle && npm run test:boundaries && npm run test:showcase && npm run contract:check && npm run ios:config:check"
+    "ci": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test && npm run test:mobile-bundle && npm run test:boundaries && npm run test:showcase && npm run contract:check && npm run ios:config:check && npm run test:local-model-runtime && npm run test:native:local-models"
   },
   "devDependencies": {
     "@types/node": "26.2.0",

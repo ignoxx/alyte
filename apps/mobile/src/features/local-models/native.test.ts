@@ -18,3 +18,12 @@ test('explicit simulator fake completes the same verified lifecycle without mode
   assert.equal((await service.deletePack()).state, 'not-installed');
   unsubscribe();
 });
+
+test('explicit simulator fake cancellation remains active during transfer', async () => {
+  const service = createLocalModelService({ native: createFakeLocalModelNativeModule() });
+  const download = service.startDownload();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const cancelled = await service.cancelDownload();
+  assert.equal(cancelled.state, 'not-installed');
+  assert.equal((await download).state, 'not-installed');
+});

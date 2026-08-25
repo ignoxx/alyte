@@ -18,7 +18,7 @@ enum AlyteLocalModelManifest {
   static let runtimeID = "llama.cpp"
   static let runtimeRepository = "ggml-org/llama.cpp"
   static let runtimeRevision = "bb4caa7540188872173c44d161602d9271386413"
-  static let promptBundle = "alyte.gemma4-e2b-evaluation.prompt.v2"
+  static let promptBundle = "alyte.semantic-mapper.prompt.v1"
   static let semanticSchema = "alyte.semantic-mapper.v1"
   static let languages = ["en", "de", "lt", "fr", "es", "it", "pt", "nl", "pl"]
   static let minimumIOS = "26.0"
@@ -80,12 +80,43 @@ enum AlyteLocalModelManifest {
   }
 }
 
+enum AlyteLocalModelState: String {
+  case notInstalled = "not-installed"
+  case downloading
+  case verifying
+  case ready
+  case loaded
+  case failed
+  case cancelling
+  case deleting
+}
+
+struct AlyteLocalModelSnapshot {
+  let state: AlyteLocalModelState
+  let bytesReceived: Int64
+  let storageBytes: Int64
+  let failure: AlyteLocalModelFailure?
+
+  var dictionary: [String: Any] {
+    [
+      "packId": AlyteLocalModelManifest.packID,
+      "state": state.rawValue,
+      "bytesReceived": bytesReceived,
+      "expectedBytes": AlyteLocalModelManifest.bytes,
+      "failure": failure?.rawValue ?? NSNull(),
+      "storageBytes": storageBytes,
+      "loaded": state == .loaded,
+    ]
+  }
+}
+
 enum AlyteLocalModelFailure: String {
   case offline = "offline"
   case insufficientSpace = "insufficient-space"
   case upstreamMissing = "upstream-missing"
   case httpFailed = "http-failed"
   case redirectRejected = "redirect-rejected"
+  case rangeRejected = "range-rejected"
   case sizeMismatch = "size-mismatch"
   case checksumMismatch = "checksum-mismatch"
   case incompatible = "incompatible"
@@ -93,6 +124,7 @@ enum AlyteLocalModelFailure: String {
   case unavailable = "unavailable"
   case runtimeFailed = "runtime-failed"
   case storageProtection = "storage-protection"
+  case interrupted = "interrupted"
   case unknown = "unknown"
 }
 

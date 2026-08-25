@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { Alert, Linking, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { AppButton, AppIcon, AppText, AppSurface, ScreenScrollView } from '../../ui/primitives';
@@ -92,6 +92,23 @@ export function ModelStorageScreen() {
         </View>
         <AppSurface tone="soft">
           <AppText>{t('settings.modelStorageBody')}</AppText>
+          <AppText selectable style={styles.muted}>
+            {t('settings.modelStorageSource')}
+          </AppText>
+          <AppText selectable style={styles.muted}>
+            {t('settings.modelStoragePinnedRevision')}
+          </AppText>
+          <AppText selectable style={styles.muted}>
+            {t('settings.modelStorageSize')}
+          </AppText>
+          <AppText selectable style={styles.muted}>
+            {t('settings.modelStorageSpace')}
+          </AppText>
+          <AppButton
+            label={t('settings.modelStorageSourceAction')}
+            onPress={() => void Linking.openURL(models.manifest.pack.artifact.url)}
+            tone="quiet"
+          />
           <AppButton
             disabled={busy || snapshot === null || snapshot.state === 'not-installed'}
             label={t('settings.modelStorageDelete')}

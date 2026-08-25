@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet } from 'react-native';
+import { Linking, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppButton, AppSurface, AppText, GroupedRow, StatusPill } from '../../ui/primitives';
 import { colors, screenStyles, spacing, typography } from '../../theme';
@@ -20,6 +20,7 @@ function modelFailure(failure: LocalModelSnapshot['failure']): string {
     return t('onboarding.modelFailureChecksum');
   }
   if (failure === 'incompatible') return t('onboarding.modelFailureIncompatible');
+  if (failure === 'interrupted') return t('onboarding.modelFailureInterrupted');
   if (
     failure === 'http-failed' ||
     failure === 'upstream-missing' ||
@@ -34,6 +35,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   const [snapshot, setSnapshot] = useState<LocalModelSnapshot | null>(null);
   const [selected, setSelected] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelled, setCancelled] = useState(false);
   const [bridgeUnavailable, setBridgeUnavailable] = useState(false);
 
@@ -68,7 +70,10 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
     setBridgeUnavailable(false);
     setBusy(true);
     try {
-      await model.startDownload();
+      const installed = await model.startDownload();
+      // The download is not the onboarding gate by itself. Activation must create a real native
+      // runtime session; simulator acceptance injects this same boundary explicitly.
+      if (canCompleteModelOnboarding(installed)) await model.load();
     } catch {
       // The native bridge emits a typed failure state. The action remains retryable and no
       // onboarding preference is written here.
@@ -79,13 +84,13 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   }
 
   async function cancelDownload() {
-    setBusy(true);
+    setCancelBusy(true);
     try {
       await model.cancelDownload();
       setSelected(false);
       setCancelled(true);
     } finally {
-      setBusy(false);
+      setCancelBusy(false);
     }
   }
 
@@ -122,12 +127,23 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
             <AppText style={styles.cardBody}>{t('onboarding.modelPublisher')}</AppText>
             <AppText style={styles.cardBody}>{t('onboarding.modelLicense')}</AppText>
             <AppText style={styles.cardBody}>{t('onboarding.modelSource')}</AppText>
+            <AppText selectable style={styles.smallDetail}>
+              {t('onboarding.modelPinnedRevision')}
+            </AppText>
+            <AppText selectable style={styles.smallDetail}>
+              {t('onboarding.modelRuntimeRevision')}
+            </AppText>
             <AppText style={styles.cardBody}>{t('onboarding.modelSize')}</AppText>
             <AppText style={styles.cardBody}>{t('onboarding.modelSpace')}</AppText>
             <AppText selectable style={styles.smallDetail}>
               {formatModelBytes(model.manifest.pack.artifact.bytes)} ·{' '}
               {model.manifest.pack.artifact.sha256.slice(0, 12)}…
             </AppText>
+            <AppButton
+              label={t('onboarding.modelSourceAction')}
+              onPress={() => void Linking.openURL(model.manifest.pack.artifact.url)}
+              tone="quiet"
+            />
           </GroupedRow>
           {snapshot?.state === 'failed' && (
             <AppText style={styles.error}>{modelFailure(snapshot.failure)}</AppText>
@@ -149,7 +165,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
                     )}
               </AppText>
               <AppButton
-                disabled={busy}
+                disabled={cancelBusy}
                 label={t('onboarding.modelCancel')}
                 onPress={() => void cancelDownload()}
                 tone="quiet"
