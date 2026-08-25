@@ -206,19 +206,18 @@ if [[ ! -f "${embedded_binary}" ]]; then
   print -u2 "Signed evaluator app is missing the pinned llama.framework: ${embedded_framework}"
   exit 2
 fi
-# CodeSignOnCopy appends a signature to the Mach-O, so compare unsigned contents when checking
-# that the embedded binary is the exact externally pinned runtime. The source binary was already
-# checked against runtimeBinarySha256 above before Xcode touched the app bundle.
-unsigned_binary_sha256() {
-  local binary="$1"
-  local scratch_directory
-  scratch_directory="$(mktemp -d "${TMPDIR:-/tmp}/alyte-eval-llama-hash.XXXXXX")"
-  ditto "${binary}" "${scratch_directory}/binary"
-  codesign --remove-signature "${scratch_directory}/binary" >/dev/null 2>&1 || true
-  shasum -a 256 "${scratch_directory}/binary" | cut -d ' ' -f 1
-  rm -rf "${scratch_directory}"
-}
-if [[ "$(unsigned_binary_sha256 "${embedded_binary}")" != "$(unsigned_binary_sha256 "${device_binary}")" ]]; then
+embedded_binary_sha256=""
+if ! embedded_binary_sha256="$("${repo_root}/scripts/hash-unsigned-binary.sh" "${embedded_binary}")"; then
+  print -u2 "Could not hash the embedded llama.framework"
+  exit 2
+fi
+device_binary_sha256=""
+if ! device_binary_sha256="$("${repo_root}/scripts/hash-unsigned-binary.sh" "${device_binary}")"; then
+  print -u2 "Could not hash the pinned llama.framework"
+  exit 2
+fi
+if [[ -z "${embedded_binary_sha256}" || -z "${device_binary_sha256}" ||
+      "${embedded_binary_sha256}" != "${device_binary_sha256}" ]]; then
   print -u2 "Embedded llama.framework does not match the pinned runtime identity manifest"
   exit 2
 fi
