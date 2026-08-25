@@ -55,6 +55,12 @@ export type ExtractionSourceLocation = {
     readonly adapterVersion: string;
     readonly schemaVersion: 'alyte.semantic-mapper.v1';
     readonly sourceObservationIds: readonly string[];
+    /** Versioned runtime inputs that produced the accepted source selection. */
+    readonly modelVersion?: string;
+    readonly runtimeVersion?: string;
+    readonly promptVersion?: string;
+    readonly parserVersion?: string;
+    readonly catalogueVersion?: string;
   } | null;
 };
 
@@ -191,15 +197,34 @@ export type ExtractionMethodProfile = {
 export type ExtractionSemanticProposal = {
   readonly sourceObservationIds: readonly string[];
   readonly proposedBiomarkerId: CanonicalId | null;
+  readonly proposedSpecimenType?: SpecimenType | 'other';
+  readonly role?: 'measurement' | 'specimen-context' | 'ignore';
 };
+
+export type ExtractionSemanticProvenance = NonNullable<ExtractionSourceLocation['semantic']>;
 
 export interface ExtractionSemanticMapper {
   readonly adapterVersion: string;
   readonly schemaVersion: 'alyte.semantic-mapper.v1';
+  /** Maximum number of deterministic candidate rows in one model request. */
+  readonly maxRowsPerChunk?: number;
+  /** Maximum OCR observations in one model request, including every cell in those rows. */
+  readonly maxObservationsPerChunk?: number;
+  /** Optional production gate. Test-only deterministic mappers may omit it. */
+  readonly prepare?: () => Promise<void>;
+  readonly provenance?: Readonly<
+    Partial<
+      Pick<
+        ExtractionSemanticProvenance,
+        'modelVersion' | 'runtimeVersion' | 'promptVersion' | 'parserVersion' | 'catalogueVersion'
+      >
+    >
+  >;
   supports(locale: string | null): boolean;
   map(input: {
     readonly pageIndex: number;
     readonly observations: readonly VisionTextObservation[];
+    readonly headings?: readonly VisionTextObservation[];
   }): Promise<unknown>;
 }
 
@@ -209,33 +234,168 @@ export function validateSemanticProposals(
   observations: readonly VisionTextObservation[],
   aliases: readonly ExtractionAliasEntry[],
 ): readonly ExtractionSemanticProposal[] {
-  if (!Array.isArray(input)) return [];
+  const isEnvelope = !Array.isArray(input);
+  const proposals: readonly unknown[] | null = Array.isArray(input)
+    ? input
+    : typeof input === 'object' &&
+        input !== null &&
+        Array.isArray((input as Record<string, unknown>).proposals)
+      ? ((input as Record<string, unknown>).proposals as readonly unknown[])
+      : null;
+  if (proposals === null) return [];
+  if (proposals.length > 24) return [];
   const sourceIds = new Set(observations.map((item) => item.id));
   const biomarkerIds = new Set(aliases.map((item) => item.id));
-  return input.flatMap((item) => {
+  const consumedRows = new Set<string>();
+  const rowKeys = semanticObservationRowKeys(observations);
+  const accepted = proposals.flatMap((item) => {
     if (typeof item !== 'object' || item === null) return [];
     const value = item as Record<string, unknown>;
     if (!Array.isArray(value.sourceObservationIds)) return [];
+    const allowedKeys = new Set([
+      'sourceObservationIds',
+      'proposedBiomarkerId',
+      'biomarkerId',
+      'proposedSpecimenType',
+      'specimenType',
+      'role',
+    ]);
+    if (Object.keys(value).some((key) => !allowedKeys.has(key))) return [];
+    if (value.proposedBiomarkerId !== undefined && value.biomarkerId !== undefined) return [];
+    if (value.proposedSpecimenType !== undefined && value.specimenType !== undefined) return [];
+    if (value.sourceObservationIds.some((id) => typeof id !== 'string')) return [];
+    const sourceObservationIds = value.sourceObservationIds as string[];
+    if (
+      sourceObservationIds.length === 0 ||
+      sourceObservationIds.length > 8 ||
+      sourceObservationIds.some((id) => id.length === 0 || id.length > 96) ||
+      new Set(sourceObservationIds).size !== sourceObservationIds.length ||
+      !sourceObservationIds.every((id) => sourceIds.has(id))
+    )
+      return [];
+    const sourceRows = sourceObservationIds.map((id) =>
+      observations.find((observation) => observation.id === id),
+    );
+    const rowIds = new Set(
+      sourceRows.map((observation) => observation && rowKeys.get(observation.id)),
+    );
+    if (rowIds.size !== 1) return [];
+    const rowId = [...rowIds][0];
+    if (typeof rowId !== 'string' && typeof rowId !== 'number') return [];
+    const rowKey = String(rowId);
+    if (consumedRows.has(rowKey)) return [];
+    const rawBiomarkerId =
+      value.proposedBiomarkerId === undefined ? value.biomarkerId : value.proposedBiomarkerId;
+    const proposedBiomarkerId =
+      rawBiomarkerId === null || rawBiomarkerId === undefined
+        ? null
+        : typeof rawBiomarkerId === 'string'
+          ? (rawBiomarkerId as CanonicalId)
+          : null;
+    if (rawBiomarkerId !== null && rawBiomarkerId !== undefined && proposedBiomarkerId === null)
+      return [];
+    const rawSpecimenType =
+      value.proposedSpecimenType === undefined ? value.specimenType : value.proposedSpecimenType;
+    const proposedSpecimenType =
+      rawSpecimenType === undefined
+        ? undefined
+        : rawSpecimenType === 'other'
+          ? 'other'
+          : typeof rawSpecimenType === 'string' &&
+              ['blood', 'serum', 'plasma', 'urine', 'stool', 'saliva', 'unknown'].includes(
+                rawSpecimenType,
+              )
+            ? (rawSpecimenType as SpecimenType)
+            : null;
+    if (proposedSpecimenType === null) return [];
+    const role =
+      value.role === undefined
+        ? undefined
+        : value.role === 'measurement' ||
+            value.role === 'specimen-context' ||
+            value.role === 'ignore'
+          ? value.role
+          : null;
+    if (role === null) return [];
+    if (role === 'measurement' && proposedBiomarkerId === null) return [];
+    if (role !== undefined && role !== 'measurement' && proposedBiomarkerId !== null) return [];
     const proposal: ExtractionSemanticProposal = {
-      sourceObservationIds: value.sourceObservationIds.filter(
-        (id): id is string => typeof id === 'string',
-      ),
-      proposedBiomarkerId:
-        value.proposedBiomarkerId === null
-          ? null
-          : typeof value.proposedBiomarkerId === 'string'
-            ? (value.proposedBiomarkerId as CanonicalId)
-            : null,
+      sourceObservationIds,
+      proposedBiomarkerId,
+      ...(proposedSpecimenType === undefined ? {} : { proposedSpecimenType }),
+      ...(role === undefined ? {} : { role }),
     };
-    return proposal.sourceObservationIds.length > 0 &&
-      proposal.sourceObservationIds.every((id) => sourceIds.has(id)) &&
-      (proposal.proposedBiomarkerId === null || biomarkerIds.has(proposal.proposedBiomarkerId)) &&
-      Object.keys(value).every(
-        (key) => key === 'sourceObservationIds' || key === 'proposedBiomarkerId',
-      )
-      ? [proposal]
-      : [];
+    if (proposal.proposedBiomarkerId !== null && !biomarkerIds.has(proposal.proposedBiomarkerId))
+      return [];
+    consumedRows.add(rowKey);
+    return [proposal];
   });
+  // A malformed or duplicate envelope must never partially influence the draft. The production
+  // mapper performs the same all-or-none check; this helper keeps legacy adapters fail-closed too.
+  return isEnvelope && accepted.length !== proposals.length ? [] : accepted;
+}
+
+/**
+ * Assigns a stable internal row key without exposing row bookkeeping to the model. Vision table
+ * structure is authoritative when present; otherwise the same geometry tolerance as deterministic
+ * extraction keeps a multi-cell loose row eligible for one semantic proposal.
+ */
+function semanticObservationRowKeys(
+  observations: readonly VisionTextObservation[],
+): ReadonlyMap<string, string> {
+  const rowKeys = new Map<string, string>();
+  const looseByPage = new Map<number, VisionTextObservation[]>();
+  for (const observation of observations) {
+    const structure = observation.structure;
+    if (
+      structure?.kind === 'table-cell' &&
+      structure.tableId !== null &&
+      structure.rowIndex !== null
+    ) {
+      rowKeys.set(
+        observation.id,
+        `table:${observation.pageIndex}:${structure.tableId}:${structure.rowIndex}`,
+      );
+      continue;
+    }
+    const page = looseByPage.get(observation.pageIndex) ?? [];
+    page.push(observation);
+    looseByPage.set(observation.pageIndex, page);
+  }
+  for (const [pageIndex, pageObservations] of looseByPage) {
+    const groups: VisionTextObservation[][] = [];
+    for (const observation of [...pageObservations].sort(
+      (left, right) =>
+        left.boundingBox.y +
+          left.boundingBox.height / 2 -
+          (right.boundingBox.y + right.boundingBox.height / 2) ||
+        left.boundingBox.x - right.boundingBox.x,
+    )) {
+      const prior = groups.at(-1);
+      const priorObservation = prior?.[0];
+      const center = observation.boundingBox.y + observation.boundingBox.height / 2;
+      const priorCenter =
+        priorObservation === undefined
+          ? null
+          : priorObservation.boundingBox.y + priorObservation.boundingBox.height / 2;
+      if (
+        prior !== undefined &&
+        priorObservation !== undefined &&
+        priorCenter !== null &&
+        Math.abs(center - priorCenter) <=
+          Math.max(observation.boundingBox.height, priorObservation.boundingBox.height) * 0.75
+      ) {
+        prior.push(observation);
+      } else {
+        groups.push([observation]);
+      }
+    }
+    groups.forEach((group, index) => {
+      const key = `loose:${pageIndex}:${index}`;
+      group.forEach((observation) => rowKeys.set(observation.id, key));
+    });
+  }
+  return rowKeys;
 }
 
 export type ExtractionRowInput = {

@@ -125,6 +125,25 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
     }
   }
 
+  func infer(prompt: String, maxOutputTokens: Int, outputCapacity: Int) async throws -> String {
+    try await withCheckedThrowingContinuation { continuation in
+      queue.async {
+        do {
+          continuation.resume(
+            returning: try self.core.infer(
+              prompt: prompt,
+              maxOutputTokens: maxOutputTokens,
+              outputCapacity: outputCapacity
+            )
+          )
+        } catch {
+          let localError = (error as? AlyteLocalModelError) ?? AlyteLocalModelError.failed(.runtimeFailed)
+          continuation.resume(throwing: localError)
+        }
+      }
+    }
+  }
+
   func unload() -> [String: Any] { queue.sync { core.unload() } }
 
   func deletePack(packID: String) async throws -> [String: Any] {

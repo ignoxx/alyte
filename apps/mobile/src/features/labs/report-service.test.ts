@@ -1209,6 +1209,123 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(draft.rows[1]?.source.semantic, null);
   });
 
+  test('bounds mapper input by candidate rows and preserves every deterministic row on partial failure', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const observations = Array.from({ length: 13 }, (_, index) => ({
+      id: `bounded-${index}`,
+      text: `Synthetic marker ${index + 1}.2 mg/dL`,
+      alternatives: [],
+      pageIndex: 0,
+      orientation: 0,
+      boundingBox: { x: 0.1, y: 0.08 + index * 0.06, width: 0.7, height: 0.03 },
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    }));
+    const ocr: VisionOCR = {
+      async recognize() {
+        return {
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations,
+        };
+      },
+    };
+    const chunkSizes: number[] = [];
+    const mapper: ExtractionSemanticMapper = {
+      adapterVersion: 'bounded.mapper.v1',
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      maxRowsPerChunk: 12,
+      supports: () => true,
+      async map({ observations: chunk }) {
+        chunkSizes.push(chunk.length);
+        if (chunkSizes.length === 1) {
+          // The valid-looking candidate must not partially apply when the same envelope also
+          // contains an invented source ID.
+          return {
+            schemaVersion: 'alyte.semantic-mapper.v1',
+            proposals: [
+              {
+                sourceObservationIds: ['bounded-0'],
+                proposedBiomarkerId: 'biomarker.ldl_c',
+                role: 'measurement',
+              },
+              {
+                sourceObservationIds: ['invented-source'],
+                proposedBiomarkerId: 'biomarker.ldl_c',
+                role: 'measurement',
+              },
+            ],
+          };
+        }
+        throw new Error('synthetic timeout after first bounded chunk');
+      },
+    };
+    const service = createService(repository, files, sanitizingPdf(files), ocr, mapper);
+    const report = (await service.importPdf(source('bounded-mapping')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+    const draft = await service.startExtraction(report.id);
+
+    assert.deepEqual(chunkSizes, [12, 1]);
+    assert.equal(draft.rows.length, 13);
+    assert.equal(
+      draft.rows.every((row) => row.source.semantic === null),
+      true,
+    );
+    assert.deepEqual(
+      draft.rows.map((row) => row.sourceText),
+      observations.map((observation) => observation.text),
+    );
+  });
+
+  test('falls back to Vision and deterministic parsing when the semantic pack is unavailable', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    let recognitionCalls = 0;
+    const ocr: VisionOCR = {
+      async recognize() {
+        recognitionCalls += 1;
+        return {
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'pack-missing-source',
+              text: 'LDL-C 3,8 mmol/L',
+              alternatives: [],
+              pageIndex: 0,
+              orientation: 0,
+              boundingBox: { x: 0.1, y: 0.2, width: 0.6, height: 0.04 },
+              recognition: { level: 'accurate' as const, language: 'de', internalConfidence: null },
+            },
+          ],
+        };
+      },
+    };
+    const mapper: ExtractionSemanticMapper = {
+      adapterVersion: 'missing-pack.mapper.v1',
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      supports: () => {
+        throw new Error('unavailable mapper must not receive a chunk');
+      },
+      prepare: async () => {
+        throw new Error('synthetic deleted pack');
+      },
+      async map() {
+        throw new Error('unavailable mapper must not run');
+      },
+    };
+    const service = createService(repository, files, sanitizingPdf(files), ocr, mapper);
+    const report = (await service.importPdf(source('missing-pack')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+    const draft = await service.startExtraction(report.id);
+    assert.equal(recognitionCalls, 1);
+    assert.equal(draft.rows.length, 1);
+    assert.equal(draft.rows[0]?.proposedBiomarkerId, 'biomarker.ldl_c');
+    assert.equal(draft.rows[0]?.source.semantic, null);
+  });
+
   test('keeps deterministic extraction when the semantic mapper does not support the language', async () => {
     const repository = createRepository();
     const files = new FakeFiles();

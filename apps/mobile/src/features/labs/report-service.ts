@@ -124,7 +124,8 @@ export class LabReportExtractionError extends Error {
   override readonly name = 'LabReportExtractionError';
 
   constructor(
-    readonly reason: 'sanitized-source' | 'recognition' | 'no-reviewable-measurements',
+    readonly reason:
+      'sanitized-source' | 'recognition' | 'no-reviewable-measurements' | 'model-unavailable',
     message: string,
     options?: { readonly cause?: unknown },
   ) {
@@ -1369,33 +1370,124 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   async function applySemanticMappings(
     rows: readonly ExtractionDraftRow[],
     observations: readonly VisionTextObservation[],
+    enabled = true,
   ): Promise<readonly ExtractionDraftRow[]> {
-    if (semanticMapper === undefined) return rows;
-    const chunks = new Map<string, VisionTextObservation[]>();
-    for (const observation of observations) {
-      const table = observation.structure?.tableId ?? 'page';
-      const key = `${observation.pageIndex}:${table}`;
-      const chunk = chunks.get(key) ?? [];
-      chunk.push(observation);
-      chunks.set(key, chunk);
+    if (semanticMapper === undefined || !enabled) return rows;
+    // A model request is a bounded set of already-filtered candidate rows. Never send the whole
+    // page or a raw OCR wall: unrelated headers, addresses, and footers are not model input.
+    const observationById = new Map(
+      observations.map((observation) => [observation.id, observation]),
+    );
+    const rowGroups = new Map<string, ExtractionDraftRow[]>();
+    const candidateSourceIds = new Set(rows.flatMap((row) => row.source.observationIds));
+    for (const row of rows) {
+      const first = row.source.observations?.[0];
+      const table = first?.structure?.tableId ?? 'page';
+      const key = `${first?.pageIndex ?? row.source.pageIndex}:${table}`;
+      const group = rowGroups.get(key) ?? [];
+      group.push(row);
+      rowGroups.set(key, group);
+    }
+    const chunks: {
+      readonly observations: VisionTextObservation[];
+      readonly headings: VisionTextObservation[];
+    }[] = [];
+    const maxRowsPerChunk = Math.max(1, Math.floor(semanticMapper.maxRowsPerChunk ?? 12));
+    const maxObservationsPerChunk = Math.max(
+      1,
+      Math.floor(semanticMapper.maxObservationsPerChunk ?? 48),
+    );
+    for (const group of rowGroups.values()) {
+      let rowChunk: ExtractionDraftRow[] = [];
+      let rowObservationCount = 0;
+      const flushChunk = () => {
+        if (rowChunk.length === 0) return;
+        const chunk = rowChunk.flatMap((row) =>
+          row.source.observationIds.flatMap((id) => {
+            const observation = observationById.get(id);
+            return observation === undefined ? [] : [observation];
+          }),
+        );
+        // Heading observations are retained only when Vision marked them as table cells outside
+        // a candidate row. This preserves section context without expanding the payload to an OCR
+        // page dump.
+        const headings = observations.filter((observation) => {
+          const structure = observation.structure;
+          return (
+            !candidateSourceIds.has(observation.id) &&
+            structure?.kind === 'table-cell' &&
+            structure.tableId === rowChunk[0]?.source.observations?.[0]?.structure?.tableId
+          );
+        });
+        if (chunk.length > 0) chunks.push({ observations: chunk, headings });
+        rowChunk = [];
+        rowObservationCount = 0;
+      };
+      for (const row of group) {
+        const observationCount = row.source.observationIds.length;
+        if (observationCount > maxObservationsPerChunk) {
+          // Keep the deterministic row, but never hand an oversized row to the model adapter.
+          flushChunk();
+          continue;
+        }
+        if (
+          rowChunk.length > 0 &&
+          (rowChunk.length >= maxRowsPerChunk ||
+            rowObservationCount + observationCount > maxObservationsPerChunk)
+        ) {
+          flushChunk();
+        }
+        rowChunk.push(row);
+        rowObservationCount += observationCount;
+      }
+      flushChunk();
     }
     const proposals: ExtractionSemanticProposal[] = [];
-    for (const chunk of chunks.values()) {
-      const locale = chunk[0]?.recognition.language ?? null;
-      if (!semanticMapper.supports(locale)) continue;
-      const input = { pageIndex: chunk[0]?.pageIndex ?? 0, observations: chunk };
-      proposals.push(
-        ...validateSemanticProposals(await semanticMapper.map(input), chunk, extractionAliases),
-      );
+    for (const chunk of chunks) {
+      const locale = chunk.observations[0]?.recognition.language ?? null;
+      try {
+        if (!semanticMapper.supports(locale)) continue;
+        const input = {
+          pageIndex: chunk.observations[0]?.pageIndex ?? 0,
+          observations: chunk.observations,
+          headings: chunk.headings,
+        };
+        proposals.push(
+          ...validateSemanticProposals(
+            await semanticMapper.map(input),
+            chunk.observations,
+            extractionAliases,
+          ),
+        );
+      } catch {
+        // Inference, cancellation, timeout, unload, and malformed output all preserve the
+        // deterministic rows. A later chunk is still allowed to complete independently.
+      }
     }
     return rows.map((row) => {
       const proposal = proposals.find((item) =>
         item.sourceObservationIds.every((id) => row.source.observationIds.includes(id)),
       );
-      if (proposal === undefined || proposal.proposedBiomarkerId === null) return row;
+      if (proposal === undefined) return row;
+      if (proposal.role === 'ignore') return row;
+      const proposedSpecimenType =
+        proposal.proposedSpecimenType === 'other' ? 'unknown' : proposal.proposedSpecimenType;
+      // Deterministic section/row context outranks model context. A model can refine an unknown
+      // row, but cannot rewrite an explicitly recognized serum/urine/blood source.
+      if (
+        proposedSpecimenType !== undefined &&
+        row.proposedSpecimenType !== 'unknown' &&
+        proposedSpecimenType !== row.proposedSpecimenType
+      )
+        return row;
       const next = revalidateExtractionRow(
         row,
-        { proposedBiomarkerId: proposal.proposedBiomarkerId },
+        {
+          ...(proposal.proposedBiomarkerId === null
+            ? {}
+            : { proposedBiomarkerId: proposal.proposedBiomarkerId }),
+          ...(proposedSpecimenType === undefined ? {} : { proposedSpecimenType }),
+        },
         extractionAliases,
       );
       if (
@@ -1411,6 +1503,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             adapterVersion: semanticMapper.adapterVersion,
             schemaVersion: semanticMapper.schemaVersion,
             sourceObservationIds: proposal.sourceObservationIds,
+            ...semanticMapper.provenance,
           },
         },
       };
@@ -1488,7 +1581,21 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             );
           })
           .map((row, order) => ({ ...row, order }));
-        const rows = await applySemanticMappings(deterministicRows, observations);
+        let semanticMappingAvailable = semanticMapper !== undefined;
+        if (semanticMapper !== undefined) {
+          try {
+            await semanticMapper.prepare?.();
+          } catch {
+            // Vision and deterministic parsing remain a complete local fallback when the
+            // optional semantic pack is missing, deleted, or cannot be loaded.
+            semanticMappingAvailable = false;
+          }
+        }
+        const rows = await applySemanticMappings(
+          deterministicRows,
+          observations,
+          semanticMappingAvailable,
+        );
         if (rows.length === 0) {
           throw new LabReportExtractionError(
             'no-reviewable-measurements',

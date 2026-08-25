@@ -4,6 +4,12 @@ import XCTest
 
 private final class SyntheticRuntime: AlyteLocalModelRuntimeSession {
   private(set) var isClosed = false
+  func generate(prompt: String, maxOutputTokens: Int, outputCapacity: Int) throws -> String {
+    _ = prompt
+    _ = maxOutputTokens
+    _ = outputCapacity
+    return "{\"schemaVersion\":\"alyte.semantic-mapper.v1\",\"proposals\":[]}"
+  }
   func close() { isClosed = true }
 }
 
@@ -154,5 +160,34 @@ final class NativeModelHarnessTests: XCTestCase {
     _ = try core.delete()
     XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("health.sqlite").path))
     XCTAssertEqual(core.state, .notInstalled)
+  }
+
+  func testInferenceRequiresLoadedPackAndStopsAfterUnload() throws {
+    let (core, _, _) = try makeCore()
+    XCTAssertThrowsError(try core.infer(
+      prompt: "synthetic",
+      maxOutputTokens: 1,
+      outputCapacity: 128
+    ))
+
+    _ = FileManager.default.createFile(atPath: core.readyURL.path, contents: Data("valid".utf8))
+    core.reconcileInstalledPack()
+    _ = try core.load()
+    XCTAssertEqual(
+      try core.infer(prompt: "synthetic", maxOutputTokens: 1, outputCapacity: 128),
+      "{\"schemaVersion\":\"alyte.semantic-mapper.v1\",\"proposals\":[]}"
+    )
+    XCTAssertThrowsError(try core.infer(
+      prompt: "synthetic",
+      maxOutputTokens: 257,
+      outputCapacity: 128
+    ))
+
+    _ = core.unload()
+    XCTAssertThrowsError(try core.infer(
+      prompt: "synthetic",
+      maxOutputTokens: 1,
+      outputCapacity: 128
+    ))
   }
 }

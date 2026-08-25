@@ -48,6 +48,18 @@ public final class AlyteLocalModelsModule: Module {
       catch { throw Self.nativeError(error, message: "The local model could not be loaded", code: 3) }
     }
 
+    AsyncFunction("infer") { (prompt: String, maxOutputTokens: Int, outputCapacity: Int) async throws -> String in
+      do {
+        return try await self.store.infer(
+          prompt: prompt,
+          maxOutputTokens: maxOutputTokens,
+          outputCapacity: outputCapacity
+        )
+      } catch {
+        throw Self.nativeError(error, message: "The local semantic mapping could not finish", code: 5)
+      }
+    }
+
     Function("unload") {
       self.store.unload()
     }

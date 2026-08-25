@@ -692,4 +692,95 @@ describe('local extraction domain', () => {
       { sourceObservationIds: ['source-1'], proposedBiomarkerId: 'biomarker.ldl_c' },
     ]);
   });
+
+  it('keeps a loose multi-cell row eligible while rejecting cross-row proposals', () => {
+    const observations = [
+      {
+        id: 'loose-label',
+        text: 'LDL-C',
+        alternatives: [],
+        pageIndex: 0,
+        orientation: 0,
+        boundingBox: { x: 0.1, y: 0.2, width: 0.2, height: 0.04 },
+        recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+      },
+      {
+        id: 'loose-value',
+        text: '3.8 mmol/L',
+        alternatives: [],
+        pageIndex: 0,
+        orientation: 0,
+        boundingBox: { x: 0.5, y: 0.202, width: 0.2, height: 0.04 },
+        recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+      },
+      {
+        id: 'other-row',
+        text: '4.1 mmol/L',
+        alternatives: [],
+        pageIndex: 0,
+        orientation: 0,
+        boundingBox: { x: 0.5, y: 0.35, width: 0.2, height: 0.04 },
+        recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+      },
+    ];
+    const looseRow = validateSemanticProposals(
+      {
+        schemaVersion: 'alyte.semantic-mapper.v1',
+        proposals: [
+          {
+            sourceObservationIds: ['loose-label', 'loose-value'],
+            proposedBiomarkerId: 'biomarker.ldl_c',
+            role: 'measurement',
+          },
+        ],
+      },
+      observations,
+      aliases,
+    );
+    assert.equal(looseRow.length, 1);
+    const crossRow = validateSemanticProposals(
+      {
+        schemaVersion: 'alyte.semantic-mapper.v1',
+        proposals: [
+          {
+            sourceObservationIds: ['loose-label', 'other-row'],
+            proposedBiomarkerId: 'biomarker.ldl_c',
+            role: 'measurement',
+          },
+        ],
+      },
+      observations,
+      aliases,
+    );
+    assert.deepEqual(crossRow, []);
+  });
+
+  it('rejects ambiguous duplicate semantic field aliases', () => {
+    const observation = {
+      id: 'source-2',
+      text: 'LDL-C 3.8 mmol/L',
+      alternatives: [],
+      pageIndex: 0,
+      orientation: 0,
+      boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    };
+    assert.deepEqual(
+      validateSemanticProposals(
+        {
+          schemaVersion: 'alyte.semantic-mapper.v1',
+          proposals: [
+            {
+              sourceObservationIds: ['source-2'],
+              proposedBiomarkerId: 'biomarker.ldl_c',
+              biomarkerId: 'biomarker.ldl_c',
+            },
+          ],
+        },
+        [observation],
+        aliases,
+      ),
+      [],
+    );
+  });
 });

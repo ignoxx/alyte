@@ -202,7 +202,8 @@ export function LabReportDetailScreen() {
     setError(false);
     setExtractionError(null);
     try {
-      await models.load();
+      // The report service owns the lazy model load and keeps Vision/OCR usable when the
+      // optional semantic runtime is unavailable at this moment.
       const draft = await reports.startExtraction(report.id, promptPassword());
       navigation.navigate('ExtractionDraft', { reportId: report.id, draftId: draft.id });
     } catch (caught) {
@@ -359,7 +360,9 @@ export function LabReportDetailScreen() {
                           ? 'labs.extractionSourceError'
                           : extractionError === 'no-reviewable-measurements'
                             ? 'labs.extractionNoMeasurementsError'
-                            : 'labs.extractionRecognitionError',
+                            : extractionError === 'model-unavailable'
+                              ? 'labs.extractionModelRequired'
+                              : 'labs.extractionRecognitionError',
                       )}
                     </AppText>
                   )}
@@ -374,7 +377,9 @@ export function LabReportDetailScreen() {
                           ? 'labs.extractionSourceError'
                           : extractionError === 'no-reviewable-measurements'
                             ? 'labs.extractionNoMeasurementsError'
-                            : 'labs.extractionRecognitionError',
+                            : extractionError === 'model-unavailable'
+                              ? 'labs.extractionModelRequired'
+                              : 'labs.extractionRecognitionError',
                       )}
                     </AppText>
                   )}

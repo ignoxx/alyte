@@ -1,4 +1,3 @@
-import type { SpecimenType } from '@alyte/domain';
 import {
   ALL_COMPARABLE_BIOMARKER_IDS,
   type BiomarkerCatalogueEntry,
@@ -13,20 +12,14 @@ import {
 export const SEMANTIC_ROLES = ['measurement', 'specimen-context', 'ignore'] as const;
 export type SemanticRole = (typeof SEMANTIC_ROLES)[number];
 
-export const SPECIMEN_TYPES = [
-  'blood',
-  'serum',
-  'plasma',
-  'urine',
-  'stool',
-  'saliva',
-  'unknown',
-] as const satisfies readonly SpecimenType[];
+export const SPECIMEN_TYPES = ['blood', 'serum', 'plasma', 'urine', 'other', 'unknown'] as const;
+
+export type SemanticSpecimenType = (typeof SPECIMEN_TYPES)[number];
 
 export type EvaluationProposal = {
   readonly sourceObservationIds: readonly string[];
   readonly role: SemanticRole;
-  readonly specimenType: SpecimenType;
+  readonly specimenType: SemanticSpecimenType;
   readonly biomarkerId: string | null;
 };
 
@@ -89,8 +82,9 @@ export function catalogueEntryFor(id: string | null): BiomarkerCatalogueEntry | 
 
 export function specimenCompatible(
   entry: BiomarkerCatalogueEntry,
-  specimenType: SpecimenType,
+  specimenType: SemanticSpecimenType,
 ): boolean {
+  if (specimenType === 'other') return false;
   if (entry.specimens.includes(specimenType)) return true;
   return (
     entry.specimenCompatibility?.some(
@@ -107,7 +101,7 @@ export function isKnownBiomarkerId(id: string | null): boolean {
   );
 }
 
-export function isSpecimenType(value: unknown): value is SpecimenType {
+export function isSpecimenType(value: unknown): value is SemanticSpecimenType {
   return typeof value === 'string' && (SPECIMEN_TYPES as readonly string[]).includes(value);
 }
 

@@ -30,6 +30,7 @@ export const VALIDATION_FAILURE_CODES = [
   'invalid-specimen',
   'invalid-biomarker-role',
   'incompatible-specimen',
+  'incompatible-unit',
   'oversized-proposal',
 ] as const;
 
@@ -112,6 +113,18 @@ function failure(code: ValidationFailureCode, proposalIndex: number | null): Val
 
 function objectKeys(value: object): string[] {
   return Object.keys(value);
+}
+
+function normalizedUnit(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/\s+/g, '').replace('μ', 'µ');
+}
+
+function sourceUnit(observations: readonly FixtureObservation[]): string | null {
+  const text = observations.map((observation) => observation.text).join(' ');
+  const match = text.match(
+    /(?:^|[^\p{L}\p{N}])((?:[a-zµμ]+)\s*\/\s*(?:[a-zµμ]+)|fL|%)(?=$|[^\p{L}\p{N}])/iu,
+  );
+  return match?.[1] === undefined ? null : normalizedUnit(match[1]);
 }
 
 /**
@@ -251,6 +264,14 @@ export function validateEvaluationOutput(
         failures.push(failure('incompatible-specimen', proposalIndex));
         return;
       }
+      const observedUnit = sourceUnit(sourceRows as FixtureObservation[]);
+      if (
+        observedUnit !== null &&
+        !entry.units.some((unit) => normalizedUnit(unit) === observedUnit)
+      ) {
+        failures.push(failure('incompatible-unit', proposalIndex));
+        return;
+      }
     }
     consumedRows.add(rowId);
     accepted.push({
@@ -262,7 +283,14 @@ export function validateEvaluationOutput(
     });
   });
 
-  return { accepted, failures, outputBytes: measured.bytes, rejected: failures.length > 0 };
+  // A response with one unsafe proposal is unsafe as an envelope. Discard every accepted proposal
+  // from that chunk so malformed, duplicate, or looping output cannot partially alter a draft.
+  return {
+    accepted: failures.length === 0 ? accepted : [],
+    failures,
+    outputBytes: measured.bytes,
+    rejected: failures.length > 0,
+  };
 }
 
 export function countFailures(

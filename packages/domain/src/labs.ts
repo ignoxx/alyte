@@ -49,6 +49,11 @@ export type MeasurementSourceLocation = {
     readonly adapterVersion: string;
     readonly schemaVersion: 'alyte.semantic-mapper.v1';
     readonly sourceObservationIds: readonly string[];
+    readonly modelVersion?: string;
+    readonly runtimeVersion?: string;
+    readonly promptVersion?: string;
+    readonly parserVersion?: string;
+    readonly catalogueVersion?: string;
   } | null;
 };
 

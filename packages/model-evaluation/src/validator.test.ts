@@ -49,6 +49,7 @@ describe('evaluation validator', () => {
     } as never);
     const result = validateEvaluationOutput(output, fixture.observations);
     const failures = countFailures(result.failures);
+    assert.equal(result.accepted.length, 0);
     assert.equal(failures['duplicate-source-row'], 1);
     assert.equal(failures['authoritative-field'], 1);
     assert.equal(failures['unknown-source-id'], 0);
@@ -66,6 +67,15 @@ describe('evaluation validator', () => {
     const result = validateEvaluationOutput(output, fixture.observations);
     assert.equal(result.accepted.length, 0);
     assert.equal(result.failures[0]?.code, 'incompatible-specimen');
+  });
+
+  it('rejects a known biomarker when the source unit is incompatible', () => {
+    const observations = fixture.observations.map((observation) =>
+      observation.id === 'en-serum-ldl-unit' ? { ...observation, text: 'g/L' } : observation,
+    );
+    const result = validateEvaluationOutput(validOutput(), observations);
+    assert.equal(result.accepted.length, 0);
+    assert.equal(result.failures[0]?.code, 'incompatible-unit');
   });
 
   it('reports invented source and biomarker identifiers independently', () => {

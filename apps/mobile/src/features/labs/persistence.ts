@@ -297,6 +297,13 @@ function decodeStoredSemantic(
     adapterVersion: item.adapterVersion,
     schemaVersion: item.schemaVersion,
     sourceObservationIds: item.sourceObservationIds as string[],
+    ...(typeof item.modelVersion === 'string' ? { modelVersion: item.modelVersion } : {}),
+    ...(typeof item.runtimeVersion === 'string' ? { runtimeVersion: item.runtimeVersion } : {}),
+    ...(typeof item.promptVersion === 'string' ? { promptVersion: item.promptVersion } : {}),
+    ...(typeof item.parserVersion === 'string' ? { parserVersion: item.parserVersion } : {}),
+    ...(typeof item.catalogueVersion === 'string'
+      ? { catalogueVersion: item.catalogueVersion }
+      : {}),
   };
 }
 

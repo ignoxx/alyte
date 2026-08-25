@@ -2,6 +2,7 @@ import Foundation
 
 /// Narrow runtime seam used by the production lifecycle core and by injected native tests.
 protocol AlyteLocalModelRuntimeSession: AnyObject {
+  func generate(prompt: String, maxOutputTokens: Int, outputCapacity: Int) throws -> String
   func close()
 }
 
@@ -288,6 +289,20 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     }
     setState(.loaded, failure: nil)
     return stateDictionary()
+  }
+
+  func infer(prompt: String, maxOutputTokens: Int, outputCapacity: Int) throws -> String {
+    guard stateValue == .loaded, let loadedRuntime else {
+      throw AlyteLocalModelError.unavailable(.unavailable)
+    }
+    guard maxOutputTokens > 0, maxOutputTokens <= 256, outputCapacity > 0, outputCapacity <= 16_384 else {
+      throw AlyteLocalModelError.failed(.runtimeFailed)
+    }
+    return try loadedRuntime.generate(
+      prompt: prompt,
+      maxOutputTokens: maxOutputTokens,
+      outputCapacity: outputCapacity
+    )
   }
 
   func unload() -> [String: Any] {

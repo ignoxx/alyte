@@ -1,4 +1,4 @@
-import type { SpecimenType } from '@alyte/domain';
+import type { NormalizedBoundingBox, SpecimenType } from '@alyte/domain';
 import type { SemanticRole } from './schema';
 
 export const MODEL_EVALUATION_FIXTURE_VERSION = 'alyte.qwen-evaluation-fixtures.v1' as const;
@@ -11,6 +11,13 @@ export type FixtureObservation = {
   readonly pageIndex: number;
   readonly locale: 'en' | 'de' | 'lt' | 'pl' | 'fr' | 'es';
   readonly specimenType: SpecimenType;
+  readonly boundingBox?: NormalizedBoundingBox;
+  readonly structure?: {
+    readonly kind: 'text' | 'table-cell';
+    readonly tableId: string | null;
+    readonly rowIndex: number | null;
+    readonly columnIndex: number | null;
+  };
 };
 
 export type FixtureExpectedMapping = {

@@ -25,6 +25,7 @@ import {
   createLocalModelService,
   type LocalModelService,
 } from '../features/local-models/native';
+import { createLocalSemanticMapper } from '../features/local-models/semantic-mapper';
 import {
   missingShowcaseIntakeInputs,
   seedShowcaseLabRecords,
@@ -82,6 +83,7 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     fakeModelState && variant !== 'production'
       ? createLocalModelService({ native: createFakeLocalModelNativeModule() })
       : createLocalModelService();
+  const semanticMapper = createLocalSemanticMapper({ models });
 
   if (showcase !== null) {
     void seedShowcaseLabRecords(labs);
@@ -96,7 +98,7 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     clock,
     showcase,
     labs,
-    reports: createLabReportsService({ repositoryFactory }),
+    reports: createLabReportsService({ repositoryFactory, semanticMapper }),
     intake,
     export: exportService,
     controls,

@@ -7,6 +7,11 @@ export type NativeLocalModelsModule = {
   readonly startDownload: (packId: string) => Promise<unknown>;
   readonly cancelDownload: () => Promise<unknown>;
   readonly load: (packId: string) => Promise<unknown>;
+  readonly infer: (
+    prompt: string,
+    maxOutputTokens: number,
+    outputCapacity: number,
+  ) => Promise<unknown>;
   readonly unload: () => unknown;
   readonly deletePack: (packId: string) => Promise<unknown>;
   readonly addListener?: (
@@ -22,6 +27,8 @@ export type LocalModelService = {
   readonly startDownload: () => Promise<LocalModelSnapshot>;
   readonly cancelDownload: () => Promise<LocalModelSnapshot>;
   readonly load: () => Promise<LocalModelSnapshot>;
+  /** Returns one bounded, grammar-constrained JSON response; raw output never gets logged. */
+  readonly infer: (prompt: string) => Promise<string>;
   readonly unload: () => Promise<LocalModelSnapshot>;
   readonly deletePack: () => Promise<LocalModelSnapshot>;
 };
@@ -105,6 +112,19 @@ export function createLocalModelService(options: LocalModelServiceOptions = {}):
       stateAfter(() => native?.startDownload(productionLocalModelManifest.pack.id)),
     cancelDownload: () => stateAfter(() => native?.cancelDownload()),
     load: () => stateAfter(() => native?.load(productionLocalModelManifest.pack.id)),
+    infer: async (prompt) => {
+      if (native === null) unavailable();
+      if (snapshot.state !== 'loaded' || !snapshot.loaded) {
+        throw Object.assign(new Error('The local model is not loaded'), { failure: 'unavailable' });
+      }
+      const output = await native.infer(prompt, 256, 16_384);
+      if (typeof output !== 'string') {
+        throw Object.assign(new Error('The local model returned malformed output'), {
+          failure: 'runtime-failed',
+        });
+      }
+      return output;
+    },
     unload: () => stateAfter(() => native?.unload()),
     deletePack: () => stateAfter(() => native?.deletePack(productionLocalModelManifest.pack.id)),
   };
@@ -188,6 +208,8 @@ export function createFakeLocalModelNativeModule(): NativeLocalModelsModule {
       }
       return emit({ ...state, state: 'loaded', loaded: true });
     },
+    infer: async (_prompt, _maxOutputTokens, _outputCapacity) =>
+      JSON.stringify({ schemaVersion: 'alyte.semantic-mapper.v1', proposals: [] }),
     unload: () =>
       emit({ ...state, state: state.state === 'loaded' ? 'ready' : state.state, loaded: false }),
     deletePack: async (packId) => {

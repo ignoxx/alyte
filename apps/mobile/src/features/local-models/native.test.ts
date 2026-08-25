@@ -13,8 +13,14 @@ test('explicit simulator fake completes the same verified lifecycle without mode
   assert.equal(states.includes('downloading'), true);
   assert.equal(states.includes('verifying'), true);
 
+  await assert.rejects(() => service.infer('synthetic prompt'), /not loaded/);
   assert.equal((await service.load()).state, 'loaded');
+  assert.deepEqual(JSON.parse(await service.infer('synthetic prompt')), {
+    schemaVersion: 'alyte.semantic-mapper.v1',
+    proposals: [],
+  });
   assert.equal((await service.unload()).state, 'ready');
+  await assert.rejects(() => service.infer('synthetic prompt'), /not loaded/);
   assert.equal((await service.deletePack()).state, 'not-installed');
   unsubscribe();
 });
