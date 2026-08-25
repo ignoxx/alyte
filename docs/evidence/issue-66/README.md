@@ -43,6 +43,8 @@ Use the same external pinned llama.cpp checkout and XCFramework variables as iss
 
 ```sh
 ALYTE_MODEL_EVAL_CANDIDATE=gemma4 \
+ALYTE_MODEL_EVAL_DEVICE_UDID=9A3D3FF4-48A2-5D50-BCE4-E74E4CA018D9 \
+ALYTE_MODEL_EVAL_XCODE_DESTINATION_ID=00008150-001875AC142A401C \
 ALYTE_MODEL_EVAL_CONTRACT_PATH="$ALYTE_MODEL_EVAL_CACHE/evaluation-contract-v1.json" \
 ALYTE_MODEL_EVAL_CACHE="$ALYTE_MODEL_EVAL_CACHE" \
 ALYTE_MODEL_EVAL_RUNTIME_SOURCE="$ALYTE_MODEL_EVAL_RUNTIME_SOURCE" \
@@ -52,6 +54,12 @@ ALYTE_MODEL_EVAL_XCRESULT="$ALYTE_MODEL_EVAL_XCRESULT" \
 ALYTE_MODEL_EVAL_TEAM_ID="$ALYTE_MODEL_EVAL_TEAM_ID" \
 ./scripts/run-model-evaluation-device.sh
 ```
+
+`ALYTE_MODEL_EVAL_DEVICE_UDID` is the CoreDevice identifier used by `devicectl`; the Xcode and
+`xctrace` destination uses the hardware UDID in `ALYTE_MODEL_EVAL_XCODE_DESTINATION_ID`. If the
+latter is omitted, the runner resolves `hardwareProperties.udid` from `devicectl device info
+details` and fails closed if it cannot do so. The CoreDevice state must be `connected` or the
+legacy `available` state.
 
 Set `ALYTE_MODEL_EVAL_AGGREGATE_PATH` to a new external path when retaining the aggregate. Keep the
 phone unlocked for XCTest. The script uninstalls the temporary evaluator app on exit and never

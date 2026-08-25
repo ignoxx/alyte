@@ -76,6 +76,24 @@ test('device runner selects the pinned candidate artifact and external contract'
   assert.match(runner, /--destination "\$\{device_relative_directory\}\/\$\{model_filename\}"/);
 });
 
+test('device runner separates CoreDevice and Xcode destination IDs and accepts connected devices', () => {
+  assert.match(
+    runner,
+    /eval_device_coredevice_id="\$\{ALYTE_MODEL_EVAL_DEVICE_UDID:-9A3D3FF4-48A2-5D50-BCE4-E74E4CA018D9\}"/,
+  );
+  assert.match(runner, /eval_device_xcode_id="\$\{ALYTE_MODEL_EVAL_XCODE_DESTINATION_ID:-\}"/);
+  assert.match(runner, /devicectl list devices 2>&1/);
+  assert.match(
+    runner,
+    /reported state '\$\{device_state:-unknown\}'; expected connected or available/,
+  );
+  assert.match(runner, /case "\$\{device_state\}" in\n  connected\|available/);
+  assert.match(runner, /device info details/);
+  assert.match(runner, /details\.result\?\.hardwareProperties\?\.udid/);
+  assert.match(runner, /--device "\$\{eval_device_coredevice_id\}"/);
+  assert.match(runner, /-destination "id=\$\{eval_device_xcode_id\}"/);
+});
+
 test('native bridge honors llama token sizing and bounded prefill', () => {
   assert.match(llamaShim, /required_probe < 0 \? -required_probe : required_probe/);
   assert.match(llamaShim, /session->batch_tokens = batch_tokens/);

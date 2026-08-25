@@ -54,7 +54,8 @@ case "${candidate}" in
     ;;
 esac
 
-eval_device_udid="${ALYTE_MODEL_EVAL_DEVICE_UDID:-9A3D3FF4-48A2-5D50-BCE4-E74E4CA018D9}"
+eval_device_coredevice_id="${ALYTE_MODEL_EVAL_DEVICE_UDID:-9A3D3FF4-48A2-5D50-BCE4-E74E4CA018D9}"
+eval_device_xcode_id="${ALYTE_MODEL_EVAL_XCODE_DESTINATION_ID:-}"
 eval_device_class="${ALYTE_MODEL_EVAL_DEVICE_CLASS:-current}"
 eval_device_model="${ALYTE_MODEL_EVAL_DEVICE_MODEL:-iPhone 17 (iPhone18,3)}"
 bundle_id="com.alyte.model-evaluation"
@@ -96,6 +97,50 @@ if [[ "$(contract_field contractVersion)" != "${expected_contract_version}" ||
       "$(contract_optional_field chatTemplateSource)" != "${expected_chat_template_source}" ]]; then
   print -u2 "Evaluation contract provenance does not match candidate ${candidate}"
   exit 2
+fi
+
+rg_bin="$(command -v rg || true)"
+if [[ -z "${rg_bin}" ]]; then
+  print -u2 "ripgrep (rg) is required for target/device checks"
+  exit 2
+fi
+
+device_listing=""
+if ! device_listing="$(xcrun devicectl list devices 2>&1)"; then
+  print -u2 "Could not list devices with devicectl while checking CoreDevice identifier ${eval_device_coredevice_id}"
+  exit 3
+fi
+device_record="$(print -r -- "${device_listing}" | "${rg_bin}" -F "${eval_device_coredevice_id}" | head -1 || true)"
+if [[ -z "${device_record}" ]]; then
+  print -u2 "CoreDevice identifier ${eval_device_coredevice_id} was not found in devicectl device list"
+  exit 3
+fi
+device_state="$(print -r -- "${device_record}" | awk -v id="${eval_device_coredevice_id}" 'index($0, id) > 0 { tail = $0; sub(".*" id "[[:space:]]+", "", tail); sub("^[[:space:]]+", "", tail); split(tail, fields, /[[:space:]]+/); print fields[1]; exit }')"
+case "${device_state}" in
+  connected|available)
+    ;;
+  *)
+    print -u2 "CoreDevice identifier ${eval_device_coredevice_id} reported state '${device_state:-unknown}'; expected connected or available"
+    exit 3
+    ;;
+esac
+
+if [[ -z "${eval_device_xcode_id}" ]]; then
+  details_directory="$(mktemp -d -t alyte-eval-device-details)"
+  details_path="${details_directory}/details.json"
+  if ! xcrun devicectl device info details \
+    --device "${eval_device_coredevice_id}" \
+    --json-output "${details_path}" >/dev/null 2>&1; then
+    rm -rf "${details_directory}"
+    print -u2 "Could not resolve the Xcode destination ID from CoreDevice identifier ${eval_device_coredevice_id} (state ${device_state}); set ALYTE_MODEL_EVAL_XCODE_DESTINATION_ID explicitly"
+    exit 3
+  fi
+  eval_device_xcode_id="$(node -e 'const details=JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); const value=details.result?.hardwareProperties?.udid ?? details.hardwareProperties?.udid; if (typeof value !== "string") process.exit(1); process.stdout.write(value)' "${details_path}" 2>/dev/null || true)"
+  rm -rf "${details_directory}"
+  if [[ ! "${eval_device_xcode_id}" =~ ^[0-9A-Fa-f-]{20,}$ ]]; then
+    print -u2 "CoreDevice identifier ${eval_device_coredevice_id} did not yield a valid hardware Xcode destination ID; set ALYTE_MODEL_EVAL_XCODE_DESTINATION_ID explicitly"
+    exit 3
+  fi
 fi
 
 case "${ALYTE_MODEL_EVAL_CACHE}" in
@@ -211,18 +256,9 @@ if [[ "$(shasum -a 256 "${model_path}" | cut -d ' ' -f 1)" != "${model_sha256}" 
   exit 2
 fi
 
-rg_bin="$(command -v rg || true)"
-if [[ -z "${rg_bin}" ]]; then
-  print -u2 "ripgrep (rg) is required for target/device checks"
-  exit 2
-fi
 if ! xcodebuild -project "${repo_root}/apps/model-evaluation/AlyteModelEvaluation.xcodeproj" -list | "${rg_bin}" -q '^        AlyteModelEvaluationTests$'; then
   print -u2 "Evaluation test target is missing"
   exit 2
-fi
-if ! xcrun devicectl list devices | "${rg_bin}" -q "${eval_device_udid}.*available"; then
-  print -u2 "Requested paired device is unavailable: ${eval_device_udid}"
-  exit 3
 fi
 
 # Build, install, stage, test, and retrieve in separate phases. The model is never put in the app
@@ -237,7 +273,7 @@ cleanup() {
   set +e
   if [[ "${installed_app}" == "1" ]]; then
     xcrun devicectl device uninstall app \
-      --device "${eval_device_udid}" \
+      --device "${eval_device_coredevice_id}" \
       "${bundle_id}" >/dev/null 2>&1
     local uninstall_code=$?
     if [[ "${exit_code}" == "0" && "${uninstall_code}" != "0" ]]; then
@@ -252,7 +288,7 @@ trap cleanup EXIT
 xcodebuild \
   -project "${repo_root}/apps/model-evaluation/AlyteModelEvaluation.xcodeproj" \
   -scheme AlyteModelEvaluation \
-  -destination "id=${eval_device_udid}" \
+  -destination "id=${eval_device_xcode_id}" \
   -derivedDataPath "${ALYTE_MODEL_EVAL_DERIVED_DATA}" \
   DEVELOPMENT_TEAM="${ALYTE_MODEL_EVAL_TEAM_ID}" \
   CODE_SIGN_IDENTITY="Apple Development" \
@@ -324,12 +360,12 @@ if [[ "$(plutil -extract ALYTE_MODEL_EVAL_MODEL_PATH raw -o - "${test_info}")" !
 fi
 
 xcrun devicectl device install app \
-  --device "${eval_device_udid}" \
+  --device "${eval_device_coredevice_id}" \
   "${app_path}"
 installed_app=1
 
 xcrun devicectl device copy to \
-  --device "${eval_device_udid}" \
+  --device "${eval_device_coredevice_id}" \
   --source "${model_path}" \
   --destination "${device_relative_directory}/${model_filename}" \
   --domain-type appDataContainer \
@@ -338,12 +374,12 @@ xcrun devicectl device copy to \
 xcodebuild \
   test-without-building \
   -xctestrun "${xctestrun_path}" \
-  -destination "id=${eval_device_udid}" \
+  -destination "id=${eval_device_xcode_id}" \
   -resultBundlePath "${ALYTE_MODEL_EVAL_XCRESULT}" \
   -only-testing:AlyteModelEvaluationTests
 
 xcrun devicectl device copy from \
-  --device "${eval_device_udid}" \
+  --device "${eval_device_coredevice_id}" \
   --source "${device_relative_directory}/aggregate.json" \
   --destination "${aggregate_path}" \
   --domain-type appDataContainer \
