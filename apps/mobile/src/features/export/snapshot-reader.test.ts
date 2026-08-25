@@ -73,7 +73,7 @@ async function databaseFixture(): Promise<NodeSqliteDatabase> {
 }
 
 describe('export snapshot completeness and consistency', () => {
-  test('reads every v10 user table in one pinned read transaction and filters preferences', async () => {
+  test('reads every v11 user table in one pinned read transaction and filters preferences', async () => {
     const database = await databaseFixture();
     await database.runAsync(
       `INSERT INTO app_preferences (key, value, updated_at) VALUES
@@ -82,7 +82,7 @@ describe('export snapshot completeness and consistency', () => {
        ('labs.sanitization-draft.report-1', '{"secret":"omit"}', '2026-08-25T00:00:00.000Z');`,
     );
     const snapshot = await readExportSnapshot(database);
-    assert.equal(snapshot.schemaVersion, 10);
+    assert.equal(snapshot.schemaVersion, 11);
     assert.deepEqual(
       snapshot.tables.map((table) => table.name),
       [

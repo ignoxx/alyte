@@ -157,6 +157,9 @@ function fakeFiles(options: {
         byteSize: 2048,
       };
     },
+    async resolvePath(path) {
+      return `file:///Documents/${path.replace('protected://', '')}`;
+    },
     async removeExportArtifacts(workspace) {
       removed.push(workspace.portableStagingReference, workspace.portableArchiveReference);
     },
@@ -241,6 +244,10 @@ describe('local export job orchestration', () => {
     assert.equal(prepared.manifest.media.selected, 0);
     assert.ok(prepared.manifest.outputs.every((output) => !output.path.startsWith('/')));
     assert.ok(archiveFake.created[0]?.includes('manifest.json'));
+    assert.equal(
+      await service.sharePath('export-job-test'),
+      'file:///Documents/exports/export-job-test.zip',
+    );
 
     const completed = await service.completeShare('export-job-test');
     assert.equal(completed.state, 'completed');

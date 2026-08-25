@@ -6,6 +6,11 @@ export type HomeStackParamList = {
 
 export type SettingsStackParamList = {
   SettingsRoot: undefined;
+  PrivacyStorage: undefined;
+  ModelStorage: undefined;
+  SupportFaq: undefined;
+  Diagnostics: undefined;
+  DeleteLocalData: undefined;
 };
 
 export type MainTabParamList = {
@@ -57,4 +62,5 @@ export type RootStackParamList = {
   MeasurementCorrection: { readonly recordId: string; readonly measurementId: string };
   LabDeletion: { readonly recordId: string; readonly measurementId?: string };
   RecordSourcePreview: { readonly recordId: string; readonly measurementId: string };
+  FullExport: undefined;
 };

@@ -137,6 +137,9 @@ export type ProtectedReportFileService = {
     portableStagingReference: string | null,
     portableArchiveReference: string | null,
   ): Promise<void>;
+  /** Enumerate and remove only regular files below Alyte's known protected directories. */
+  listOwnedFiles?(): Promise<readonly string[]>;
+  removeOwnedFile?(path: string): Promise<void>;
 };
 
 export type ProtectedReportFileServiceOptions = {
@@ -294,6 +297,25 @@ export function createProtectedReportFileService(
   function nativePathForSuffix(suffix: string): string {
     if (root === null) throw new Error('Protected report storage is not initialized');
     return joinPath(root, suffix);
+  }
+
+  function suffixForOwnedFile(path: string): string {
+    const portable = path.startsWith(PROTECTED_PATH_SCHEME)
+      ? path.slice(PROTECTED_PATH_SCHEME.length)
+      : protectedSuffix(path);
+    if (portable === null || portable.length === 0 || hasUnsafePathSegment(portable)) {
+      throw new Error('The requested path is not an owned protected file');
+    }
+    const segments = portable.split('/');
+    if (segments.length < 2 || !PROTECTED_DIRECTORY_NAMES.has(segments[0]!)) {
+      throw new Error('The requested path is not an owned protected file');
+    }
+    // Export staging contains deterministic nested data files. Other protected directories hold
+    // only direct artifacts; accepting deeper paths there would widen the deletion boundary.
+    if (segments.length > 2 && segments[0] !== PROTECTED_REPORT_DIRECTORIES.exports) {
+      throw new Error('The requested path is not an owned protected file');
+    }
+    return portable;
   }
 
   function portablePath(path: string): string {
@@ -563,6 +585,57 @@ export function createProtectedReportFileService(
     );
   }
 
+  async function listOwnedFiles(): Promise<readonly string[]> {
+    await initialize();
+    if (root === null) throw new Error('Protected report storage is not initialized');
+
+    const result: string[] = [];
+    async function visit(directory: string, suffix: string): Promise<void> {
+      for (const name of await fileSystem.readDirectoryAsync(directory)) {
+        const child = joinPath(directory, name);
+        const infoResult = (await fileSystem.getInfoAsync(child)) as {
+          readonly exists: boolean;
+          readonly isDirectory?: boolean;
+        };
+        if (!infoResult.exists) continue;
+        const childSuffix = `${suffix}/${name}`;
+        if (hasUnsafePathSegment(childSuffix)) continue;
+        if (infoResult.isDirectory === true) {
+          await visit(child, childSuffix);
+        } else {
+          result.push(`${PROTECTED_PATH_SCHEME}${childSuffix}`);
+        }
+      }
+    }
+
+    for (const directory of [
+      PROTECTED_REPORT_DIRECTORIES.originals,
+      PROTECTED_REPORT_DIRECTORIES.working,
+      PROTECTED_REPORT_DIRECTORIES.sanitized,
+      PROTECTED_REPORT_DIRECTORIES.intake,
+      PROTECTED_REPORT_DIRECTORIES.transient,
+      PROTECTED_REPORT_DIRECTORIES.exports,
+    ]) {
+      await visit(joinPath(root, directory), directory);
+    }
+    return result.sort((left, right) => left.localeCompare(right));
+  }
+
+  async function removeOwnedFile(path: string): Promise<void> {
+    await initialize();
+    const suffix = suffixForOwnedFile(path);
+    const native = nativePathForSuffix(suffix);
+    const result = (await fileSystem.getInfoAsync(native)) as {
+      readonly exists: boolean;
+      readonly isDirectory?: boolean;
+    };
+    if (result.isDirectory === true) throw new Error('The requested protected path is a directory');
+    await fileSystem.deleteAsync(native, { idempotent: true });
+    if ((await fileSystem.getInfoAsync(native)).exists) {
+      throw new Error('The protected file remained after deletion');
+    }
+  }
+
   function exportJobName(jobId: string): string {
     const value = safeFilename(jobId, 'export-job');
     if (value !== jobId || value.length === 0 || value.includes('.')) {
@@ -819,6 +892,8 @@ export function createProtectedReportFileService(
     stageIntake,
     inspectIntake,
     listIntake,
+    listOwnedFiles,
+    removeOwnedFile,
     exportWorkspaceReferences,
     createExportWorkspace,
     writeExportFile,

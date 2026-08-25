@@ -10,6 +10,11 @@ import { LogScreen } from '../features/intake/LogScreen';
 import { IntakeEntryScreen } from '../features/intake/IntakeEntryScreen';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
 import { SnapScreen } from '../features/intake/SnapScreen';
+import { PrivacyStorageScreen } from '../features/settings/PrivacyStorageScreen';
+import { ModelStorageScreen } from '../features/settings/ModelStorageScreen';
+import { SupportFaqScreen } from '../features/settings/SupportFaqScreen';
+import { DiagnosticsScreen } from '../features/settings/DiagnosticsScreen';
+import { DeleteLocalDataScreen } from '../features/settings/DeleteLocalDataScreen';
 import {
   registerNavigationFeatures,
   type NavigationFeature,
@@ -79,6 +84,39 @@ const intakeFeatures: readonly NavigationFeature[] = [
   },
 ];
 
+const settingsFeatures: readonly NavigationFeature[] = [
+  {
+    name: 'PrivacyStorage',
+    target: 'settings',
+    component: PrivacyStorageScreen,
+    titleKey: 'settings.privacyTitle',
+  },
+  {
+    name: 'ModelStorage',
+    target: 'settings',
+    component: ModelStorageScreen,
+    titleKey: 'settings.modelStorageTitle',
+  },
+  {
+    name: 'SupportFaq',
+    target: 'settings',
+    component: SupportFaqScreen,
+    titleKey: 'settings.supportTitle',
+  },
+  {
+    name: 'Diagnostics',
+    target: 'settings',
+    component: DiagnosticsScreen,
+    titleKey: 'settings.diagnosticsTitle',
+  },
+  {
+    name: 'DeleteLocalData',
+    target: 'settings',
+    component: DeleteLocalDataScreen,
+    titleKey: 'settings.deleteTitle',
+  },
+];
+
 /**
  * Later vertical slices register detail and form routes under an existing destination stack. The
  * root tabs remain stable while feature modules own their screen implementations.
@@ -89,6 +127,7 @@ export function createNavigationRegistry(
   return registerNavigationFeatures(coreFeatures, [
     ...labsFeatures,
     ...intakeFeatures,
+    ...settingsFeatures,
     ...extensions,
   ]);
 }

@@ -228,7 +228,8 @@ export type AppIconName =
   | 'photos'
   | 'addDocument'
   | 'eye'
-  | 'shield';
+  | 'shield'
+  | 'trash';
 
 const iconSymbols: Record<AppIconName, string> = {
   home: 'house',
@@ -248,6 +249,7 @@ const iconSymbols: Record<AppIconName, string> = {
   addDocument: 'doc.badge.plus',
   eye: 'eye',
   shield: 'shield',
+  trash: 'trash',
 };
 
 /** Small SF Symbol seam for inline controls; navigation uses native SF Symbols directly. */
@@ -267,7 +269,9 @@ export function AppIcon({
       accessibilityRole="image"
       source={`sf:${iconSymbols[name]}`}
       style={{ color, height: size, width: size }}
-      {...(accessibilityLabel === undefined ? {} : { accessibilityLabel, accessible: true })}
+      {...(accessibilityLabel === undefined
+        ? { accessible: false }
+        : { accessibilityLabel, accessible: true })}
     />
   );
 }

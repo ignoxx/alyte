@@ -436,7 +436,7 @@ async function createFrozenLabsFixture(database: SqliteDatabase, version: number
 
 describe('local schema forward migrations', () => {
   for (let releasedVersion = 1; releasedVersion <= 8; releasedVersion += 1) {
-    test(`upgrades released v${releasedVersion} to v10`, async () => {
+    test(`upgrades released v${releasedVersion} to v11`, async () => {
       const database = new NodeSqliteDatabase(temporaryDatabase());
       await createFrozenLabsFixture(database, releasedVersion);
       await createBoundary(database).initialize();
@@ -474,11 +474,19 @@ describe('local schema forward migrations', () => {
         ).length,
         1,
       );
+      assert.equal(
+        (
+          await database.getAllAsync(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'local_deletion_operations';",
+          )
+        ).length,
+        1,
+      );
       await database.closeAsync();
     });
   }
 
-  test('upgrades the released v9 schema to v10 without changing user records', async () => {
+  test('upgrades the released v9 schema to v11 without changing user records', async () => {
     const database = new NodeSqliteDatabase(temporaryDatabase());
     await createFrozenLabsFixture(database, 8);
     await createBoundary(database, LOCAL_MIGRATIONS.slice(0, 9)).initialize();
@@ -511,12 +519,54 @@ describe('local schema forward migrations', () => {
     );
     assert.equal(
       (
+        await database.getAllAsync(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'local_deletion_operations';",
+        )
+      ).length,
+      1,
+    );
+    assert.equal(
+      (
         await database.getAllAsync<{ id: string }>(
           'SELECT id FROM lab_records WHERE id = ?',
           'record-old-v5',
         )
       )[0]?.id,
       'record-old-v5',
+    );
+    await database.closeAsync();
+  });
+
+  test('upgrades the released v10 export schema to v11 with a durable deletion table', async () => {
+    const database = new NodeSqliteDatabase(temporaryDatabase());
+    await createFrozenLabsFixture(database, 8);
+    await createBoundary(database, LOCAL_MIGRATIONS.slice(0, 10)).initialize();
+    const releasedVersion = await database.getAllAsync<{ version: number }>(
+      'SELECT MAX(version) AS version FROM schema_migrations;',
+    );
+    assert.equal(releasedVersion[0]?.version, 10);
+    await createBoundary(database).initialize();
+    const currentVersion = await database.getAllAsync<{ version: number }>(
+      'SELECT MAX(version) AS version FROM schema_migrations;',
+    );
+    assert.equal(currentVersion[0]?.version, CURRENT_SCHEMA_VERSION);
+    const columns = await database.getAllAsync<{ name: string }>(
+      'PRAGMA table_info(local_deletion_operations);',
+    );
+    assert.deepEqual(
+      columns.map((column) => column.name),
+      [
+        'id',
+        'scope',
+        'plan_hash',
+        'plan_json',
+        'state',
+        'failure_categories_json',
+        'requested_at',
+        'started_at',
+        'completed_at',
+        'updated_at',
+      ],
     );
     await database.closeAsync();
   });
@@ -671,7 +721,7 @@ describe('local schema forward migrations', () => {
     );
     assert.equal(versionRows[0]?.version, CURRENT_SCHEMA_VERSION);
     const requiredTables = await firstDatabase.getAllAsync<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('lab_reports', 'lab_records', 'measurements', 'intake_events', 'intake_components', 'cloud_jobs', 'app_preferences', 'intake_capture_recovery', 'extraction_drafts', 'extraction_draft_rows', 'lab_combined_deletions', 'local_export_jobs');",
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('lab_reports', 'lab_records', 'measurements', 'intake_events', 'intake_components', 'cloud_jobs', 'app_preferences', 'intake_capture_recovery', 'extraction_drafts', 'extraction_draft_rows', 'lab_combined_deletions', 'local_export_jobs', 'local_deletion_operations');",
     );
     assert.deepEqual(requiredTables.map((table) => table.name).sort(), [
       'app_preferences',
@@ -684,6 +734,7 @@ describe('local schema forward migrations', () => {
       'lab_combined_deletions',
       'lab_records',
       'lab_reports',
+      'local_deletion_operations',
       'local_export_jobs',
       'measurements',
     ]);

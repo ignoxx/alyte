@@ -104,7 +104,8 @@ export type ExportFiles = Pick<
   | 'protectExportArchive'
   | 'removeExportArtifacts'
   | 'removeExportArtifactsByReference'
->;
+> &
+  Pick<ProtectedReportFileService, 'resolvePath'>;
 
 export type LocalExportService = {
   start(input?: {
@@ -126,6 +127,8 @@ export type LocalExportService = {
   completeShare(jobId: string): Promise<LocalExportJob>;
   cancelShare(jobId: string): Promise<LocalExportJob>;
   getJob(jobId: string): Promise<LocalExportJob | null>;
+  /** Resolve a protected portable reference only for the system share controller. */
+  sharePath(jobId: string): Promise<string>;
   startup(): Promise<void>;
   reconcile(): Promise<void>;
 };
@@ -984,6 +987,15 @@ export function createLocalExportService(options: ExportServiceOptions): LocalEx
     }
   }
 
+  async function sharePath(jobId: string): Promise<string> {
+    const job = await getJob(jobId);
+    if (job === null || job.state !== 'ready' || job.portableArchiveReference === null) {
+      throw new Error('The Full Export is not ready to share');
+    }
+    if (options.files.resolvePath === undefined) return job.portableArchiveReference;
+    return options.files.resolvePath(job.portableArchiveReference);
+  }
+
   async function reconcile(): Promise<void> {
     startupPromise = null;
     startupFailure = null;
@@ -997,6 +1009,7 @@ export function createLocalExportService(options: ExportServiceOptions): LocalEx
     completeShare,
     cancelShare,
     getJob,
+    sharePath,
     startup,
     reconcile,
   };

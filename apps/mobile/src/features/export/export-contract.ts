@@ -36,7 +36,8 @@ export type ExportTableName =
   | 'lab_combined_deletions'
   | 'app_preferences';
 
-export type ExportControlTableName = 'schema_migrations' | 'local_export_jobs';
+export type ExportControlTableName =
+  'schema_migrations' | 'local_export_jobs' | 'local_deletion_operations';
 
 export type ExportColumnDecision = {
   readonly name: string;
@@ -271,6 +272,7 @@ export const EXPORT_SCHEMA_DECISIONS: readonly ExportTableDecision[] = [
   includedTable('app_preferences', ['key', 'value', 'updated_at']),
   excludedTable('schema_migrations'),
   excludedTable('local_export_jobs'),
+  excludedTable('local_deletion_operations'),
 ] as const;
 
 export const EXPORT_INTERPRETATION_PREFERENCE_KEYS = [

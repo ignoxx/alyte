@@ -18,6 +18,7 @@ import { extractionEditorDestination } from './registry-model';
 import { MeasurementCorrectionScreen } from '../features/labs/MeasurementCorrectionScreen';
 import { LabDeletionScreen } from '../features/labs/LabDeletionScreen';
 import { RecordSourcePreviewScreen } from '../features/labs/RecordSourcePreviewScreen';
+import { FullExportScreen } from '../features/settings/FullExportScreen';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const MainTabs = createNativeBottomTabNavigator<MainTabParamList>();
@@ -252,6 +253,15 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
             presentation: 'fullScreenModal',
             headerShown: true,
             title: t('labs.extractionSourcePreviewTitle'),
+          }}
+        />
+        <RootStack.Screen
+          name="FullExport"
+          component={FullExportScreen}
+          options={{
+            presentation: 'fullScreenModal',
+            headerShown: true,
+            title: t('settings.exportTitle'),
           }}
         />
       </RootStack.Navigator>

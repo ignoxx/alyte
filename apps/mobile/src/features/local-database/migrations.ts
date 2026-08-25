@@ -19,7 +19,7 @@ type CallbackMigration = {
 
 export type Migration = SqlMigration | CallbackMigration;
 
-export const CURRENT_SCHEMA_VERSION = 10;
+export const CURRENT_SCHEMA_VERSION = 11;
 
 const INTAKE_CAPTURE_RECOVERY_DDL = `
   CREATE TABLE IF NOT EXISTS intake_capture_recovery (
@@ -412,6 +412,28 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
 
       CREATE INDEX IF NOT EXISTS local_export_jobs_state_idx
         ON local_export_jobs(state, updated_at ASC);
+    `,
+  },
+  {
+    version: 11,
+    sql: `
+      CREATE TABLE IF NOT EXISTS local_deletion_operations (
+        id TEXT PRIMARY KEY NOT NULL,
+        scope TEXT NOT NULL CHECK (scope IN ('reports', 'records', 'events', 'media', 'all-health')),
+        plan_hash TEXT NOT NULL,
+        plan_json TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('requested', 'running', 'completed', 'failed')),
+        failure_categories_json TEXT NOT NULL DEFAULT '[]',
+        requested_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS local_deletion_operations_state_idx
+        ON local_deletion_operations(state, updated_at ASC);
+      CREATE INDEX IF NOT EXISTS local_deletion_operations_scope_idx
+        ON local_deletion_operations(scope, updated_at DESC);
     `,
   },
 ];

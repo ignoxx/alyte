@@ -17,6 +17,10 @@ import {
   type LocalExportService,
 } from '../features/export/service';
 import {
+  createLocalControlsService,
+  type LocalControlsService,
+} from '../features/local-controls/service';
+import {
   missingShowcaseIntakeInputs,
   seedShowcaseLabRecords,
   showcaseIntakeInputs,
@@ -30,6 +34,7 @@ export interface AlyteServices {
   readonly reports: LabReportsService;
   readonly intake: IntakeService;
   readonly export: LocalExportService;
+  readonly controls: LocalControlsService;
 }
 
 export function runtimeVariant(): RuntimeVariant {
@@ -65,6 +70,12 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
   // Reconcile protected export artifacts before any export action can be used. The service keeps
   // a sanitized retryable failure when native storage is unavailable; it never logs health data.
   void exportService.startup().catch(() => undefined);
+  const controls = createLocalControlsService({
+    variant,
+    appVersion: '0.1.0',
+  });
+  // Deletion intent and owned-file reconciliation are durable and safe to resume after relaunch.
+  void controls.reconcile().catch(() => undefined);
 
   if (showcase !== null) {
     void seedShowcaseLabRecords(labs);
@@ -82,6 +93,7 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     reports: createLabReportsService({ repositoryFactory }),
     intake,
     export: exportService,
+    controls,
   };
 }
 

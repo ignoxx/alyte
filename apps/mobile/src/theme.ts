@@ -1,10 +1,4 @@
-import {
-  DynamicColorIOS,
-  Platform,
-  PlatformColor,
-  StyleSheet,
-  type ColorValue,
-} from 'react-native';
+import { Platform, PlatformColor, StyleSheet, type ColorValue } from 'react-native';
 
 /**
  * Semantic system colors keep ordinary React Native surfaces in sync with UIKit's light and dark
@@ -12,10 +6,6 @@ import {
  */
 function systemColor(name: string, fallback: string): ColorValue {
   return Platform.OS === 'ios' ? PlatformColor(name) : fallback;
-}
-
-function quietAccent(light: string, dark: string, fallback: string): ColorValue {
-  return process.env.EXPO_OS === 'ios' ? DynamicColorIOS({ light, dark }) : fallback;
 }
 
 export const colors = {
@@ -26,8 +16,8 @@ export const colors = {
   elevatedSurface: systemColor('systemBackground', '#FFFFFF'),
   onAccent: '#FFFFFF',
   border: systemColor('separator', '#D7E2DE'),
-  accent: quietAccent('#365B8C', '#78A9E6', '#365B8C'),
-  accentPressed: quietAccent('#29486F', '#9BC4F5', '#29486F'),
+  accent: systemColor('systemBlue', '#007AFF'),
+  accentPressed: systemColor('systemBlue', '#0066D6'),
   accentSoft: systemColor('tertiarySystemFill', '#DDEDE8'),
   disabledFill: systemColor('tertiarySystemFill', '#E1E6E4'),
   disabledInk: systemColor('secondaryLabel', '#566260'),
