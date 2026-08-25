@@ -631,6 +631,14 @@ use typechecking and focused integrated checks for obvious low-risk wiring and s
 - Repository tests use temporary SQLite databases and exercise every migration from version zero.
 - Swift XCTest covers OCR/PDF transforms, password handling, metadata removal, redaction flattening,
   file protection, and cloud-envelope test vectors.
+- `npm run test:native:protection` copies the maintained `AlyteProtection` sources and XCTest
+  fixtures into an ephemeral Swift Package, resolves the exact ZIPFoundation 0.9.20 dependency,
+  and runs both native protection test suites on the current iOS Simulator SDK. By default it
+  chooses the newest available standard iPhone simulator; `ALYTE_IOS_SIMULATOR_NAME` can select
+  a named iPhone, and an ephemeral standard iPhone is created and removed when none is available.
+  The package, Xcode project, workspace, scheme, and derived data are disposable; no generated
+  native project is checked in. This simulator command does not establish physical-device Data
+  Protection behavior.
 - Contract tests run the same JSON fixtures through mobile and backend decoders.
 - Backend integration tests use temporary SQLite databases and upload directories plus fake
   providers, clocks, process restarts, and RevenueCat webhook events to prove leasing, deployment

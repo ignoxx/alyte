@@ -1,4 +1,5 @@
 import XCTest
+@testable import AlyteProtection
 
 final class AlyteProtectionFilePolicyTests: XCTestCase {
   func testProtectsDatabaseAndSQLiteSidecarsWithDataProtectionAndBackupExclusion() throws {
