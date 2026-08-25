@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -51,27 +50,62 @@ test('device runner rejects a linked-but-unembedded or unsigned runtime before i
   assert.match(runner, /codesign --verify --deep --strict --verbose=2 "\$\{app_path\}"/);
 });
 
-test('binary identity hashing fails closed and cleans up when setup, copy, or hashing fails', () => {
+test('binary identity hashing accepts normal signing representation but rejects tampering', () => {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), 'alyte-eval-embedding-test-'));
   const toolDirectory = join(temporaryDirectory, 'tools');
   fs.mkdirSync(toolDirectory);
-  const binaryPath = join(temporaryDirectory, 'binary');
-  const binary = Buffer.from('synthetic runtime bytes\n', 'utf8');
-  writeFileSync(binaryPath, binary);
-  const expectedHash = crypto.createHash('sha256').update(binary).digest('hex');
+  const sourcePath = join(temporaryDirectory, 'source');
+  const embeddedPath = join(temporaryDirectory, 'embedded');
+  const tamperedPath = join(temporaryDirectory, 'tampered');
   const baseEnvironment = {
     ...process.env,
     TMPDIR: temporaryDirectory,
   };
 
   try {
-    const valid = spawnSync('zsh', [hashScript, binaryPath], {
+    execFileSync('lipo', ['-thin', 'arm64e', '/usr/bin/true', '-output', sourcePath]);
+    execFileSync('codesign', ['--remove-signature', sourcePath]);
+    fs.copyFileSync(sourcePath, embeddedPath);
+    execFileSync('codesign', ['--force', '--sign', '-', embeddedPath]);
+    const valid = spawnSync('zsh', [hashScript, sourcePath], {
       env: baseEnvironment,
       encoding: 'utf8',
     });
     assert.equal(valid.status, 0, valid.stderr);
-    assert.equal(valid.stdout.trim(), expectedHash);
 
+    const embedded = spawnSync('zsh', [hashScript, embeddedPath], {
+      env: baseEnvironment,
+      encoding: 'utf8',
+    });
+    assert.equal(embedded.status, 0, embedded.stderr);
+    assert.equal(valid.stdout.trim(), embedded.stdout.trim());
+
+    const tampered = Buffer.from(fs.readFileSync(embeddedPath));
+    tampered[4096] ^= 0xff;
+    writeFileSync(tamperedPath, tampered);
+    const tamperedResult = spawnSync('zsh', [hashScript, tamperedPath], {
+      env: baseEnvironment,
+      encoding: 'utf8',
+    });
+    assert.equal(tamperedResult.status, 0, tamperedResult.stderr);
+    assert.notEqual(tamperedResult.stdout.trim(), valid.stdout.trim());
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test('binary identity hashing fails closed and cleans up when setup, copy, or hashing fails', () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'alyte-eval-embedding-failure-test-'));
+  const toolDirectory = join(temporaryDirectory, 'tools');
+  fs.mkdirSync(toolDirectory);
+  const binaryPath = join(temporaryDirectory, 'binary');
+  writeFileSync(binaryPath, Buffer.from('synthetic runtime bytes\n', 'utf8'));
+  const baseEnvironment = {
+    ...process.env,
+    TMPDIR: temporaryDirectory,
+  };
+
+  try {
     const missing = spawnSync('zsh', [hashScript, join(temporaryDirectory, 'missing')], {
       env: baseEnvironment,
       encoding: 'utf8',
@@ -87,9 +121,9 @@ test('binary identity hashing fails closed and cleans up when setup, copy, or ha
     });
     assert.notEqual(copyFailure.status, 0);
 
-    const failingShasum = join(toolDirectory, 'shasum');
-    writeFileSync(failingShasum, '#!/bin/zsh\nexit 42\n');
-    chmodSync(failingShasum, 0o755);
+    const failingNode = join(toolDirectory, 'node');
+    writeFileSync(failingNode, '#!/bin/zsh\nexit 42\n');
+    chmodSync(failingNode, 0o755);
     const hashFailure = spawnSync('zsh', [hashScript, binaryPath], {
       env: { ...baseEnvironment, PATH: `${toolDirectory}:${process.env.PATH}` },
       encoding: 'utf8',

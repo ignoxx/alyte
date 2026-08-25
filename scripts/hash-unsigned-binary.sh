@@ -7,6 +7,7 @@ if [[ "$#" != "1" || ! -f "$1" ]]; then
 fi
 
 binary="$1"
+script_directory="${0:A:h}"
 scratch_directory=""
 if ! scratch_directory="$(mktemp -d "${TMPDIR:-/tmp}/alyte-eval-llama-hash.XXXXXX")"; then
   print -u2 "Could not create a hashing workspace"
@@ -42,7 +43,7 @@ if codesign --display --verbose=2 "${scratch_directory}/binary" >/dev/null 2>&1;
 fi
 
 hash_line=""
-if ! hash_line="$(shasum -a 256 "${scratch_directory}/binary")"; then
+if ! hash_line="$(node "${script_directory}/hash-unsigned-binary.mjs" "${scratch_directory}/binary")"; then
   print -u2 "Could not hash binary"
   exit 1
 fi
