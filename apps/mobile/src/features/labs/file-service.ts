@@ -59,6 +59,11 @@ export type ProtectedExportWorkspace = {
   readonly portableArchiveReference: string;
 };
 
+export type ProtectedExportWorkspaceReferences = Pick<
+  ProtectedExportWorkspace,
+  'portableStagingReference' | 'portableArchiveReference'
+>;
+
 export type ProtectedExportSource = {
   readonly path: string;
   readonly portablePath: string;
@@ -107,6 +112,7 @@ export type ProtectedReportFileService = {
   inspectIntake?(path: string): Promise<ProtectedCopy | null>;
   listIntake?(): Promise<readonly string[]>;
   /** Narrow workspace operations for local Full Export; no arbitrary recursive path API is exposed. */
+  exportWorkspaceReferences?(jobId: string): ProtectedExportWorkspaceReferences;
   createExportWorkspace?(jobId: string): Promise<ProtectedExportWorkspace>;
   writeExportFile?(
     workspace: ProtectedExportWorkspace,
@@ -565,6 +571,14 @@ export function createProtectedReportFileService(
     return value;
   }
 
+  function exportWorkspaceReferences(jobId: string): ProtectedExportWorkspaceReferences {
+    const name = exportJobName(jobId);
+    return {
+      portableStagingReference: `${PROTECTED_PATH_SCHEME}${PROTECTED_REPORT_DIRECTORIES.exports}/${name}.partial`,
+      portableArchiveReference: `${PROTECTED_PATH_SCHEME}${PROTECTED_REPORT_DIRECTORIES.exports}/${name}.zip`,
+    };
+  }
+
   function exportRelativePath(relativePath: string): string {
     if (
       relativePath.length === 0 ||
@@ -622,8 +636,23 @@ export function createProtectedReportFileService(
     ) {
       throw new Error('The export workspace already exists');
     }
-    await fileSystem.makeDirectoryAsync(stagingPath, { intermediates: false });
-    await protectDirectory(stagingPath);
+    try {
+      await fileSystem.makeDirectoryAsync(stagingPath, { intermediates: false });
+      await protectDirectory(stagingPath);
+      if (!(await fileSystem.getInfoAsync(stagingPath)).exists) {
+        throw new Error('Export staging workspace disappeared after protection');
+      }
+    } catch (error) {
+      try {
+        await fileSystem.deleteAsync(stagingPath, { idempotent: true });
+      } catch {
+        throw new Error('Export staging workspace cleanup is pending');
+      }
+      if ((await fileSystem.getInfoAsync(stagingPath)).exists) {
+        throw new Error('Export staging workspace cleanup is pending');
+      }
+      throw error;
+    }
     return {
       stagingPath,
       portableStagingReference: portablePath(stagingPath),
@@ -790,6 +819,7 @@ export function createProtectedReportFileService(
     stageIntake,
     inspectIntake,
     listIntake,
+    exportWorkspaceReferences,
     createExportWorkspace,
     writeExportFile,
     copyExportMedia,

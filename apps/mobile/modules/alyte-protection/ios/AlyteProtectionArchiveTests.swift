@@ -71,6 +71,75 @@ final class AlyteProtectionArchiveTests: XCTestCase {
     XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.partial.path))
   }
 
+  func testIdenticalInputsProduceIdenticalArchiveBytesDespiteSourceMetadata() throws {
+    let first = try makeFixture()
+    let second = try makeFixture()
+    defer {
+      try? FileManager.default.removeItem(at: first.directory)
+      try? FileManager.default.removeItem(at: second.directory)
+    }
+    let metadata: [FileAttributeKey: Any] = [
+      .modificationDate: Date(timeIntervalSince1970: 1_700_000_000),
+      .posixPermissions: 0o600,
+    ]
+    for fixture in [first, second] {
+      for file in fixture.files {
+        try FileManager.default.setAttributes(metadata, ofItemAtPath: file.url.path)
+      }
+    }
+    let policy = AlyteProtectionFilePolicy()
+    let expected = try first.files.map { file in
+      AlyteZipExpectedEntry(
+        path: file.relative,
+        bytes: Int64(try FileManager.default.attributesOfItem(atPath: file.url.path)[.size] as! NSNumber),
+        sha256: try policy.hashFile(at: file.url)
+      )
+    }
+    let secondExpected = try second.files.map { file in
+      AlyteZipExpectedEntry(
+        path: file.relative,
+        bytes: Int64(try FileManager.default.attributesOfItem(atPath: file.url.path)[.size] as! NSNumber),
+        sha256: try policy.hashFile(at: file.url)
+      )
+    }
+    _ = try AlyteProtectionArchive().create(
+      operationId: "export-deterministic-one",
+      stagingURL: first.staging,
+      partialURL: first.partial,
+      expected: expected
+    )
+    _ = try AlyteProtectionArchive().create(
+      operationId: "export-deterministic-two",
+      stagingURL: second.staging,
+      partialURL: second.partial,
+      expected: secondExpected
+    )
+    XCTAssertEqual(try Data(contentsOf: first.partial), try Data(contentsOf: second.partial))
+  }
+
+  func testRejectsSymlinkedExportAncestor() throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let aliasContainer = fixture.directory.appendingPathComponent("alias-container", isDirectory: true)
+    try FileManager.default.createDirectory(at: aliasContainer, withIntermediateDirectories: true)
+    let alias = aliasContainer.appendingPathComponent("alyte-protected", isDirectory: true)
+    try FileManager.default.createSymbolicLink(
+      at: alias,
+      withDestinationURL: fixture.directory.appendingPathComponent("alyte-protected")
+    )
+    let aliasedStaging = alias.appendingPathComponent("exports/staging.partial")
+    XCTAssertThrowsError(
+      try AlyteProtectionArchive().create(
+        operationId: "export-ancestor-symlink",
+        stagingURL: aliasedStaging,
+        partialURL: alias.appendingPathComponent("exports/alias.zip.partial"),
+        expected: []
+      )
+    ) { error in
+      XCTAssertEqual((error as? AlyteProtectionError)?.failureCategory, .archiveSymlink)
+    }
+  }
+
   private func makeFixture() throws -> (
     directory: URL,
     staging: URL,

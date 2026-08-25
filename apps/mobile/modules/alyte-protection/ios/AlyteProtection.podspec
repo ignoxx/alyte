@@ -10,6 +10,9 @@ Pod::Spec.new do |s|
   s.static_framework = true
   s.dependency 'ExpoModulesCore'
   s.dependency 'ZIPFoundation', '0.9.20'
+  s.resource_bundles = {
+    'AlyteProtectionAcknowledgements' => ['../THIRD_PARTY_NOTICES.md']
+  }
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
   s.exclude_files = "**/*Tests.swift"

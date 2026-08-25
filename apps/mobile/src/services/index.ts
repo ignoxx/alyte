@@ -62,6 +62,9 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
 
   const labs = createLabsService({ repositoryFactory });
   const exportService = createDefaultLocalExportService();
+  // Reconcile protected export artifacts before any export action can be used. The service keeps
+  // a sanitized retryable failure when native storage is unavailable; it never logs health data.
+  void exportService.startup().catch(() => undefined);
 
   if (showcase !== null) {
     void seedShowcaseLabRecords(labs);

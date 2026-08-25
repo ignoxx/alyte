@@ -76,18 +76,20 @@ public final class AlyteProtectionModule: Module {
         stagingPath: String,
         partialArchivePath: String,
         entriesJSON: String
-      ) throws -> [String: Any] in
+      ) async throws -> [String: Any] in
       do {
         guard let data = entriesJSON.data(using: .utf8) else {
           throw AlyteProtectionError.archiveInvalidInput
         }
         let expected = try JSONDecoder().decode([AlyteZipExpectedEntry].self, from: data)
-        let result = try Self.archiveAdapter.create(
-          operationId: operationId,
-          stagingURL: URL(fileURLWithPath: Self.filePath(from: stagingPath)),
-          partialURL: URL(fileURLWithPath: Self.filePath(from: partialArchivePath)),
-          expected: expected
-        )
+        let result = try await Self.runArchiveOperation {
+          try Self.archiveAdapter.create(
+            operationId: operationId,
+            stagingURL: URL(fileURLWithPath: Self.filePath(from: stagingPath)),
+            partialURL: URL(fileURLWithPath: Self.filePath(from: partialArchivePath)),
+            expected: expected
+          )
+        }
         return [
           "operationId": result.operationId,
           "phase": result.phase,
@@ -100,13 +102,15 @@ public final class AlyteProtectionModule: Module {
     }
 
     AsyncFunction("promoteZip") {
-      (operationId: String, partialArchivePath: String, archivePath: String) throws -> [String: Any] in
+      (operationId: String, partialArchivePath: String, archivePath: String) async throws -> [String: Any] in
       do {
-        let result = try Self.archiveAdapter.promote(
-          operationId: operationId,
-          partialURL: URL(fileURLWithPath: Self.filePath(from: partialArchivePath)),
-          archiveURL: URL(fileURLWithPath: Self.filePath(from: archivePath))
-        )
+        let result = try await Self.runArchiveOperation {
+          try Self.archiveAdapter.promote(
+            operationId: operationId,
+            partialURL: URL(fileURLWithPath: Self.filePath(from: partialArchivePath)),
+            archiveURL: URL(fileURLWithPath: Self.filePath(from: archivePath))
+          )
+        }
         return [
           "operationId": result.operationId,
           "phase": result.phase,
@@ -119,12 +123,14 @@ public final class AlyteProtectionModule: Module {
     }
 
     AsyncFunction("cancelZip") {
-      (operationId: String, partialArchivePath: String) throws -> [String: Any] in
+      (operationId: String, partialArchivePath: String) async throws -> [String: Any] in
       do {
-        let result = try Self.archiveAdapter.cancel(
-          operationId: operationId,
-          partialURL: URL(fileURLWithPath: Self.filePath(from: partialArchivePath))
-        )
+        let result = try await Self.runArchiveOperation {
+          try Self.archiveAdapter.cancel(
+            operationId: operationId,
+            partialURL: URL(fileURLWithPath: Self.filePath(from: partialArchivePath))
+          )
+        }
         return [
           "operationId": result.operationId,
           "phase": result.phase,
@@ -133,6 +139,20 @@ public final class AlyteProtectionModule: Module {
         ]
       } catch {
         throw Self.nativeError(error, message: "Could not cancel local export archive", code: 6)
+      }
+    }
+  }
+
+  private static func runArchiveOperation<T: Sendable>(
+    _ operation: @escaping @Sendable () throws -> T
+  ) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+      DispatchQueue.global(qos: .utility).async {
+        do {
+          continuation.resume(returning: try operation())
+        } catch {
+          continuation.resume(throwing: error)
+        }
       }
     }
   }

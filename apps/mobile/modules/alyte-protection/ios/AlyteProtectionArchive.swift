@@ -22,11 +22,16 @@ struct AlyteZipOperationResult {
  */
 final class AlyteProtectionArchive {
   private let fileManager: FileManager
+  private let environment: AlyteProtectionEnvironment
   private let lock = NSLock()
   private var operations: [String: Progress] = [:]
 
-  init(fileManager: FileManager = .default) {
+  init(
+    fileManager: FileManager = .default,
+    environment: AlyteProtectionEnvironment = .current
+  ) {
     self.fileManager = fileManager
+    self.environment = environment
   }
 
   func create(
@@ -64,6 +69,10 @@ final class AlyteProtectionArchive {
 
     do {
       let archive = try Archive(url: partial, accessMode: .create)
+      // Archive(url: .create) creates the empty partial first. Protect it before ZIPFoundation
+      // receives the first health byte, so a crash cannot leave an unprotected partial artifact.
+      _ = try AlyteProtectionFilePolicy(fileManager: fileManager, environment: environment)
+        .protectPath(at: partial)
       for item in expected.sorted(by: { $0.path < $1.path }) {
         try checkCancellation(progress)
         let source = try containedURL(item.path, in: stagingRoot)
@@ -71,13 +80,7 @@ final class AlyteProtectionArchive {
         guard actual.bytes == item.bytes, actual.sha256 == item.sha256 else {
           throw AlyteProtectionError.archiveChecksum
         }
-        try archive.addEntry(
-          with: item.path,
-          fileURL: source,
-          compressionMethod: .deflate,
-          bufferSize: 1024 * 1024,
-          progress: progress
-        )
+        try addDeterministicEntry(item, source: source, archive: archive, progress: progress)
       }
       try verifyArchive(at: partial, expected: expected, progress: progress)
       let archiveBytes = try fileSize(partial)
@@ -118,6 +121,8 @@ final class AlyteProtectionArchive {
     }
     do {
       try fileManager.moveItem(at: partial, to: destination)
+      _ = try AlyteProtectionFilePolicy(fileManager: fileManager, environment: environment)
+        .protectPath(at: destination)
       return AlyteZipOperationResult(
         operationId: operationId,
         phase: "promoted",
@@ -125,6 +130,7 @@ final class AlyteProtectionArchive {
         bytes: try fileSize(destination)
       )
     } catch {
+      try? fileManager.removeItem(at: destination)
       throw AlyteProtectionError.archiveFailure
     }
   }
@@ -187,7 +193,46 @@ final class AlyteProtectionArchive {
     guard name.range(of: expectedPattern, options: .regularExpression) != nil else {
       throw AlyteProtectionError.archiveInvalidInput
     }
-    return standardized.deletingLastPathComponent().standardizedFileURL
+    let exportsRoot = standardized.deletingLastPathComponent().standardizedFileURL
+    try validateCanonicalContainerPath(standardized, exportsRoot: exportsRoot)
+    return exportsRoot
+  }
+
+  private func validateCanonicalContainerPath(_ url: URL, exportsRoot: URL) throws {
+    let path = url.standardizedFileURL.path
+    let resolved = url.resolvingSymlinksInPath().standardizedFileURL.path
+    guard path == resolved else { throw AlyteProtectionError.archiveSymlink }
+
+    var cursor = URL(fileURLWithPath: "/", isDirectory: true)
+    for component in url.path.split(separator: "/") {
+      cursor.appendPathComponent(String(component), isDirectory: true)
+      let resource = try cursor.resourceValues(forKeys: [.isSymbolicLinkKey])
+      if resource.isSymbolicLink == true { throw AlyteProtectionError.archiveSymlink }
+    }
+
+    let rootComponents = exportsRoot.path.split(separator: "/").map(String.init)
+    let hasAppContainerRoot = rootComponents.count >= 7 &&
+      rootComponents[rootComponents.count - 7] == "Containers" &&
+      rootComponents[rootComponents.count - 6] == "Data" &&
+      rootComponents[rootComponents.count - 5] == "Application" &&
+      rootComponents[rootComponents.count - 4].range(of: #"^[A-Fa-f0-9-]{36}$"#, options: .regularExpression) != nil &&
+      rootComponents[rootComponents.count - 3] == "Documents" &&
+      rootComponents[rootComponents.count - 2] == "alyte-protected" &&
+      rootComponents[rootComponents.count - 1] == "exports"
+    if environment.isSimulator && environment.allowsDevelopmentSimulatorFallback {
+      return
+    }
+    guard hasAppContainerRoot,
+          let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
+      throw AlyteProtectionError.archivePathEscape
+    }
+    let actualExportsRoot = documents
+      .appendingPathComponent("alyte-protected", isDirectory: true)
+      .appendingPathComponent("exports", isDirectory: true)
+      .standardizedFileURL
+    guard actualExportsRoot.path == exportsRoot.path else {
+      throw AlyteProtectionError.archivePathEscape
+    }
   }
 
   private func validateExpectedEntries(_ entries: [AlyteZipExpectedEntry]) throws {
@@ -210,6 +255,11 @@ final class AlyteProtectionArchive {
     _ root: URL,
     expected: [AlyteZipExpectedEntry]
   ) throws {
+    try validateCanonicalContainerPath(root, exportsRoot: root.deletingLastPathComponent().standardizedFileURL)
+    let rootResource = try root.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+    guard rootResource.isSymbolicLink != true, rootResource.isDirectory == true else {
+      throw AlyteProtectionError.archiveSymlink
+    }
     let expectedPaths = Set(expected.map(\.path))
     var foundPaths = Set<String>()
     guard let enumerator = fileManager.enumerator(
@@ -235,11 +285,38 @@ final class AlyteProtectionArchive {
     guard candidate.path.hasPrefix(rootPrefix), candidate.path != root.path else {
       throw AlyteProtectionError.archivePathEscape
     }
+    guard candidate.resolvingSymlinksInPath().standardizedFileURL.path == candidate.path else {
+      throw AlyteProtectionError.archiveSymlink
+    }
     let resource = try candidate.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
     guard resource.isSymbolicLink != true, resource.isRegularFile == true else {
       throw AlyteProtectionError.archiveSymlink
     }
     return candidate
+  }
+
+  private func addDeterministicEntry(
+    _ item: AlyteZipExpectedEntry,
+    source: URL,
+    archive: Archive,
+    progress: Progress
+  ) throws {
+    let handle = try FileHandle(forReadingFrom: source)
+    defer { try? handle.close() }
+    try archive.addEntry(
+      with: item.path,
+      type: .file,
+      uncompressedSize: item.bytes,
+      modificationDate: Date(timeIntervalSince1970: 0),
+      permissions: 0o644,
+      compressionMethod: .deflate,
+      bufferSize: 1024 * 1024,
+      progress: progress,
+      provider: { position, size in
+        try handle.seek(toOffset: UInt64(position))
+        return try handle.read(upToCount: size) ?? Data()
+      }
+    )
   }
 
   private func verifyArchive(

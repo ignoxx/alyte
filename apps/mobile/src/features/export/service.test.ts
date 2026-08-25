@@ -99,6 +99,7 @@ function sha256(value: string): string {
 function fakeFiles(options: {
   readonly missingPaths?: readonly string[];
   readonly sourceHashes?: Readonly<Record<string, string>>;
+  readonly workspaceError?: Error;
 }) {
   const removed: string[] = [];
   const written = new Map<string, string>();
@@ -112,7 +113,14 @@ function fakeFiles(options: {
     portableArchiveReference: `protected://exports/${jobId}.zip`,
   });
   const files: ExportFiles = {
+    exportWorkspaceReferences(jobId) {
+      return {
+        portableStagingReference: `protected://exports/${jobId}.partial`,
+        portableArchiveReference: `protected://exports/${jobId}.zip`,
+      };
+    },
     async createExportWorkspace(jobId) {
+      if (options.workspaceError !== undefined) throw options.workspaceError;
       return workspaceFor(jobId);
     },
     async writeExportFile(_workspace, relativePath, contents) {
@@ -160,11 +168,22 @@ function fakeFiles(options: {
   return { files, removed, written };
 }
 
-function fakeArchive() {
+function fakeArchive(options: { readonly blockCreate?: boolean } = {}) {
   const created: string[][] = [];
+  const cancelCalls: string[] = [];
+  let signalStarted!: () => void;
+  let releaseCreate!: () => void;
+  const started = new Promise<void>((resolve) => {
+    signalStarted = resolve;
+  });
+  const createReleased = new Promise<void>((resolve) => {
+    releaseCreate = resolve;
+  });
   const archive = {
     async createZip(input: { readonly entries: readonly { readonly path: string }[] }) {
       created.push(input.entries.map((entry) => entry.path));
+      signalStarted();
+      if (options.blockCreate === true) await createReleased;
       return {
         operationId: 'export-job-test',
         phase: 'verified' as const,
@@ -181,6 +200,8 @@ function fakeArchive() {
       };
     },
     async cancelZip(input: { readonly operationId: string }) {
+      cancelCalls.push(input.operationId);
+      releaseCreate();
       return {
         operationId: input.operationId,
         phase: 'cancelled' as const,
@@ -189,7 +210,7 @@ function fakeArchive() {
       };
     },
   };
-  return { archive, created };
+  return { archive, created, started, cancelCalls };
 }
 
 function serviceFor(
@@ -316,6 +337,57 @@ describe('local export job orchestration', () => {
       'protected://exports/export-job-abandoned.partial',
       'protected://exports/export-job-abandoned.zip',
     ]);
+    await database.closeAsync();
+  });
+
+  test('cancellation coordinates with in-flight archive work and publishes progress', async () => {
+    const database = await currentDatabase();
+    const fileFake = fakeFiles({});
+    const archiveFake = fakeArchive({ blockCreate: true });
+    const service = serviceFor(database, fileFake.files, archiveFake.archive);
+    const operation = service.start({ jobId: 'export-job-cancel-race' });
+    const phases: string[] = [];
+    operation.subscribe((progress) => phases.push(progress.phase));
+    await archiveFake.started;
+
+    const cancelled = operation.cancel();
+    await assert.rejects(operation.promise, /cancelled/i);
+    const job = await cancelled;
+    assert.equal(job.state, 'cancelled');
+    assert.deepEqual(archiveFake.cancelCalls, ['export-job-cancel-race']);
+    assert.ok(phases.includes('archiving'));
+    assert.ok(phases.includes('cancelled'));
+    await database.closeAsync();
+  });
+
+  test('persists deterministic cleanup references before workspace creation can fail', async () => {
+    const database = await currentDatabase();
+    const fileFake = fakeFiles({ workspaceError: new Error('synthetic protection failure') });
+    const service = serviceFor(database, fileFake.files, fakeArchive().archive);
+    await assert.rejects(
+      service.prepare({ jobId: 'export-job-before-workspace' }),
+      /protection failure/i,
+    );
+    const row = (
+      await database.getAllAsync<{
+        state: string;
+        portable_staging_reference: string;
+        portable_archive_reference: string;
+      }>(
+        `SELECT state, portable_staging_reference, portable_archive_reference
+         FROM local_export_jobs WHERE id = ?;`,
+        'export-job-before-workspace',
+      )
+    )[0];
+    assert.equal(row?.state, 'failed');
+    assert.equal(
+      row?.portable_staging_reference,
+      'protected://exports/export-job-before-workspace.partial',
+    );
+    assert.equal(
+      row?.portable_archive_reference,
+      'protected://exports/export-job-before-workspace.zip',
+    );
     await database.closeAsync();
   });
 });

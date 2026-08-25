@@ -10,6 +10,7 @@ import { nativeDatabaseProtection, type DatabaseProtection } from '../local-data
 import {
   createProtectedReportFileService,
   type ProtectedExportFile,
+  type ProtectedExportWorkspaceReferences,
   type ProtectedExportWorkspace,
   type ProtectedReportFileService,
 } from '../labs/file-service';
@@ -42,6 +43,7 @@ export type LocalExportFailureCategory =
   | 'abandoned'
   | 'archive-failed'
   | 'cancelled'
+  | 'cleanup-pending'
   | 'database-failed'
   | 'invalid-selection'
   | 'media-invalid'
@@ -70,6 +72,22 @@ export type PreparedLocalExport = {
   readonly manifest: ExportManifest;
 };
 
+export type LocalExportProgress = {
+  readonly operationId: string;
+  readonly phase: 'staging' | 'archiving' | 'promoting' | 'ready' | 'cancelled' | 'failed';
+  readonly completedEntries: number;
+  readonly totalEntries: number;
+  readonly completedBytes: number;
+  readonly totalBytes: number;
+};
+
+export type LocalExportOperation = {
+  readonly operationId: string;
+  readonly promise: Promise<PreparedLocalExport>;
+  readonly subscribe: (listener: (progress: LocalExportProgress) => void) => () => void;
+  readonly cancel: () => Promise<LocalExportJob>;
+};
+
 export type ExportDatabase = SqliteDatabase;
 export type ExportDatabaseSession = {
   readonly database: ExportDatabase;
@@ -79,6 +97,7 @@ export type ExportDatabaseSession = {
 export type ExportFiles = Pick<
   Required<ProtectedReportFileService>,
   | 'createExportWorkspace'
+  | 'exportWorkspaceReferences'
   | 'writeExportFile'
   | 'copyExportMedia'
   | 'inspectExportSource'
@@ -88,6 +107,11 @@ export type ExportFiles = Pick<
 >;
 
 export type LocalExportService = {
+  start(input?: {
+    readonly jobId?: string;
+    readonly selection?: ExportSelection;
+    readonly locale?: string;
+  }): LocalExportOperation;
   prepare(input?: {
     readonly jobId?: string;
     readonly selection?: ExportSelection;
@@ -102,6 +126,7 @@ export type LocalExportService = {
   completeShare(jobId: string): Promise<LocalExportJob>;
   cancelShare(jobId: string): Promise<LocalExportJob>;
   getJob(jobId: string): Promise<LocalExportJob | null>;
+  startup(): Promise<void>;
   reconcile(): Promise<void>;
 };
 
@@ -125,6 +150,24 @@ type JobRow = {
   readonly updated_at: unknown;
   readonly ready_at: unknown;
 };
+
+class ExportCancelledError extends Error {
+  override readonly name = 'ExportCancelledError';
+  readonly failureCategory = 'cancelled' as const;
+
+  constructor() {
+    super('The export was cancelled');
+  }
+}
+
+class ExportCleanupPendingError extends Error {
+  override readonly name = 'ExportCleanupPendingError';
+  readonly failureCategory = 'cleanup-pending' as const;
+
+  constructor() {
+    super('Export cleanup is pending and will be retried');
+  }
+}
 
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.length === 0) throw new Error(`Invalid ${field}`);
@@ -178,6 +221,7 @@ function decodeJob(row: JobRow): LocalExportJob {
     'abandoned',
     'archive-failed',
     'cancelled',
+    'cleanup-pending',
     'database-failed',
     'invalid-selection',
     'media-invalid',
@@ -215,6 +259,7 @@ function decodeJob(row: JobRow): LocalExportJob {
 }
 
 function failureCategory(error: unknown): LocalExportFailureCategory {
+  if (error instanceof ExportCleanupPendingError) return 'cleanup-pending';
   if (error instanceof ExportSchemaIncompleteError) return 'schema-incomplete';
   const value = (error as { readonly failureCategory?: unknown })?.failureCategory;
   if (value === 'cancelled') return 'cancelled';
@@ -421,8 +466,9 @@ async function writeJobState(
     readonly staging?: string | null;
     readonly archive?: string | null;
     readonly failure?: LocalExportFailureCategory | null;
+    readonly expectedState?: LocalExportJobState;
   },
-): Promise<void> {
+): Promise<number> {
   const timestampColumn =
     input.state === 'staging'
       ? 'staging_started_at'
@@ -435,12 +481,13 @@ async function writeJobState(
             : input.state === 'cancelled'
               ? 'cancelled_at'
               : 'completed_at';
-  await database.runAsync(
+  const expectedClause = input.expectedState === undefined ? '' : ' AND state = ?';
+  const result = await database.runAsync(
     `UPDATE local_export_jobs
      SET state = ?, portable_staging_reference = COALESCE(?, portable_staging_reference),
        portable_archive_reference = COALESCE(?, portable_archive_reference),
        failure_category = ?, updated_at = ?, ${timestampColumn} = ?
-     WHERE id = ?;`,
+     WHERE id = ?${expectedClause};`,
     input.state,
     input.staging ?? null,
     input.archive ?? null,
@@ -448,7 +495,9 @@ async function writeJobState(
     input.now,
     input.now,
     input.id,
+    ...(input.expectedState === undefined ? [] : [input.expectedState]),
   );
+  return result.changes;
 }
 
 export function createLocalExportService(options: ExportServiceOptions): LocalExportService {
@@ -456,50 +505,204 @@ export function createLocalExportService(options: ExportServiceOptions): LocalEx
   const makeId = options.idGenerator ?? ((prefix: string) => createSortableOpaqueId(prefix));
   const appVersion = options.appVersion ?? '0.1.0';
 
-  async function prepare(
+  type OperationContext = {
+    readonly operationId: string;
+    readonly listeners: Set<(progress: LocalExportProgress) => void>;
+    readonly jobCreated: Promise<void>;
+    readonly resolveJobCreated: () => void;
+    readonly rejectJobCreated: (error: unknown) => void;
+    promise?: Promise<PreparedLocalExport>;
+    progress: LocalExportProgress;
+    workspace: ProtectedExportWorkspace | null;
+    archiveInFlight: boolean;
+    cancelRequested: boolean;
+  };
+
+  const activeOperations = new Map<string, OperationContext>();
+  let startupPromise: Promise<void> | null = null;
+  let startupFailure: Error | null = null;
+
+  function progressFor(
+    operationId: string,
+    phase: LocalExportProgress['phase'],
+    completedEntries = 0,
+    totalEntries = 0,
+    completedBytes = 0,
+    totalBytes = 0,
+  ): LocalExportProgress {
+    return {
+      operationId,
+      phase,
+      completedEntries,
+      totalEntries,
+      completedBytes,
+      totalBytes,
+    };
+  }
+
+  function publish(context: OperationContext, progress: LocalExportProgress): void {
+    context.progress = progress;
+    for (const listener of context.listeners) {
+      try {
+        listener(progress);
+      } catch {
+        // Progress observers are advisory; an observer cannot interrupt protected export work.
+      }
+    }
+  }
+
+  function ensureNotCancelled(context: OperationContext): void {
+    if (context.cancelRequested) throw new ExportCancelledError();
+  }
+
+  async function cleanupReferences(
+    stagingReference: string | null,
+    archiveReference: string | null,
+  ): Promise<void> {
+    await options.files.removeExportArtifactsByReference(stagingReference, archiveReference);
+  }
+
+  async function reconcileJobs(): Promise<void> {
+    const session = await options.databaseFactory();
+    try {
+      const rows = await session.database.getAllAsync<JobRow>(
+        `SELECT id, state, selection_json, portable_staging_reference,
+           portable_archive_reference, failure_category, created_at, updated_at, ready_at
+         FROM local_export_jobs
+         WHERE state IN ('staging', 'archiving')
+            OR (state = 'failed' AND failure_category = 'cleanup-pending')
+         ORDER BY created_at ASC;`,
+      );
+      for (const row of rows) {
+        const job = decodeJob(row);
+        try {
+          await cleanupReferences(job.portableStagingReference, job.portableArchiveReference);
+          await writeJobState(session.database, {
+            id: job.id,
+            state: 'failed',
+            now: now(),
+            failure: 'abandoned',
+          });
+        } catch {
+          // Keep the failure retryable without putting health data, paths, or native details in
+          // an error/log payload. The next protected startup retries this same owned reference.
+          await writeJobState(session.database, {
+            id: job.id,
+            state: 'failed',
+            now: now(),
+            failure: 'cleanup-pending',
+          });
+        }
+      }
+    } finally {
+      await session.close();
+    }
+  }
+
+  async function startup(): Promise<void> {
+    if (startupFailure !== null) throw startupFailure;
+    if (startupPromise === null) {
+      startupPromise = reconcileJobs().catch(() => {
+        startupFailure = new Error('Export startup reconciliation failed; retry is available');
+        throw startupFailure;
+      });
+    }
+    return startupPromise;
+  }
+
+  async function ensureStarted(): Promise<void> {
+    await startup();
+  }
+
+  async function prepareOperation(
+    context: OperationContext,
     input: {
-      readonly jobId?: string;
       readonly selection?: ExportSelection;
       readonly locale?: string;
-    } = {},
+    },
   ): Promise<PreparedLocalExport> {
     const session = await options.databaseFactory();
     const database = session.database;
-    const id = input.jobId ?? makeId('export-job');
+    const id = context.operationId;
     const selection = normalizedSelection(input.selection);
     const createdAt = now();
-    let workspace: ProtectedExportWorkspace | null = null;
+    let inserted = false;
+    let jobReferences: ProtectedExportWorkspaceReferences;
+    let totalEntries = 0;
+    let completedEntries = 0;
+    let completedBytes = 0;
+    let totalBytes = 0;
+
     try {
+      await ensureStarted();
+      // The only persisted paths are deterministic protected:// references. This insert is the
+      // first export mutation and makes every subsequent filesystem kill point relaunch-visible.
+      jobReferences = options.files.exportWorkspaceReferences(id);
       await database.runAsync(
         `INSERT INTO local_export_jobs
-         (id, state, selection_json, created_at, updated_at, staging_started_at)
-         VALUES (?, 'staging', ?, ?, ?, ?);`,
+         (id, state, selection_json, portable_staging_reference, portable_archive_reference,
+          created_at, updated_at, staging_started_at)
+         VALUES (?, 'staging', ?, ?, ?, ?, ?, ?);`,
         id,
         canonicalJson(selection),
+        jobReferences.portableStagingReference,
+        jobReferences.portableArchiveReference,
         createdAt,
         createdAt,
         createdAt,
       );
-      workspace = await options.files.createExportWorkspace(id);
-      await writeJobState(database, {
-        id,
-        state: 'staging',
-        now: now(),
-        staging: workspace.portableStagingReference,
-      });
+      inserted = true;
+      context.resolveJobCreated();
+
+      context.workspace = await options.files.createExportWorkspace(id);
+      if (
+        context.workspace.portableStagingReference !== jobReferences.portableStagingReference ||
+        context.workspace.portableArchiveReference !== jobReferences.portableArchiveReference
+      ) {
+        throw new Error('Export workspace reference changed');
+      }
+      publish(context, progressFor(id, 'staging'));
+      ensureNotCancelled(context);
 
       const snapshot = await readExportSnapshot(database);
       const textOutputs = exportTextOutputs(snapshot);
+      const selected = selectedMedia(snapshot, selection);
+      totalEntries = textOutputs.length + selected.length + 1;
+      totalBytes = textOutputs.reduce((sum, output) => sum + textByteLength(output.content), 0);
+
       const outputDescriptors: ExportOutputDescriptor[] = [];
       for (const output of textOutputs) {
-        outputDescriptors.push(await writeTextOutput(options.files, workspace, output));
+        ensureNotCancelled(context);
+        const descriptor = await writeTextOutput(options.files, context.workspace, output);
+        outputDescriptors.push(descriptor);
+        completedEntries += 1;
+        completedBytes += descriptor.bytes;
+        publish(
+          context,
+          progressFor(id, 'staging', completedEntries, totalEntries, completedBytes, totalBytes),
+        );
       }
 
       const mediaFiles: ExportMediaFile[] = [];
-      for (const media of selectedMedia(snapshot, selection)) {
-        mediaFiles.push(await selectedMediaFile(options.files, workspace, media));
+      for (const media of selected) {
+        ensureNotCancelled(context);
+        const selectedFile = await selectedMediaFile(options.files, context.workspace, media);
+        mediaFiles.push(selectedFile);
+        completedEntries += 1;
+        completedBytes += selectedFile.bytes ?? 0;
+        totalBytes += selectedFile.bytes ?? 0;
+        publish(
+          context,
+          progressFor(id, 'staging', completedEntries, totalEntries, completedBytes, totalBytes),
+        );
       }
+
       await writeJobState(database, { id, state: 'archiving', now: now() });
+      publish(
+        context,
+        progressFor(id, 'archiving', completedEntries, totalEntries, completedBytes, totalBytes),
+      );
+      ensureNotCancelled(context);
 
       const archiveEntries: ZipExpectedEntry[] = [
         ...outputDescriptors.map((output) => ({
@@ -541,12 +744,9 @@ export function createLocalExportService(options: ExportServiceOptions): LocalEx
           missing: mediaFiles.filter((media) => media.status === 'missing').length,
           files: mediaFiles,
         },
-        // A manifest cannot contain a cryptographic hash of the ZIP that contains the manifest
-        // without a self-referential fixed point. The prepare result carries the verified final
-        // archive hash and size; this field is null until a future envelope can carry that hash.
         archive: null,
       };
-      const manifestOutput = await writeTextOutput(options.files, workspace, {
+      const manifestOutput = await writeTextOutput(options.files, context.workspace, {
         path: 'manifest.json',
         content: manifestJson(manifest),
         rows: 1,
@@ -556,54 +756,99 @@ export function createLocalExportService(options: ExportServiceOptions): LocalEx
         bytes: manifestOutput.bytes,
         sha256: manifestOutput.sha256,
       });
+      completedEntries += 1;
+      completedBytes += manifestOutput.bytes;
+      totalBytes += manifestOutput.bytes;
+      publish(
+        context,
+        progressFor(id, 'archiving', completedEntries, totalEntries, completedBytes, totalBytes),
+      );
       archiveEntries.sort((left, right) => left.path.localeCompare(right.path));
-      const zipResult = await options.archive.createZip({
-        operationId: id,
-        stagingPath: workspace.stagingPath,
-        partialArchivePath: workspace.archivePartialPath,
-        entries: archiveEntries,
-      });
+
+      context.archiveInFlight = true;
+      let zipResult;
+      try {
+        zipResult = await options.archive.createZip({
+          operationId: id,
+          stagingPath: context.workspace.stagingPath,
+          partialArchivePath: context.workspace.archivePartialPath,
+          entries: archiveEntries,
+        });
+      } finally {
+        context.archiveInFlight = false;
+      }
+      ensureNotCancelled(context);
       if (zipResult.entryCount !== archiveEntries.length)
         throw new Error('Archive entry count mismatch');
+      publish(
+        context,
+        progressFor(id, 'promoting', totalEntries, totalEntries, completedBytes, totalBytes),
+      );
       await options.archive.promoteZip({
         operationId: id,
-        partialArchivePath: workspace.archivePartialPath,
-        archivePath: workspace.archivePath,
+        partialArchivePath: context.workspace.archivePartialPath,
+        archivePath: context.workspace.archivePath,
       });
-      const archiveArtifact = await options.files.protectExportArchive(workspace.archivePath);
+      ensureNotCancelled(context);
+      const archiveArtifact = await options.files.protectExportArchive(
+        context.workspace.archivePath,
+      );
       if (archiveArtifact.byteSize === null) throw new Error('Export archive size was unavailable');
-      await writeJobState(database, {
+      const readyChanges = await writeJobState(database, {
         id,
         state: 'ready',
         now: now(),
-        archive: workspace.portableArchiveReference,
+        archive: context.workspace.portableArchiveReference,
+        expectedState: 'archiving',
       });
+      if (readyChanges !== 1) throw new ExportCancelledError();
+      publish(
+        context,
+        progressFor(id, 'ready', totalEntries, totalEntries, completedBytes, totalBytes),
+      );
       const job = await readJob(database, id);
       if (job === null) throw new Error('Prepared export job disappeared');
       return {
         job,
-        archiveReference: workspace.portableArchiveReference,
+        archiveReference: context.workspace.portableArchiveReference,
         archiveSha256: archiveArtifact.sourceHash,
         archiveBytes: archiveArtifact.byteSize,
         manifest,
       };
     } catch (error) {
-      if (workspace !== null) {
+      if (!inserted) context.rejectJobCreated(error);
+      let cleanupFailed = false;
+      if (inserted) {
         try {
-          await options.files.removeExportArtifacts(workspace);
+          await cleanupReferences(
+            jobReferences!.portableStagingReference,
+            jobReferences!.portableArchiveReference,
+          );
         } catch {
-          // The durable failure state remains authoritative; reconciliation retries cleanup.
+          cleanupFailed = true;
         }
-      }
-      try {
+        if (cleanupFailed) {
+          await writeJobState(database, {
+            id,
+            state: 'failed',
+            now: now(),
+            failure: 'cleanup-pending',
+          });
+          publish(context, progressFor(id, 'failed'));
+          throw new ExportCleanupPendingError();
+        }
+        const cancelled =
+          context.cancelRequested ||
+          error instanceof ExportCancelledError ||
+          failureCategory(error) === 'cancelled';
         await writeJobState(database, {
           id,
-          state: 'failed',
+          state: cancelled ? 'cancelled' : 'failed',
           now: now(),
-          failure: failureCategory(error),
+          failure: cancelled ? 'cancelled' : failureCategory(error),
         });
-      } catch {
-        // A database failure cannot be made more observable by logging health content.
+        publish(context, progressFor(id, cancelled ? 'cancelled' : 'failed'));
+        if (cancelled && !(error instanceof ExportCancelledError)) throw new ExportCancelledError();
       }
       throw error;
     } finally {
@@ -611,11 +856,85 @@ export function createLocalExportService(options: ExportServiceOptions): LocalEx
     }
   }
 
+  function start(
+    input: {
+      readonly jobId?: string;
+      readonly selection?: ExportSelection;
+      readonly locale?: string;
+    } = {},
+  ): LocalExportOperation {
+    const operationId = input.jobId ?? makeId('export-job');
+    let resolveJobCreated!: () => void;
+    let rejectJobCreated!: (error: unknown) => void;
+    const jobCreated = new Promise<void>((resolve, reject) => {
+      resolveJobCreated = resolve;
+      rejectJobCreated = reject;
+    });
+    const context: OperationContext = {
+      operationId,
+      listeners: new Set(),
+      jobCreated,
+      resolveJobCreated,
+      rejectJobCreated,
+      progress: progressFor(operationId, 'staging'),
+      workspace: null,
+      archiveInFlight: false,
+      cancelRequested: false,
+    };
+    activeOperations.set(operationId, context);
+    const promise = prepareOperation(context, input).finally(() => {
+      activeOperations.delete(operationId);
+    });
+    context.promise = promise;
+    return {
+      operationId,
+      promise,
+      subscribe(listener) {
+        context.listeners.add(listener);
+        listener(context.progress);
+        return () => context.listeners.delete(listener);
+      },
+      cancel: () => cancelShare(operationId),
+    };
+  }
+
+  async function prepare(
+    input: {
+      readonly jobId?: string;
+      readonly selection?: ExportSelection;
+      readonly locale?: string;
+    } = {},
+  ): Promise<PreparedLocalExport> {
+    return start(input).promise;
+  }
+
   async function completeShare(jobId: string): Promise<LocalExportJob> {
     return transitionTerminal(jobId, 'completed');
   }
 
   async function cancelShare(jobId: string): Promise<LocalExportJob> {
+    const active = activeOperations.get(jobId);
+    if (active !== undefined) {
+      active.cancelRequested = true;
+      if (active.archiveInFlight && active.workspace !== null) {
+        try {
+          await options.archive.cancelZip({
+            operationId: jobId,
+            partialArchivePath: active.workspace.archivePartialPath,
+          });
+        } catch {
+          // The operation still reaches a durable failed/cancelled state and reconciliation owns
+          // any partial cleanup. Native errors never cross this boundary with paths or content.
+        }
+      }
+      await active.jobCreated.catch(() => undefined);
+      await active.promise?.catch(() => undefined);
+      const finished = await getJob(jobId);
+      // A cancellation arriving just after the ready CAS must still consume the ready handoff;
+      // returning it here would leave a shareable archive alive after the caller cancelled.
+      if (finished !== null && finished.state !== 'ready') return finished;
+      if (finished?.state === 'ready') return transitionTerminal(jobId, 'cancelled');
+    }
     return transitionTerminal(jobId, 'cancelled');
   }
 
@@ -623,17 +942,25 @@ export function createLocalExportService(options: ExportServiceOptions): LocalEx
     jobId: string,
     state: 'completed' | 'cancelled',
   ): Promise<LocalExportJob> {
+    await ensureStarted();
     const session = await options.databaseFactory();
     try {
       const job = await readJob(session.database, jobId);
       if (job === null) throw new Error('Export job was not found');
-      if (job.state !== 'ready' && job.state !== 'staging' && job.state !== 'archiving') {
+      if (state === 'completed' && job.state !== 'ready') return job;
+      if (state === 'cancelled' && !['ready', 'staging', 'archiving'].includes(job.state))
         return job;
+      try {
+        await cleanupReferences(job.portableStagingReference, job.portableArchiveReference);
+      } catch {
+        await writeJobState(session.database, {
+          id: jobId,
+          state: 'failed',
+          now: now(),
+          failure: 'cleanup-pending',
+        });
+        throw new ExportCleanupPendingError();
       }
-      await options.files.removeExportArtifactsByReference(
-        job.portableStagingReference,
-        job.portableArchiveReference,
-      );
       await writeJobState(session.database, {
         id: jobId,
         state,
@@ -658,47 +985,19 @@ export function createLocalExportService(options: ExportServiceOptions): LocalEx
   }
 
   async function reconcile(): Promise<void> {
-    const session = await options.databaseFactory();
-    try {
-      const rows = await session.database.getAllAsync<JobRow>(
-        `SELECT id, state, selection_json, portable_staging_reference,
-           portable_archive_reference, failure_category, created_at, updated_at, ready_at
-         FROM local_export_jobs WHERE state IN ('staging', 'archiving') ORDER BY created_at ASC;`,
-      );
-      for (const row of rows) {
-        const job = decodeJob(row);
-        try {
-          await options.files.removeExportArtifactsByReference(
-            job.portableStagingReference,
-            job.portableArchiveReference,
-          );
-          await writeJobState(session.database, {
-            id: job.id,
-            state: 'failed',
-            now: now(),
-            failure: 'abandoned',
-          });
-        } catch {
-          // Invalid/unowned references remain observable as failed without attempting an unsafe path.
-          await writeJobState(session.database, {
-            id: job.id,
-            state: 'failed',
-            now: now(),
-            failure: 'protection-failed',
-          });
-        }
-      }
-    } finally {
-      await session.close();
-    }
+    startupPromise = null;
+    startupFailure = null;
+    await startup();
   }
 
   return {
+    start,
     prepare,
     prepareForShare: prepare,
     completeShare,
     cancelShare,
     getJob,
+    startup,
     reconcile,
   };
 }
