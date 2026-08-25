@@ -272,7 +272,7 @@ export function LabReportDetailScreen() {
           {previewError && (
             <AppText style={styles.errorText}>{t('labs.reportPreviewError')}</AppText>
           )}
-          {report.sourceType === 'pdf' && (
+          {(report.sourceType === 'pdf' || report.sourceType === 'image') && (
             <Pressable
               accessibilityRole="button"
               disabled={busy}
@@ -292,29 +292,31 @@ export function LabReportDetailScreen() {
               <AppIcon name="chevronRight" size={16} />
             </Pressable>
           )}
-          {report.importState === 'imported' && report.labRecordIds.length === 0 && (
-            <View style={styles.extractAction}>
-              <AppText variant="heading">{t('labs.extractionStart')}</AppText>
-              <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
-              <AppButton
-                disabled={busy}
-                label={t('labs.extractionStart')}
-                onPress={() => void extractLocally()}
-                style={styles.extractButton}
-              />
-              {extractionError !== null && (
-                <AppText style={styles.errorText}>
-                  {t(
-                    extractionError === 'sanitized-source'
-                      ? 'labs.extractionSourceError'
-                      : extractionError === 'no-reviewable-measurements'
-                        ? 'labs.extractionNoMeasurementsError'
-                        : 'labs.extractionRecognitionError',
-                  )}
-                </AppText>
-              )}
-            </View>
-          )}
+          {report.sourceType === 'pdf' &&
+            report.importState === 'imported' &&
+            report.labRecordIds.length === 0 && (
+              <View style={styles.extractAction}>
+                <AppText variant="heading">{t('labs.extractionStart')}</AppText>
+                <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
+                <AppButton
+                  disabled={busy}
+                  label={t('labs.extractionStart')}
+                  onPress={() => void extractLocally()}
+                  style={styles.extractButton}
+                />
+                {extractionError !== null && (
+                  <AppText style={styles.errorText}>
+                    {t(
+                      extractionError === 'sanitized-source'
+                        ? 'labs.extractionSourceError'
+                        : extractionError === 'no-reviewable-measurements'
+                          ? 'labs.extractionNoMeasurementsError'
+                          : 'labs.extractionRecognitionError',
+                    )}
+                  </AppText>
+                )}
+              </View>
+            )}
           {report.importState === 'imported' && report.labRecordIds.length > 0 && (
             <AppText style={styles.actionStatus}>{t('labs.extractionAlreadyConfirmed')}</AppText>
           )}

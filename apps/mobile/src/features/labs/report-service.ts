@@ -42,8 +42,14 @@ import {
   nativePdfInspector,
   type PdfInspection,
   type PdfInspector,
+  type PdfSanitizationResult,
   type PdfSanitizedVerification,
 } from './pdf';
+import {
+  nativeImageInspector,
+  type ImageSanitizationResult,
+  type ImageSanitizedVerification,
+} from './image';
 import { nativeVisionOCR, type VisionOCR } from './vision';
 
 export type PasswordRequest = (context: {
@@ -63,12 +69,12 @@ export type LabReportPreview = {
 };
 
 export type SanitizedReportPreview = {
-  readonly sourceType: 'pdf';
+  readonly sourceType: LabReport['sourceType'];
   readonly artifactPath: string;
   readonly artifactHash: string;
   /** Rendered from the same verified artifactPath that upload/export receives. */
   readonly uris: readonly string[];
-  readonly verification: PdfSanitizedVerification;
+  readonly verification: PdfSanitizedVerification | ImageSanitizedVerification;
 };
 
 export type SanitizationEditorState = {
@@ -163,6 +169,7 @@ export type LabReportsServiceOptions = {
   readonly idGenerator?: (prefix: string) => string;
   readonly passwordRequest?: PasswordRequest;
   readonly visionOCR?: VisionOCR;
+  readonly imageInspector?: typeof nativeImageInspector;
   readonly extractionAliases?: readonly ExtractionAliasEntry[];
   readonly semanticMapper?: ExtractionSemanticMapper;
 };
@@ -243,7 +250,7 @@ function recipeForReport(report: LabReport): SanitizationRecipe {
 }
 
 function verificationForSanitizedReport(
-  verification: PdfSanitizedVerification,
+  verification: PdfSanitizedVerification | ImageSanitizedVerification,
 ): SanitizedReportVerification {
   return {
     selectableText: verification.selectableText,
@@ -258,7 +265,9 @@ function verificationForSanitizedReport(
   };
 }
 
-function verificationPassed(verification: PdfSanitizedVerification): boolean {
+function verificationPassed(
+  verification: PdfSanitizedVerification | ImageSanitizedVerification,
+): boolean {
   return (
     verification.verified &&
     !verification.selectableText &&
@@ -269,12 +278,14 @@ function verificationPassed(verification: PdfSanitizedVerification): boolean {
     verification.reloadChecked &&
     verification.sourceAwareChecked &&
     verification.sourceContentRemoved &&
-    verification.verificationVersion === 'source-aware-v1' &&
+    ['source-aware-v1', 'image-source-aware-v1'].includes(verification.verificationVersion) &&
     verification.failureReasons.length === 0
   );
 }
 
-function structuralVerificationPassed(verification: PdfSanitizedVerification): boolean {
+function structuralVerificationPassed(
+  verification: PdfSanitizedVerification | ImageSanitizedVerification,
+): boolean {
   return (
     verification.verified &&
     !verification.selectableText &&
@@ -296,6 +307,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   const fileService = options.fileService ?? createProtectedReportFileService();
   const picker = options.picker ?? createSystemLabSourcePicker();
   const pdfInspector = options.pdfInspector ?? nativePdfInspector;
+  const imageInspector = options.imageInspector ?? nativeImageInspector;
   const visionOCR = options.visionOCR ?? nativeVisionOCR;
   const extractionAliases = options.extractionAliases ?? createDefaultExtractionAliases();
   const semanticMapper = options.semanticMapper;
@@ -761,13 +773,24 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     const repo = await repository();
     const report = await repo.getReport(id);
     if (report === null) throw new Error('Lab Report was not found');
-    if (report.sourceType !== 'pdf') {
-      throw new LabReportSanitizationError(id, 'Only PDF Lab Reports can be sanitized');
-    }
     const path = await openOriginal(id);
     const current = await repo.getSanitizedReport(id);
     const recipe =
       (await repo.getSanitizationDraft(id)) ?? current?.recipe ?? recipeForReport(report);
+
+    if (report.sourceType === 'image') {
+      await imageInspector.inspect(path);
+      const pagePreviewUris = [path];
+      return {
+        report,
+        sourcePath: path,
+        recipe,
+        suggestions: [],
+        pagePreviewUris,
+        current,
+      };
+    }
+
     let session = sanitizationSessions.get(id) ?? null;
     if (session === null) {
       const inspection = await pdfInspector.inspect(path);
@@ -852,13 +875,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const repo = await repository();
       const report = await repo.getReport(id);
       if (report === null) throw new Error('Lab Report was not found');
-      if (report.sourceType !== 'pdf') {
-        throw new LabReportSanitizationError(id, 'Only PDF Lab Reports can be sanitized');
-      }
       if (recipe.reportId !== id) {
         throw new LabReportSanitizationError(id, 'Sanitization recipe belongs to another report');
       }
-      if (pdfInspector.sanitize === undefined || pdfInspector.verifySanitized === undefined) {
+      if (
+        report.sourceType === 'pdf' &&
+        (pdfInspector.sanitize === undefined || pdfInspector.verifySanitized === undefined)
+      ) {
         throw new LabReportSanitizationError(id, 'PDF sanitization is unavailable on this device');
       }
       const sourcePath = await openOriginal(id);
@@ -884,9 +907,15 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           ? current.id
           : makeId('sanitized-report');
       const destination =
-        fileService.sanitizedDestination === undefined
-          ? `${sourcePath}.alyte-sanitized-${derivativeId}.pdf`
-          : await fileService.sanitizedDestination(id, derivativeId);
+        report.sourceType === 'image'
+          ? fileService.sanitizedImageDestination === undefined
+            ? fileService.sanitizedDestination === undefined
+              ? `${sourcePath}.alyte-sanitized-${derivativeId}.jpg`
+              : await fileService.sanitizedDestination(id, derivativeId)
+            : await fileService.sanitizedImageDestination(id, derivativeId)
+          : fileService.sanitizedDestination === undefined
+            ? `${sourcePath}.alyte-sanitized-${derivativeId}.pdf`
+            : await fileService.sanitizedDestination(id, derivativeId);
       const pending = await repo.saveSanitizedReport({
         id: derivativeId,
         reportId: id,
@@ -902,11 +931,18 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       });
       try {
         const session = sanitizationSessions.get(id);
-        const rendered =
-          session?.sanitize !== undefined
-            ? await session.sanitize(destination, recipe)
-            : await pdfInspector.sanitize(sourcePath, destination, recipe);
-        const structural = await pdfInspector.verifySanitized(destination);
+        let rendered: PdfSanitizationResult | ImageSanitizationResult;
+        let structural: PdfSanitizedVerification | ImageSanitizedVerification;
+        if (report.sourceType === 'image') {
+          rendered = await imageInspector.sanitize(sourcePath, destination, recipe);
+          structural = await imageInspector.verifySanitized(destination);
+        } else {
+          rendered =
+            session?.sanitize !== undefined
+              ? await session.sanitize(destination, recipe)
+              : await pdfInspector.sanitize!(sourcePath, destination, recipe);
+          structural = await pdfInspector.verifySanitized!(destination);
+        }
         const verification =
           rendered.verification === undefined
             ? structural
@@ -972,6 +1008,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
 
   async function previewSanitizedReport(id: string): Promise<SanitizedReportPreview> {
     await ensureInitialized();
+    const report = await (await repository()).getReport(id);
+    if (report === null) throw new LabReportSanitizationError(id, 'Lab Report was not found');
     const derivative = await (await repository()).getSanitizedReport(id);
     if (
       derivative === null ||
@@ -1009,13 +1047,17 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       });
       throw new LabReportSanitizationError(id, 'The verified Sanitized Report hash changed');
     }
-    if (pdfInspector.verifySanitized === undefined) {
-      throw new LabReportSanitizationError(
-        id,
-        'Sanitized verification is unavailable on this device',
-      );
-    }
-    const verification = await pdfInspector.verifySanitized(artifactPath);
+    const verification =
+      report.sourceType === 'image'
+        ? await imageInspector.verifySanitized(artifactPath)
+        : pdfInspector.verifySanitized === undefined
+          ? (() => {
+              throw new LabReportSanitizationError(
+                id,
+                'Sanitized verification is unavailable on this device',
+              );
+            })()
+          : await pdfInspector.verifySanitized(artifactPath);
     if (!structuralVerificationPassed(verification)) {
       await fileService.remove(derivative.artifactPath);
       await (
@@ -1034,10 +1076,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       );
     }
     return {
-      sourceType: 'pdf',
+      sourceType: report.sourceType,
       artifactPath,
       artifactHash: derivative.artifactHash,
-      uris: await pdfInspector.renderPreview(artifactPath),
+      uris:
+        report.sourceType === 'image'
+          ? [artifactPath]
+          : await pdfInspector.renderPreview(artifactPath),
       verification,
     };
   }
@@ -1291,6 +1336,12 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const repo = await repository();
       const report = await repo.getReport(id);
       if (report === null) throw new Error('Lab Report was not found');
+      if (report.sourceType === 'image') {
+        throw new LabReportExtractionError(
+          'sanitized-source',
+          'Image extraction is unavailable until image semantic extraction is enabled',
+        );
+      }
       if (report.importState !== 'imported' || report.originalPath === null) {
         throw new Error('Only an imported Lab Report can be extracted');
       }

@@ -17,6 +17,7 @@
     "@alyte/contracts": "0.1.0",
     "@alyte/domain": "0.1.0",
     "@alyte/fixtures": "0.1.0",
+    "@alyte/image": "file:modules/alyte-image",
     "@alyte/protection": "file:modules/alyte-protection",
     "@alyte/pdf": "file:modules/alyte-pdf",
     "@alyte/vision": "file:modules/alyte-vision",

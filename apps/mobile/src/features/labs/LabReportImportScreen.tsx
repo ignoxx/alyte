@@ -90,7 +90,9 @@ export function LabReportImportScreen() {
       const first = results[0];
       if (first !== undefined) {
         setLastReport(first.report);
-        showImportedReport(first.report, false);
+        // Image sources now enter the local privacy workspace immediately. Extraction remains
+        // deliberately hidden until the semantic image extraction slice is integrated.
+        showImportedReport(first.report, true);
       }
     } catch (caught) {
       setError(errorMessage(caught));

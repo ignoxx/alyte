@@ -25,6 +25,11 @@ import {
   type AlytePDFWorkspaceHandle,
   type NativeRedactionChange,
 } from './AlytePDFWorkspace';
+import {
+  AlyteImageWorkspace,
+  type AlyteImageWorkspaceHandle,
+  type NativeImageRedactionChange,
+} from './image';
 import type {
   PasswordRequest,
   SanitizationEditorState,
@@ -54,7 +59,8 @@ export function SanitizedReportEditorScreen() {
   const navigation = useNavigation<EditorNavigation>();
   const route = useRoute<EditorRoute>();
   const { reports } = useServices();
-  const viewer = useRef<AlytePDFWorkspaceHandle>(null);
+  const pdfViewer = useRef<AlytePDFWorkspaceHandle>(null);
+  const imageViewer = useRef<AlyteImageWorkspaceHandle>(null);
   const [state, setState] = useState<SanitizationEditorState | null>(null);
   const [recipe, setRecipe] = useState<SanitizationRecipe | null>(null);
   const [baseline, setBaseline] = useState('');
@@ -172,6 +178,9 @@ export function SanitizedReportEditorScreen() {
     setCanUndo(change.canUndo);
     setCanRedo(change.canRedo);
   }
+  function applyImageRedactions(change: NativeImageRedactionChange) {
+    applyNativeRedactions(change);
+  }
   function updatePageFor(target: number, update: Parameters<typeof updateSanitizationPage>[2]) {
     if (recipe === null) return;
     try {
@@ -236,32 +245,58 @@ export function SanitizedReportEditorScreen() {
           <AppButton label={t('labs.retry')} onPress={() => void sanitize()} tone="quiet" />
         </View>
       )}
-      <AlytePDFWorkspace
-        ref={viewer}
-        style={styles.viewer}
-        sourcePath={preview?.artifactPath ?? state.sourcePath}
-        pageIndex={displayedPageIndex}
-        redactMode={redactMode && preview === null}
-        rotation={preview === null ? currentPage.rotation : 0}
-        crop={preview === null ? currentPage.crop : null}
-        redactions={preview === null ? currentPage.redactions : []}
-        accessibilityLabels={{
-          redaction: t('labs.sanitizedEditorOverlayLabel'),
-          moveLeft: t('labs.sanitizedEditorMoveLeft'),
-          moveRight: t('labs.sanitizedEditorMoveRight'),
-          moveUp: t('labs.sanitizedEditorMoveUp'),
-          moveDown: t('labs.sanitizedEditorMoveDown'),
-          grow: t('labs.sanitizedEditorResize'),
-          shrink: t('labs.sanitizedEditorResizeSmaller'),
-          remove: t('labs.sanitizedEditorRemove'),
-        }}
-        onRedactionsChange={(event) => applyNativeRedactions(event.nativeEvent)}
-        onSelectionChange={(event) => setHasSelection(event.nativeEvent.selected)}
-        onFailure={() => setError(t('labs.sanitizedEditorLoadError'))}
-        accessibilityLabel={
-          preview === null ? t('labs.sanitizedOriginalCanvas') : t('labs.sanitizedExactCanvas')
-        }
-      />
+      {state.report.sourceType === 'image' ? (
+        <AlyteImageWorkspace
+          ref={imageViewer}
+          style={styles.viewer}
+          sourcePath={preview?.artifactPath ?? state.sourcePath}
+          redactMode={redactMode && preview === null}
+          redactions={preview === null ? currentPage.redactions : []}
+          accessibilityLabels={{
+            redaction: t('labs.sanitizedEditorOverlayLabel'),
+            moveLeft: t('labs.sanitizedEditorMoveLeft'),
+            moveRight: t('labs.sanitizedEditorMoveRight'),
+            moveUp: t('labs.sanitizedEditorMoveUp'),
+            moveDown: t('labs.sanitizedEditorMoveDown'),
+            grow: t('labs.sanitizedEditorResize'),
+            shrink: t('labs.sanitizedEditorResizeSmaller'),
+            remove: t('labs.sanitizedEditorRemove'),
+          }}
+          onRedactionsChange={(event) => applyImageRedactions(event.nativeEvent)}
+          onSelectionChange={(event) => setHasSelection(event.nativeEvent.selected)}
+          onFailure={() => setError(t('labs.sanitizedEditorLoadError'))}
+          accessibilityLabel={
+            preview === null ? t('labs.sanitizedOriginalCanvas') : t('labs.sanitizedExactCanvas')
+          }
+        />
+      ) : (
+        <AlytePDFWorkspace
+          ref={pdfViewer}
+          style={styles.viewer}
+          sourcePath={preview?.artifactPath ?? state.sourcePath}
+          pageIndex={displayedPageIndex}
+          redactMode={redactMode && preview === null}
+          rotation={preview === null ? currentPage.rotation : 0}
+          crop={preview === null ? currentPage.crop : null}
+          redactions={preview === null ? currentPage.redactions : []}
+          accessibilityLabels={{
+            redaction: t('labs.sanitizedEditorOverlayLabel'),
+            moveLeft: t('labs.sanitizedEditorMoveLeft'),
+            moveRight: t('labs.sanitizedEditorMoveRight'),
+            moveUp: t('labs.sanitizedEditorMoveUp'),
+            moveDown: t('labs.sanitizedEditorMoveDown'),
+            grow: t('labs.sanitizedEditorResize'),
+            shrink: t('labs.sanitizedEditorResizeSmaller'),
+            remove: t('labs.sanitizedEditorRemove'),
+          }}
+          onRedactionsChange={(event) => applyNativeRedactions(event.nativeEvent)}
+          onSelectionChange={(event) => setHasSelection(event.nativeEvent.selected)}
+          onFailure={() => setError(t('labs.sanitizedEditorLoadError'))}
+          accessibilityLabel={
+            preview === null ? t('labs.sanitizedOriginalCanvas') : t('labs.sanitizedExactCanvas')
+          }
+        />
+      )}
       {preview !== null && (
         <View style={styles.verified}>
           <AppText>{t('labs.sanitizedEditorVerified')}</AppText>
@@ -279,7 +314,9 @@ export function SanitizedReportEditorScreen() {
                 label={t('labs.sanitizedRedact')}
                 onPress={() => {
                   setRedactMode((value) => !value);
-                  void viewer.current?.clearSelection();
+                  void (state.report.sourceType === 'image'
+                    ? imageViewer.current?.clearSelection()
+                    : pdfViewer.current?.clearSelection());
                 }}
                 selected={redactMode}
               />
@@ -287,25 +324,39 @@ export function SanitizedReportEditorScreen() {
                 symbol="arrow.uturn.backward"
                 disabled={!canUndo}
                 label={t('labs.sanitizedUndo')}
-                onPress={() => void viewer.current?.undo()}
+                onPress={() =>
+                  void (state.report.sourceType === 'image'
+                    ? imageViewer.current?.undo()
+                    : pdfViewer.current?.undo())
+                }
               />
               <ToolbarAction
                 symbol="arrow.uturn.forward"
                 disabled={!canRedo}
                 label={t('labs.sanitizedRedo')}
-                onPress={() => void viewer.current?.redo()}
+                onPress={() =>
+                  void (state.report.sourceType === 'image'
+                    ? imageViewer.current?.redo()
+                    : pdfViewer.current?.redo())
+                }
               />
               <ToolbarAction
                 symbol="trash"
                 disabled={!hasSelection}
                 label={t('labs.sanitizedEditorRemove')}
-                onPress={() => void viewer.current?.removeSelected()}
+                onPress={() =>
+                  void (state.report.sourceType === 'image'
+                    ? imageViewer.current?.removeSelected()
+                    : pdfViewer.current?.removeSelected())
+                }
               />
-              <ToolbarAction
-                symbol="square.grid.2x2"
-                label={`${t('labs.sanitizedPages')} ${pageIndex + 1}/${recipe.pages.length}`}
-                onPress={() => setPagesOpen(true)}
-              />
+              {state.report.sourceType === 'pdf' && (
+                <ToolbarAction
+                  symbol="square.grid.2x2"
+                  label={`${t('labs.sanitizedPages')} ${pageIndex + 1}/${recipe.pages.length}`}
+                  onPress={() => setPagesOpen(true)}
+                />
+              )}
             </View>
             <AppButton
               disabled={busy}
@@ -372,32 +423,36 @@ export function SanitizedReportEditorScreen() {
                     onPress={() => updatePageFor(page.pageIndex, { selected: !page.selected })}
                     tone="quiet"
                   />
-                  <AppButton
-                    label={t('labs.sanitizedEditorRotate')}
-                    onPress={() =>
-                      updatePageFor(page.pageIndex, {
-                        rotation: ((page.rotation + 90) % 360) as 0 | 90 | 180 | 270,
-                      })
-                    }
-                    tone="quiet"
-                  />
-                  <AppButton
-                    label={t('labs.sanitizedEditorCropIn')}
-                    onPress={() => adjustCrop(page.pageIndex, 0.025)}
-                    tone="quiet"
-                  />
-                  <AppButton
-                    disabled={page.crop === null}
-                    label={t('labs.sanitizedEditorCropOut')}
-                    onPress={() => adjustCrop(page.pageIndex, -0.025)}
-                    tone="quiet"
-                  />
-                  <AppButton
-                    disabled={page.crop === null}
-                    label={t('labs.sanitizedEditorCropReset')}
-                    onPress={() => updatePageFor(page.pageIndex, { crop: null })}
-                    tone="quiet"
-                  />
+                  {state.report.sourceType === 'pdf' && (
+                    <>
+                      <AppButton
+                        label={t('labs.sanitizedEditorRotate')}
+                        onPress={() =>
+                          updatePageFor(page.pageIndex, {
+                            rotation: ((page.rotation + 90) % 360) as 0 | 90 | 180 | 270,
+                          })
+                        }
+                        tone="quiet"
+                      />
+                      <AppButton
+                        label={t('labs.sanitizedEditorCropIn')}
+                        onPress={() => adjustCrop(page.pageIndex, 0.025)}
+                        tone="quiet"
+                      />
+                      <AppButton
+                        disabled={page.crop === null}
+                        label={t('labs.sanitizedEditorCropOut')}
+                        onPress={() => adjustCrop(page.pageIndex, -0.025)}
+                        tone="quiet"
+                      />
+                      <AppButton
+                        disabled={page.crop === null}
+                        label={t('labs.sanitizedEditorCropReset')}
+                        onPress={() => updatePageFor(page.pageIndex, { crop: null })}
+                        tone="quiet"
+                      />
+                    </>
+                  )}
                   <AppButton
                     disabled={index === 0}
                     label="↑"

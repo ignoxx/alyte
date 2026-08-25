@@ -33,11 +33,13 @@ import {
   createLabReportsService,
   createDefaultExtractionAliases,
   LabReportExtractionError,
+  type LabReportsServiceOptions,
   type LabReportsService,
 } from './report-service';
 import type { LabReportImportError } from './report-service';
 import type { PdfInspection, PdfInspectionSession, PdfInspector } from './pdf';
 import type { PdfSanitizedVerification } from './pdf';
+import type { ImageInspection, ImageSanitizedVerification, ImageSanitizationResult } from './image';
 import type { VisionOCR } from './vision';
 import type { DatabaseProtection } from './protection';
 import { addRedaction } from '@alyte/domain';
@@ -183,6 +185,10 @@ class FakeFiles implements ProtectedReportFileService {
     return `protected://sanitized/${reportId}-${derivativeId}.pdf`;
   }
 
+  async sanitizedImageDestination(reportId: string, derivativeId: string): Promise<string> {
+    return `protected://sanitized/${reportId}-${derivativeId}.jpg`;
+  }
+
   async protectArtifact(path: string): Promise<ProtectedCopy> {
     const file = this.files.get(path);
     if (file === undefined) throw new Error('sanitized artifact missing');
@@ -317,6 +323,48 @@ class SanitizingPdf extends FakePdf {
   }
 }
 
+const verifiedImage: ImageSanitizedVerification = {
+  verified: true,
+  selectableText: false,
+  annotations: false,
+  attachments: false,
+  metadata: false,
+  removableRedactions: false,
+  reloadChecked: true,
+  sourceAwareChecked: true,
+  sourceContentRemoved: true,
+  verificationVersion: 'image-source-aware-v1',
+  failureReasons: [],
+  pixelWidth: 1200,
+  pixelHeight: 900,
+};
+
+class SanitizingImage {
+  readonly sanitizedPaths: string[] = [];
+  files: FakeFiles;
+
+  constructor(files: FakeFiles) {
+    this.files = files;
+  }
+
+  async inspect(_path: string): Promise<ImageInspection> {
+    return { width: 1200, height: 900, pixelWidth: 1200, pixelHeight: 900, hasMetadata: true };
+  }
+
+  async sanitize(_sourcePath: string, destinationPath: string): Promise<ImageSanitizationResult> {
+    this.sanitizedPaths.push(destinationPath);
+    this.files.files.set(destinationPath, {
+      hash: `image-artifact-${this.sanitizedPaths.length}`,
+      size: 256,
+    });
+    return { destinationPath, byteSize: 256, verification: verifiedImage };
+  }
+
+  async verifySanitized(_path: string): Promise<ImageSanitizedVerification> {
+    return verifiedImage;
+  }
+}
+
 function source(uri: string, sourceType: 'pdf' | 'image' = 'pdf'): LabSourceSelection {
   return {
     uri,
@@ -335,6 +383,7 @@ function createService(
   pdf: PdfInspector = new FakePdf(),
   visionOCR?: VisionOCR,
   semanticMapper?: ExtractionSemanticMapper,
+  imageInspector?: LabReportsServiceOptions['imageInspector'],
 ): LabReportsService {
   return createLabReportsService({
     repositoryFactory: async () => repository,
@@ -342,6 +391,7 @@ function createService(
     pdfInspector: pdf,
     ...(visionOCR === undefined ? {} : { visionOCR }),
     ...(semanticMapper === undefined ? {} : { semanticMapper }),
+    ...(imageInspector === undefined ? {} : { imageInspector }),
     idGenerator: (() => {
       let count = 0;
       return (prefix: string) => `${prefix}-fixed-${++count}`;
@@ -1698,6 +1748,30 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(preview.artifactHash, saved.artifactHash);
     assert.equal(pdf.previewCalls, 2);
     assert.equal(await files.exists(imported.originalPath!), true);
+  });
+
+  test('sanitizes an image locally without replacing the immutable original', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const image = new SanitizingImage(files);
+    const service = createService(repository, files, new FakePdf(), undefined, undefined, image);
+    const imported = (await service.importImages([source('sanitize-image', 'image')]))[0]!.report;
+    const editor = await service.openSanitizationEditor(imported.id);
+    const recipe = addRedaction(editor.recipe, 0, {
+      id: 'image-redaction-name',
+      rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.08 },
+      origin: 'user',
+      label: 'name',
+    });
+
+    const saved = await service.saveSanitizedReport(imported.id, recipe);
+    assert.equal(saved.verificationState, 'verified');
+    assert.equal(saved.artifactPath?.endsWith('.jpg'), true);
+    assert.deepEqual(image.sanitizedPaths, [saved.artifactPath]);
+    const preview = await service.previewSanitizedReport(imported.id);
+    assert.deepEqual(preview.uris, [saved.artifactPath]);
+    assert.equal(await files.exists(imported.originalPath!), true);
+    assert.equal(await files.exists(saved.artifactPath!), true);
   });
 
   test('failed structural verification never exposes the derivative and preserves the original', async () => {

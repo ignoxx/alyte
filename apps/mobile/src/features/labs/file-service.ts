@@ -105,6 +105,8 @@ export type ProtectedReportFileService = {
   cleanupTransientImports(): Promise<void>;
   /** Destination and verification seams for newly rendered Sanitized Reports. */
   sanitizedDestination?(reportId: string, derivativeId: string): Promise<string>;
+  /** Image derivatives use a non-PDF extension so previews and exports remain honest. */
+  sanitizedImageDestination?(reportId: string, derivativeId: string): Promise<string>;
   protectArtifact?(path: string): Promise<ProtectedCopy>;
   /** Intake media uses this same protected-file owner; methods remain optional for lab test fakes. */
   intakeDestination?(captureId: string, source: IntakeImageSource): Promise<string>;
@@ -488,6 +490,18 @@ export function createProtectedReportFileService(
     return joinPath(
       joinPath(root, PROTECTED_REPORT_DIRECTORIES.sanitized),
       `${safeFilename(reportId, 'report')}-${safeFilename(derivativeId, 'sanitized')}.pdf`,
+    );
+  }
+
+  async function sanitizedImageDestination(
+    reportId: string,
+    derivativeId: string,
+  ): Promise<string> {
+    await initialize();
+    if (root === null) throw new Error('Protected report storage is not initialized');
+    return joinPath(
+      joinPath(root, PROTECTED_REPORT_DIRECTORIES.sanitized),
+      `${safeFilename(reportId, 'report')}-${safeFilename(derivativeId, 'sanitized')}.jpg`,
     );
   }
 
@@ -887,6 +901,7 @@ export function createProtectedReportFileService(
     portablePath,
     cleanupTransientImports,
     sanitizedDestination,
+    sanitizedImageDestination,
     protectArtifact,
     intakeDestination,
     stageIntake,
