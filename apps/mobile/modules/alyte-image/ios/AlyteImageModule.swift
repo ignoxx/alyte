@@ -300,7 +300,8 @@ private func rgbaPixels(_ image: CGImage) -> AlyteImagePixels? {
     space: CGColorSpaceCreateDeviceRGB(),
     bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
   ) else { return nil }
-  // Row zero is the top of the image, matching normalized recipe coordinates.
+  // Keep the source and derivative in one deterministic Core Graphics bitmap orientation. The
+  // byte buffer still indexes rows from the lower edge, so recipe sampling inverts its y-axis.
   context.translateBy(x: 0, y: CGFloat(height))
   context.scaleBy(x: 1, y: -1)
   context.interpolationQuality = .none
@@ -366,7 +367,9 @@ private func compareSourceAware(
     }
     for (x, y) in samples {
       let pixelX = min(width - 1, max(0, Int(x * CGFloat(width))))
-      let pixelY = min(height - 1, max(0, Int(y * CGFloat(height))))
+      // rgbaPixels keeps Core Graphics' bitmap row order. Normalized recipe coordinates are
+      // top-origin, while row zero in that buffer is the bottom of the rendered image.
+      let pixelY = min(height - 1, max(0, Int((1 - y) * CGFloat(height))))
       let pixel = actualPixels.pixel(x: pixelX, y: pixelY)
       if max(Int(pixel.0), Int(pixel.1), Int(pixel.2)) > 70 {
         redactionsRemoved = false

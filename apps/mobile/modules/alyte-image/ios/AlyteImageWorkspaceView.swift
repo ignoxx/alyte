@@ -26,15 +26,16 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   private let scrollView = UIScrollView()
   private let imageView = UIImageView()
   private let overlay = ImageRedactionOverlay()
+  private let overlayPan = UIPanGestureRecognizer()
   private var image: UIImage?
   private var regions: [ImageWorkspaceRedaction] = []
   private var interactionState = AlyteImageWorkspaceInteractionState()
   private var history: [[ImageWorkspaceRedaction]] = []
   private var future: [[ImageWorkspaceRedaction]] = []
   private var startRegions: [ImageWorkspaceRedaction] = []
-  private var activeGestureID: String?
   private var labels: [String: String] = [:]
   private var deferredRegions: [ImageWorkspaceRedaction]?
+  private var overlayGestureIsResize = false
   private var lastViewportSize = CGSize.zero
   private var focusRegion: CGRect?
 
@@ -46,7 +47,6 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
       let hadSelection = selectedID != nil
       interactionState.setInspectionMode(newValue)
       if newValue {
-        activeGestureID = nil
         startRegions.removeAll()
         deferredRegions = nil
       }
@@ -63,6 +63,7 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   }
 
   private var selectedID: String? { interactionState.selectedID }
+  private var activeGestureID: String? { interactionState.activeGesture?.id }
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -73,6 +74,9 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     scrollView.maximumZoomScale = 1
     scrollView.showsVerticalScrollIndicator = false
     scrollView.showsHorizontalScrollIndicator = false
+    // The editor owns safe-area layout. Automatic adjustment would add a second inset and can
+    // leave a landscape source offset against one edge on its first layout.
+    scrollView.contentInsetAdjustmentBehavior = .never
     scrollView.backgroundColor = .systemBackground
     addSubview(scrollView)
 
@@ -90,6 +94,13 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
     tap.require(toFail: doubleTap)
     overlay.addGestureRecognizer(tap)
+    overlayPan.addTarget(self, action: #selector(overlayPanned(_:)))
+    overlayPan.delegate = self
+    // The single overlay recognizer can explicitly fail for empty space, allowing the scroll
+    // view to pan there. Per-redaction recognizers cannot express that arbitration reliably when
+    // the touch begins on the overlay itself.
+    scrollView.panGestureRecognizer.require(toFail: overlayPan)
+    overlay.addGestureRecognizer(overlayPan)
   }
 
   private func updateOverlayInteraction() {
@@ -207,23 +218,39 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     imageView.frame = CGRect(origin: .zero, size: image.size)
     imageView.bounds = CGRect(origin: .zero, size: image.size)
     scrollView.contentSize = image.size
-    let scale = min(
-      max(0.01, scrollView.bounds.width / max(1, image.size.width)),
-      max(0.01, scrollView.bounds.height / max(1, image.size.height)))
+    let viewport = AlyteImageWorkspaceGeometry.aspectFit(
+      imageSize: image.size, viewportSize: scrollView.bounds.size)
+    let scale = max(0.01, viewport.scale)
     scrollView.minimumZoomScale = scale
     scrollView.maximumZoomScale = max(scale * 4, scale + 1)
-    scrollView.zoomScale = scale
+    scrollView.setZoomScale(scale, animated: false)
+    scrollView.layoutIfNeeded()
     lastViewportSize = scrollView.bounds.size
     overlay.frame = imageView.bounds
     layoutRegions()
-    centerImage()
+    centerImage(resetContentOffset: true)
     focusStoredRegion()
   }
 
-  private func centerImage() {
-    let horizontal = max(0, (scrollView.bounds.width - scrollView.contentSize.width) / 2)
-    let vertical = max(0, (scrollView.bounds.height - scrollView.contentSize.height) / 2)
-    scrollView.contentInset = UIEdgeInsets(top: vertical, left: horizontal, bottom: vertical, right: horizontal)
+  private func centerImage(resetContentOffset: Bool = false) {
+    guard scrollView.bounds.width > 0, scrollView.bounds.height > 0 else { return }
+    let displayedSize = imageView.frame.size
+    let horizontal = max(0, (scrollView.bounds.width - displayedSize.width) / 2)
+    let vertical = max(0, (scrollView.bounds.height - displayedSize.height) / 2)
+    scrollView.contentInset = UIEdgeInsets(
+      top: vertical, left: horizontal, bottom: vertical, right: horizontal)
+
+    let minOffset = CGPoint(x: -horizontal, y: -vertical)
+    let maxOffset = CGPoint(
+      x: max(minOffset.x, scrollView.contentSize.width - scrollView.bounds.width + horizontal),
+      y: max(minOffset.y, scrollView.contentSize.height - scrollView.bounds.height + vertical))
+    let current = resetContentOffset ? minOffset : scrollView.contentOffset
+    let clamped = CGPoint(
+      x: min(max(current.x, minOffset.x), maxOffset.x),
+      y: min(max(current.y, minOffset.y), maxOffset.y))
+    if scrollView.contentOffset != clamped {
+      scrollView.setContentOffset(clamped, animated: false)
+    }
   }
 
   private func focusStoredRegion() {
@@ -314,10 +341,8 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
       view.accessibilityIdentifier = region.id
       if !inspectionMode {
         view.accessibilityCustomActions = accessibilityActions(for: region.id)
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
-        pan.name = region.id
-        view.addGestureRecognizer(pan)
       }
+      view.tag = 0
       overlay.addSubview(view)
       if !inspectionMode, selectedID == region.id {
         let handle = UIView(frame: CGRect(x: frame.maxX - 22, y: frame.maxY - 22, width: 44, height: 44))
@@ -332,9 +357,7 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
         handle.accessibilityValue = accessibilityValue(for: region.rect, selected: true)
         handle.accessibilityIdentifier = region.id
         handle.accessibilityCustomActions = accessibilityActions(for: region.id)
-        let resize = UIPanGestureRecognizer(target: self, action: #selector(resized(_:)))
-        resize.name = region.id
-        handle.addGestureRecognizer(resize)
+        handle.tag = 1
         overlay.addSubview(handle)
       }
     }
@@ -345,11 +368,11 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     let frame = pageRect(region.rect)
     let regionView = overlay.subviews.first {
       $0.accessibilityIdentifier == id &&
-        $0.gestureRecognizers?.contains(where: { $0 is UIPanGestureRecognizer }) == true
+        $0.tag == 0
     }
     regionView?.frame = frame
     let handle = overlay.subviews.first {
-      $0 !== regionView && $0.gestureRecognizers?.contains(where: { $0.name == id }) == true
+      $0 !== regionView && $0.tag == 1 && $0.accessibilityIdentifier == id
     }
     handle?.frame = CGRect(x: frame.maxX - 22, y: frame.maxY - 22, width: 44, height: 44)
   }
@@ -379,8 +402,25 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     layoutRegions()
   }
 
-  @objc private func panned(_ gesture: UIPanGestureRecognizer) { manipulate(gesture, resize: false) }
-  @objc private func resized(_ gesture: UIPanGestureRecognizer) { manipulate(gesture, resize: true) }
+  @objc private func overlayPanned(_ gesture: UIPanGestureRecognizer) {
+    manipulate(gesture, resize: overlayGestureIsResize)
+  }
+
+  func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    guard gestureRecognizer === overlayPan else { return true }
+    guard redactMode, !inspectionMode else { return false }
+    let point = gestureRecognizer.location(in: overlay)
+    guard let hit = overlay.subviews.reversed().first(where: {
+      $0.accessibilityIdentifier != nil && $0.frame.insetBy(dx: -8, dy: -8).contains(point)
+    }), let id = hit.accessibilityIdentifier else {
+      overlayGestureIsResize = false
+      gestureRecognizer.name = nil
+      return false
+    }
+    overlayGestureIsResize = hit.tag == 1
+    gestureRecognizer.name = id
+    return true
+  }
 
   private func manipulate(_ gesture: UIPanGestureRecognizer, resize: Bool) {
     guard redactMode, !inspectionMode,
@@ -388,7 +428,7 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
       let index = regions.firstIndex(where: { $0.id == id })
     else { return }
     if gesture.state == .began {
-      activeGestureID = id
+      guard interactionState.beginGesture(id: id, kind: resize ? .resize : .move) else { return }
       setSelection(id)
       startRegions = regions
       deferredRegions = nil
@@ -419,7 +459,8 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   }
 
   private func finishGesture(applyDeferredRegions: Bool) {
-    activeGestureID = nil
+    interactionState.endGesture()
+    overlayGestureIsResize = false
     if applyDeferredRegions, let deferredRegions { regions = deferredRegions }
     deferredRegions = nil
     reconcileSelection()

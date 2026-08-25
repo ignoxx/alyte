@@ -127,6 +127,37 @@ final class ImagePrivacyTests: XCTestCase {
     XCTAssertLessThanOrEqual(focused.maxY, 1)
   }
 
+  func testAspectFitViewportCentersPortraitAndLandscapeImages() {
+    let portrait = AlyteImageWorkspaceGeometry.aspectFit(
+      imageSize: CGSize(width: 900, height: 1600), viewportSize: CGSize(width: 390, height: 720))
+    XCTAssertEqual(portrait.scale, 0.4333333333, accuracy: 0.000001)
+    XCTAssertEqual(portrait.displayedSize.width, 390, accuracy: 0.000001)
+    XCTAssertEqual(portrait.displayedSize.height, 693.3333333, accuracy: 0.000001)
+    XCTAssertEqual(portrait.insets.top, 13.3333333, accuracy: 0.000001)
+    XCTAssertEqual(portrait.insets.left, 0, accuracy: 0.000001)
+
+    let landscape = AlyteImageWorkspaceGeometry.aspectFit(
+      imageSize: CGSize(width: 1920, height: 1440), viewportSize: CGSize(width: 390, height: 720))
+    XCTAssertEqual(landscape.scale, 0.203125, accuracy: 0.000001)
+    XCTAssertEqual(landscape.displayedSize.width, 390, accuracy: 0.000001)
+    XCTAssertEqual(landscape.displayedSize.height, 292.5, accuracy: 0.000001)
+    XCTAssertEqual(landscape.insets.top, 213.75, accuracy: 0.000001)
+    XCTAssertEqual(landscape.insets.left, 0, accuracy: 0.000001)
+  }
+
+  func testMoveAndResizeGestureStateStayExplicitAndCannotMutateInspectionMode() {
+    var state = AlyteImageWorkspaceInteractionState(selectedID: "region-1")
+    XCTAssertTrue(state.beginGesture(id: "region-1", kind: .move))
+    XCTAssertEqual(state.activeGesture, AlyteImageWorkspaceGesture(id: "region-1", kind: .move))
+    state.endGesture()
+    XCTAssertNil(state.activeGesture)
+    XCTAssertTrue(state.beginGesture(id: "region-1", kind: .resize))
+    XCTAssertEqual(state.activeGesture?.kind, .resize)
+    state.setInspectionMode(true)
+    XCTAssertNil(state.activeGesture)
+    XCTAssertFalse(state.beginGesture(id: "region-1", kind: .move))
+  }
+
   func testInspectionModeClearsSelectionAndBlocksMutationSelection() {
     var state = AlyteImageWorkspaceInteractionState(selectedID: "region-1")
     XCTAssertTrue(state.allowsMutation)
@@ -138,5 +169,35 @@ final class ImagePrivacyTests: XCTestCase {
     state.setInspectionMode(false)
     state.select("region-2")
     XCTAssertEqual(state.selectedID, "region-2")
+  }
+
+  func testLandscapePhotosSamplePassesSourceAwareVerification() throws {
+    let source = try temporaryDirectory().appendingPathComponent("landscape.jpg")
+    let destination = try temporaryDirectory().appendingPathComponent("landscape-sanitized.jpg")
+    let image = UIGraphicsImageRenderer(size: CGSize(width: 1920, height: 1440)).image { context in
+      UIColor.systemRed.setFill()
+      context.fill(CGRect(x: 0, y: 0, width: 960, height: 720))
+      UIColor.systemBlue.setFill()
+      context.fill(CGRect(x: 960, y: 0, width: 960, height: 720))
+      UIColor.systemGreen.setFill()
+      context.fill(CGRect(x: 0, y: 720, width: 960, height: 720))
+      UIColor.systemYellow.setFill()
+      context.fill(CGRect(x: 960, y: 720, width: 960, height: 720))
+      UIColor.black.setFill()
+      context.fill(CGRect(x: 64, y: 120, width: 300, height: 120))
+      context.fill(CGRect(x: 1660, y: 920, width: 160, height: 260))
+    }
+    try XCTUnwrap(image.jpegData(compressionQuality: 0.9)).write(to: source)
+    let recipe: [String: Any] = ["pages": [[
+      "pageIndex": 0,
+      "selected": true,
+      "crop": NSNull(),
+      "rotation": 0,
+      "redactions": [["rect": ["x": 0.36, "y": 0.2, "width": 0.12, "height": 0.16]]],
+    ]]]
+    let result = try AlyteImageSanitizationTestSupport.render(
+      sourceURL: source, destinationURL: destination, recipe: recipe)
+    let facts = try XCTUnwrap(result["verification"] as? [String: Any])
+    XCTAssertEqual(facts["verified"] as? Bool, true, "\(facts)")
   }
 }
