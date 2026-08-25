@@ -21,7 +21,8 @@ export type OCRSerializationFailureCode =
   | 'observation-text-too-long'
   | 'observation-alternatives-too-long'
   | 'invalid-observation'
-  | 'unknown-catalogue-id';
+  | 'unknown-catalogue-id'
+  | 'input-too-large';
 
 export class OCRSerializationError extends Error {
   readonly code: OCRSerializationFailureCode;
@@ -94,5 +95,9 @@ export function serializeOCRChunk(
       left.localeCompare(right),
     ),
   };
-  return JSON.stringify(canonical);
+  const result = JSON.stringify(canonical);
+  if (new TextEncoder().encode(result).byteLength > qwenEvaluationManifest.prompt.maxInputBytes) {
+    throw new OCRSerializationError('input-too-large');
+  }
+  return result;
 }

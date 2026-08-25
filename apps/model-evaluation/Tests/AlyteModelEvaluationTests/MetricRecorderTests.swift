@@ -35,11 +35,12 @@ final class MetricRecorderTests: XCTestCase {
     }
 
     func testNativeRunnerRequiresTheExternalPinnedRuntime() {
+        guard !LlamaCppRuntimeBridge.isFrameworkLinked else { return }
         XCTAssertFalse(LlamaCppRuntimeBridge.isFrameworkLinked)
         XCTAssertThrowsError(
             try LlamaCppRuntimeSession(
                 modelURL: URL(fileURLWithPath: "/external/Qwen3.5-0.8B-Q4_0.gguf"),
-                grammar: NativeEvaluationRunner.grammar,
+                grammar: "",
                 grammarRoot: "root",
                 contextTokens: 2_048,
                 batchTokens: 256,
@@ -51,27 +52,48 @@ final class MetricRecorderTests: XCTestCase {
     }
 
     func testPinnedRuntimeEvaluationWritesAggregateOnlyWhenStaged() throws {
-        guard let modelPath = ProcessInfo.processInfo.environment["ALYTE_MODEL_EVAL_MODEL_PATH"],
-              let aggregatePath = ProcessInfo.processInfo.environment["ALYTE_MODEL_EVAL_AGGREGATE_PATH"] else {
+        guard configuredValue("ALYTE_MODEL_EVAL_DEVICE_RUN") == "1" else {
+            return
+        }
+        guard let modelPath = configuredValue("ALYTE_MODEL_EVAL_MODEL_PATH"),
+              let aggregatePath = configuredValue("ALYTE_MODEL_EVAL_AGGREGATE_PATH"),
+              let runtimePath = configuredValue("ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK") else {
+            XCTFail("device mode requires model, aggregate, and pinned runtime paths")
             return
         }
         guard LlamaCppRuntimeBridge.isFrameworkLinked else {
-            throw XCTSkip("the pinned llama.cpp XCFramework is not linked")
+            XCTFail("device mode requires the pinned llama.cpp XCFramework")
+            return
+        }
+        guard let contractURL = Bundle(for: MetricRecorderTests.self).url(
+            forResource: "evaluation-contract-v1",
+            withExtension: "json"
+        ) else {
+            XCTFail("canonical evaluation contract resource is missing")
+            return
         }
         let modelURL = URL(fileURLWithPath: modelPath)
-        let runtimePath = ProcessInfo.processInfo.environment["ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK"] ?? ""
         let report = try NativeEvaluationRunner.run(
             modelURL: modelURL,
+            contractURL: contractURL,
             packBytes: fileSize(modelURL),
             runtimeBytes: directorySize(URL(fileURLWithPath: runtimePath)),
-            deviceClass: ProcessInfo.processInfo.environment["ALYTE_MODEL_EVAL_DEVICE_CLASS"] ?? "paired",
-            deviceModel: ProcessInfo.processInfo.environment["ALYTE_MODEL_EVAL_DEVICE_MODEL"] ?? "unknown",
+            deviceClass: configuredValue("ALYTE_MODEL_EVAL_DEVICE_CLASS") ?? "paired",
+            deviceModel: configuredValue("ALYTE_MODEL_EVAL_DEVICE_MODEL") ?? "unknown",
             osVersion: ProcessInfo.processInfo.operatingSystemVersionString
         )
         try AggregateReportWriter.write(report, to: URL(fileURLWithPath: aggregatePath))
         XCTAssertEqual(report.fixtureCount, 6)
+        XCTAssertEqual(report.expectedRowCount, 12)
         XCTAssertLessThanOrEqual(report.schemaFailureCount + report.acceptedProposalCount, 24 * 6)
     }
+}
+
+private func configuredValue(_ key: String) -> String? {
+    if let value = ProcessInfo.processInfo.environment[key], !value.isEmpty {
+        return value
+    }
+    return Bundle(for: MetricRecorderTests.self).object(forInfoDictionaryKey: key) as? String
 }
 
 private struct AggregateFixture: Codable {

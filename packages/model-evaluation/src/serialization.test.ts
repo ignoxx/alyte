@@ -36,4 +36,21 @@ describe('bounded OCR serialization', () => {
       /unknown-catalogue-id/,
     );
   });
+
+  it('rejects a deterministic total serialized input bound', () => {
+    const oversized = Array.from({ length: 48 }, (_, index) => ({
+      id: `observation-${index}`,
+      rowId: `row-${index}`,
+      text: 'x'.repeat(240),
+      alternatives: ['y'.repeat(120)],
+      pageIndex: 0,
+      locale: 'en' as const,
+      specimenType: 'serum' as const,
+    }));
+    assert.throws(
+      () => serializeOCRChunk(oversized, 'en', ['biomarker.ldl_c']),
+      (error: unknown) =>
+        error instanceof OCRSerializationError && error.code === 'input-too-large',
+    );
+  });
 });

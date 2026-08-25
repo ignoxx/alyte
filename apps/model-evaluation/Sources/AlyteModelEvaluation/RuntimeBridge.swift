@@ -21,6 +21,7 @@ public enum LlamaCppRuntimeError: Error, Equatable, Sendable {
     case modelLoadFailed
     case inferenceFailed
     case outputLimitExceeded
+    case inputLimitExceeded
 }
 
 public final class LlamaCppRuntimeSession: @unchecked Sendable {
@@ -96,6 +97,8 @@ public final class LlamaCppRuntimeSession: @unchecked Sendable {
             return String(decoding: bytes, as: UTF8.self)
         case -2:
             throw LlamaCppRuntimeError.outputLimitExceeded
+        case -3:
+            throw LlamaCppRuntimeError.inputLimitExceeded
         default:
             throw LlamaCppRuntimeError.inferenceFailed
         }

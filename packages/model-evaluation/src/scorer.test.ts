@@ -47,4 +47,39 @@ describe('evaluation scorer', () => {
     assert.equal('rawModelOutput' in report, false);
     assert.equal('prompt' in report, false);
   });
+
+  it('aggregates exact source fact preservation independently from mapping correctness', () => {
+    const first = scoreEvaluationFixture(fixture, {
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      proposals: [
+        {
+          sourceObservationIds: [
+            'en-serum-ldl-label',
+            'en-serum-ldl-value',
+            'en-serum-ldl-unit',
+            'en-serum-ldl-interval',
+          ],
+          role: 'measurement',
+          specimenType: 'serum',
+          biomarkerId: 'biomarker.ldl_c',
+        },
+      ],
+    });
+    const second = scoreEvaluationFixture(fixture, {
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      proposals: [
+        {
+          sourceObservationIds: ['en-urine-glucose-label'],
+          role: 'specimen-context',
+          specimenType: 'urine',
+          biomarkerId: null,
+        },
+      ],
+    });
+    const quality = aggregateFixtureScores([first, second]);
+    assert.equal(first.exactSourceFactsPreserved, 1);
+    assert.equal(second.exactSourceFactsPreserved, 0);
+    assert.equal(quality.exactSourceFactsPreserved, 1);
+    assert.equal(quality.exactSourceValueUnitIntervalPreservation, 0.5);
+  });
 });

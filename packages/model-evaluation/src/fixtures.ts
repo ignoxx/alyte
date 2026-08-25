@@ -17,8 +17,8 @@ export type FixtureExpectedMapping = {
   readonly rowId: string;
   readonly sourceObservationIds: readonly string[];
   readonly sourceFactObservationIds: readonly string[];
-  readonly biomarkerId: string;
-  readonly role: Extract<SemanticRole, 'measurement'>;
+  readonly biomarkerId: string | null;
+  readonly role: SemanticRole;
   readonly specimenType: SpecimenType;
   /** These facts are source-only and are never included in model output. */
   readonly sourceFacts: {
@@ -65,7 +65,8 @@ function fixture(
     readonly valueAlternatives?: readonly string[];
     readonly unit: string;
     readonly interval: string;
-    readonly biomarkerId: string;
+    readonly biomarkerId: string | null;
+    readonly role?: SemanticRole;
     readonly specimenType: SpecimenType;
   }[],
 ): SemanticEvaluationFixture {
@@ -107,7 +108,7 @@ function fixture(
         `${row.rowId}-interval`,
       ],
       biomarkerId: row.biomarkerId,
-      role: 'measurement',
+      role: row.role ?? 'measurement',
       specimenType: row.specimenType,
       sourceFacts: {
         valueString: row.value,
@@ -140,7 +141,8 @@ export const semanticEvaluationFixtures: readonly SemanticEvaluationFixture[] = 
       value: 'negative',
       unit: 'qualitative',
       interval: 'negative',
-      biomarkerId: 'biomarker.glucose',
+      biomarkerId: null,
+      role: 'specimen-context',
       specimenType: 'urine',
     },
   ]),
@@ -183,7 +185,8 @@ export const semanticEvaluationFixtures: readonly SemanticEvaluationFixture[] = 
       value: 'neigiama',
       unit: 'qualitative',
       interval: 'neigiama',
-      biomarkerId: 'biomarker.glucose',
+      biomarkerId: null,
+      role: 'specimen-context',
       specimenType: 'urine',
     },
   ]),
@@ -226,7 +229,8 @@ export const semanticEvaluationFixtures: readonly SemanticEvaluationFixture[] = 
       value: 'négatif',
       unit: 'qualitative',
       interval: 'négatif',
-      biomarkerId: 'biomarker.glucose',
+      biomarkerId: null,
+      role: 'specimen-context',
       specimenType: 'urine',
     },
   ]),

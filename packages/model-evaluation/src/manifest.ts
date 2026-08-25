@@ -34,7 +34,7 @@ export const qwenEvaluationManifest = Object.freeze({
     release: 'v0.2.0',
     revision: 'bb4caa7540188872173c44d161602d9271386413',
     xcframeworkScript: 'build-xcframework.sh',
-    xcframeworkPlatforms: ['ios-device', 'ios-sim'] as const,
+    xcframeworkPlatforms: ['ios-device'] as const,
     grammar: 'GBNF via llama_sampler_init_grammar',
     minimumRuntimeOS: '16.4',
   }),
@@ -48,6 +48,7 @@ export const qwenEvaluationManifest = Object.freeze({
     maxAlternativeCharacters: 120,
     maxProposals: 24,
     maxOutputBytes: 16_384,
+    maxInputBytes: 8_192,
     contextWindowTokens: 2_048,
     outputTokenLimit: 256,
     temperature: 0,
@@ -83,7 +84,12 @@ export function assertEvaluationManifest(manifest: QwenEvaluationManifest): void
   if (manifest.prompt.thinking) {
     throw new Error('thinking_must_be_disabled_for_grammar_evaluation');
   }
-  if (manifest.prompt.temperature !== 0 || manifest.prompt.maxOutputBytes <= 0) {
+  if (
+    manifest.prompt.temperature !== 0 ||
+    manifest.prompt.maxOutputBytes <= 0 ||
+    manifest.prompt.maxInputBytes <= 0 ||
+    manifest.prompt.maxInputBytes > 8_192
+  ) {
     throw new Error('nondeterministic_or_unbounded_prompt_settings');
   }
 }

@@ -5,11 +5,15 @@ production Expo app, report service, model downloader, model-pack persistence, o
 mapper. The checked-in corpus contains only fabricated OCR-shaped observations for `en`, `de`,
 `lt`, `pl`, `fr`, and `es`, with blood, serum, plasma, and urine contexts.
 
-The native runner must pass small chunks produced by `serializeOCRChunk` to the pinned llama.cpp
-runtime with `thinking = false` and the structural grammar in `schema/semantic-mapper-v1.gbnf`.
-Only `sourceObservationIds`, a bounded semantic role, a known specimen type, and a known catalogue
-Biomarker ID may come back. `validateEvaluationOutput` is the single acceptance boundary. Values,
-units, intervals, conversions, translations, and medical copy remain source/deterministic data.
+The generated `generated/evaluation-contract-v1.json` is the canonical versioned fixture, grammar,
+catalogue-compatibility, and bound contract consumed by the native target. It contains all six
+two-row locale fixtures and OCR alternatives; it contains no runtime prompt or model response.
+The native runner builds bounded prompts from that contract and passes them to the pinned llama.cpp
+runtime with `thinking = false`. Only `sourceObservationIds`, a bounded semantic role, a known
+specimen type, and a known catalogue Biomarker ID may come back. `validateEvaluationOutput` is the
+TypeScript acceptance boundary, and the native target applies the same contract-driven acceptance
+rules before retaining aggregate counts. Values, units, intervals, conversions, translations, and
+medical copy remain source/deterministic data.
 
 Model weights are intentionally absent. Operators stage the exact GGUF in an external,
 task-specific cache and verify its size and SHA-256 before installing the evaluation target.

@@ -183,6 +183,10 @@ export function aggregateFixtureScores(scores: readonly FixtureScore[]): Aggrega
     (sum, score) => sum + score.correctAcceptedProposals,
     0,
   );
+  const exactSourceFactsPreserved = scores.reduce(
+    (sum, score) => sum + score.exactSourceFactsPreserved,
+    0,
+  );
   const rowsNeedingReview = scores.reduce((sum, score) => sum + score.rowsNeedingReview, 0);
   return {
     fixtureCount: scores.length,
@@ -193,8 +197,8 @@ export function aggregateFixtureScores(scores: readonly FixtureScore[]): Aggrega
     correctAcceptedProposals,
     modelRecall: ratio(modelReferencedRows, expectedRows),
     acceptedEndToEndPrecision: ratio(correctAcceptedProposals, acceptedProposals),
-    exactSourceValueUnitIntervalPreservation: ratio(correctAcceptedProposals, acceptedProposals),
-    exactSourceFactsPreserved: correctAcceptedProposals,
+    exactSourceValueUnitIntervalPreservation: ratio(exactSourceFactsPreserved, acceptedProposals),
+    exactSourceFactsPreserved,
     rowsNeedingReview,
     reviewBurdenRate: ratio(rowsNeedingReview, expectedRows),
     failureCounts: sumFailureCounts(scores),

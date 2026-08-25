@@ -8,7 +8,8 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "tsx --test src/**/*.test.ts"
+    "test": "tsx --test src/**/*.test.ts && npm run contract:check",
+    "contract:check": "tsx ../../scripts/model-evaluation-contract.ts --check"
   },
   "dependencies": {
     "@alyte/catalogue": "0.1.0",

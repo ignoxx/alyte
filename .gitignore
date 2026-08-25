@@ -8,6 +8,10 @@ coverage/
 *.log
 *.tsbuildinfo
 .DS_Store
+# Evaluation weights and native result/build artifacts stay in the external task cache.
+*.gguf
+*.xcframework/
+*.xcresult/
 ios/
 !apps/mobile/modules/alyte-vision/ios/
 !apps/mobile/modules/alyte-vision/ios/**

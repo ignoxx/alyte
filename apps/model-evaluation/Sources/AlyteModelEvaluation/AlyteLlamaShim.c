@@ -13,6 +13,7 @@ struct AlyteLlamaSession {
     struct llama_context *context;
     const struct llama_vocab *vocab;
     struct llama_sampler *sampler_chain;
+    int context_tokens;
 };
 
 static void alyte_llama_discard_log(enum ggml_log_level level, const char *text, void *user_data) {
@@ -127,6 +128,7 @@ void *alyte_llama_session_create(
     session->context = context;
     session->vocab = vocab;
     session->sampler_chain = sampler_chain;
+    session->context_tokens = context_tokens;
     return (void *) session;
 }
 
@@ -150,6 +152,10 @@ int alyte_llama_session_generate(
     int prompt_count = alyte_llama_tokenize(session->vocab, prompt, &prompt_tokens);
     if (prompt_count <= 0) {
         return -1;
+    }
+    if (prompt_count + max_output_tokens >= session->context_tokens) {
+        free(prompt_tokens);
+        return -3;
     }
 
     struct llama_batch prompt_batch = llama_batch_get_one(prompt_tokens, prompt_count);

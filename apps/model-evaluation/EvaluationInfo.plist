@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>ALYTE_MODEL_EVAL_DEVICE_RUN</key>
+	<string>$(ALYTE_MODEL_EVAL_DEVICE_RUN)</string>
+	<key>ALYTE_MODEL_EVAL_DEVICE_CLASS</key>
+	<string>$(ALYTE_MODEL_EVAL_DEVICE_CLASS)</string>
+	<key>ALYTE_MODEL_EVAL_DEVICE_MODEL</key>
+	<string>$(ALYTE_MODEL_EVAL_DEVICE_MODEL)</string>
+	<key>ALYTE_MODEL_EVAL_MODEL_PATH</key>
+	<string>$(ALYTE_MODEL_EVAL_MODEL_PATH)</string>
+	<key>ALYTE_MODEL_EVAL_AGGREGATE_PATH</key>
+	<string>$(ALYTE_MODEL_EVAL_AGGREGATE_PATH)</string>
+	<key>ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK</key>
+	<string>$(ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK)</string>
+</dict>
+</plist>

@@ -1,0 +1,871 @@
+{
+  "contractVersion": "alyte.qwen-evaluation.contract.v1",
+  "manifestVersion": "alyte.qwen-evaluation.manifest.v1",
+  "fixtureVersion": "alyte.qwen-evaluation-fixtures.v1",
+  "schemaVersion": "alyte.semantic-mapper.v1",
+  "catalogueVersion": "0.2.0",
+  "catalogueSchemaVersion": "alyte.catalogue.v1",
+  "model": {
+    "repository": "ggml-org/Qwen3.5-0.8B-GGUF",
+    "revision": "8fea620810c4afa23dd6443f999a48574c1611a3",
+    "filename": "Qwen3.5-0.8B-Q4_0.gguf",
+    "sha256": "57d1997790d1744fba5b40a7317df71ea5e2acee28c47e78f0cce39c0703f8cf"
+  },
+  "runtime": {
+    "repository": "ggml-org/llama.cpp",
+    "release": "v0.2.0",
+    "revision": "bb4caa7540188872173c44d161602d9271386413"
+  },
+  "thinking": false,
+  "grammar": "# Structural grammar for alyte.semantic-mapper.v1.\n# Canonical Biomarker IDs and source observation IDs remain validator-owned because they are\n# fixture-specific. The deterministic validator rejects unknown IDs after grammar decoding.\n\nroot ::= \"{\" ws \"\\\"schemaVersion\\\"\" ws \":\" ws \"\\\"alyte.semantic-mapper.v1\\\"\" ws \",\" ws \"\\\"proposals\\\"\" ws \":\" ws proposals ws \"}\"\nproposals ::= \"[\" ws (proposal (ws \",\" ws proposal)*)? ws \"]\"\nproposal ::= \"{\" ws \"\\\"sourceObservationIds\\\"\" ws \":\" ws string-list ws \",\" ws \"\\\"role\\\"\" ws \":\" ws role ws \",\" ws \"\\\"specimenType\\\"\" ws \":\" ws specimen ws \",\" ws \"\\\"biomarkerId\\\"\" ws \":\" ws (string | \"null\") ws \"}\"\nstring-list ::= \"[\" ws string (ws \",\" ws string)* ws \"]\"\nrole ::= \"\\\"measurement\\\"\" | \"\\\"specimen-context\\\"\" | \"\\\"ignore\\\"\"\nspecimen ::= \"\\\"blood\\\"\" | \"\\\"serum\\\"\" | \"\\\"plasma\\\"\" | \"\\\"urine\\\"\" | \"\\\"stool\\\"\" | \"\\\"saliva\\\"\" | \"\\\"unknown\\\"\"\nstring ::= \"\\\"\" ([^\"\\\\] | escape)* \"\\\"\"\nescape ::= \"\\\\\" ([\"\\\\/bfnrt] | \"u\" hex4)\nhex4 ::= [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]\nws ::= [ \\t\\n\\r]*\n",
+  "grammarRoot": "root",
+  "maxInputBytes": 8192,
+  "maxOutputBytes": 16384,
+  "maxProposals": 24,
+  "allowedBiomarkerIds": [
+    "biomarker.alt",
+    "biomarker.ast",
+    "biomarker.ferritin",
+    "biomarker.ggt",
+    "biomarker.glucose",
+    "biomarker.hba1c",
+    "biomarker.hdl_c",
+    "biomarker.hematocrit",
+    "biomarker.hemoglobin",
+    "biomarker.ldl_c",
+    "biomarker.mcv",
+    "biomarker.total_cholesterol",
+    "biomarker.triglycerides",
+    "biomarker.vitamin_b12_total",
+    "biomarker.vitamin_d_total"
+  ],
+  "biomarkerCatalogue": [
+    {
+      "id": "biomarker.alt",
+      "specimens": ["blood", "serum", "plasma", "unknown"],
+      "specimenCompatibility": [["blood"], ["serum", "plasma"], ["unknown"]]
+    },
+    {
+      "id": "biomarker.ast",
+      "specimens": ["blood", "serum", "plasma", "unknown"],
+      "specimenCompatibility": [["blood"], ["serum", "plasma"], ["unknown"]]
+    },
+    {
+      "id": "biomarker.ferritin",
+      "specimens": ["serum", "plasma"],
+      "specimenCompatibility": [["serum", "plasma"]]
+    },
+    {
+      "id": "biomarker.ggt",
+      "specimens": ["blood", "serum", "plasma", "unknown"],
+      "specimenCompatibility": [["blood"], ["serum", "plasma"], ["unknown"]]
+    },
+    {
+      "id": "biomarker.glucose",
+      "specimens": ["blood", "serum", "plasma"],
+      "specimenCompatibility": [["blood"], ["serum", "plasma"]]
+    },
+    {
+      "id": "biomarker.hba1c",
+      "specimens": ["blood"],
+      "specimenCompatibility": [["blood"]]
+    },
+    {
+      "id": "biomarker.hdl_c",
+      "specimens": ["blood", "serum", "plasma", "unknown"],
+      "specimenCompatibility": [["blood", "serum", "plasma"], ["unknown"]]
+    },
+    {
+      "id": "biomarker.hematocrit",
+      "specimens": ["blood", "unknown"],
+      "specimenCompatibility": [["blood"], ["unknown"]]
+    },
+    {
+      "id": "biomarker.hemoglobin",
+      "specimens": ["blood", "unknown"],
+      "specimenCompatibility": [["blood"], ["unknown"]]
+    },
+    {
+      "id": "biomarker.ldl_c",
+      "specimens": ["blood", "serum", "plasma", "unknown"],
+      "specimenCompatibility": [["blood", "serum", "plasma"], ["unknown"]]
+    },
+    {
+      "id": "biomarker.mcv",
+      "specimens": ["blood", "unknown"],
+      "specimenCompatibility": [["blood"], ["unknown"]]
+    },
+    {
+      "id": "biomarker.total_cholesterol",
+      "specimens": ["blood", "serum", "plasma", "unknown"],
+      "specimenCompatibility": [["blood", "serum", "plasma"], ["unknown"]]
+    },
+    {
+      "id": "biomarker.triglycerides",
+      "specimens": ["blood", "serum", "plasma", "unknown"],
+      "specimenCompatibility": [["blood", "serum", "plasma"], ["unknown"]]
+    },
+    {
+      "id": "biomarker.vitamin_b12_total",
+      "specimens": ["serum", "plasma"],
+      "specimenCompatibility": [["serum", "plasma"]]
+    },
+    {
+      "id": "biomarker.vitamin_d_total",
+      "specimens": ["serum"],
+      "specimenCompatibility": [["serum"]]
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "qwen-v1-en-mixed",
+      "language": "en",
+      "serializedInput": "{\"version\":\"alyte.semantic-ocr-chunk.v1\",\"locale\":\"en\",\"pageIndex\":0,\"observations\":[{\"id\":\"en-serum-ldl-interval\",\"text\":\"<115\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"en-serum-ldl-label\",\"text\":\"LDL cholesterol\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"en-serum-ldl-unit\",\"text\":\"mg/dL\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"en-serum-ldl-value\",\"text\":\"118\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"en-urine-glucose-interval\",\"text\":\"negative\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"en-urine-glucose-label\",\"text\":\"Glucose\",\"alternatives\":[\"Glucose (urine)\"],\"pageIndex\":0},{\"id\":\"en-urine-glucose-unit\",\"text\":\"qualitative\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"en-urine-glucose-value\",\"text\":\"negative\",\"alternatives\":[],\"pageIndex\":0}],\"knownBiomarkerIds\":[\"biomarker.ldl_c\"]}",
+      "observations": [
+        {
+          "id": "en-serum-ldl-label",
+          "rowId": "en-serum-ldl",
+          "text": "LDL cholesterol",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "en",
+          "specimenType": "serum"
+        },
+        {
+          "id": "en-serum-ldl-value",
+          "rowId": "en-serum-ldl",
+          "text": "118",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "en",
+          "specimenType": "serum"
+        },
+        {
+          "id": "en-serum-ldl-unit",
+          "rowId": "en-serum-ldl",
+          "text": "mg/dL",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "en",
+          "specimenType": "serum"
+        },
+        {
+          "id": "en-serum-ldl-interval",
+          "rowId": "en-serum-ldl",
+          "text": "<115",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "en",
+          "specimenType": "serum"
+        },
+        {
+          "id": "en-urine-glucose-label",
+          "rowId": "en-urine-glucose",
+          "text": "Glucose",
+          "alternatives": ["Glucose (urine)"],
+          "pageIndex": 0,
+          "locale": "en",
+          "specimenType": "urine"
+        },
+        {
+          "id": "en-urine-glucose-value",
+          "rowId": "en-urine-glucose",
+          "text": "negative",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "en",
+          "specimenType": "urine"
+        },
+        {
+          "id": "en-urine-glucose-unit",
+          "rowId": "en-urine-glucose",
+          "text": "qualitative",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "en",
+          "specimenType": "urine"
+        },
+        {
+          "id": "en-urine-glucose-interval",
+          "rowId": "en-urine-glucose",
+          "text": "negative",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "en",
+          "specimenType": "urine"
+        }
+      ],
+      "expected": [
+        {
+          "rowId": "en-serum-ldl",
+          "sourceObservationIds": [
+            "en-serum-ldl-label",
+            "en-serum-ldl-value",
+            "en-serum-ldl-unit",
+            "en-serum-ldl-interval"
+          ],
+          "sourceFactObservationIds": [
+            "en-serum-ldl-value",
+            "en-serum-ldl-unit",
+            "en-serum-ldl-interval"
+          ],
+          "biomarkerId": "biomarker.ldl_c",
+          "role": "measurement",
+          "specimenType": "serum",
+          "sourceFacts": {
+            "valueString": "118",
+            "unit": "mg/dL",
+            "referenceInterval": "<115"
+          }
+        },
+        {
+          "rowId": "en-urine-glucose",
+          "sourceObservationIds": [
+            "en-urine-glucose-label",
+            "en-urine-glucose-value",
+            "en-urine-glucose-unit",
+            "en-urine-glucose-interval"
+          ],
+          "sourceFactObservationIds": [
+            "en-urine-glucose-value",
+            "en-urine-glucose-unit",
+            "en-urine-glucose-interval"
+          ],
+          "biomarkerId": null,
+          "role": "specimen-context",
+          "specimenType": "urine",
+          "sourceFacts": {
+            "valueString": "negative",
+            "unit": "qualitative",
+            "referenceInterval": "negative"
+          }
+        }
+      ]
+    },
+    {
+      "id": "qwen-v1-de-mixed",
+      "language": "de",
+      "serializedInput": "{\"version\":\"alyte.semantic-ocr-chunk.v1\",\"locale\":\"de\",\"pageIndex\":0,\"observations\":[{\"id\":\"de-blood-hb-interval\",\"text\":\"12,0–16,0\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"de-blood-hb-label\",\"text\":\"Hämoglobin\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"de-blood-hb-unit\",\"text\":\"g/dL\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"de-blood-hb-value\",\"text\":\"14,2\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"de-plasma-ldl-interval\",\"text\":\"<3,0\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"de-plasma-ldl-label\",\"text\":\"LDL-Cholesterin\",\"alternatives\":[\"LDL Cholesterin\"],\"pageIndex\":0},{\"id\":\"de-plasma-ldl-unit\",\"text\":\"mmol/L\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"de-plasma-ldl-value\",\"text\":\"3,8\",\"alternatives\":[\"3.8\"],\"pageIndex\":0}],\"knownBiomarkerIds\":[\"biomarker.hemoglobin\",\"biomarker.ldl_c\"]}",
+      "observations": [
+        {
+          "id": "de-plasma-ldl-label",
+          "rowId": "de-plasma-ldl",
+          "text": "LDL-Cholesterin",
+          "alternatives": ["LDL Cholesterin"],
+          "pageIndex": 0,
+          "locale": "de",
+          "specimenType": "plasma"
+        },
+        {
+          "id": "de-plasma-ldl-value",
+          "rowId": "de-plasma-ldl",
+          "text": "3,8",
+          "alternatives": ["3.8"],
+          "pageIndex": 0,
+          "locale": "de",
+          "specimenType": "plasma"
+        },
+        {
+          "id": "de-plasma-ldl-unit",
+          "rowId": "de-plasma-ldl",
+          "text": "mmol/L",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "de",
+          "specimenType": "plasma"
+        },
+        {
+          "id": "de-plasma-ldl-interval",
+          "rowId": "de-plasma-ldl",
+          "text": "<3,0",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "de",
+          "specimenType": "plasma"
+        },
+        {
+          "id": "de-blood-hb-label",
+          "rowId": "de-blood-hb",
+          "text": "Hämoglobin",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "de",
+          "specimenType": "blood"
+        },
+        {
+          "id": "de-blood-hb-value",
+          "rowId": "de-blood-hb",
+          "text": "14,2",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "de",
+          "specimenType": "blood"
+        },
+        {
+          "id": "de-blood-hb-unit",
+          "rowId": "de-blood-hb",
+          "text": "g/dL",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "de",
+          "specimenType": "blood"
+        },
+        {
+          "id": "de-blood-hb-interval",
+          "rowId": "de-blood-hb",
+          "text": "12,0–16,0",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "de",
+          "specimenType": "blood"
+        }
+      ],
+      "expected": [
+        {
+          "rowId": "de-plasma-ldl",
+          "sourceObservationIds": [
+            "de-plasma-ldl-label",
+            "de-plasma-ldl-value",
+            "de-plasma-ldl-unit",
+            "de-plasma-ldl-interval"
+          ],
+          "sourceFactObservationIds": [
+            "de-plasma-ldl-value",
+            "de-plasma-ldl-unit",
+            "de-plasma-ldl-interval"
+          ],
+          "biomarkerId": "biomarker.ldl_c",
+          "role": "measurement",
+          "specimenType": "plasma",
+          "sourceFacts": {
+            "valueString": "3,8",
+            "unit": "mmol/L",
+            "referenceInterval": "<3,0"
+          }
+        },
+        {
+          "rowId": "de-blood-hb",
+          "sourceObservationIds": [
+            "de-blood-hb-label",
+            "de-blood-hb-value",
+            "de-blood-hb-unit",
+            "de-blood-hb-interval"
+          ],
+          "sourceFactObservationIds": [
+            "de-blood-hb-value",
+            "de-blood-hb-unit",
+            "de-blood-hb-interval"
+          ],
+          "biomarkerId": "biomarker.hemoglobin",
+          "role": "measurement",
+          "specimenType": "blood",
+          "sourceFacts": {
+            "valueString": "14,2",
+            "unit": "g/dL",
+            "referenceInterval": "12,0–16,0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "qwen-v1-lt-mixed",
+      "language": "lt",
+      "serializedInput": "{\"version\":\"alyte.semantic-ocr-chunk.v1\",\"locale\":\"lt\",\"pageIndex\":0,\"observations\":[{\"id\":\"lt-serum-ferritin-interval\",\"text\":\"15–150\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"lt-serum-ferritin-label\",\"text\":\"Feritinas\",\"alternatives\":[\"Serumo feritinas\"],\"pageIndex\":0},{\"id\":\"lt-serum-ferritin-unit\",\"text\":\"ng/mL\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"lt-serum-ferritin-value\",\"text\":\"42\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"lt-urine-glucose-interval\",\"text\":\"neigiama\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"lt-urine-glucose-label\",\"text\":\"Gliukozė (šlapimas)\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"lt-urine-glucose-unit\",\"text\":\"qualitative\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"lt-urine-glucose-value\",\"text\":\"neigiama\",\"alternatives\":[],\"pageIndex\":0}],\"knownBiomarkerIds\":[\"biomarker.ferritin\"]}",
+      "observations": [
+        {
+          "id": "lt-serum-ferritin-label",
+          "rowId": "lt-serum-ferritin",
+          "text": "Feritinas",
+          "alternatives": ["Serumo feritinas"],
+          "pageIndex": 0,
+          "locale": "lt",
+          "specimenType": "serum"
+        },
+        {
+          "id": "lt-serum-ferritin-value",
+          "rowId": "lt-serum-ferritin",
+          "text": "42",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "lt",
+          "specimenType": "serum"
+        },
+        {
+          "id": "lt-serum-ferritin-unit",
+          "rowId": "lt-serum-ferritin",
+          "text": "ng/mL",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "lt",
+          "specimenType": "serum"
+        },
+        {
+          "id": "lt-serum-ferritin-interval",
+          "rowId": "lt-serum-ferritin",
+          "text": "15–150",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "lt",
+          "specimenType": "serum"
+        },
+        {
+          "id": "lt-urine-glucose-label",
+          "rowId": "lt-urine-glucose",
+          "text": "Gliukozė (šlapimas)",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "lt",
+          "specimenType": "urine"
+        },
+        {
+          "id": "lt-urine-glucose-value",
+          "rowId": "lt-urine-glucose",
+          "text": "neigiama",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "lt",
+          "specimenType": "urine"
+        },
+        {
+          "id": "lt-urine-glucose-unit",
+          "rowId": "lt-urine-glucose",
+          "text": "qualitative",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "lt",
+          "specimenType": "urine"
+        },
+        {
+          "id": "lt-urine-glucose-interval",
+          "rowId": "lt-urine-glucose",
+          "text": "neigiama",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "lt",
+          "specimenType": "urine"
+        }
+      ],
+      "expected": [
+        {
+          "rowId": "lt-serum-ferritin",
+          "sourceObservationIds": [
+            "lt-serum-ferritin-label",
+            "lt-serum-ferritin-value",
+            "lt-serum-ferritin-unit",
+            "lt-serum-ferritin-interval"
+          ],
+          "sourceFactObservationIds": [
+            "lt-serum-ferritin-value",
+            "lt-serum-ferritin-unit",
+            "lt-serum-ferritin-interval"
+          ],
+          "biomarkerId": "biomarker.ferritin",
+          "role": "measurement",
+          "specimenType": "serum",
+          "sourceFacts": {
+            "valueString": "42",
+            "unit": "ng/mL",
+            "referenceInterval": "15–150"
+          }
+        },
+        {
+          "rowId": "lt-urine-glucose",
+          "sourceObservationIds": [
+            "lt-urine-glucose-label",
+            "lt-urine-glucose-value",
+            "lt-urine-glucose-unit",
+            "lt-urine-glucose-interval"
+          ],
+          "sourceFactObservationIds": [
+            "lt-urine-glucose-value",
+            "lt-urine-glucose-unit",
+            "lt-urine-glucose-interval"
+          ],
+          "biomarkerId": null,
+          "role": "specimen-context",
+          "specimenType": "urine",
+          "sourceFacts": {
+            "valueString": "neigiama",
+            "unit": "qualitative",
+            "referenceInterval": "neigiama"
+          }
+        }
+      ]
+    },
+    {
+      "id": "qwen-v1-pl-mixed",
+      "language": "pl",
+      "serializedInput": "{\"version\":\"alyte.semantic-ocr-chunk.v1\",\"locale\":\"pl\",\"pageIndex\":0,\"observations\":[{\"id\":\"pl-blood-hct-interval\",\"text\":\"36–46\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"pl-blood-hct-label\",\"text\":\"Hematokryt\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"pl-blood-hct-unit\",\"text\":\"%\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"pl-blood-hct-value\",\"text\":\"42\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"pl-plasma-triglycerides-interval\",\"text\":\"<1,7\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"pl-plasma-triglycerides-label\",\"text\":\"Triglicerydy\",\"alternatives\":[\"Triglicerydy w osoczu\"],\"pageIndex\":0},{\"id\":\"pl-plasma-triglycerides-unit\",\"text\":\"mmol/L\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"pl-plasma-triglycerides-value\",\"text\":\"1,7\",\"alternatives\":[\"1.7\"],\"pageIndex\":0}],\"knownBiomarkerIds\":[\"biomarker.hematocrit\",\"biomarker.triglycerides\"]}",
+      "observations": [
+        {
+          "id": "pl-blood-hct-label",
+          "rowId": "pl-blood-hct",
+          "text": "Hematokryt",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "pl",
+          "specimenType": "blood"
+        },
+        {
+          "id": "pl-blood-hct-value",
+          "rowId": "pl-blood-hct",
+          "text": "42",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "pl",
+          "specimenType": "blood"
+        },
+        {
+          "id": "pl-blood-hct-unit",
+          "rowId": "pl-blood-hct",
+          "text": "%",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "pl",
+          "specimenType": "blood"
+        },
+        {
+          "id": "pl-blood-hct-interval",
+          "rowId": "pl-blood-hct",
+          "text": "36–46",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "pl",
+          "specimenType": "blood"
+        },
+        {
+          "id": "pl-plasma-triglycerides-label",
+          "rowId": "pl-plasma-triglycerides",
+          "text": "Triglicerydy",
+          "alternatives": ["Triglicerydy w osoczu"],
+          "pageIndex": 0,
+          "locale": "pl",
+          "specimenType": "plasma"
+        },
+        {
+          "id": "pl-plasma-triglycerides-value",
+          "rowId": "pl-plasma-triglycerides",
+          "text": "1,7",
+          "alternatives": ["1.7"],
+          "pageIndex": 0,
+          "locale": "pl",
+          "specimenType": "plasma"
+        },
+        {
+          "id": "pl-plasma-triglycerides-unit",
+          "rowId": "pl-plasma-triglycerides",
+          "text": "mmol/L",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "pl",
+          "specimenType": "plasma"
+        },
+        {
+          "id": "pl-plasma-triglycerides-interval",
+          "rowId": "pl-plasma-triglycerides",
+          "text": "<1,7",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "pl",
+          "specimenType": "plasma"
+        }
+      ],
+      "expected": [
+        {
+          "rowId": "pl-blood-hct",
+          "sourceObservationIds": [
+            "pl-blood-hct-label",
+            "pl-blood-hct-value",
+            "pl-blood-hct-unit",
+            "pl-blood-hct-interval"
+          ],
+          "sourceFactObservationIds": [
+            "pl-blood-hct-value",
+            "pl-blood-hct-unit",
+            "pl-blood-hct-interval"
+          ],
+          "biomarkerId": "biomarker.hematocrit",
+          "role": "measurement",
+          "specimenType": "blood",
+          "sourceFacts": {
+            "valueString": "42",
+            "unit": "%",
+            "referenceInterval": "36–46"
+          }
+        },
+        {
+          "rowId": "pl-plasma-triglycerides",
+          "sourceObservationIds": [
+            "pl-plasma-triglycerides-label",
+            "pl-plasma-triglycerides-value",
+            "pl-plasma-triglycerides-unit",
+            "pl-plasma-triglycerides-interval"
+          ],
+          "sourceFactObservationIds": [
+            "pl-plasma-triglycerides-value",
+            "pl-plasma-triglycerides-unit",
+            "pl-plasma-triglycerides-interval"
+          ],
+          "biomarkerId": "biomarker.triglycerides",
+          "role": "measurement",
+          "specimenType": "plasma",
+          "sourceFacts": {
+            "valueString": "1,7",
+            "unit": "mmol/L",
+            "referenceInterval": "<1,7"
+          }
+        }
+      ]
+    },
+    {
+      "id": "qwen-v1-fr-mixed",
+      "language": "fr",
+      "serializedInput": "{\"version\":\"alyte.semantic-ocr-chunk.v1\",\"locale\":\"fr\",\"pageIndex\":0,\"observations\":[{\"id\":\"fr-serum-vitamin-d-interval\",\"text\":\"20–50\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"fr-serum-vitamin-d-label\",\"text\":\"Vitamine D totale\",\"alternatives\":[\"25-hydroxyvitamine D totale\"],\"pageIndex\":0},{\"id\":\"fr-serum-vitamin-d-unit\",\"text\":\"ng/mL\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"fr-serum-vitamin-d-value\",\"text\":\"31\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"fr-urine-glucose-interval\",\"text\":\"négatif\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"fr-urine-glucose-label\",\"text\":\"Glucose urinaire\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"fr-urine-glucose-unit\",\"text\":\"qualitative\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"fr-urine-glucose-value\",\"text\":\"négatif\",\"alternatives\":[],\"pageIndex\":0}],\"knownBiomarkerIds\":[\"biomarker.vitamin_d_total\"]}",
+      "observations": [
+        {
+          "id": "fr-serum-vitamin-d-label",
+          "rowId": "fr-serum-vitamin-d",
+          "text": "Vitamine D totale",
+          "alternatives": ["25-hydroxyvitamine D totale"],
+          "pageIndex": 0,
+          "locale": "fr",
+          "specimenType": "serum"
+        },
+        {
+          "id": "fr-serum-vitamin-d-value",
+          "rowId": "fr-serum-vitamin-d",
+          "text": "31",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "fr",
+          "specimenType": "serum"
+        },
+        {
+          "id": "fr-serum-vitamin-d-unit",
+          "rowId": "fr-serum-vitamin-d",
+          "text": "ng/mL",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "fr",
+          "specimenType": "serum"
+        },
+        {
+          "id": "fr-serum-vitamin-d-interval",
+          "rowId": "fr-serum-vitamin-d",
+          "text": "20–50",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "fr",
+          "specimenType": "serum"
+        },
+        {
+          "id": "fr-urine-glucose-label",
+          "rowId": "fr-urine-glucose",
+          "text": "Glucose urinaire",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "fr",
+          "specimenType": "urine"
+        },
+        {
+          "id": "fr-urine-glucose-value",
+          "rowId": "fr-urine-glucose",
+          "text": "négatif",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "fr",
+          "specimenType": "urine"
+        },
+        {
+          "id": "fr-urine-glucose-unit",
+          "rowId": "fr-urine-glucose",
+          "text": "qualitative",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "fr",
+          "specimenType": "urine"
+        },
+        {
+          "id": "fr-urine-glucose-interval",
+          "rowId": "fr-urine-glucose",
+          "text": "négatif",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "fr",
+          "specimenType": "urine"
+        }
+      ],
+      "expected": [
+        {
+          "rowId": "fr-serum-vitamin-d",
+          "sourceObservationIds": [
+            "fr-serum-vitamin-d-label",
+            "fr-serum-vitamin-d-value",
+            "fr-serum-vitamin-d-unit",
+            "fr-serum-vitamin-d-interval"
+          ],
+          "sourceFactObservationIds": [
+            "fr-serum-vitamin-d-value",
+            "fr-serum-vitamin-d-unit",
+            "fr-serum-vitamin-d-interval"
+          ],
+          "biomarkerId": "biomarker.vitamin_d_total",
+          "role": "measurement",
+          "specimenType": "serum",
+          "sourceFacts": {
+            "valueString": "31",
+            "unit": "ng/mL",
+            "referenceInterval": "20–50"
+          }
+        },
+        {
+          "rowId": "fr-urine-glucose",
+          "sourceObservationIds": [
+            "fr-urine-glucose-label",
+            "fr-urine-glucose-value",
+            "fr-urine-glucose-unit",
+            "fr-urine-glucose-interval"
+          ],
+          "sourceFactObservationIds": [
+            "fr-urine-glucose-value",
+            "fr-urine-glucose-unit",
+            "fr-urine-glucose-interval"
+          ],
+          "biomarkerId": null,
+          "role": "specimen-context",
+          "specimenType": "urine",
+          "sourceFacts": {
+            "valueString": "négatif",
+            "unit": "qualitative",
+            "referenceInterval": "négatif"
+          }
+        }
+      ]
+    },
+    {
+      "id": "qwen-v1-es-mixed",
+      "language": "es",
+      "serializedInput": "{\"version\":\"alyte.semantic-ocr-chunk.v1\",\"locale\":\"es\",\"pageIndex\":0,\"observations\":[{\"id\":\"es-blood-ast-interval\",\"text\":\"<35\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"es-blood-ast-label\",\"text\":\"AST\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"es-blood-ast-unit\",\"text\":\"U/L\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"es-blood-ast-value\",\"text\":\"22\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"es-plasma-b12-interval\",\"text\":\"200–900\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"es-plasma-b12-label\",\"text\":\"Vitamina B12 total\",\"alternatives\":[\"Cobalamina\"],\"pageIndex\":0},{\"id\":\"es-plasma-b12-unit\",\"text\":\"pg/mL\",\"alternatives\":[],\"pageIndex\":0},{\"id\":\"es-plasma-b12-value\",\"text\":\"410\",\"alternatives\":[],\"pageIndex\":0}],\"knownBiomarkerIds\":[\"biomarker.ast\",\"biomarker.vitamin_b12_total\"]}",
+      "observations": [
+        {
+          "id": "es-plasma-b12-label",
+          "rowId": "es-plasma-b12",
+          "text": "Vitamina B12 total",
+          "alternatives": ["Cobalamina"],
+          "pageIndex": 0,
+          "locale": "es",
+          "specimenType": "plasma"
+        },
+        {
+          "id": "es-plasma-b12-value",
+          "rowId": "es-plasma-b12",
+          "text": "410",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "es",
+          "specimenType": "plasma"
+        },
+        {
+          "id": "es-plasma-b12-unit",
+          "rowId": "es-plasma-b12",
+          "text": "pg/mL",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "es",
+          "specimenType": "plasma"
+        },
+        {
+          "id": "es-plasma-b12-interval",
+          "rowId": "es-plasma-b12",
+          "text": "200–900",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "es",
+          "specimenType": "plasma"
+        },
+        {
+          "id": "es-blood-ast-label",
+          "rowId": "es-blood-ast",
+          "text": "AST",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "es",
+          "specimenType": "blood"
+        },
+        {
+          "id": "es-blood-ast-value",
+          "rowId": "es-blood-ast",
+          "text": "22",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "es",
+          "specimenType": "blood"
+        },
+        {
+          "id": "es-blood-ast-unit",
+          "rowId": "es-blood-ast",
+          "text": "U/L",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "es",
+          "specimenType": "blood"
+        },
+        {
+          "id": "es-blood-ast-interval",
+          "rowId": "es-blood-ast",
+          "text": "<35",
+          "alternatives": [],
+          "pageIndex": 0,
+          "locale": "es",
+          "specimenType": "blood"
+        }
+      ],
+      "expected": [
+        {
+          "rowId": "es-plasma-b12",
+          "sourceObservationIds": [
+            "es-plasma-b12-label",
+            "es-plasma-b12-value",
+            "es-plasma-b12-unit",
+            "es-plasma-b12-interval"
+          ],
+          "sourceFactObservationIds": [
+            "es-plasma-b12-value",
+            "es-plasma-b12-unit",
+            "es-plasma-b12-interval"
+          ],
+          "biomarkerId": "biomarker.vitamin_b12_total",
+          "role": "measurement",
+          "specimenType": "plasma",
+          "sourceFacts": {
+            "valueString": "410",
+            "unit": "pg/mL",
+            "referenceInterval": "200–900"
+          }
+        },
+        {
+          "rowId": "es-blood-ast",
+          "sourceObservationIds": [
+            "es-blood-ast-label",
+            "es-blood-ast-value",
+            "es-blood-ast-unit",
+            "es-blood-ast-interval"
+          ],
+          "sourceFactObservationIds": [
+            "es-blood-ast-value",
+            "es-blood-ast-unit",
+            "es-blood-ast-interval"
+          ],
+          "biomarkerId": "biomarker.ast",
+          "role": "measurement",
+          "specimenType": "blood",
+          "sourceFacts": {
+            "valueString": "22",
+            "unit": "U/L",
+            "referenceInterval": "<35"
+          }
+        }
+      ]
+    }
+  ]
+}
