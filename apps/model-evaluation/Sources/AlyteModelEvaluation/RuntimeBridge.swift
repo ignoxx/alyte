@@ -19,9 +19,32 @@ public enum LlamaCppRuntimeBridge {
 public enum LlamaCppRuntimeError: Error, Equatable, Sendable {
     case unavailable
     case modelLoadFailed
-    case inferenceFailed
+    case inferenceFailed(status: Int32)
+    case tokenizationFailed
+    case promptDecodeFailed
+    case tokenDecodeFailed
     case outputLimitExceeded
     case inputLimitExceeded
+
+    // These values mirror the evaluator-only status codes in AlyteLlamaShim.c. Keep the
+    // diagnostics stage-only: prompts, model output, and provider/runtime logs never cross this
+    // boundary.
+    static func nativeGenerationError(for status: Int32) -> Self {
+        switch status {
+        case -2:
+            return .outputLimitExceeded
+        case -3:
+            return .inputLimitExceeded
+        case -4:
+            return .tokenizationFailed
+        case -5:
+            return .promptDecodeFailed
+        case -6:
+            return .tokenDecodeFailed
+        default:
+            return .inferenceFailed(status: status)
+        }
+    }
 }
 
 public final class LlamaCppRuntimeSession: @unchecked Sendable {
@@ -77,7 +100,7 @@ public final class LlamaCppRuntimeSession: @unchecked Sendable {
         outputCapacity: Int = 16_384
     ) throws -> String {
         #if ALYTE_LLAMA_EVAL
-        guard let session else { throw LlamaCppRuntimeError.inferenceFailed }
+        guard let session else { throw LlamaCppRuntimeError.inferenceFailed(status: -1) }
         guard outputCapacity > 0 else { throw LlamaCppRuntimeError.outputLimitExceeded }
         var output = [CChar](repeating: 0, count: outputCapacity)
         let result = prompt.withCString { promptText in
@@ -95,12 +118,8 @@ public final class LlamaCppRuntimeSession: @unchecked Sendable {
         case 0...:
             let bytes = output.prefix(Int(result)).map { UInt8(bitPattern: $0) }
             return String(decoding: bytes, as: UTF8.self)
-        case -2:
-            throw LlamaCppRuntimeError.outputLimitExceeded
-        case -3:
-            throw LlamaCppRuntimeError.inputLimitExceeded
         default:
-            throw LlamaCppRuntimeError.inferenceFailed
+            throw LlamaCppRuntimeError.nativeGenerationError(for: result)
         }
         #else
         _ = prompt

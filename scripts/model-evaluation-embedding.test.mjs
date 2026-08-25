@@ -11,6 +11,10 @@ const project = fs.readFileSync(
   'utf8',
 );
 const runner = fs.readFileSync('scripts/run-model-evaluation-device.sh', 'utf8');
+const llamaShim = fs.readFileSync(
+  'apps/model-evaluation/Sources/AlyteModelEvaluation/AlyteLlamaShim.c',
+  'utf8',
+);
 const hashScript = resolve('scripts/hash-unsigned-binary.sh');
 
 test('evaluator embeds the selected device framework slice, not the xcframework wrapper', () => {
@@ -48,6 +52,13 @@ test('device runner rejects a linked-but-unembedded or unsigned runtime before i
   );
   assert.match(runner, /codesign --verify --strict --verbose=2 "\$\{embedded_framework\}"/);
   assert.match(runner, /codesign --verify --deep --strict --verbose=2 "\$\{app_path\}"/);
+});
+
+test('native bridge honors llama token sizing and bounded prefill', () => {
+  assert.match(llamaShim, /required_probe < 0 \? -required_probe : required_probe/);
+  assert.match(llamaShim, /session->batch_tokens = batch_tokens/);
+  assert.match(llamaShim, /for \(int offset = 0; offset < prompt_count; \)/);
+  assert.match(llamaShim, /ALYTE_LLAMA_STATUS_PROMPT_DECODE_FAILED/);
 });
 
 test('binary identity hashing accepts normal signing representation but rejects tampering', () => {

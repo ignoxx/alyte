@@ -6,7 +6,17 @@
 #include <llama.h>
 
 #include <limits.h>
+#include <stdint.h>
 #include <string.h>
+
+enum {
+    ALYTE_LLAMA_STATUS_INVALID_ARGUMENT = -1,
+    ALYTE_LLAMA_STATUS_OUTPUT_LIMIT = -2,
+    ALYTE_LLAMA_STATUS_INPUT_LIMIT = -3,
+    ALYTE_LLAMA_STATUS_TOKENIZATION_FAILED = -4,
+    ALYTE_LLAMA_STATUS_PROMPT_DECODE_FAILED = -5,
+    ALYTE_LLAMA_STATUS_TOKEN_DECODE_FAILED = -6,
+};
 
 struct AlyteLlamaSession {
     struct llama_model *model;
@@ -14,6 +24,7 @@ struct AlyteLlamaSession {
     const struct llama_vocab *vocab;
     struct llama_sampler *sampler_chain;
     int context_tokens;
+    int batch_tokens;
 };
 
 static void alyte_llama_discard_log(enum ggml_log_level level, const char *text, void *user_data) {
@@ -31,14 +42,27 @@ static int alyte_llama_tokenize(
         return -1;
     }
 
-    int32_t required = llama_tokenize(vocab, text, (int32_t) text_length, NULL, 0, false, true);
-    if (required <= 0) {
-        return -1;
+    int32_t required_probe = llama_tokenize(
+        vocab,
+        text,
+        (int32_t) text_length,
+        NULL,
+        0,
+        false,
+        true);
+    // llama.cpp reports the required capacity as a negative count when the supplied buffer is
+    // too small. The null/zero-capacity sizing probe intentionally takes that path.
+    if (required_probe == INT32_MIN) {
+        return ALYTE_LLAMA_STATUS_TOKENIZATION_FAILED;
+    }
+    int32_t required = required_probe < 0 ? -required_probe : required_probe;
+    if (required <= 0 || (size_t) required > SIZE_MAX / sizeof(llama_token)) {
+        return ALYTE_LLAMA_STATUS_TOKENIZATION_FAILED;
     }
 
     llama_token *tokens = (llama_token *) malloc(sizeof(llama_token) * (size_t) required);
     if (tokens == NULL) {
-        return -1;
+        return ALYTE_LLAMA_STATUS_TOKENIZATION_FAILED;
     }
 
     int32_t count = llama_tokenize(
@@ -49,9 +73,9 @@ static int alyte_llama_tokenize(
         required,
         false,
         true);
-    if (count != required) {
+    if (count <= 0 || count > required) {
         free(tokens);
-        return -1;
+        return ALYTE_LLAMA_STATUS_TOKENIZATION_FAILED;
     }
 
     *tokens_out = tokens;
@@ -129,6 +153,7 @@ void *alyte_llama_session_create(
     session->vocab = vocab;
     session->sampler_chain = sampler_chain;
     session->context_tokens = context_tokens;
+    session->batch_tokens = batch_tokens;
     return (void *) session;
 }
 
@@ -141,7 +166,7 @@ int alyte_llama_session_generate(
     AlyteLlamaSession *session = (AlyteLlamaSession *) opaque_session;
     if (session == NULL || prompt == NULL || output == NULL || output_capacity == 0 ||
         max_output_tokens <= 0) {
-        return -1;
+        return ALYTE_LLAMA_STATUS_INVALID_ARGUMENT;
     }
     output[0] = '\0';
 
@@ -151,22 +176,38 @@ int alyte_llama_session_generate(
     llama_token *prompt_tokens = NULL;
     int prompt_count = alyte_llama_tokenize(session->vocab, prompt, &prompt_tokens);
     if (prompt_count <= 0) {
-        return -1;
+        return prompt_count == ALYTE_LLAMA_STATUS_TOKENIZATION_FAILED
+            ? ALYTE_LLAMA_STATUS_TOKENIZATION_FAILED
+            : ALYTE_LLAMA_STATUS_INVALID_ARGUMENT;
     }
     if (prompt_count + max_output_tokens >= session->context_tokens) {
         free(prompt_tokens);
-        return -3;
+        return ALYTE_LLAMA_STATUS_INPUT_LIMIT;
     }
 
-    struct llama_batch prompt_batch = llama_batch_get_one(prompt_tokens, prompt_count);
-    if (llama_decode(session->context, prompt_batch) != 0) {
-        free(prompt_tokens);
-        return -1;
+    // n_batch is the logical maximum accepted by llama_decode. Prefill in bounded chunks so a
+    // valid prompt below the context limit cannot fail merely because it exceeds that batch size.
+    for (int offset = 0; offset < prompt_count; ) {
+        int chunk_count = prompt_count - offset;
+        if (chunk_count > session->batch_tokens) {
+            chunk_count = session->batch_tokens;
+        }
+        struct llama_batch prompt_batch = llama_batch_get_one(prompt_tokens + offset, chunk_count);
+        if (llama_decode(session->context, prompt_batch) != 0) {
+            free(prompt_tokens);
+            return ALYTE_LLAMA_STATUS_PROMPT_DECODE_FAILED;
+        }
+        offset += chunk_count;
     }
 
     size_t output_length = 0;
     for (int index = 0; index < max_output_tokens; index += 1) {
         llama_token token = llama_sampler_sample(session->sampler_chain, session->context, -1);
+        if (token < 0) {
+            free(prompt_tokens);
+            output[0] = '\0';
+            return ALYTE_LLAMA_STATUS_TOKEN_DECODE_FAILED;
+        }
         if (llama_vocab_is_eog(session->vocab, token)) {
             break;
         }
@@ -176,7 +217,7 @@ int alyte_llama_session_generate(
         if (piece_length < 0 || output_length + (size_t) piece_length + 1 > output_capacity) {
             free(prompt_tokens);
             output[0] = '\0';
-            return -2;
+            return ALYTE_LLAMA_STATUS_OUTPUT_LIMIT;
         }
         memcpy(output + output_length, piece, (size_t) piece_length);
         output_length += (size_t) piece_length;
@@ -186,7 +227,7 @@ int alyte_llama_session_generate(
         if (llama_decode(session->context, next_batch) != 0) {
             free(prompt_tokens);
             output[0] = '\0';
-            return -1;
+            return ALYTE_LLAMA_STATUS_TOKEN_DECODE_FAILED;
         }
     }
 

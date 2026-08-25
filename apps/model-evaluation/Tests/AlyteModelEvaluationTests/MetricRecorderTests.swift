@@ -51,6 +51,25 @@ final class MetricRecorderTests: XCTestCase {
         }
     }
 
+    func testNativeGenerationFailureMappingKeepsOnlyBoundedStatus() {
+        XCTAssertEqual(
+            LlamaCppRuntimeError.nativeGenerationError(for: -4),
+            .tokenizationFailed
+        )
+        XCTAssertEqual(
+            LlamaCppRuntimeError.nativeGenerationError(for: -5),
+            .promptDecodeFailed
+        )
+        XCTAssertEqual(
+            LlamaCppRuntimeError.nativeGenerationError(for: -6),
+            .tokenDecodeFailed
+        )
+        XCTAssertEqual(
+            LlamaCppRuntimeError.nativeGenerationError(for: -99),
+            .inferenceFailed(status: -99)
+        )
+    }
+
     func testPinnedRuntimeEvaluationWritesAggregateOnlyWhenStaged() throws {
         guard configuredValue("ALYTE_MODEL_EVAL_DEVICE_RUN") == "1" else {
             return
