@@ -7,6 +7,7 @@ export type ParentTabNavigation = NavigationProp<MainTabParamList>;
 
 export type HomeQuickAction =
   | { readonly kind: 'import-report' }
+  | { readonly kind: 'continue-report'; readonly reportId: string }
   | { readonly kind: 'log-intake' }
   | { readonly kind: 'snap' }
   | { readonly kind: 'edit-intake'; readonly eventId: string };
@@ -30,6 +31,12 @@ export function dispatchHomeQuickAction(
       navigation
         .getParent<NavigationProp<RootStackParamList>>()
         ?.navigate(reportImportDestination.route);
+      return;
+    case 'continue-report':
+      navigation.navigate('Labs', {
+        screen: 'LabReportDetail',
+        params: { reportId: action.reportId },
+      });
       return;
     case 'log-intake':
       navigation.navigate('Log', { screen: 'IntakeEntry' });

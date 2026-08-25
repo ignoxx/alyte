@@ -9,7 +9,12 @@ import {
 } from '@alyte/domain';
 import type { IntakeCloudJob } from '../intake/outbox';
 import { intakeEventMenuActions } from '../intake/ui';
-import { buildHomeLabViewModel, homeHasLocalHistory, sortHomeTimeline } from './home-model';
+import {
+  buildHomeLabViewModel,
+  homeHasLocalHistory,
+  isUnfinishedLabReport,
+  sortHomeTimeline,
+} from './home-model';
 
 function event(
   id: string,
@@ -226,6 +231,59 @@ test('Quiet Home includes an open persisted Extraction Draft before a Lab Record
   assert.equal(model.latestReport?.measurementCount, 0);
   assert.equal(model.openDraftCount, 1);
   assert.equal(model.recentRecords.length, 0);
+});
+
+test('Home classifies an imported source without a confirmed Lab Record as unfinished', () => {
+  const imported = {
+    ...report('unfinished-report', 'missing-record', '2026-08-18'),
+    labRecordIds: [],
+  };
+  const model = buildHomeLabViewModel([imported], []);
+
+  assert.equal(isUnfinishedLabReport(imported), true);
+  assert.deepEqual(
+    model.unfinishedReports.map((item) => item.id),
+    ['unfinished-report'],
+  );
+  assert.deepEqual(
+    model.pendingImports.map((item) => item.id),
+    ['unfinished-report'],
+  );
+  assert.equal(model.latestReport?.measurementCount, 0);
+  assert.equal(model.measuredChanges.length, 0);
+});
+
+test('Home does not classify an imported source linked to a confirmed Lab Record as unfinished', () => {
+  const confirmed = report('confirmed-report', 'confirmed-record', '2026-08-18');
+  const record = labRecord('confirmed-record', '2026-08-18', [
+    measurement('confirmed-ldl', 'confirmed-record', 'biomarker.ldl_c', 110),
+  ]);
+  const model = buildHomeLabViewModel([confirmed], [record]);
+
+  assert.equal(isUnfinishedLabReport(confirmed), false);
+  assert.deepEqual(model.unfinishedReports, []);
+});
+
+test('Home keeps failed and interrupted sources actionable without treating them as measured', () => {
+  const failed = {
+    ...report('failed-report', 'missing-failed-record', '2026-08-18'),
+    importState: 'failed' as const,
+  };
+  const interrupted = {
+    ...report('interrupted-report', 'missing-interrupted-record', '2026-08-19'),
+    importState: 'interrupted' as const,
+  };
+  const model = buildHomeLabViewModel([failed, interrupted], []);
+
+  assert.deepEqual(
+    model.unfinishedReports.map((item) => item.id),
+    ['interrupted-report', 'failed-report'],
+  );
+  assert.deepEqual(
+    model.pendingImports.map((item) => item.id),
+    ['interrupted-report', 'failed-report'],
+  );
+  assert.equal(model.measuredChanges.length, 0);
 });
 
 test('Quiet Home keeps manual records in record history instead of report sections', () => {

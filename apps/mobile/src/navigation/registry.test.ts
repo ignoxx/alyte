@@ -145,12 +145,14 @@ test('Home quick actions dispatch to sibling tabs and preserve the Log edit push
   } as unknown as ParentTabNavigation;
 
   dispatchHomeQuickAction(navigation, { kind: 'import-report' });
+  dispatchHomeQuickAction(navigation, { kind: 'continue-report', reportId: 'report-42' });
   dispatchHomeQuickAction(navigation, { kind: 'log-intake' });
   dispatchHomeQuickAction(navigation, { kind: 'snap' });
   dispatchHomeQuickAction(navigation, { kind: 'edit-intake', eventId: 'event-42' });
 
   assert.deepEqual(calls, [
     ['ReportImport'],
+    ['Labs', { screen: 'LabReportDetail', params: { reportId: 'report-42' } }],
     ['Log', { screen: 'IntakeEntry' }],
     ['SnapCapture'],
     ['Log', { screen: 'IntakeEntry', params: { eventId: 'event-42' } }],

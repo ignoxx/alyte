@@ -41,6 +41,8 @@
     "directionDecreased": "decreased",
     "directionStable": "stable",
     "reviewWork": "Review work",
+    "continueReport": "Continue report",
+    "continueReportHint": "Open this Lab Report in Labs to continue its existing workflow.",
     "pendingImports": "{count} report(s) need attention",
     "pendingDrafts": "{count} extraction draft(s) need review",
     "pendingMeasurements": "{count} Measurement(s) need review",

@@ -105,14 +105,43 @@ function PendingWork({ model }: { readonly model: HomeLabViewModel }) {
   );
 }
 
+function ContinueReport({
+  report,
+  onPress,
+}: {
+  readonly report: NonNullable<HomeLabViewModel['unfinishedReports']>[number];
+  readonly onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityHint={t('home.continueReportHint')}
+      accessibilityLabel={`${t('home.continueReport')}: ${report.originalFilename}`}
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [styles.continueAction, pressed && styles.actionPressed]}
+    >
+      <AppIcon name="doc" size={22} />
+      <View style={styles.rowBody}>
+        <AppText variant="heading">{t('home.continueReport')}</AppText>
+        <AppText numberOfLines={2} style={styles.muted}>
+          {report.originalFilename}
+        </AppText>
+      </View>
+      <AppIcon name="chevronRight" size={16} />
+    </Pressable>
+  );
+}
+
 function PopulatedHome({
   model,
   locale,
   onImport,
+  onContinueReport,
 }: {
   readonly model: HomeLabViewModel;
   readonly locale: string;
   readonly onImport: () => void;
+  readonly onContinueReport: (reportId: string) => void;
 }) {
   const latest = model.latestReport;
   const latestRecord = model.recentRecords[0] ?? null;
@@ -132,6 +161,12 @@ function PopulatedHome({
         {t('home.measurementsCount').replace('{count}', String(latestItem.measurementCount))}
       </AppText>
       <View style={styles.rule} />
+      {model.unfinishedReports[0] !== undefined && (
+        <ContinueReport
+          onPress={() => onContinueReport(model.unfinishedReports[0]!.id)}
+          report={model.unfinishedReports[0]}
+        />
+      )}
       <PendingWork model={model} />
       {model.measuredChanges.length > 0 && (
         <View style={styles.section}>
@@ -218,6 +253,10 @@ export function HomeScreen() {
     dispatchHomeQuickActionFromStack(navigation, { kind: 'import-report' });
   }
 
+  function continueReport(reportId: string) {
+    dispatchHomeQuickActionFromStack(navigation, { kind: 'continue-report', reportId });
+  }
+
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
@@ -229,7 +268,12 @@ export function HomeScreen() {
           (model.latestReport === null && model.recentRecords.length === 0 ? (
             <EmptyHome onImport={openImport} />
           ) : (
-            <PopulatedHome locale={locale} model={model} onImport={openImport} />
+            <PopulatedHome
+              locale={locale}
+              model={model}
+              onContinueReport={continueReport}
+              onImport={openImport}
+            />
           ))}
         {error && (
           <Pressable accessibilityRole="button" onPress={() => void load()} style={styles.retry}>
@@ -273,6 +317,18 @@ const styles = StyleSheet.create({
   heroDate: { color: colors.ink },
   rule: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth },
   pendingWork: { gap: spacing.xs },
+  continueAction: {
+    alignItems: 'center',
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: 72,
+    paddingVertical: spacing.sm,
+  },
+  actionPressed: { backgroundColor: colors.accentSoft },
   changeRow: {
     alignItems: 'flex-end',
     borderBottomColor: colors.border,

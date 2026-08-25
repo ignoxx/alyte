@@ -50,6 +50,8 @@ export type HomeLabViewModel = {
   readonly latestReport: HomeReportRow | null;
   readonly recentReports: readonly HomeReportRow[];
   readonly recentRecords: readonly HomeReportRow[];
+  /** Source reports whose local import/review journey has not reached a confirmed Lab Record. */
+  readonly unfinishedReports: readonly LabReport[];
   readonly pendingImports: readonly LabReport[];
   readonly openDraftCount: number;
   readonly reviewCount: number;
@@ -90,6 +92,25 @@ function compareHomeRows(left: HomeReportRow, right: HomeReportRow): number {
   return right.id.localeCompare(left.id);
 }
 
+function compareUnfinishedReports(left: LabReport, right: LabReport): number {
+  const updatedOrder = right.updatedAt.localeCompare(left.updatedAt);
+  if (updatedOrder !== 0) return updatedOrder;
+  const createdOrder = right.createdAt.localeCompare(left.createdAt);
+  return createdOrder === 0 ? right.id.localeCompare(left.id) : createdOrder;
+}
+
+/**
+ * A Lab Report remains unfinished until its source/import state and confirmed record link say
+ * otherwise. This deliberately returns source state, rather than relabelling it as extracted or
+ * measured, so the existing Labs detail flow can choose retry, sanitization, extraction, or review.
+ */
+export function isUnfinishedLabReport(report: LabReport): boolean {
+  return (
+    report.importState !== 'deleted' &&
+    (report.importState !== 'imported' || report.labRecordIds.length === 0)
+  );
+}
+
 function latestPoints(
   points: readonly MeasuredTrendPoint[],
 ): { readonly previous: MeasuredTrendPoint; readonly latest: MeasuredTrendPoint } | null {
@@ -124,9 +145,10 @@ export function buildHomeLabViewModel(
     .slice(0, 3);
   const recentReports = reportRows.slice(0, 3);
   const latestReport = reportRows[0] ?? null;
-  const pendingImports = reports.filter(
-    (report) => report.importState !== 'imported' && report.importState !== 'deleted',
-  );
+  const unfinishedReports = reports.filter(isUnfinishedLabReport).sort(compareUnfinishedReports);
+  // Keep the existing pending-import read-model field useful to the Home summary: an imported
+  // source without a confirmed record is still pending the local laboratory journey.
+  const pendingImports = unfinishedReports;
   const reviewCount = records.reduce(
     (count, record) =>
       count +
@@ -159,6 +181,7 @@ export function buildHomeLabViewModel(
     latestReport,
     recentReports,
     recentRecords,
+    unfinishedReports,
     pendingImports,
     openDraftCount: Math.max(0, openDraftCount),
     reviewCount,
