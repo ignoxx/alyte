@@ -350,6 +350,7 @@ const verifiedImage: ImageSanitizedVerification = {
 class SanitizingImage {
   readonly sanitizedPaths: string[] = [];
   files: FakeFiles;
+  failSanitize = false;
 
   constructor(files: FakeFiles) {
     this.files = files;
@@ -360,6 +361,7 @@ class SanitizingImage {
   }
 
   async sanitize(_sourcePath: string, destinationPath: string): Promise<ImageSanitizationResult> {
+    if (this.failSanitize) throw new Error('synthetic replacement failure');
     this.sanitizedPaths.push(destinationPath);
     this.files.files.set(destinationPath, {
       hash: `image-artifact-${this.sanitizedPaths.length}`,
@@ -1894,6 +1896,126 @@ describe('protected Lab Report import lifecycle', () => {
       assert.equal(recognitionCalls, 0);
       assert.equal((await repository.getSanitizedReport(imported.id))?.verificationState, 'failed');
     }
+  });
+
+  test('invalidates image extraction drafts only after a successful derivative replacement or deletion', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const image = new SanitizingImage(files);
+    const ocr: VisionOCR = {
+      async recognize(): Promise<VisionOCRResult> {
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'draft-invalidation-ldl',
+              text: 'Blood LDL-C 3.8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.25, width: 0.45, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        });
+      },
+    };
+    const service = createService(repository, files, new FakePdf(), ocr, undefined, image);
+    const imported = (await service.importImages([source('draft-invalidation', 'image')]))[0]!
+      .report;
+    const first = await service.saveSanitizedReport(
+      imported.id,
+      (await service.openSanitizationEditor(imported.id)).recipe,
+    );
+    const firstDraft = await service.startExtraction(imported.id);
+
+    const secondRecipe = addRedaction(first.recipe, 0, {
+      id: 'draft-invalidation-redaction',
+      rect: { x: 0.2, y: 0.2, width: 0.15, height: 0.08 },
+      origin: 'user',
+      label: 'synthetic-private-region',
+    });
+    image.failSanitize = true;
+    await assert.rejects(
+      service.saveSanitizedReport(imported.id, secondRecipe),
+      /Sanitized Report could not be verified/,
+    );
+    assert.equal((await repository.getExtractionDraftForReport(imported.id))?.id, firstDraft.id);
+    assert.equal(await files.exists(first.artifactPath!), true);
+
+    image.failSanitize = false;
+    const second = await service.saveSanitizedReport(imported.id, secondRecipe);
+    assert.notEqual(second.artifactHash, first.artifactHash);
+    assert.equal(await repository.getExtractionDraftForReport(imported.id), null);
+    assert.equal(await repository.getExtractionDraft(firstDraft.id), null);
+    assert.equal(await files.exists(first.artifactPath!), false);
+
+    const replacementDraft = await service.startExtraction(imported.id);
+    assert.notEqual(replacementDraft.id, firstDraft.id);
+    await service.deleteSanitizedReport(imported.id);
+    assert.equal(await repository.getExtractionDraftForReport(imported.id), null);
+    assert.equal(await repository.getExtractionDraft(replacementDraft.id), null);
+    assert.equal(await files.exists(imported.originalPath!), true);
+  });
+
+  test('readiness fails closed for a malformed persisted verification and extraction remains retryable', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const image = new SanitizingImage(files);
+    const service = createService(
+      repository,
+      files,
+      new FakePdf(),
+      {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v2',
+            pageIndex: 0,
+            orientation: 0,
+            observations: [
+              {
+                id: 'readiness-ldl',
+                text: 'Blood LDL-C 3.8 mmol/L',
+                alternatives: [],
+                boundingBox: { x: 0.1, y: 0.25, width: 0.45, height: 0.04 },
+                pageIndex: 0,
+                orientation: 0,
+                recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+              },
+            ],
+          });
+        },
+      },
+      undefined,
+      image,
+    );
+    const imported = (await service.importImages([source('readiness-malformed', 'image')]))[0]!
+      .report;
+    const saved = await service.saveSanitizedReport(
+      imported.id,
+      (await service.openSanitizationEditor(imported.id)).recipe,
+    );
+    const draft = await service.startExtraction(imported.id);
+    await repository.updateSanitizedReport(saved.id, {
+      verification: {
+        ...saved.verification!,
+        verificationVersion: 'future-unsupported-version',
+      },
+    });
+
+    assert.deepEqual(await service.getExtractionReadiness(imported.id), {
+      ready: false,
+      status: 'unverified',
+    });
+    await assert.rejects(service.startExtraction(imported.id), (error: unknown) => {
+      assert.ok(error instanceof LabReportExtractionError);
+      assert.equal(error.reason, 'sanitized-source');
+      return true;
+    });
+    assert.equal((await repository.getExtractionDraftForReport(imported.id))?.id, draft.id);
+    assert.equal(await files.exists(saved.artifactPath!), true);
   });
 
   test('failed structural verification never exposes the derivative and preserves the original', async () => {

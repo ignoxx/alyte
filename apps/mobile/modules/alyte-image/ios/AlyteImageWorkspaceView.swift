@@ -28,7 +28,7 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   private let overlay = ImageRedactionOverlay()
   private var image: UIImage?
   private var regions: [ImageWorkspaceRedaction] = []
-  private var selectedID: String?
+  private var interactionState = AlyteImageWorkspaceInteractionState()
   private var history: [[ImageWorkspaceRedaction]] = []
   private var future: [[ImageWorkspaceRedaction]] = []
   private var startRegions: [ImageWorkspaceRedaction] = []
@@ -36,15 +36,33 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   private var labels: [String: String] = [:]
   private var deferredRegions: [ImageWorkspaceRedaction]?
   private var lastViewportSize = CGSize.zero
+  private var focusRegion: CGRect?
 
   var sourcePath = "" { didSet { if oldValue != sourcePath { load() } } }
-  var inspectionMode = false { didSet { if oldValue != inspectionMode { layoutRegions() } } }
+  var inspectionMode: Bool {
+    get { interactionState.inspectionMode }
+    set {
+      guard interactionState.inspectionMode != newValue else { return }
+      let hadSelection = selectedID != nil
+      interactionState.setInspectionMode(newValue)
+      if newValue {
+        activeGestureID = nil
+        startRegions.removeAll()
+        deferredRegions = nil
+      }
+      if hadSelection, newValue { onSelectionChange(["selected": false]) }
+      updateOverlayInteraction()
+      layoutRegions()
+    }
+  }
   var redactMode = false {
     didSet {
-      overlay.isUserInteractionEnabled = redactMode
+      updateOverlayInteraction()
       if !redactMode { clearSelection() }
     }
   }
+
+  private var selectedID: String? { interactionState.selectedID }
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -72,6 +90,10 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
     tap.require(toFail: doubleTap)
     overlay.addGestureRecognizer(tap)
+  }
+
+  private func updateOverlayInteraction() {
+    overlay.isUserInteractionEnabled = redactMode && !inspectionMode
   }
 
   override func layoutSubviews() {
@@ -113,7 +135,22 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     layoutRegions()
   }
 
+  func setFocusRegion(_ value: [String: Any]?) {
+    guard let value,
+      let x = (value["x"] as? NSNumber)?.doubleValue,
+      let y = (value["y"] as? NSNumber)?.doubleValue,
+      let width = (value["width"] as? NSNumber)?.doubleValue,
+      let height = (value["height"] as? NSNumber)?.doubleValue
+    else {
+      focusRegion = nil
+      return
+    }
+    focusRegion = CGRect(x: x, y: y, width: width, height: height)
+    focusStoredRegion()
+  }
+
   func undoEdit() {
+    guard !inspectionMode else { return }
     guard let previous = history.popLast() else { return }
     future.append(regions)
     regions = previous
@@ -123,6 +160,7 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   }
 
   func redoEdit() {
+    guard !inspectionMode else { return }
     guard let next = future.popLast() else { return }
     history.append(regions)
     regions = next
@@ -137,6 +175,7 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   }
 
   func removeSelected() {
+    guard !inspectionMode else { return }
     guard let selectedID, regions.contains(where: { $0.id == selectedID }) else { return }
     history.append(regions)
     future.removeAll()
@@ -178,12 +217,57 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     overlay.frame = imageView.bounds
     layoutRegions()
     centerImage()
+    focusStoredRegion()
   }
 
   private func centerImage() {
     let horizontal = max(0, (scrollView.bounds.width - scrollView.contentSize.width) / 2)
     let vertical = max(0, (scrollView.bounds.height - scrollView.contentSize.height) / 2)
     scrollView.contentInset = UIEdgeInsets(top: vertical, left: horizontal, bottom: vertical, right: horizontal)
+  }
+
+  private func focusStoredRegion() {
+    guard let focusRegion, imageView.bounds.width > 0, imageView.bounds.height > 0,
+      scrollView.bounds.width > 0, scrollView.bounds.height > 0
+    else { return }
+    let expanded = AlyteImageWorkspaceGeometry.focusRect(normalized: focusRegion)
+    let target = pageRect(expanded)
+    let targetScale = min(
+      scrollView.maximumZoomScale,
+      max(
+        scrollView.minimumZoomScale,
+        min(
+          scrollView.bounds.width / max(1, target.width),
+          scrollView.bounds.height / max(1, target.height)) * 0.82))
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.scrollView.setZoomScale(targetScale, animated: false)
+      self.centerImage()
+      let scaledCenter = CGPoint(
+        x: target.midX * self.scrollView.zoomScale,
+        y: target.midY * self.scrollView.zoomScale)
+      let visibleSize = CGSize(
+        width: self.scrollView.bounds.width,
+        height: self.scrollView.bounds.height)
+      let desired = CGPoint(
+        x: scaledCenter.x - visibleSize.width / 2,
+        y: scaledCenter.y - visibleSize.height / 2)
+      let minOffset = CGPoint(
+        x: -self.scrollView.contentInset.left,
+        y: -self.scrollView.contentInset.top)
+      let maxOffset = CGPoint(
+        x: max(
+          minOffset.x,
+          self.scrollView.contentSize.width - visibleSize.width + self.scrollView.contentInset.right),
+        y: max(
+          minOffset.y,
+          self.scrollView.contentSize.height - visibleSize.height + self.scrollView.contentInset.bottom))
+      self.scrollView.setContentOffset(
+        CGPoint(
+          x: min(max(desired.x, minOffset.x), maxOffset.x),
+          y: min(max(desired.y, minOffset.y), maxOffset.y)),
+        animated: false)
+    }
   }
 
   func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
@@ -271,7 +355,7 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   }
 
   @objc private func tapped(_ gesture: UITapGestureRecognizer) {
-    guard redactMode else { return }
+    guard redactMode, !inspectionMode else { return }
     let point = gesture.location(in: overlay)
     if let hit = overlay.subviews.reversed().first(where: {
       $0.frame.contains(point) && $0.accessibilityIdentifier != nil
@@ -299,7 +383,8 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   @objc private func resized(_ gesture: UIPanGestureRecognizer) { manipulate(gesture, resize: true) }
 
   private func manipulate(_ gesture: UIPanGestureRecognizer, resize: Bool) {
-    guard let id = gesture.name,
+    guard redactMode, !inspectionMode,
+      let id = gesture.name,
       let index = regions.firstIndex(where: { $0.id == id })
     else { return }
     if gesture.state == .began {
@@ -343,9 +428,10 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
 
   private func setSelection(_ id: String?) {
     let next = id.flatMap { candidate in regions.contains(where: { $0.id == candidate }) ? candidate : nil }
-    guard next != selectedID else { return }
-    selectedID = next
-    onSelectionChange(["selected": next != nil])
+    let previous = selectedID
+    interactionState.select(next)
+    guard selectedID != previous else { return }
+    onSelectionChange(["selected": selectedID != nil])
   }
 
   private func reconcileSelection() { setSelection(selectedID) }
@@ -366,7 +452,7 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
       action("moveDown", "Move down") { self.adjust(id: id, dx: 0, dy: 0.01, size: 0) },
       action("grow", "Grow") { self.adjust(id: id, dx: 0, dy: 0, size: 0.01) },
       action("shrink", "Shrink") { self.adjust(id: id, dx: 0, dy: 0, size: -0.01) },
-      action("remove", "Remove") { self.selectedID = id; self.removeSelected() },
+      action("remove", "Remove") { self.setSelection(id); self.removeSelected() },
     ]
   }
 
@@ -377,6 +463,7 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   }
 
   private func adjust(id: String, dx: CGFloat, dy: CGFloat, size: CGFloat) {
+    guard !inspectionMode else { return }
     guard let index = regions.firstIndex(where: { $0.id == id }) else { return }
     history.append(regions)
     future.removeAll()

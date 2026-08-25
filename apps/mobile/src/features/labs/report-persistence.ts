@@ -630,6 +630,20 @@ export function createLabReportRepository(
         createdAt,
         input.deletedAt ?? null,
       );
+      if (state === 'verified') {
+        // Extraction rows are proposals about one exact sanitized artifact. A newly
+        // verified derivative may have different crop/redactions/bytes, so remove the
+        // old proposal in the same transaction as the pointer replacement.
+        await database.runAsync(
+          `DELETE FROM extraction_draft_rows
+           WHERE draft_id IN (SELECT id FROM extraction_drafts WHERE report_id = ?);`,
+          input.reportId,
+        );
+        await database.runAsync(
+          'DELETE FROM extraction_drafts WHERE report_id = ?;',
+          input.reportId,
+        );
+      }
     });
     const saved = await getSanitizedReport(input.reportId);
     if (saved === null) throw new Error('Sanitized Report could not be read back');
@@ -710,11 +724,24 @@ export function createLabReportRepository(
   async function deleteSanitizedReport(id: string): Promise<void> {
     await initialize();
     await withWrite(async () => {
+      const rows = await database.getAllAsync<{ report_id: string }>(
+        'SELECT report_id FROM sanitized_report_derivatives WHERE id = ?;',
+        id,
+      );
       const result = await database.runAsync(
         'DELETE FROM sanitized_report_derivatives WHERE id = ?;',
         id,
       );
       if (result.changes !== 1) return;
+      const reportId = rows[0]?.report_id;
+      if (reportId !== undefined) {
+        await database.runAsync(
+          `DELETE FROM extraction_draft_rows
+           WHERE draft_id IN (SELECT id FROM extraction_drafts WHERE report_id = ?);`,
+          reportId,
+        );
+        await database.runAsync('DELETE FROM extraction_drafts WHERE report_id = ?;', reportId);
+      }
     });
   }
 

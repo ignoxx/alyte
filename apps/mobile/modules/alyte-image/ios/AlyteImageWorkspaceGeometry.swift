@@ -1,5 +1,26 @@
 import CoreGraphics
 
+public struct AlyteImageWorkspaceInteractionState {
+  public private(set) var inspectionMode: Bool
+  public private(set) var selectedID: String?
+
+  public init(inspectionMode: Bool = false, selectedID: String? = nil) {
+    self.inspectionMode = inspectionMode
+    self.selectedID = inspectionMode ? nil : selectedID
+  }
+
+  public var allowsMutation: Bool { !inspectionMode }
+
+  public mutating func setInspectionMode(_ enabled: Bool) {
+    inspectionMode = enabled
+    if enabled { selectedID = nil }
+  }
+
+  public mutating func select(_ id: String?) {
+    selectedID = inspectionMode ? nil : id
+  }
+}
+
 public enum AlyteImageWorkspaceGeometry {
   public static let minimumViewSize: CGFloat = 24
 
@@ -17,6 +38,13 @@ public enum AlyteImageWorkspaceGeometry {
       y: (viewRect.minY - pageFrame.minY) / pageFrame.height,
       width: viewRect.width / pageFrame.width,
       height: viewRect.height / pageFrame.height)
+  }
+
+  public static func focusRect(normalized rect: CGRect) -> CGRect {
+    let marginX = max(rect.width, 0.08)
+    let marginY = max(rect.height * 2, 0.08)
+    return rect.insetBy(dx: -marginX, dy: -marginY)
+      .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
   }
 
   public static func rotated(_ rect: CGRect, degrees: Int) -> CGRect {

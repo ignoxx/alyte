@@ -32,7 +32,6 @@ import {
   type PasswordRequest,
 } from './report-service';
 import type { LabReportPreview } from './report-service';
-import type { SanitizedReport } from '@alyte/domain';
 import { formatReportPageCount } from './report-detail-model';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
@@ -78,7 +77,7 @@ export function LabReportDetailScreen() {
   );
   const [preview, setPreview] = useState<LabReportPreview | null>(null);
   const [previewError, setPreviewError] = useState(false);
-  const [sanitizedReport, setSanitizedReport] = useState<SanitizedReport | null>(null);
+  const [extractionReady, setExtractionReady] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -87,10 +86,14 @@ export function LabReportDetailScreen() {
       setReport(next);
       if (next === null) {
         setIntegrity('missing');
-        setSanitizedReport(null);
+        setExtractionReady(false);
       } else {
         setIntegrity(await reports.verifySource(next.id));
-        setSanitizedReport(await reports.getSanitizedReport(next.id));
+        setExtractionReady(
+          next.importState === 'imported' && next.labRecordIds.length === 0
+            ? (await reports.getExtractionReadiness(next.id)).ready
+            : false,
+        );
       }
       setError(false);
     } catch {
@@ -179,21 +182,11 @@ export function LabReportDetailScreen() {
       setExtractionError(
         caught instanceof LabReportExtractionError ? caught.reason : 'recognition',
       );
-      setSanitizedReport(await reports.getSanitizedReport(report.id).catch(() => null));
+      setExtractionReady((await reports.getExtractionReadiness(report.id)).ready);
     } finally {
       setBusy(false);
     }
   }
-
-  const extractionReady =
-    report !== null &&
-    report.importState === 'imported' &&
-    report.labRecordIds.length === 0 &&
-    sanitizedReport?.verificationState === 'verified' &&
-    sanitizedReport.artifactPath !== null &&
-    sanitizedReport.artifactHash !== null &&
-    sanitizedReport.verification?.sourceAwareChecked === true &&
-    sanitizedReport.verification.sourceContentRemoved === true;
 
   function openMoreMenu() {
     const showDelete = () => confirmDelete();

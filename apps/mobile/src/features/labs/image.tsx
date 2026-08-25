@@ -89,6 +89,8 @@ type ImageWorkspaceProps = ViewProps & {
   readonly redactMode: boolean;
   /** Read-only source navigation mode: show the stored region without editable redaction chrome. */
   readonly inspectionMode?: boolean;
+  /** Normalized page-0 region to center and zoom when the workspace opens. */
+  readonly focusRegion?: RedactionRegion['rect'] | null;
   readonly redactions: readonly RedactionRegion[];
   readonly accessibilityLabels: Readonly<Record<string, string>>;
   readonly onRedactionsChange?: (event: { nativeEvent: NativeImageRedactionChange }) => void;

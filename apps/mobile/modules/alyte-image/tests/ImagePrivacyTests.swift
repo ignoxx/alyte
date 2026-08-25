@@ -113,4 +113,30 @@ final class ImagePrivacyTests: XCTestCase {
       sourceURL: source, destinationURL: blockedDestination, recipe: recipe(redactions: [redaction()])))
     XCTAssertFalse(FileManager.default.fileExists(atPath: blockedDestination.appendingPathExtension("partial").path))
   }
+
+  func testFocusRegionExpandsAndStaysWithinNormalizedImageBounds() {
+    let source = CGRect(x: 0.42, y: 0.46, width: 0.08, height: 0.03)
+    let focused = AlyteImageWorkspaceGeometry.focusRect(normalized: source)
+    XCTAssertLessThanOrEqual(focused.minX, source.minX)
+    XCTAssertLessThanOrEqual(focused.minY, source.minY)
+    XCTAssertGreaterThanOrEqual(focused.maxX, source.maxX)
+    XCTAssertGreaterThanOrEqual(focused.maxY, source.maxY)
+    XCTAssertGreaterThanOrEqual(focused.minX, 0)
+    XCTAssertGreaterThanOrEqual(focused.minY, 0)
+    XCTAssertLessThanOrEqual(focused.maxX, 1)
+    XCTAssertLessThanOrEqual(focused.maxY, 1)
+  }
+
+  func testInspectionModeClearsSelectionAndBlocksMutationSelection() {
+    var state = AlyteImageWorkspaceInteractionState(selectedID: "region-1")
+    XCTAssertTrue(state.allowsMutation)
+    state.setInspectionMode(true)
+    XCTAssertFalse(state.allowsMutation)
+    XCTAssertNil(state.selectedID)
+    state.select("region-2")
+    XCTAssertNil(state.selectedID)
+    state.setInspectionMode(false)
+    state.select("region-2")
+    XCTAssertEqual(state.selectedID, "region-2")
+  }
 }

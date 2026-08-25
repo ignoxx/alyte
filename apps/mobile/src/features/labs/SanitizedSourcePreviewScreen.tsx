@@ -86,6 +86,7 @@ export function SanitizedSourcePreviewScreen() {
         <AlyteImageWorkspace
           accessibilityLabel={`${t('labs.sanitizedExactCanvas')} ${route.params.pageIndex + 1}`}
           accessibilityLabels={{ redaction: t('labs.extractionSourceRegionLabel') }}
+          focusRegion={box}
           inspectionMode
           redactMode={false}
           redactions={[sourceRegion]}

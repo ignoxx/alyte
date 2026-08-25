@@ -476,6 +476,9 @@ public final class AlyteImageModule: Module {
       Prop("inspectionMode") { (view: AlyteImageWorkspaceView, enabled: Bool) in
         view.inspectionMode = enabled
       }
+      Prop("focusRegion") { (view: AlyteImageWorkspaceView, region: [String: Any]?) in
+        view.setFocusRegion(region)
+      }
       Prop("redactions") { (view: AlyteImageWorkspaceView, redactions: [[String: Any]]) in
         view.setRedactions(redactions)
       }
