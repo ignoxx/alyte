@@ -62,6 +62,7 @@ export type EvaluationAggregateReport = {
     'alyte.qwen-evaluation.aggregate.v1' | 'alyte.model-evaluation.aggregate.v1';
   readonly provenance: {
     readonly manifestVersion: string;
+    readonly promptBundleVersion?: string;
     readonly modelId: string;
     readonly modelRepository: string;
     readonly modelRevision: string;
@@ -228,6 +229,9 @@ export function buildAggregateReport(
     reportVersion,
     provenance: {
       manifestVersion: manifest.manifestVersion,
+      ...(manifest.promptBundleVersion === undefined
+        ? {}
+        : { promptBundleVersion: manifest.promptBundleVersion }),
       modelId: manifest.model.id,
       modelRepository: manifest.model.repository,
       modelRevision: manifest.model.revision,

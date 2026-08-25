@@ -81,13 +81,18 @@ final class MetricRecorderTests: XCTestCase {
         let prompt = EvaluationPrompt.render(
             fixture: fixture,
             schemaVersion: "alyte.semantic-mapper.v1",
-            chatTemplate: "gemma4-v1"
+            chatTemplate: "gemma4-v1",
+            promptBundleVersion: "alyte.gemma4-e2b-evaluation.prompt.v2"
         )
         XCTAssertTrue(prompt.hasPrefix("<bos><|turn>system\n"))
         XCTAssertTrue(prompt.contains("<|turn>user\nSchema version: alyte.semantic-mapper.v1. Locale: de."))
         XCTAssertTrue(prompt.hasSuffix("<|turn>model\n"))
         XCTAssertFalse(prompt.contains("<|im_start|>"))
         XCTAssertFalse(prompt.contains("<think>"))
+        XCTAssertTrue(prompt.contains("For each unambiguous physical measurement row, emit exactly one proposal."))
+        XCTAssertTrue(prompt.contains("Combine all relevant source observation IDs/cells from that row"))
+        XCTAssertTrue(prompt.contains("Never emit separate proposals for label, value, unit, or range cells"))
+        XCTAssertTrue(prompt.contains("omit that row rather than duplicate-consuming any source row"))
     }
 
     func testQwenPromptPathRetainsTheExistingChatMLTemplate() {
@@ -126,6 +131,12 @@ final class MetricRecorderTests: XCTestCase {
             try syntheticContract(
                 candidate: "gemma4",
                 runtimeRevision: "0000000000000000000000000000000000000000"
+            ).validate()
+        )
+        XCTAssertThrowsError(
+            try syntheticContract(
+                candidate: "gemma4",
+                promptBundleVersion: "alyte.gemma4-e2b-evaluation.prompt.v1"
             ).validate()
         )
         XCTAssertThrowsError(
@@ -203,7 +214,8 @@ private func syntheticContract(
     modelRepository: String? = nil,
     sourceModelRevision: String? = nil,
     runtimeRevision: String? = nil,
-    chatTemplateSource: String? = nil
+    chatTemplateSource: String? = nil,
+    promptBundleVersion: String? = nil
 ) -> EvaluationContract {
     let isGemma = candidate == "gemma4"
     let languageCodes = ["en", "de", "lt", "pl", "fr", "es"]
@@ -251,6 +263,9 @@ private func syntheticContract(
     return EvaluationContract(
         contractVersion: isGemma ? "alyte.gemma4-e2b-evaluation.contract.v1" : "alyte.qwen-evaluation.contract.v1",
         manifestVersion: isGemma ? "alyte.gemma4-e2b-evaluation.manifest.v1" : "alyte.qwen-evaluation.manifest.v1",
+        promptBundleVersion: isGemma
+            ? (promptBundleVersion ?? "alyte.gemma4-e2b-evaluation.prompt.v2")
+            : nil,
         fixtureVersion: "alyte.qwen-evaluation-fixtures.v1",
         schemaVersion: "alyte.semantic-mapper.v1",
         catalogueVersion: "synthetic-catalogue",

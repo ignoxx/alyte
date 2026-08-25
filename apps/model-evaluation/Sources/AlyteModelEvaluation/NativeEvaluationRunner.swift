@@ -2,6 +2,7 @@ import Foundation
 
 public struct NativeEvaluationReport: Codable, Equatable, Sendable {
     public let manifestVersion: String
+    public let promptBundleVersion: String?
     public let modelRepository: String
     public let modelRevision: String
     public let modelFilename: String
@@ -32,6 +33,7 @@ public struct NativeEvaluationReport: Codable, Equatable, Sendable {
 
     public init(
         manifestVersion: String,
+        promptBundleVersion: String?,
         modelRepository: String,
         modelRevision: String,
         modelFilename: String,
@@ -61,6 +63,7 @@ public struct NativeEvaluationReport: Codable, Equatable, Sendable {
         deviceMetrics: DeviceMetricSnapshot
     ) {
         self.manifestVersion = manifestVersion
+        self.promptBundleVersion = promptBundleVersion
         self.modelRepository = modelRepository
         self.modelRevision = modelRevision
         self.modelFilename = modelFilename
@@ -143,7 +146,8 @@ public enum NativeEvaluationRunner {
             let prompt = EvaluationPrompt.render(
                 fixture: fixture,
                 schemaVersion: contract.schemaVersion,
-                chatTemplate: contract.chatTemplate
+                chatTemplate: contract.chatTemplate,
+                promptBundleVersion: contract.promptBundleVersion
             )
             guard prompt.data(using: .utf8)?.count ?? .max <= contract.maxInputBytes else {
                 throw LlamaCppRuntimeError.inputLimitExceeded
@@ -175,6 +179,7 @@ public enum NativeEvaluationRunner {
         )
         return NativeEvaluationReport(
             manifestVersion: contract.manifestVersion,
+            promptBundleVersion: contract.promptBundleVersion,
             modelRepository: contract.model.repository,
             modelRevision: contract.model.revision,
             modelFilename: contract.model.filename,
@@ -211,10 +216,15 @@ enum EvaluationPrompt {
     static func render(
         fixture: CanonicalFixture,
         schemaVersion: String,
-        chatTemplate: String?
+        chatTemplate: String?,
+        promptBundleVersion: String? = nil
     ) -> String {
         if chatTemplate == "gemma4-v1" {
-            return gemma4Prompt(for: fixture, schemaVersion: schemaVersion)
+            return gemma4Prompt(
+                for: fixture,
+                schemaVersion: schemaVersion,
+                promptBundleVersion: promptBundleVersion
+            )
         }
         return legacyQwenPrompt(for: fixture, schemaVersion: schemaVersion)
     }
@@ -240,10 +250,18 @@ Select source IDs and propose only bounded semantic fields.<|im_end|>
     /// Exact text-only subset of Google's Gemma 4 template with reasoning disabled. The pinned
     /// llama.cpp revision exposes metadata lookup but does not provide Gemma 4's newer `<|turn>`
     /// template in its built-in apply API, so this reviewed template is bound explicitly.
-    private static func gemma4Prompt(for fixture: CanonicalFixture, schemaVersion: String) -> String {
+    private static func gemma4Prompt(
+        for fixture: CanonicalFixture,
+        schemaVersion: String,
+        promptBundleVersion: String?
+    ) -> String {
+        let rowGroupingInstructions = promptBundleVersion == "alyte.gemma4-e2b-evaluation.prompt.v2"
+            ? "For each unambiguous physical measurement row, emit exactly one proposal. Combine all relevant source observation IDs/cells from that row (including label, value, unit, and reference-range cells) into that single proposal. Never emit separate proposals for label, value, unit, or range cells belonging to one row. If grouping a row is ambiguous, omit that row rather than duplicate-consuming any source row."
+            : ""
         let system = """
 You are an offline semantic mapper. Return only the JSON object required by the grammar.
 Do not provide values, units, intervals, translations, explanations or medical copy.
+\(rowGroupingInstructions)
 """.trimmingCharacters(in: .whitespacesAndNewlines)
         let user = """
 Schema version: \(schemaVersion). Locale: \(fixture.language).

@@ -95,6 +95,7 @@ describe('evaluation scorer', () => {
     const report = buildAggregateReport(scores, [], gemmaEvaluationManifest);
     assert.equal(report.reportVersion, 'alyte.model-evaluation.aggregate.v1');
     assert.equal(report.provenance.manifestVersion, gemmaEvaluationManifest.manifestVersion);
+    assert.equal(report.provenance.promptBundleVersion, 'alyte.gemma4-e2b-evaluation.prompt.v2');
     assert.equal(report.provenance.modelFilename, 'gemma-4-E2B-it-Q4_0.gguf');
     assert.equal(report.provenance.sourceModelRepository, 'google/gemma-4-E2B-it');
     assert.equal(report.provenance.sourceModelRevision, '3e22461f65e89153144f8adb70e3b8c2cc9845a7');

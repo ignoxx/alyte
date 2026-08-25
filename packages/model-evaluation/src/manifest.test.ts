@@ -22,6 +22,10 @@ describe('evaluation candidate manifests', () => {
       '8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52',
     );
     assert.equal(gemmaEvaluationManifest.model.license, 'Apache-2.0');
+    assert.equal(
+      gemmaEvaluationManifest.promptBundleVersion,
+      'alyte.gemma4-e2b-evaluation.prompt.v2',
+    );
     assert.deepEqual(gemmaEvaluationManifest.sourceModel, {
       id: 'gemma-4-e2b-it',
       repository: 'google/gemma-4-E2B-it',
@@ -42,6 +46,15 @@ describe('evaluation candidate manifests', () => {
     };
     assert.throws(
       () => assertEvaluationCandidateManifest(tampered),
+      /unsupported_evaluation_candidate_manifest/,
+    );
+
+    const tamperedPromptBundle = {
+      ...gemmaEvaluationManifest,
+      promptBundleVersion: 'alyte.gemma4-e2b-evaluation.prompt.v1',
+    };
+    assert.throws(
+      () => assertEvaluationCandidateManifest(tamperedPromptBundle),
       /unsupported_evaluation_candidate_manifest/,
     );
   });

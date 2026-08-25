@@ -10,10 +10,13 @@ export const SEMANTIC_MAPPER_SCHEMA_VERSION = 'alyte.semantic-mapper.v1' as cons
 export const OCR_CHUNK_VERSION = 'alyte.semantic-ocr-chunk.v1' as const;
 export const GEMMA_EVALUATION_MANIFEST_VERSION = 'alyte.gemma4-e2b-evaluation.manifest.v1' as const;
 export const GEMMA_EVALUATION_CONTRACT_VERSION = 'alyte.gemma4-e2b-evaluation.contract.v1' as const;
+export const GEMMA_EVALUATION_PROMPT_BUNDLE_VERSION =
+  'alyte.gemma4-e2b-evaluation.prompt.v2' as const;
 
 export type EvaluationManifest = {
   readonly manifestVersion: string;
   readonly contractVersion?: string;
+  readonly promptBundleVersion?: string;
   readonly sourceModel?: {
     readonly id: string;
     readonly repository: string;
@@ -130,6 +133,7 @@ export type QwenEvaluationManifest = typeof qwenEvaluationManifest;
 export const gemmaEvaluationManifest = Object.freeze({
   manifestVersion: GEMMA_EVALUATION_MANIFEST_VERSION,
   contractVersion: GEMMA_EVALUATION_CONTRACT_VERSION,
+  promptBundleVersion: GEMMA_EVALUATION_PROMPT_BUNDLE_VERSION,
   sourceModel: Object.freeze({
     id: 'gemma-4-e2b-it',
     repository: 'google/gemma-4-E2B-it',
@@ -172,6 +176,7 @@ function candidateIdentity(manifest: EvaluationManifest): string {
   return JSON.stringify({
     contractVersion: manifest.contractVersion ?? QWEN_EVALUATION_CONTRACT_VERSION,
     manifestVersion: manifest.manifestVersion,
+    promptBundleVersion: manifest.promptBundleVersion ?? null,
     sourceModel: manifest.sourceModel ?? null,
     model: {
       id: manifest.model.id,

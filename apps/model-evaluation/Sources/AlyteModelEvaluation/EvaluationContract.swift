@@ -3,6 +3,7 @@ import Foundation
 struct EvaluationContract: Decodable, Sendable {
     let contractVersion: String
     let manifestVersion: String
+    let promptBundleVersion: String?
     let fixtureVersion: String
     let schemaVersion: String
     let catalogueVersion: String
@@ -64,6 +65,7 @@ struct EvaluationContract: Decodable, Sendable {
               sourceModel?.id == identity.sourceModelID,
               sourceModel?.repository == identity.sourceModelRepository,
               sourceModel?.revision == identity.sourceModelRevision,
+              promptBundleVersion == identity.promptBundleVersion,
               chatTemplate == identity.chatTemplate,
               chatTemplateSource == identity.chatTemplateSource else {
             throw EvaluationContractError.invalidContract
@@ -71,6 +73,7 @@ struct EvaluationContract: Decodable, Sendable {
         if let chatTemplate {
             guard chatTemplate == "gemma4-v1",
                   chatTemplateSource == "explicit-pinned-google-gemma-4-template-v1",
+                  promptBundleVersion == "alyte.gemma4-e2b-evaluation.prompt.v2",
                   contractVersion == "alyte.gemma4-e2b-evaluation.contract.v1" else {
                 throw EvaluationContractError.invalidContract
             }
@@ -146,6 +149,7 @@ private struct EvaluationCandidateIdentity {
     let runtimeRepository: String
     let runtimeRelease: String
     let runtimeRevision: String
+    let promptBundleVersion: String?
     let chatTemplate: String?
     let chatTemplateSource: String?
 
@@ -161,6 +165,7 @@ private struct EvaluationCandidateIdentity {
         runtimeRepository: String,
         runtimeRelease: String,
         runtimeRevision: String,
+        promptBundleVersion: String?,
         chatTemplate: String?,
         chatTemplateSource: String?
     ) {
@@ -175,6 +180,7 @@ private struct EvaluationCandidateIdentity {
         self.runtimeRepository = runtimeRepository
         self.runtimeRelease = runtimeRelease
         self.runtimeRevision = runtimeRevision
+        self.promptBundleVersion = promptBundleVersion
         self.chatTemplate = chatTemplate
         self.chatTemplateSource = chatTemplateSource
     }
@@ -194,6 +200,7 @@ private struct EvaluationCandidateIdentity {
                 runtimeRepository: "ggml-org/llama.cpp",
                 runtimeRelease: "v0.2.0",
                 runtimeRevision: "bb4caa7540188872173c44d161602d9271386413",
+                promptBundleVersion: nil,
                 chatTemplate: nil,
                 chatTemplateSource: nil
             )
@@ -210,6 +217,7 @@ private struct EvaluationCandidateIdentity {
                 runtimeRepository: "ggml-org/llama.cpp",
                 runtimeRelease: "v0.2.0",
                 runtimeRevision: "bb4caa7540188872173c44d161602d9271386413",
+                promptBundleVersion: "alyte.gemma4-e2b-evaluation.prompt.v2",
                 chatTemplate: "gemma4-v1",
                 chatTemplateSource: "explicit-pinned-google-gemma-4-template-v1"
             )

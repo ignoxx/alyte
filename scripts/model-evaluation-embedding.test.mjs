@@ -5,6 +5,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { assertAggregatePrivacy } from './model-evaluation-aggregate-scrub.mjs';
 
 const project = fs.readFileSync(
   'apps/model-evaluation/AlyteModelEvaluation.xcodeproj/project.pbxproj',
@@ -68,6 +69,8 @@ test('device runner selects the pinned candidate artifact and external contract'
   assert.match(runner, /model_revision="b4243c156154b6dca9324415f8c7ccc098b4aed1"/);
   assert.match(runner, /source_model_repository="google\/gemma-4-E2B-it"/);
   assert.match(runner, /source_model_revision="3e22461f65e89153144f8adb70e3b8c2cc9845a7"/);
+  assert.match(runner, /expected_prompt_bundle_version="alyte\.gemma4-e2b-evaluation\.prompt\.v2"/);
+  assert.match(runner, /contract_optional_field promptBundleVersion/);
   assert.match(runner, /runtime_repository="ggml-org\/llama\.cpp"/);
   assert.match(runner, /runtime_revision="bb4caa7540188872173c44d161602d9271386413"/);
   assert.match(runner, /contract_source_model_field/);
@@ -92,6 +95,32 @@ test('device runner separates CoreDevice and Xcode destination IDs and accepts c
   assert.match(runner, /details\.result\?\.hardwareProperties\?\.udid/);
   assert.match(runner, /--device "\$\{eval_device_coredevice_id\}"/);
   assert.match(runner, /-destination "id=\$\{eval_device_xcode_id\}"/);
+});
+
+test('aggregate privacy scrub allows aggregate metrics but rejects nested raw content', () => {
+  assert.doesNotThrow(() =>
+    assertAggregatePrivacy({
+      sourceFactsPreservedCount: 2,
+      nested: [{ reviewBurden: 10, label: 'aggregate-only' }],
+    }),
+  );
+  assert.throws(
+    () => assertAggregatePrivacy({ nested: [{ rawModelOutput: '{}' }] }),
+    /forbidden field/,
+  );
+  assert.throws(
+    () => assertAggregatePrivacy({ nested: { sourceObservationIds: ['synthetic-id'] } }),
+    /forbidden field/,
+  );
+  assert.throws(
+    () => assertAggregatePrivacy({ nested: { promptText: 'not retained' } }),
+    /forbidden field/,
+  );
+  assert.throws(
+    () => assertAggregatePrivacy({ nested: { status: 'prefix <|turn> suffix' } }),
+    /chat control marker/,
+  );
+  assert.throws(() => assertAggregatePrivacy({ sourceFactsPreservedCount: '2' }), /invalid shape/);
 });
 
 test('native bridge honors llama token sizing and bounded prefill', () => {

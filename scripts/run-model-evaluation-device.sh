@@ -24,6 +24,7 @@ case "${candidate}" in
     source_model_revision=""
     expected_contract_version="alyte.qwen-evaluation.contract.v1"
     expected_manifest_version="alyte.qwen-evaluation.manifest.v1"
+    expected_prompt_bundle_version=""
     runtime_repository="ggml-org/llama.cpp"
     runtime_revision="bb4caa7540188872173c44d161602d9271386413"
     expected_chat_template=""
@@ -41,6 +42,7 @@ case "${candidate}" in
     source_model_revision="3e22461f65e89153144f8adb70e3b8c2cc9845a7"
     expected_contract_version="alyte.gemma4-e2b-evaluation.contract.v1"
     expected_manifest_version="alyte.gemma4-e2b-evaluation.manifest.v1"
+    expected_prompt_bundle_version="alyte.gemma4-e2b-evaluation.prompt.v2"
     runtime_repository="ggml-org/llama.cpp"
     runtime_revision="bb4caa7540188872173c44d161602d9271386413"
     expected_chat_template="gemma4-v1"
@@ -93,6 +95,7 @@ if [[ "$(contract_field contractVersion)" != "${expected_contract_version}" ||
       "$(contract_source_model_field id)" != "${source_model_id}" ||
       "$(contract_source_model_field repository)" != "${source_model_repository}" ||
       "$(contract_source_model_field revision)" != "${source_model_revision}" ||
+      "$(contract_optional_field promptBundleVersion)" != "${expected_prompt_bundle_version}" ||
       "$(contract_optional_field chatTemplate)" != "${expected_chat_template}" ||
       "$(contract_optional_field chatTemplateSource)" != "${expected_chat_template_source}" ]]; then
   print -u2 "Evaluation contract provenance does not match candidate ${candidate}"
@@ -389,15 +392,4 @@ if [[ ! -s "${aggregate_path}" ]]; then
   print -u2 "Device evaluation did not return a non-empty aggregate report"
   exit 2
 fi
-node - "${aggregate_path}" <<'NODE'
-const fs = require('node:fs');
-const path = process.argv[2];
-const report = JSON.parse(fs.readFileSync(path, 'utf8'));
-const serialized = JSON.stringify(report);
-if (serialized.includes('<|im_start|>') || serialized.includes('<|turn>') || serialized.includes('<bos>') || serialized.includes('sourceFacts') || serialized.includes('rawModelOutput')) {
-  throw new Error('aggregate report contains forbidden raw evaluation content');
-}
-if (!report.deviceMetrics || typeof report.fixtureCount !== 'number' || typeof report.expectedRowCount !== 'number') {
-  throw new Error('aggregate report is missing required evaluation metrics');
-}
-NODE
+node "${repo_root}/scripts/model-evaluation-aggregate-scrub.mjs" "${aggregate_path}"

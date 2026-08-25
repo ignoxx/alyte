@@ -24,6 +24,7 @@ export const MODEL_EVALUATION_CONTRACT_VERSION = QWEN_EVALUATION_CONTRACT_VERSIO
 export type CanonicalEvaluationContract = {
   readonly contractVersion: string;
   readonly manifestVersion: string;
+  readonly promptBundleVersion?: string;
   readonly fixtureVersion: typeof MODEL_EVALUATION_FIXTURE_VERSION;
   readonly schemaVersion: typeof SEMANTIC_MAPPER_SCHEMA_VERSION;
   readonly catalogueVersion: typeof CATALOGUE_VERSION;
@@ -152,6 +153,9 @@ export function createCanonicalEvaluationContract(
   return {
     contractVersion: manifest.contractVersion ?? MODEL_EVALUATION_CONTRACT_VERSION,
     manifestVersion: manifest.manifestVersion,
+    ...(manifest.promptBundleVersion === undefined
+      ? {}
+      : { promptBundleVersion: manifest.promptBundleVersion }),
     fixtureVersion: MODEL_EVALUATION_FIXTURE_VERSION,
     schemaVersion: SEMANTIC_MAPPER_SCHEMA_VERSION,
     catalogueVersion: CATALOGUE_VERSION,

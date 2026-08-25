@@ -19,7 +19,11 @@ greedy sampling, and only `sourceObservationIds`, a bounded semantic role, a kno
 and a known catalogue Biomarker ID in model output. `validateEvaluationOutput` is the TypeScript
 acceptance boundary, and the native target applies the same contract-driven acceptance rules before
 retaining aggregate counts. Values, units, intervals, conversions, translations, and medical copy
-remain source/deterministic data.
+remain source/deterministic data. Gemma attempt 2 is identified by the immutable
+`alyte.gemma4-e2b-evaluation.prompt.v2` bundle in its contract and aggregate provenance; its only
+instruction change requires one proposal per unambiguous physical measurement row and combines all
+source cells for that row. The safe attempt-1 result and its review-burden rationale are recorded
+in `docs/evidence/issue-66/README.md`.
 
 Model weights are intentionally absent. Operators stage the exact candidate GGUF in an external,
 task-specific cache and verify its size and SHA-256 before installing the evaluation target.

@@ -40,6 +40,7 @@ describe('canonical native evaluation contract', () => {
     const gemma = createCanonicalEvaluationContract(gemmaEvaluationManifest);
     assert.equal(qwen.contractVersion, 'alyte.qwen-evaluation.contract.v1');
     assert.equal(gemma.contractVersion, 'alyte.gemma4-e2b-evaluation.contract.v1');
+    assert.equal(gemma.promptBundleVersion, 'alyte.gemma4-e2b-evaluation.prompt.v2');
     assert.equal(gemma.manifestVersion, gemmaEvaluationManifest.manifestVersion);
     assert.equal(gemma.model.repository, 'ggml-org/gemma-4-E2B-it-GGUF');
     assert.equal(gemma.model.filename, 'gemma-4-E2B-it-Q4_0.gguf');
@@ -54,6 +55,7 @@ describe('canonical native evaluation contract', () => {
     });
     assert.equal(gemma.chatTemplate, 'gemma4-v1');
     assert.equal(gemma.chatTemplateSource, 'explicit-pinned-google-gemma-4-template-v1');
+    assert.equal(qwen.promptBundleVersion, undefined);
     assert.deepEqual(
       gemma.fixtures.map((fixture) => fixture.id),
       qwen.fixtures.map((fixture) => fixture.id),
