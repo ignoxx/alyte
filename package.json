@@ -22,12 +22,13 @@
     "build": "npm run build --workspace=@alyte/contracts && npm run build --workspace=@alyte/api",
     "test": "npm run build --workspace=@alyte/contracts && npm run test --workspaces --if-present && npm run test:contracts-build",
     "test:contracts-build": "node --test scripts/contracts-build.test.mjs",
+    "test:mobile-bundle": "node scripts/mobile-bundle.test.mjs",
     "test:boundaries": "node --test scripts/boundaries.test.mjs",
     "test:showcase": "tsx --test scripts/showcase.test.ts",
     "test:native:protection": "bash scripts/run-native-protection-tests.sh",
     "contract:check": "npm run build --workspace=@alyte/contracts && npm run contract:check --workspace=@alyte/contracts",
     "ios:config:check": "node scripts/check-expo-config.mjs",
-    "ci": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test && npm run test:boundaries && npm run test:showcase && npm run contract:check && npm run ios:config:check"
+    "ci": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test && npm run test:mobile-bundle && npm run test:boundaries && npm run test:showcase && npm run contract:check && npm run ios:config:check"
   },
   "devDependencies": {
     "@types/node": "26.2.0",

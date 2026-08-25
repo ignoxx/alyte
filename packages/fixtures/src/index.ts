@@ -79,7 +79,7 @@ export {
   type MetabolicLabReportFixture,
   type SyntheticOCRObservation,
   type SyntheticLabSpecimen,
-} from './metabolic-lab-reports.js';
+} from './metabolic-lab-reports';
 export {
   bloodLiverLabReportFixtures,
   bloodLiverSafetyReportFixture,
@@ -88,4 +88,4 @@ export {
   type BloodLiverFixtureSpecimen,
   type BloodLiverLabReportFixture,
   type BloodLiverOCRObservation,
-} from './blood-liver-lab-reports.js';
+} from './blood-liver-lab-reports';
