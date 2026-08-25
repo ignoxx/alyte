@@ -123,9 +123,9 @@ headroom rather than treating it as abuse.
   or routing controls to users at launch.
 - Core local functionality does not require Apple Intelligence or a model bundled in the App Store
   binary. PDFKit, Vision recognition, privacy review, existing history, charts, reviewed content,
-  record management, manual entry, and export remain account-free and available before a model is
-  installed. A verified local semantic model pack is required before a person starts a new
-  automated Lab Report extraction.
+  record management, manual entry, and export remain account-free. Alyte requires one verified
+  local semantic model pack to complete first-launch onboarding, while later pack deletion affects
+  only new automated Lab Report extraction and never removes access to existing local records.
 - The first release supports one Alyte-recommended pack: Qwen 3.5 0.8B. Alyte downloads its exact
   allowlisted file only after installation from a public, ungated Hugging Face repository at a
   pinned commit; model weights are never bundled with the app. The app shows the model, publisher,
@@ -133,12 +133,13 @@ headroom rather than treating it as abuse.
   expected SHA-256 before activation. It does not ask for or embed a Hugging Face account token,
   use a gated model, silently follow a moving branch such as `main`, or expose an experimental
   model picker.
-- Onboarding may offer the free model download but always permits `Skip for now`. If no verified
-  pack is installed when the person first requests automated extraction, Alyte presents the same
-  download disclosure as a contextual gate and begins extraction only after activation. Offline,
-  failed, or insufficient-space downloads remain retryable without blocking access to the rest of
-  the local app. After extraction begins, an inference/runtime failure falls back to Vision
-  structure, locale parsing, aliases, deterministic validation, and focused review.
+- Onboarding presents Qwen 3.5 0.8B as the sole first-release model choice and requires the person
+  to select, download, verify, and activate it before entering Alyte. There is no skip, account, or
+  paywall gate. Offline, cancelled, failed, or insufficient-space downloads remain in the download
+  step with a safe retry. If the pack is deleted later, Alyte presents the same disclosure as a
+  contextual reinstall gate before new automated extraction while existing local history remains
+  usable. After extraction begins, an inference/runtime failure falls back to Vision structure,
+  locale parsing, aliases, deterministic validation, and focused review.
 
 ## Laboratory-history model
 
@@ -592,16 +593,19 @@ messages, medication reminders, biomarker warnings, and inferred-health alerts a
 
 ## Onboarding and support
 
-- First launch uses at most four concise screens: the product promise; local-first/no-account
-  privacy; the need to verify imports and distinguish measured results from general research; and
-  the optional paid cloud boundary plus adult-only/non-diagnostic scope.
-- Onboarding leads directly into the local app and never forces account creation or a paywall.
+- First launch uses a concise sequence covering the product promise; local-first/no-account
+  privacy; the need to verify imports and distinguish measured results from general research; the
+  optional paid cloud boundary plus adult-only/non-diagnostic scope; and the required local model
+  selection/download.
+- Onboarding leads directly into the local app after the model pack verifies and never forces
+  account creation or a paywall.
 - The already-shipped onboarding is not presumed final: the release pass must verify that each
   screen earns its place and emphasizes the two-report outcome over implementation details.
-- Onboarding may disclose and offer the Qwen 3.5 0.8B download, including its source, license, size,
-  and device-space requirement, but `Skip for now` enters the OCR-only local app. The download
-  becomes required contextually when the person first starts automated Lab Report extraction.
-  Permissions, account creation, and payment remain deferred until contextually needed.
+- Onboarding discloses Qwen 3.5 0.8B's source, publisher, license, download size, and device-space
+  requirement, then requires explicit selection and a verified download. Qwen is the only
+  first-release option, but the selection step keeps the model-pack boundary explicit; it is not a
+  public multi-model picker. Permissions, account creation, and payment remain deferred until
+  contextually needed.
 - Detailed teaching is contextual and appears when the person first imports, verifies, analyzes,
   or explores evidence rather than lengthening the opening tour.
 - Settings provides clear Contact, Feedback, and Billing Help actions for complaints or assistance.

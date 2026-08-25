@@ -295,11 +295,11 @@ Cloud Plus passes Gate C.
 5. **Candidate extraction** — Vision document/tables, measurement filtering, locale parsing,
    Lithuanian fixtures, per-section specimen context, deterministic validation, a provider-neutral
    semantic mapper, and structured-fixture Qwen 3.5 0.8B feasibility evaluation through #50.
-6. **Required extraction model pack** — no bundled weights; onboarding offer with `Skip for now`;
-   contextual download gate before first automated extraction; direct public/ungated Hugging Face
-   download from an immutable revision; reviewed manifest/license, checksum verification, and
-   storage/load/delete lifecycle through #51; followed by constrained extraction integration and
-   deterministic inference-failure fallback through #52.
+6. **Required extraction model pack** — no bundled weights; explicit selection and verified Qwen
+   3.5 0.8B download before onboarding completes; contextual reinstall gate after later deletion;
+   direct public/ungated Hugging Face download from an immutable revision; reviewed
+   manifest/license, checksum verification, and storage/load/delete lifecycle through #51; followed
+   by constrained extraction integration and deterministic inference-failure fallback through #52.
 7. **Laboratory history and review** — compact draft, Reports, Records, Measurements, manual entry,
    source inspection, correction, provenance.
 8. **Comparison** — canonical aliases, units, trends, missing/incompatible behavior.
