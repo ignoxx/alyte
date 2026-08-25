@@ -19,6 +19,7 @@ import {
   canonicalId,
   convertComparableValue,
   decodeVisionOCRResult,
+  EXTRACTION_PARSER_VERSION,
   groupObservationsIntoRows,
   parseLabDate,
   revalidateExtractionRow,
@@ -554,7 +555,7 @@ describe('protected Lab Report import lifecycle', () => {
         reportId: `${fixture.id}-source`,
         state: 'draft' as const,
         ocrContractVersion: 'alyte.vision.document.v2' as const,
-        parserVersion: 'alyte.local-parser.v2' as const,
+        parserVersion: EXTRACTION_PARSER_VERSION,
         collectionDate,
         rows,
         createdAt: '2026-08-20T00:00:00.000Z',
@@ -799,11 +800,17 @@ describe('protected Lab Report import lifecycle', () => {
       assert.equal(rowByObservation.has(excludedObservationId), false, excludedObservationId);
     }
 
-    // A row containing sibling analyte aliases is retained for provenance but cannot be included
-    // until the person resolves it; this mirrors the compact review's fail-closed action.
-    await service.updateExtractionRow(rowByObservation.get('safety-ambiguous-sibling')!.id, {
-      decision: 'skip',
-    });
+    // Rows with a confirmation-blocking exception remain available for review but must be
+    // explicitly excluded before this fixture can be confirmed.
+    for (const observationId of [
+      'safety-incompatible-unit',
+      'safety-ambiguous-sibling',
+      'safety-incompatible-ast-unit',
+    ]) {
+      await service.updateExtractionRow(rowByObservation.get(observationId)!.id, {
+        decision: 'skip',
+      });
+    }
 
     const records = await service.confirmExtraction(draft.id);
     const mcvTrend = buildMeasuredTrend(
@@ -1035,6 +1042,37 @@ describe('protected Lab Report import lifecycle', () => {
     assert.deepEqual(draft.rows[0]?.proposedValue, { kind: 'numeric', value: 9.839 });
     assert.equal(draft.rows[0]?.proposedUnit, null);
     assert.ok(draft.rows[0]?.reviewReasons.includes('missing-unit'));
+    assert.equal(draft.rows[0]?.decision, 'unresolved');
+    await assert.rejects(service.confirmExtraction(draft.id), /unresolved required fields/);
+  });
+
+  test('does not confirm an extracted value with a biomarker-incompatible unit', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const service = createService(repository, files, sanitizingPdf(files), {
+      async recognize(): Promise<VisionOCRResult> {
+        return {
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'incompatible-unit-row',
+              text: 'LDL-C 3.8 g/L',
+              alternatives: [],
+              boundingBox: { x: 0.12, y: 0.42, width: 0.69, height: 0.03 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        };
+      },
+    });
+    const report = (await service.importPdf(source('incompatible-unit')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+    const draft = await service.startExtraction(report.id);
+    assert.ok(draft.rows[0]?.reviewReasons.includes('incompatible-unit'));
     assert.equal(draft.rows[0]?.decision, 'unresolved');
     await assert.rejects(service.confirmExtraction(draft.id), /unresolved required fields/);
   });

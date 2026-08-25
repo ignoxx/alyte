@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import {
   canonicalId,
   createSanitizationRecipe,
+  EXTRACTION_PARSER_VERSION,
   groupObservationsIntoRows,
   type ExtractionAliasEntry,
 } from '@alyte/domain';
@@ -230,6 +231,72 @@ describe('protected manual Lab Record persistence', () => {
       'Synthetic lipid panel',
     );
     await relaunched.repository.close();
+  });
+
+  test('revalidates open drafts created by the previous parser policy before confirmation', async () => {
+    const { repository, database } = createRepository();
+    await repository.createReport({
+      id: 'report-stale-parser',
+      sourceType: 'image',
+      originalFilename: 'synthetic-stale-parser.png',
+      mimeType: 'image/png',
+      importState: 'imported',
+      originalPath: 'protected://original/synthetic-stale-parser.png',
+      sourceHash: 'synthetic-stale-parser-hash',
+      pageCount: 1,
+    });
+    const aliases: readonly ExtractionAliasEntry[] = [
+      {
+        id: 'biomarker.triglycerides',
+        aliases: ['Triglycerides'],
+        specimens: ['blood', 'unknown'],
+        units: ['mmol/L'],
+      },
+    ];
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'stale-source',
+          text: 'Triglycerides 9.839 8.3 mmol/L',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.7, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+      ],
+      { aliases, collectionDate: { kind: 'known', value: '2026-08-20' }, specimenType: 'blood' },
+    );
+    assert.ok(row);
+    const draft = await repository.createExtractionDraft({
+      id: 'stale-parser-draft',
+      reportId: 'report-stale-parser',
+      collectionDate: { kind: 'known', value: '2026-08-20' },
+      rows: [{ ...row, reviewReasons: [], reviewState: 'ready', decision: 'resolve' }],
+    });
+    await database.runAsync(
+      'UPDATE extraction_drafts SET parser_version = ? WHERE id = ?;',
+      'alyte.local-parser.v2',
+      draft.id,
+    );
+
+    await assert.rejects(
+      repository.confirmExtractionDraft(draft.id, aliases),
+      /unresolved required fields/,
+    );
+    const reopened = await repository.getExtractionDraft(draft.id, aliases);
+    assert.equal(reopened?.parserVersion, EXTRACTION_PARSER_VERSION);
+    assert.ok(reopened?.rows[0]?.reviewReasons.includes('unsupported-layout'));
+    assert.equal(reopened?.rows[0]?.decision, 'unresolved');
+    assert.equal(
+      (
+        await database.getAllAsync<{ parser_version: string }>(
+          'SELECT parser_version FROM extraction_drafts WHERE id = ?;',
+          draft.id,
+        )
+      )[0]?.parser_version,
+      EXTRACTION_PARSER_VERSION,
+    );
   });
 
   test('includes valid extraction by default and keeps source provenance through correction', async () => {

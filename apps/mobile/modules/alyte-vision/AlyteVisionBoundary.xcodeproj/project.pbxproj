@@ -1,0 +1,81 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A65000000000000000000001 /* AlyteVisionObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A65000000000000000000011 /* AlyteVisionObservation.swift */; };
+		A65000000000000000000002 /* AlyteVisionObservationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A65000000000000000000012 /* AlyteVisionObservationTests.swift */; };
+		A65000000000000000000003 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A65000000000000000000021 /* Vision.framework */; };
+		A65000000000000000000004 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A65000000000000000000022 /* UIKit.framework */; };
+		A65000000000000000000005 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A65000000000000000000023 /* XCTest.framework */; };
+		A65000000000000000000006 /* AlyteVisionBoundary.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A65000000000000000000024 /* AlyteVisionBoundary.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A65000000000000000000011 /* AlyteVisionObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlyteVisionObservation.swift; sourceTree = "<group>"; };
+		A65000000000000000000012 /* AlyteVisionObservationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlyteVisionObservationTests.swift; sourceTree = "<group>"; };
+		A65000000000000000000021 /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
+		A65000000000000000000022 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		A65000000000000000000023 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
+		A65000000000000000000024 /* AlyteVisionBoundary.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = AlyteVisionBoundary.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		A65000000000000000000025 /* AlyteVisionBoundaryTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AlyteVisionBoundaryTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A65000000000000000000031 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A65000000000000000000003 /* Vision.framework in Frameworks */, A65000000000000000000004 /* UIKit.framework in Frameworks */); runOnlyForDeploymentPostprocessing = 0; };
+		A65000000000000000000032 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A65000000000000000000005 /* XCTest.framework in Frameworks */, A65000000000000000000006 /* AlyteVisionBoundary.framework in Frameworks */); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A65000000000000000000041 = {isa = PBXGroup; children = (A65000000000000000000042 /* Sources */, A65000000000000000000043 /* Tests */, A65000000000000000000044 /* Frameworks */, A65000000000000000000045 /* Products */); sourceTree = "<group>"; };
+		A65000000000000000000042 /* Sources */ = {isa = PBXGroup; children = (A65000000000000000000011 /* AlyteVisionObservation.swift */); path = ios; sourceTree = "<group>"; };
+		A65000000000000000000043 /* Tests */ = {isa = PBXGroup; children = (A65000000000000000000012 /* AlyteVisionObservationTests.swift */); path = tests; sourceTree = "<group>"; };
+		A65000000000000000000044 /* Frameworks */ = {isa = PBXGroup; children = (A65000000000000000000021 /* Vision.framework */, A65000000000000000000022 /* UIKit.framework */, A65000000000000000000023 /* XCTest.framework */); name = Frameworks; sourceTree = "<group>"; };
+		A65000000000000000000045 /* Products */ = {isa = PBXGroup; children = (A65000000000000000000024 /* AlyteVisionBoundary.framework */, A65000000000000000000025 /* AlyteVisionBoundaryTests.xctest */); name = Products; sourceTree = "<group>"; };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A65000000000000000000051 /* AlyteVisionBoundary */ = {isa = PBXNativeTarget; buildConfigurationList = A65000000000000000000061 /* Build configuration list for AlyteVisionBoundary */; buildPhases = (A65000000000000000000071 /* Sources */, A65000000000000000000031 /* Frameworks */); buildRules = (); dependencies = (); name = AlyteVisionBoundary; productName = AlyteVisionBoundary; productReference = A65000000000000000000024 /* AlyteVisionBoundary.framework */; productType = "com.apple.product-type.framework"; };
+		A65000000000000000000052 /* AlyteVisionBoundaryTests */ = {isa = PBXNativeTarget; buildConfigurationList = A65000000000000000000062 /* Build configuration list for AlyteVisionBoundaryTests */; buildPhases = (A65000000000000000000072 /* Sources */, A65000000000000000000032 /* Frameworks */); buildRules = (); dependencies = (A65000000000000000000081 /* PBXTargetDependency */); name = AlyteVisionBoundaryTests; productName = AlyteVisionBoundaryTests; productReference = A65000000000000000000025 /* AlyteVisionBoundaryTests.xctest */; productType = "com.apple.product-type.bundle.unit-test"; };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A65000000000000000000091 /* Project object */ = {isa = PBXProject; attributes = {LastUpgradeCheck = 2660; TargetAttributes = {A65000000000000000000051 = {CreatedOnToolsVersion = 26.0;}; A65000000000000000000052 = {CreatedOnToolsVersion = 26.0; TestTargetID = A65000000000000000000051;};};}; buildConfigurationList = A65000000000000000000063 /* Build configuration list for project */; compatibilityVersion = "Xcode 16.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = A65000000000000000000041; productRefGroup = A65000000000000000000045; projectDirPath = ""; projectRoot = ""; targets = (A65000000000000000000051, A65000000000000000000052); };
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A65000000000000000000073 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A65000000000000000000071 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A65000000000000000000001 /* AlyteVisionObservation.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+		A65000000000000000000072 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A65000000000000000000002 /* AlyteVisionObservationTests.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A65000000000000000000081 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = A65000000000000000000051 /* AlyteVisionBoundary */; targetProxy = A65000000000000000000082 /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
+
+/* Begin PBXContainerItemProxy section */
+		A65000000000000000000082 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = A65000000000000000000091 /* Project object */; proxyType = 1; remoteGlobalIDString = A65000000000000000000051; remoteInfo = AlyteVisionBoundary; };
+/* End PBXContainerItemProxy section */
+
+/* Begin XCBuildConfiguration section */
+		A65000000000000000000101 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CODE_SIGNING_ALLOWED = NO; DEFINES_MODULE = YES; ENABLE_TESTABILITY = YES; IPHONEOS_DEPLOYMENT_TARGET = 26.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1"; }; name = Debug; };
+		A65000000000000000000102 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CODE_SIGNING_ALLOWED = NO; DEFINES_MODULE = YES; IPHONEOS_DEPLOYMENT_TARGET = 26.0; SDKROOT = iphoneos; SWIFT_OPTIMIZATION_LEVEL = "-O"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1"; }; name = Release; };
+		A65000000000000000000103 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; CONFIGURATION_BUILD_DIR = "$(BUILD_DIR)/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)"; DEFINES_MODULE = YES; FRAMEWORK_SEARCH_PATHS = "$(inherited) $(BUILT_PRODUCTS_DIR)"; IPHONEOS_DEPLOYMENT_TARGET = 26.0; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@rpath"); PRODUCT_BUNDLE_IDENTIFIER = com.alyte.visionboundary; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SKIP_INSTALL = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1"; }; name = Debug; };
+		A65000000000000000000104 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; DEFINES_MODULE = YES; IPHONEOS_DEPLOYMENT_TARGET = 26.0; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@rpath"); PRODUCT_BUNDLE_IDENTIFIER = com.alyte.visionboundary; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SKIP_INSTALL = YES; SWIFT_OPTIMIZATION_LEVEL = "-O"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1"; }; name = Release; };
+		A65000000000000000000105 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = ""; CODE_SIGNING_ALLOWED = NO; FRAMEWORK_SEARCH_PATHS = "$(inherited) $(BUILT_PRODUCTS_DIR)"; IPHONEOS_DEPLOYMENT_TARGET = 26.0; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@loader_path/Frameworks", "@loader_path/../Frameworks", "@rpath"); PRODUCT_BUNDLE_IDENTIFIER = com.alyte.visionboundary.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1"; TEST_HOST = ""; }; name = Debug; };
+		A65000000000000000000106 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = ""; CODE_SIGNING_ALLOWED = NO; FRAMEWORK_SEARCH_PATHS = "$(inherited) $(BUILT_PRODUCTS_DIR)"; IPHONEOS_DEPLOYMENT_TARGET = 26.0; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@loader_path/Frameworks", "@loader_path/../Frameworks", "@rpath"); PRODUCT_BUNDLE_IDENTIFIER = com.alyte.visionboundary.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SWIFT_OPTIMIZATION_LEVEL = "-O"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1"; TEST_HOST = ""; }; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A65000000000000000000061 /* Build configuration list for AlyteVisionBoundary */ = {isa = XCConfigurationList; buildConfigurations = (A65000000000000000000103, A65000000000000000000104); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A65000000000000000000062 /* Build configuration list for AlyteVisionBoundaryTests */ = {isa = XCConfigurationList; buildConfigurations = (A65000000000000000000105, A65000000000000000000106); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A65000000000000000000063 /* Build configuration list for project */ = {isa = XCConfigurationList; buildConfigurations = (A65000000000000000000101, A65000000000000000000102); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = A65000000000000000000091 /* Project object */;
+}

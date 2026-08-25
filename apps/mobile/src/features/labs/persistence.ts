@@ -469,6 +469,16 @@ function extractionDraftFromDb(
   };
 }
 
+function extractionDraftVersions(row: ExtractionDraftDb): {
+  readonly ocr: string;
+  readonly parser: string;
+} {
+  return {
+    ocr: requiredString(row.ocr_contract_version, 'OCR contract version'),
+    parser: requiredString(row.parser_version, 'extraction parser version'),
+  };
+}
+
 const specimenTypes = ['blood', 'serum', 'plasma', 'urine', 'stool', 'saliva', 'unknown'] as const;
 const provenances = ['user-entered', 'extracted', 'user-corrected'] as const;
 const reviewStates = ['confirmed', 'needs-review'] as const;
@@ -697,14 +707,23 @@ export type LabRepository = {
     readonly now?: string;
   }): Promise<ExtractionDraft>;
   countOpenExtractionDrafts(): Promise<number>;
-  getExtractionDraft(id: string): Promise<ExtractionDraft | null>;
-  getExtractionDraftForReport(reportId: string): Promise<ExtractionDraft | null>;
+  getExtractionDraft(
+    id: string,
+    aliases?: readonly ExtractionAliasEntry[],
+  ): Promise<ExtractionDraft | null>;
+  getExtractionDraftForReport(
+    reportId: string,
+    aliases?: readonly ExtractionAliasEntry[],
+  ): Promise<ExtractionDraft | null>;
   updateExtractionDraftRow(
     id: string,
     patch: ExtractionDraftRowPatch,
     aliases: readonly ExtractionAliasEntry[],
   ): Promise<ExtractionDraftRow>;
-  confirmExtractionDraft(id: string): Promise<readonly LabRecord[]>;
+  confirmExtractionDraft(
+    id: string,
+    aliases?: readonly ExtractionAliasEntry[],
+  ): Promise<readonly LabRecord[]>;
   getSanitizationDraft(reportId: string): Promise<SanitizationRecipe | null>;
   saveSanitizationDraft(reportId: string, recipe: SanitizationRecipe): Promise<void>;
   clearSanitizationDraft(reportId: string): Promise<void>;
@@ -1206,14 +1225,69 @@ export function createLabRepository(
     return rows.map(extractionRowFromDb);
   }
 
-  async function getExtractionDraft(id: string): Promise<ExtractionDraft | null> {
+  async function readExtractionDraft(
+    row: ExtractionDraftDb,
+    aliases?: readonly ExtractionAliasEntry[],
+  ): Promise<ExtractionDraft> {
+    const rows = await extractionRowsFor(requiredString(row.id, 'extraction draft id'));
+    const versions = extractionDraftVersions(row);
+    const state = enumValue(
+      row.state,
+      ['draft', 'confirmed', 'failed'] as const,
+      'extraction draft state',
+    );
+    if (
+      state === 'draft' &&
+      versions.ocr === VISION_OCR_CONTRACT_VERSION &&
+      versions.parser !== EXTRACTION_PARSER_VERSION &&
+      aliases !== undefined
+    ) {
+      await withWrite(async () => {
+        for (const current of rows) {
+          const next = revalidateExtractionRow(current, {}, aliases);
+          await database.runAsync(
+            `UPDATE extraction_draft_rows SET proposed_biomarker_id = ?, review_reasons_json = ?,
+              review_state = ?, decision = ? WHERE id = ?;`,
+            next.proposedBiomarkerId,
+            JSON.stringify(next.reviewReasons),
+            next.reviewState,
+            next.decision,
+            next.id,
+          );
+        }
+        await database.runAsync(
+          'UPDATE extraction_drafts SET parser_version = ?, updated_at = ? WHERE id = ?;',
+          EXTRACTION_PARSER_VERSION,
+          now(),
+          row.id,
+        );
+      });
+      const refreshed = await database.getAllAsync<ExtractionDraftDb>(
+        `SELECT ${extractionDraftColumns} FROM extraction_drafts WHERE id = ?;`,
+        row.id,
+      );
+      const refreshedRow = refreshed[0];
+      if (refreshedRow === undefined)
+        throw new Error('Extraction Draft was removed during migration');
+      return extractionDraftFromDb(
+        refreshedRow,
+        await extractionRowsFor(requiredString(refreshedRow.id, 'extraction draft id')),
+      );
+    }
+    return extractionDraftFromDb(row, rows);
+  }
+
+  async function getExtractionDraft(
+    id: string,
+    aliases?: readonly ExtractionAliasEntry[],
+  ): Promise<ExtractionDraft | null> {
     await initialize();
     const rows = await database.getAllAsync<ExtractionDraftDb>(
       `SELECT ${extractionDraftColumns} FROM extraction_drafts WHERE id = ?;`,
       id,
     );
     const row = rows[0];
-    return row === undefined ? null : extractionDraftFromDb(row, await extractionRowsFor(id));
+    return row === undefined ? null : readExtractionDraft(row, aliases);
   }
 
   async function countOpenExtractionDrafts(): Promise<number> {
@@ -1230,19 +1304,17 @@ export function createLabRepository(
     return count;
   }
 
-  async function getExtractionDraftForReport(reportId: string): Promise<ExtractionDraft | null> {
+  async function getExtractionDraftForReport(
+    reportId: string,
+    aliases?: readonly ExtractionAliasEntry[],
+  ): Promise<ExtractionDraft | null> {
     await initialize();
     const rows = await database.getAllAsync<ExtractionDraftDb>(
       `SELECT ${extractionDraftColumns} FROM extraction_drafts WHERE report_id = ?;`,
       reportId,
     );
     const row = rows[0];
-    return row === undefined
-      ? null
-      : extractionDraftFromDb(
-          row,
-          await extractionRowsFor(requiredString(row.id, 'extraction draft id')),
-        );
+    return row === undefined ? null : readExtractionDraft(row, aliases);
   }
 
   async function createExtractionDraft(input: {
@@ -1376,11 +1448,18 @@ export function createLabRepository(
     return updated;
   }
 
-  async function confirmExtractionDraft(id: string): Promise<readonly LabRecord[]> {
+  async function confirmExtractionDraft(
+    id: string,
+    aliases?: readonly ExtractionAliasEntry[],
+  ): Promise<readonly LabRecord[]> {
     await initialize();
+    // Revalidate before opening the confirmation transaction. The migration is
+    // itself transactional, so doing this preflight avoids nesting a write
+    // transaction when an older open draft is confirmed directly after launch.
+    if (aliases !== undefined) await getExtractionDraft(id, aliases);
     let recordIds: string[] = [];
     await withWrite(async () => {
-      const draft = await getExtractionDraft(id);
+      const draft = await getExtractionDraft(id, aliases);
       if (draft === null) throw new Error('Extraction Draft was not found');
       if (draft.state === 'confirmed') {
         const existing = await database.getAllAsync<{ id: string }>(

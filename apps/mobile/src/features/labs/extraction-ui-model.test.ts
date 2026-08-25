@@ -85,6 +85,8 @@ test('Extraction confirmation includes valid rows by default and gates only true
     'missing-label',
     'missing-value',
     'unparseable-value',
+    'missing-unit',
+    'incompatible-unit',
     'unsupported-layout',
   ] as const) {
     assert.equal(
@@ -109,16 +111,6 @@ test('Extraction confirmation includes valid rows by default and gates only true
       row({
         decision: 'preserve',
         reviewReasons: ['ambiguous-assay', 'unsupported-layout'],
-        reviewState: 'needs-review',
-      }),
-    ),
-    true,
-  );
-  assert.equal(
-    extractionNeedsResolution(
-      row({
-        decision: 'unresolved',
-        reviewReasons: ['missing-unit'],
         reviewState: 'needs-review',
       }),
     ),

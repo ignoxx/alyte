@@ -1441,7 +1441,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       }
       // Re-verify before reusing a draft. A draft is tied to the exact derivative that
       // produced it; if that derivative disappeared or changed, it must not be confirmable.
-      const existingDraft = await repo.getExtractionDraftForReport(id);
+      const existingDraft = await repo.getExtractionDraftForReport(id, extractionAliases);
       if (existingDraft !== null) return existingDraft;
       const sourcePath = sanitized.artifactPath;
       try {
@@ -1509,7 +1509,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
 
   async function getExtractionDraft(id: string): Promise<ExtractionDraft | null> {
     await ensureInitialized();
-    return (await repository()).getExtractionDraft(id);
+    return (await repository()).getExtractionDraft(id, extractionAliases);
   }
 
   async function countOpenExtractionDrafts(): Promise<number> {
@@ -1528,7 +1528,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   async function confirmExtraction(id: string): Promise<readonly LabRecord[]> {
     return serialized(async () => {
       await ensureInitialized();
-      return (await repository()).confirmExtractionDraft(id);
+      return (await repository()).confirmExtractionDraft(id, extractionAliases);
     });
   }
 

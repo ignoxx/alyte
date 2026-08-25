@@ -114,7 +114,7 @@ public final class AlyteVisionModule: Module {
             for (columnIndex, cell) in row.enumerated() {
               let text = cell.content.text.transcript
               guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
-              observations.append(alyteDocumentObservation(
+              observations.append(contentsOf: alyteDocumentObservations(
                 id: "document-\(pageIndex)-\(documentIndex)-table-\(tableIndex)-r\(rowIndex)-c\(columnIndex)",
                 text: text,
                 box: cell.content.boundingRegion.boundingBox.cgRect,
@@ -128,40 +128,18 @@ public final class AlyteVisionModule: Module {
         }
         let tableBoxes = document.document.tables.map { $0.boundingRegion.boundingBox.cgRect }
         for (lineIndex, line) in document.document.text.lines.enumerated() {
-            let text = line.transcript
-            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
-            guard !tableBoxes.contains(where: { $0.intersects(line.boundingBox.cgRect) }) else { continue }
-            observations.append(alyteDocumentObservation(
-              id: "document-\(pageIndex)-\(documentIndex)-line-\(lineIndex)", text: text,
-              box: line.boundingBox.cgRect, pageIndex: pageIndex, orientation: orientation,
-              structure: ["kind": "text", "tableId": NSNull(), "rowIndex": NSNull(), "columnIndex": NSNull()],
-              lines: [line]
-            ))
+          let text = line.transcript
+          guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+          guard !tableBoxes.contains(where: { $0.intersects(line.boundingBox.cgRect) }) else { continue }
+          observations.append(contentsOf: alyteDocumentObservations(
+            id: "document-\(pageIndex)-\(documentIndex)-line-\(lineIndex)", text: text,
+            box: line.boundingBox.cgRect, pageIndex: pageIndex, orientation: orientation,
+            structure: ["kind": "text", "tableId": NSNull(), "rowIndex": NSNull(), "columnIndex": NSNull()],
+            lines: [line]
+          ))
         }
       }
       return ["contractVersion": alyteVisionContractVersion, "pageIndex": pageIndex, "orientation": orientation, "observations": observations]
     }
   }
-}
-
-private func alyteDocumentObservation(id: String, text: String, box: CGRect, pageIndex: Int, orientation: Int, structure: [String: Any], lines: [RecognizedTextObservation]) -> [String: Any] {
-        let language: Any = lines.first?.recognitionLanguages.first?.minimalIdentifier as Any? ?? NSNull()
-        let confidence: Any = lines.isEmpty
-          ? NSNull()
-          : Double(lines.map(\.confidence).reduce(0, +) / Float(lines.count))
-        let x = max(0, min(1, box.minX))
-        let y = max(0, min(1, 1 - box.maxY))
-        let width = max(0.0001, min(1 - x, box.width))
-        let height = max(0.0001, min(1 - y, box.height))
-        return [
-          "id": id, "text": text,
-          "alternatives": Array(Set(lines.flatMap { $0.topCandidates(5).dropFirst().map(\.string) })).prefix(5).map { $0 },
-          "boundingBox": ["x": Double(x), "y": Double(y), "width": Double(width), "height": Double(height)],
-          "pageIndex": pageIndex, "orientation": orientation, "structure": structure,
-          "recognition": [
-            "level": "accurate",
-            "language": language,
-            "internalConfidence": confidence,
-          ],
-        ]
 }

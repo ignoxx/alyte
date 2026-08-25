@@ -3,7 +3,7 @@ import { parseLocaleDecimal } from './labs';
 import type { MeasurementValue, SpecimenType, LabDateState } from './labs';
 
 export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.document.v2' as const;
-export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v2' as const;
+export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v3' as const;
 
 const NUMERIC_TOKEN_PATTERN =
   '[<>≤≥]?\\s*[+-]?(?:(?:\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)|(?:\\d+(?:[.,]\\d+)?)|(?:\\.\\d+))';
@@ -93,6 +93,7 @@ const REQUIRED_EXTRACTION_REVIEW_REASONS = new Set<ExtractionReviewReason>([
   'missing-value',
   'unparseable-value',
   'missing-unit',
+  'incompatible-unit',
   'unsupported-layout',
 ]);
 
@@ -514,6 +515,10 @@ export function normalizeUnit(input: string | null): string | null {
   return aliases[lower] ?? normalized;
 }
 
+function requiresNumericUnit(value: MeasurementValue, unit: string | null): boolean {
+  return unit === null && (value.kind === 'numeric' || value.kind === 'bounded');
+}
+
 function unitCompatible(
   unit: string | null,
   biomarkerId: CanonicalId | null,
@@ -641,6 +646,98 @@ function findUnitInText(sourceText: string): string | null {
     /(?:mg\s*\/\s*dL?|mmol\s*\/\s*L|g\s*\/\s*dL?|g\s*\/\s*L|ng\s*\/\s*mL|nmol\s*\/\s*L|µ?g\s*\/\s*L|pg\s*\/\s*mL|pmol\s*\/\s*L|IU\s*\/\s*L|U\s*\/\s*L|L\s*\/\s*L|fL|%|mmol\s*\/\s*mol)/iu,
   );
   return normalizeUnit(match?.[0] ?? null);
+}
+
+type NumericSourceCandidate = {
+  readonly raw: string;
+  readonly start: number;
+  readonly end: number;
+  readonly value: MeasurementValue | null;
+};
+
+type SourceValueAnalysis = {
+  readonly valueCandidates: readonly NumericSourceCandidate[];
+  readonly effectiveReferences: readonly {
+    readonly raw: string;
+    readonly start: number;
+    readonly end: number;
+  }[];
+};
+
+function analyzeSourceValues(sourceText: string): SourceValueAnalysis {
+  const numericCandidates: NumericSourceCandidate[] = [
+    ...sourceText.matchAll(new RegExp(NUMERIC_TOKEN_PATTERN, 'gu')),
+  ]
+    .map((match) => {
+      const raw = match[0].trim();
+      const start = (match.index ?? 0) + match[0].indexOf(raw);
+      return {
+        raw,
+        start,
+        end: start + raw.length,
+        value: parseComparatorValue(raw),
+      };
+    })
+    .filter((candidate) => {
+      const before = sourceText[candidate.start - 1] ?? '';
+      const after = sourceText[candidate.end] ?? '';
+      const afterAfter = sourceText[candidate.end + 1] ?? '';
+      const afterCandidate = sourceText.slice(candidate.start);
+      const isMethodTemperature = /^(?:30|37)\s*(?:°\s*)?C\b|^(?:30|37)\s+degrees?/iu.test(
+        afterCandidate,
+      );
+      return (
+        !/[\p{L}\p{N}]/u.test(before) &&
+        !/[\p{L}\p{N}]/u.test(after) &&
+        !(after === '-' && /[\p{L}]/u.test(afterAfter)) &&
+        !isMethodTemperature
+      );
+    });
+  const referenceCandidates = [
+    ...sourceText.matchAll(
+      new RegExp(
+        `(?:[<>≤≥]\\s*${PLAIN_NUMERIC_TOKEN_PATTERN}|${PLAIN_NUMERIC_TOKEN_PATTERN}\\s*(?:-|–|—|to)\\s*[<>≤≥]?\\s*${PLAIN_NUMERIC_TOKEN_PATTERN})`,
+        'giu',
+      ),
+    ),
+  ].map((match) => ({
+    raw: match[0].trim(),
+    start: match.index ?? 0,
+    end: (match.index ?? 0) + match[0].length,
+  }));
+  const rangeReferences = referenceCandidates.filter(
+    (reference) => !/^[<>≤≥]/u.test(reference.raw),
+  );
+  const overlapsRangeReference = (candidate: { start: number; end: number }) =>
+    rangeReferences.some(
+      (reference) => candidate.start < reference.end && candidate.end > reference.start,
+    );
+  const numericOutsideRange = numericCandidates.filter(
+    (candidate) => candidate.value?.kind === 'numeric' && !overlapsRangeReference(candidate),
+  );
+  const isReference = (candidate: {
+    start: number;
+    end: number;
+    value?: MeasurementValue | null;
+  }) =>
+    referenceCandidates.some(
+      (reference) =>
+        candidate.start < reference.end &&
+        candidate.end > reference.start &&
+        (!/^[<>≤≥]/u.test(reference.raw) || numericOutsideRange.length > 0),
+    );
+  const scalarCandidates = numericCandidates.filter(
+    (candidate) => candidate.value?.kind === 'numeric' && !isReference(candidate),
+  );
+  const boundedCandidates = numericCandidates.filter(
+    (candidate) => candidate.value?.kind === 'bounded' && !isReference(candidate),
+  );
+  return {
+    valueCandidates: scalarCandidates.length > 0 ? scalarCandidates : boundedCandidates,
+    effectiveReferences: referenceCandidates.filter(
+      (reference) => !/^[<>≤≥]/u.test(reference.raw) || numericOutsideRange.length > 0,
+    ),
+  };
 }
 
 export function groupObservationsIntoRows(
@@ -773,72 +870,7 @@ function parseSourceRow(
   const unsafeMatch = findUnsafeBiomarkerLabel(sourceText, aliases, aliasMatch?.id);
   const globalUnsafeMatch =
     aliasMatch === null ? findUnsafeBiomarkerLabel(sourceText, aliases) : null;
-  const numericCandidates = [...sourceText.matchAll(new RegExp(NUMERIC_TOKEN_PATTERN, 'gu'))]
-    .map((match) => {
-      const raw = match[0].trim();
-      const start = (match.index ?? 0) + match[0].indexOf(raw);
-      return {
-        raw,
-        start,
-        end: start + raw.length,
-        value: parseComparatorValue(raw),
-      };
-    })
-    .filter((candidate) => {
-      const before = sourceText[candidate.start - 1] ?? '';
-      const after = sourceText[candidate.end] ?? '';
-      const afterAfter = sourceText[candidate.end + 1] ?? '';
-      const afterCandidate = sourceText.slice(candidate.start);
-      const isMethodTemperature = /^(?:30|37)\s*(?:°\s*)?C\b|^(?:30|37)\s+degrees?/iu.test(
-        afterCandidate,
-      );
-      return (
-        !/[\p{L}\p{N}]/u.test(before) &&
-        !/[\p{L}\p{N}]/u.test(after) &&
-        !(after === '-' && /[\p{L}]/u.test(afterAfter)) &&
-        !isMethodTemperature
-      );
-    });
-  const referenceCandidates = [
-    ...sourceText.matchAll(
-      new RegExp(
-        `(?:[<>≤≥]\\s*${PLAIN_NUMERIC_TOKEN_PATTERN}|${PLAIN_NUMERIC_TOKEN_PATTERN}\\s*(?:-|–|—|to)\\s*[<>≤≥]?\\s*${PLAIN_NUMERIC_TOKEN_PATTERN})`,
-        'giu',
-      ),
-    ),
-  ].map((match) => ({
-    raw: match[0].trim(),
-    start: match.index ?? 0,
-    end: (match.index ?? 0) + match[0].length,
-  }));
-  const rangeReferences = referenceCandidates.filter(
-    (reference) => !/^[<>≤≥]/u.test(reference.raw),
-  );
-  const overlapsRangeReference = (candidate: { start: number; end: number }) =>
-    rangeReferences.some(
-      (reference) => candidate.start < reference.end && candidate.end > reference.start,
-    );
-  const numericOutsideRange = numericCandidates.filter(
-    (candidate) => candidate.value?.kind === 'numeric' && !overlapsRangeReference(candidate),
-  );
-  const isReference = (candidate: {
-    start: number;
-    end: number;
-    value?: MeasurementValue | null;
-  }) =>
-    referenceCandidates.some(
-      (reference) =>
-        candidate.start < reference.end &&
-        candidate.end > reference.start &&
-        (!/^[<>≤≥]/u.test(reference.raw) || numericOutsideRange.length > 0),
-    );
-  const scalarCandidates = numericCandidates.filter(
-    (candidate) => candidate.value?.kind === 'numeric' && !isReference(candidate),
-  );
-  const boundedCandidates = numericCandidates.filter(
-    (candidate) => candidate.value?.kind === 'bounded' && !isReference(candidate),
-  );
-  const valueCandidates = scalarCandidates.length > 0 ? scalarCandidates : boundedCandidates;
+  const { valueCandidates, effectiveReferences } = analyzeSourceValues(sourceText);
   const selectedValue = valueCandidates.length === 1 ? valueCandidates[0] : undefined;
   const categoricalMatch =
     selectedValue === undefined
@@ -854,9 +886,6 @@ function parseSourceRow(
       ? { kind: 'categorical' as const, value: rawValue }
       : (parseComparatorValue(rawValue) ?? { kind: 'free_text' as const, value: sourceText });
   const unit = findUnitInText(sourceText);
-  const effectiveReferences = referenceCandidates.filter(
-    (reference) => !/^[<>≤≥]/u.test(reference.raw) || numericOutsideRange.length > 0,
-  );
   const referenceCandidate = effectiveReferences[0]?.raw ?? null;
   const reference = parseReferenceInterval(referenceCandidate);
   const flagCandidate =
@@ -875,8 +904,7 @@ function parseSourceRow(
     reasons.push('ambiguous-assay');
   else if (!methodCompatible(sourceText, biomarkerId, aliases)) reasons.push('incompatible-method');
   if (!unitCompatible(unit, biomarkerId, aliases)) reasons.push('incompatible-unit');
-  if (unit === null && (proposedValue.kind === 'numeric' || proposedValue.kind === 'bounded'))
-    reasons.push('missing-unit');
+  if (requiresNumericUnit(proposedValue, unit)) reasons.push('missing-unit');
   if (!specimenCompatible(specimenType, biomarkerId, aliases))
     reasons.push('incompatible-specimen');
   if (referenceCandidate !== null && reference === null)
@@ -938,6 +966,7 @@ export function revalidateExtractionRow(
   );
   const globalUnsafeMatch =
     aliasMatch === null ? findUnsafeBiomarkerLabel(next.sourceText, aliases) : null;
+  const sourceValues = analyzeSourceValues(next.sourceText);
   const id =
     unsafeMatch === null && globalUnsafeMatch === null && !hasSiblingAlias
       ? next.proposedBiomarkerId
@@ -946,13 +975,14 @@ export function revalidateExtractionRow(
   if (unsafeMatch !== null || globalUnsafeMatch !== null || hasSiblingAlias)
     reasons.add('ambiguous-assay');
   else if (!methodCompatible(next.sourceText, id, aliases)) reasons.add('incompatible-method');
-  if (hasSiblingAlias) reasons.add('unsupported-layout');
-  if (!unitCompatible(next.proposedUnit, id, aliases)) reasons.add('incompatible-unit');
   if (
-    next.proposedUnit === null &&
-    (next.proposedValue.kind === 'numeric' || next.proposedValue.kind === 'bounded')
+    sourceValues.valueCandidates.length > 1 ||
+    sourceValues.effectiveReferences.length > 1 ||
+    hasSiblingAlias
   )
-    reasons.add('missing-unit');
+    reasons.add('unsupported-layout');
+  if (!unitCompatible(next.proposedUnit, id, aliases)) reasons.add('incompatible-unit');
+  if (requiresNumericUnit(next.proposedValue, next.proposedUnit)) reasons.add('missing-unit');
   if (!specimenCompatible(next.proposedSpecimenType, id, aliases))
     reasons.add('incompatible-specimen');
   if (next.collectionDate.kind === 'missing') reasons.add('missing-collection-date');

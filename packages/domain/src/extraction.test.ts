@@ -4,10 +4,12 @@ import { metabolicMicronutrientBiomarkers } from '@alyte/catalogue';
 import {
   buildExtractionConfirmationPlan,
   decodeVisionOCRResult,
+  EXTRACTION_PARSER_VERSION,
   extractionReviewBlocksConfirmation,
   groupObservationsIntoRows,
   parseComparatorValue,
   parseLabDate,
+  revalidateExtractionRow,
   validateSemanticProposals,
   type ExtractionAliasEntry,
 } from './extraction.js';
@@ -238,7 +240,7 @@ describe('local extraction domain', () => {
       reportId: 'report-decision',
       state: 'draft' as const,
       ocrContractVersion: 'alyte.vision.document.v2' as const,
-      parserVersion: 'alyte.local-parser.v2' as const,
+      parserVersion: EXTRACTION_PARSER_VERSION,
       collectionDate: { kind: 'missing' as const },
       rows,
       createdAt: '2026-08-22T00:00:00.000Z',
@@ -342,6 +344,13 @@ describe('local extraction domain', () => {
     assert.ok(row?.reviewReasons.includes('unsupported-layout'));
     assert.equal(row?.proposedValue.kind, 'free_text');
     assert.equal(row?.decision, 'unresolved');
+    const edited = revalidateExtractionRow(
+      row!,
+      { proposedValue: { kind: 'numeric', value: 118 }, decision: 'preserve' },
+      tableAliases,
+    );
+    assert.ok(edited.reviewReasons.includes('unsupported-layout'));
+    assert.equal(edited.decision, 'preserve');
     assert.throws(
       () =>
         buildExtractionConfirmationPlan(
@@ -350,7 +359,46 @@ describe('local extraction domain', () => {
             reportId: 'synthetic-report',
             state: 'draft',
             ocrContractVersion: 'alyte.vision.document.v2',
-            parserVersion: 'alyte.local-parser.v2',
+            parserVersion: EXTRACTION_PARSER_VERSION,
+            collectionDate: { kind: 'known', value: '2026-08-20' },
+            rows: row === undefined ? [] : [row],
+            createdAt: '2026-08-20T00:00:00.000Z',
+            updatedAt: '2026-08-20T00:00:00.000Z',
+            confirmedAt: null,
+          },
+          { record: () => 'record', measurement: () => 'measurement' },
+        ),
+      /unresolved required fields/,
+    );
+  });
+
+  it('keeps incompatible units review-only and blocks confirmation', () => {
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'incompatible-unit',
+          text: 'LDL-C 3.8 g/L',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.8, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+      ],
+      { aliases: tableAliases, collectionDate: { kind: 'known', value: '2026-08-20' } },
+    );
+    assert.equal(row?.proposedBiomarkerId, 'biomarker.ldl_c');
+    assert.ok(row?.reviewReasons.includes('incompatible-unit'));
+    assert.equal(row?.reviewState, 'needs-review');
+    assert.throws(
+      () =>
+        buildExtractionConfirmationPlan(
+          {
+            id: 'incompatible-unit-draft',
+            reportId: 'synthetic-report',
+            state: 'draft',
+            ocrContractVersion: 'alyte.vision.document.v2',
+            parserVersion: EXTRACTION_PARSER_VERSION,
             collectionDate: { kind: 'known', value: '2026-08-20' },
             rows: row === undefined ? [] : [row],
             createdAt: '2026-08-20T00:00:00.000Z',
@@ -397,7 +445,7 @@ describe('local extraction domain', () => {
             reportId: 'synthetic-report',
             state: 'draft',
             ocrContractVersion: 'alyte.vision.document.v2',
-            parserVersion: 'alyte.local-parser.v2',
+            parserVersion: EXTRACTION_PARSER_VERSION,
             collectionDate: { kind: 'known', value: '2026-08-20' },
             rows: row === undefined ? [] : [row],
             createdAt: '2026-08-20T00:00:00.000Z',
@@ -413,9 +461,9 @@ describe('local extraction domain', () => {
   it('keeps separated three-row table observations distinct with exact source provenance', () => {
     const rows = groupObservationsIntoRows(
       [
-        ['ldl-row', 'LDL-C 3.8 mmol/L', 0.2, 3.8, 'biomarker.ldl_c'],
-        ['hdl-row', 'HDL-C 1.4 mmol/L', 0.3, 1.4, 'biomarker.hdl_c'],
-        ['triglycerides-row', 'Triglycerides 1.2 mmol/L', 0.4, 1.2, 'biomarker.triglycerides'],
+        ['ldl-row', 'LDL-C 3,8 mmol/L', 0.2, 3.8, 'biomarker.ldl_c'],
+        ['hdl-row', 'HDL-C 1,4 mmol/L', 0.3, 1.4, 'biomarker.hdl_c'],
+        ['triglycerides-row', 'Triglycerides 1,2 mmol/L', 0.4, 1.2, 'biomarker.triglycerides'],
       ].map(([id, text, y]) => ({
         id: id as string,
         text: text as string,
@@ -433,6 +481,7 @@ describe('local extraction domain', () => {
       })),
       {
         aliases: tableAliases,
+        locale: 'de-DE',
         collectionDate: { kind: 'known', value: '2026-08-20' },
         specimenType: 'serum',
       },
@@ -461,6 +510,18 @@ describe('local extraction domain', () => {
           ids: ['triglycerides-row'],
           box: { x: 0.12, y: 0.4, width: 0.69, height: 0.03 },
         },
+      ],
+    );
+    assert.deepEqual(
+      rows.map((row) => [
+        row.sourceValueString,
+        row.sourceUnit,
+        row.source.observations?.[0]?.text,
+      ]),
+      [
+        ['3,8', 'mmol/L', 'LDL-C 3,8 mmol/L'],
+        ['1,4', 'mmol/L', 'HDL-C 1,4 mmol/L'],
+        ['1,2', 'mmol/L', 'Triglycerides 1,2 mmol/L'],
       ],
     );
   });
@@ -525,7 +586,7 @@ describe('local extraction domain', () => {
       reportId: 'report-1',
       state: 'draft' as const,
       ocrContractVersion: 'alyte.vision.document.v2' as const,
-      parserVersion: 'alyte.local-parser.v2' as const,
+      parserVersion: EXTRACTION_PARSER_VERSION,
       collectionDate: { kind: 'missing' as const },
       rows: rows.map((row) => ({ ...row, decision: 'preserve' as const })),
       createdAt: '2026-08-22T00:00:00.000Z',
