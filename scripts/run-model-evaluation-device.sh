@@ -200,6 +200,36 @@ if [[ ! -d "${app_path}" ]]; then
   print -u2 "Signed evaluator app was not produced: ${app_path}"
   exit 2
 fi
+embedded_framework="${app_path}/Frameworks/llama.framework"
+embedded_binary="${embedded_framework}/llama"
+if [[ ! -f "${embedded_binary}" ]]; then
+  print -u2 "Signed evaluator app is missing the pinned llama.framework: ${embedded_framework}"
+  exit 2
+fi
+# CodeSignOnCopy appends a signature to the Mach-O, so compare unsigned contents when checking
+# that the embedded binary is the exact externally pinned runtime. The source binary was already
+# checked against runtimeBinarySha256 above before Xcode touched the app bundle.
+unsigned_binary_sha256() {
+  local binary="$1"
+  local scratch_directory
+  scratch_directory="$(mktemp -d "${TMPDIR:-/tmp}/alyte-eval-llama-hash.XXXXXX")"
+  ditto "${binary}" "${scratch_directory}/binary"
+  codesign --remove-signature "${scratch_directory}/binary" >/dev/null 2>&1 || true
+  shasum -a 256 "${scratch_directory}/binary" | cut -d ' ' -f 1
+  rm -rf "${scratch_directory}"
+}
+if [[ "$(unsigned_binary_sha256 "${embedded_binary}")" != "$(unsigned_binary_sha256 "${device_binary}")" ]]; then
+  print -u2 "Embedded llama.framework does not match the pinned runtime identity manifest"
+  exit 2
+fi
+if ! codesign --verify --strict --verbose=2 "${embedded_framework}" >/dev/null 2>&1; then
+  print -u2 "Embedded llama.framework is not code-signed"
+  exit 2
+fi
+if ! codesign --verify --deep --strict --verbose=2 "${app_path}" >/dev/null 2>&1; then
+  print -u2 "Signed evaluator app failed code-signature verification"
+  exit 2
+fi
 xctestrun_path="$(find "${ALYTE_MODEL_EVAL_DERIVED_DATA}/Build/Products" -maxdepth 1 -name '*.xctestrun' -type f -print -quit)"
 if [[ -z "${xctestrun_path}" || ! -f "${xctestrun_path}" ]]; then
   print -u2 "Signed XCTest run specification was not produced"

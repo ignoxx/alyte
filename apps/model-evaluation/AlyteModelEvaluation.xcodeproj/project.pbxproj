@@ -26,7 +26,7 @@
 		A20000000000000000000008 = {isa = PBXFileReference; explicitFileType = wrapper.application; path = AlyteModelEvaluation.app; sourceTree = BUILT_PRODUCTS_DIR;};
 		A20000000000000000000009 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = AlyteModelEvaluationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR;};
 		A20000000000000000000010 = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Sources/AlyteModelEvaluation/AlyteLlamaShim.m; sourceTree = "<group>";};
-		A20000000000000000000011 = {isa = PBXFileReference; explicitFileType = wrapper.xcframework; name = llama.xcframework; path = "$(ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK)"; sourceTree = "<group>";};
+		A20000000000000000000011 = {isa = PBXFileReference; explicitFileType = wrapper.framework; name = llama.framework; path = "$(ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK)/ios-arm64/llama.framework"; sourceTree = "<group>";};
 		A20000000000000000000012 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/AlyteModelEvaluation/EvaluationContract.swift; sourceTree = "<group>";};
 		A20000000000000000000013 = {isa = PBXFileReference; lastKnownFileType = text.json; path = ../../packages/model-evaluation/generated/evaluation-contract-v1.json; sourceTree = "<group>";};
 		A20000000000000000000014 = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = EvaluationInfo.plist; sourceTree = "<group>";};
