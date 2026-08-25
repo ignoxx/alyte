@@ -38,6 +38,7 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   private var lastViewportSize = CGSize.zero
 
   var sourcePath = "" { didSet { if oldValue != sourcePath { load() } } }
+  var inspectionMode = false { didSet { if oldValue != inspectionMode { layoutRegions() } } }
   var redactMode = false {
     didSet {
       overlay.isUserInteractionEnabled = redactMode
@@ -216,21 +217,25 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     for region in regions {
       let frame = pageRect(region.rect)
       let view = UIView(frame: frame)
-      view.backgroundColor = UIColor.black.withAlphaComponent(selectedID == region.id ? 0.72 : 0.55)
-      view.layer.borderColor = UIColor.systemYellow.cgColor
-      view.layer.borderWidth = selectedID == region.id ? 2 : 0
+      view.backgroundColor = inspectionMode
+        ? UIColor.systemTeal.withAlphaComponent(0.14)
+        : UIColor.black.withAlphaComponent(selectedID == region.id ? 0.72 : 0.55)
+      view.layer.borderColor = (inspectionMode ? UIColor.systemTeal : UIColor.systemYellow).cgColor
+      view.layer.borderWidth = inspectionMode || selectedID == region.id ? 3 : 0
       view.accessibilityLabel = labels["redaction"] ?? "Redaction"
       view.isAccessibilityElement = true
-      view.accessibilityTraits = .adjustable
-      if selectedID == region.id { view.accessibilityTraits.insert(.selected) }
+      view.accessibilityTraits = inspectionMode ? .image : .adjustable
+      if !inspectionMode, selectedID == region.id { view.accessibilityTraits.insert(.selected) }
       view.accessibilityValue = accessibilityValue(for: region.rect, selected: selectedID == region.id)
       view.accessibilityIdentifier = region.id
-      view.accessibilityCustomActions = accessibilityActions(for: region.id)
-      let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
-      pan.name = region.id
-      view.addGestureRecognizer(pan)
+      if !inspectionMode {
+        view.accessibilityCustomActions = accessibilityActions(for: region.id)
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
+        pan.name = region.id
+        view.addGestureRecognizer(pan)
+      }
       overlay.addSubview(view)
-      if selectedID == region.id {
+      if !inspectionMode, selectedID == region.id {
         let handle = UIView(frame: CGRect(x: frame.maxX - 22, y: frame.maxY - 22, width: 44, height: 44))
         handle.backgroundColor = .clear
         let knob = UIView(frame: CGRect(x: 14, y: 14, width: 16, height: 16))

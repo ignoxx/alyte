@@ -182,6 +182,7 @@
     "reportLinkedRecords": "Linked Lab Records: {count}",
     "extractionTitle": "Review local extraction",
     "extractionStart": "Run local OCR and review",
+    "extractionPrivacyRequired": "Open Sanitize Report first. Local extraction appears here after the verified derivative is ready.",
     "extractionSourceError": "The verified Sanitized Report is unavailable. Open the privacy workspace and render it again; no Extraction Draft was created.",
     "extractionRecognitionError": "Local document recognition could not finish. Try again; no Extraction Draft was created.",
     "extractionNoMeasurementsError": "Local OCR found no plausible Measurements in this report. The report remains available, and no Extraction Draft was created.",

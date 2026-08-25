@@ -1786,6 +1786,116 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(await files.exists(saved.artifactPath!), true);
   });
 
+  test('extracts an image only from its verified sanitized derivative and preserves page-zero provenance', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const image = new SanitizingImage(files);
+    const visionPaths: string[] = [];
+    const ocr: VisionOCR = {
+      async recognize(path): Promise<VisionOCRResult> {
+        visionPaths.push(path);
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'image-collection-date',
+              text: 'Collection date 2026-08-22',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.05, width: 0.45, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+            {
+              id: 'image-ldl',
+              text: 'Blood LDL-C 3.8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.25, width: 0.45, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+            {
+              id: 'image-header',
+              text: 'Synthetic laboratory contact details',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.1, width: 0.7, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        });
+      },
+    };
+    const service = createService(repository, files, new FakePdf(), ocr, undefined, image);
+    const imported = (await service.importImages([source('extract-image', 'image')]))[0]!.report;
+    const editor = await service.openSanitizationEditor(imported.id);
+    const saved = await service.saveSanitizedReport(imported.id, editor.recipe);
+
+    const draft = await service.startExtraction(imported.id);
+    assert.equal(draft.rows.length, 1, 'unrelated image prose is not a review row');
+    assert.equal(draft.rows[0]?.source.pageIndex, 0);
+    assert.deepEqual(draft.rows[0]?.source.boundingBox, {
+      x: 0.1,
+      y: 0.25,
+      width: 0.45,
+      height: 0.04,
+    });
+    assert.deepEqual(visionPaths, [saved.artifactPath]);
+    assert.notEqual(visionPaths[0], imported.originalPath);
+
+    const records = await service.confirmExtraction(draft.id);
+    const measurement = records[0]?.measurements[0];
+    assert.deepEqual(measurement?.source?.observationIds, ['image-ldl']);
+    assert.equal(measurement?.source?.pageIndex, 0);
+    assert.deepEqual(measurement?.source?.boundingBox, draft.rows[0]?.source.boundingBox);
+    assert.equal(await files.exists(imported.originalPath!), true);
+  });
+
+  test('does not call Vision when an image derivative is missing or tampered', async () => {
+    for (const state of ['missing', 'tampered'] as const) {
+      const repository = createRepository();
+      const files = new FakeFiles();
+      const image = new SanitizingImage(files);
+      let recognitionCalls = 0;
+      const service = createService(
+        repository,
+        files,
+        new FakePdf(),
+        {
+          async recognize(): Promise<VisionOCRResult> {
+            recognitionCalls += 1;
+            throw new Error('Vision must not receive an unavailable image derivative');
+          },
+        },
+        undefined,
+        image,
+      );
+      const imported = (await service.importImages([source(`extract-image-${state}`, 'image')]))[0]!
+        .report;
+      const saved = await service.saveSanitizedReport(
+        imported.id,
+        (await service.openSanitizationEditor(imported.id)).recipe,
+      );
+      if (state === 'missing') {
+        files.files.delete(saved.artifactPath!);
+      } else {
+        files.files.set(saved.artifactPath!, { hash: 'tampered-image', size: 256 });
+      }
+
+      await assert.rejects(service.startExtraction(imported.id), (error: unknown) => {
+        assert.ok(error instanceof LabReportExtractionError);
+        assert.equal(error.reason, 'sanitized-source');
+        return true;
+      });
+      assert.equal(recognitionCalls, 0);
+      assert.equal((await repository.getSanitizedReport(imported.id))?.verificationState, 'failed');
+    }
+  });
+
   test('failed structural verification never exposes the derivative and preserves the original', async () => {
     const repository = createRepository();
     const files = new FakeFiles();

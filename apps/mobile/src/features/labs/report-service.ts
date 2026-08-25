@@ -1380,12 +1380,6 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const repo = await repository();
       const report = await repo.getReport(id);
       if (report === null) throw new Error('Lab Report was not found');
-      if (report.sourceType === 'image') {
-        throw new LabReportExtractionError(
-          'sanitized-source',
-          'Image extraction is unavailable until image semantic extraction is enabled',
-        );
-      }
       if (report.importState !== 'imported' || report.originalPath === null) {
         throw new Error('Only an imported Lab Report can be extracted');
       }
@@ -1404,6 +1398,9 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const sourcePath = sanitized.artifactPath;
       try {
         const results: VisionOCRResult[] = [];
+        // Both PDF pages and image reports reach Vision through the same verified derivative
+        // boundary. Image derivatives are flattened, orientation-normalized artifacts, so their
+        // sole page is always page 0 and has no additional rotation to apply.
         const pages = sanitized.uris.map((_, pageIndex) => ({ pageIndex, rotation: 0 }));
         for (const page of pages) {
           try {

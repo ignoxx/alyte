@@ -13,9 +13,16 @@ import { t } from '../../localization';
 import { AppButton, AppText } from '../../ui/primitives';
 import { colors, spacing } from '../../theme';
 import { AlytePDFWorkspace } from './AlytePDFWorkspace';
+import { AlyteImageWorkspace } from './image';
 
 type Route = RouteProp<RootStackParamList, 'RecordSourcePreview'>;
-type Ready = { path: string; pageIndex: number; box: RedactionRegion['rect']; orientation: number };
+type Ready = {
+  path: string;
+  sourceType: 'pdf' | 'image';
+  pageIndex: number;
+  box: RedactionRegion['rect'];
+  orientation: number;
+};
 export function RecordSourcePreviewScreen() {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const route = useRoute<Route>();
@@ -46,6 +53,7 @@ export function RecordSourcePreviewScreen() {
       if (active)
         setReady({
           path: preview.artifactPath,
+          sourceType: preview.sourceType,
           pageIndex: measurement.source.pageIndex,
           box: measurement.source.boundingBox,
           orientation: measurement.source.orientation,
@@ -75,19 +83,35 @@ export function RecordSourcePreviewScreen() {
     );
   return (
     <View style={styles.root}>
-      <AlytePDFWorkspace
-        accessibilityLabel={`${t('labs.sanitizedExactCanvas')} ${ready.pageIndex + 1}`}
-        accessibilityLabels={{ redaction: t('labs.extractionSourceRegionLabel') }}
-        crop={null}
-        focusRegion={ready.box}
-        inspectionMode
-        pageIndex={ready.pageIndex}
-        redactMode={false}
-        redactions={[{ id: 'record-source-region', label: null, origin: 'user', rect: ready.box }]}
-        rotation={ready.orientation}
-        sourcePath={ready.path}
-        style={styles.workspace}
-      />
+      {ready.sourceType === 'image' ? (
+        <AlyteImageWorkspace
+          accessibilityLabel={`${t('labs.sanitizedExactCanvas')} ${ready.pageIndex + 1}`}
+          accessibilityLabels={{ redaction: t('labs.extractionSourceRegionLabel') }}
+          inspectionMode
+          redactMode={false}
+          redactions={[
+            { id: 'record-source-region', label: null, origin: 'user', rect: ready.box },
+          ]}
+          sourcePath={ready.path}
+          style={styles.workspace}
+        />
+      ) : (
+        <AlytePDFWorkspace
+          accessibilityLabel={`${t('labs.sanitizedExactCanvas')} ${ready.pageIndex + 1}`}
+          accessibilityLabels={{ redaction: t('labs.extractionSourceRegionLabel') }}
+          crop={null}
+          focusRegion={ready.box}
+          inspectionMode
+          pageIndex={ready.pageIndex}
+          redactMode={false}
+          redactions={[
+            { id: 'record-source-region', label: null, origin: 'user', rect: ready.box },
+          ]}
+          rotation={ready.orientation}
+          sourcePath={ready.path}
+          style={styles.workspace}
+        />
+      )}
       <AppText selectable style={styles.caption}>
         {t('labs.detailVerifiedSource').replace('{page}', String(ready.pageIndex + 1))}
       </AppText>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import { useCallback, useLayoutEffect, useState } from 'react';
 import {
   ActionSheetIOS,
   Alert,
@@ -10,7 +10,7 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
-import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { LabReport } from '@alyte/domain';
@@ -32,6 +32,7 @@ import {
   type PasswordRequest,
 } from './report-service';
 import type { LabReportPreview } from './report-service';
+import type { SanitizedReport } from '@alyte/domain';
 import { formatReportPageCount } from './report-detail-model';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
@@ -77,13 +78,20 @@ export function LabReportDetailScreen() {
   );
   const [preview, setPreview] = useState<LabReportPreview | null>(null);
   const [previewError, setPreviewError] = useState(false);
+  const [sanitizedReport, setSanitizedReport] = useState<SanitizedReport | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const next = await reports.getReport(route.params.reportId);
       setReport(next);
-      setIntegrity(next === null ? 'missing' : await reports.verifySource(next.id));
+      if (next === null) {
+        setIntegrity('missing');
+        setSanitizedReport(null);
+      } else {
+        setIntegrity(await reports.verifySource(next.id));
+        setSanitizedReport(await reports.getSanitizedReport(next.id));
+      }
       setError(false);
     } catch {
       setError(true);
@@ -92,9 +100,11 @@ export function LabReportDetailScreen() {
     }
   }, [reports, route.params.reportId]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -169,10 +179,21 @@ export function LabReportDetailScreen() {
       setExtractionError(
         caught instanceof LabReportExtractionError ? caught.reason : 'recognition',
       );
+      setSanitizedReport(await reports.getSanitizedReport(report.id).catch(() => null));
     } finally {
       setBusy(false);
     }
   }
+
+  const extractionReady =
+    report !== null &&
+    report.importState === 'imported' &&
+    report.labRecordIds.length === 0 &&
+    sanitizedReport?.verificationState === 'verified' &&
+    sanitizedReport.artifactPath !== null &&
+    sanitizedReport.artifactHash !== null &&
+    sanitizedReport.verification?.sourceAwareChecked === true &&
+    sanitizedReport.verification.sourceContentRemoved === true;
 
   function openMoreMenu() {
     const showDelete = () => confirmDelete();
@@ -292,31 +313,48 @@ export function LabReportDetailScreen() {
               <AppIcon name="chevronRight" size={16} />
             </Pressable>
           )}
-          {report.sourceType === 'pdf' &&
-            report.importState === 'imported' &&
-            report.labRecordIds.length === 0 && (
-              <View style={styles.extractAction}>
-                <AppText variant="heading">{t('labs.extractionStart')}</AppText>
-                <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
-                <AppButton
-                  disabled={busy}
-                  label={t('labs.extractionStart')}
-                  onPress={() => void extractLocally()}
-                  style={styles.extractButton}
-                />
-                {extractionError !== null && (
-                  <AppText style={styles.errorText}>
-                    {t(
-                      extractionError === 'sanitized-source'
-                        ? 'labs.extractionSourceError'
-                        : extractionError === 'no-reviewable-measurements'
-                          ? 'labs.extractionNoMeasurementsError'
-                          : 'labs.extractionRecognitionError',
-                    )}
-                  </AppText>
-                )}
-              </View>
-            )}
+          {report.importState === 'imported' && report.labRecordIds.length === 0 && (
+            <View style={styles.extractAction}>
+              {extractionReady ? (
+                <>
+                  <AppText variant="heading">{t('labs.extractionStart')}</AppText>
+                  <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
+                  <AppButton
+                    disabled={busy}
+                    label={t('labs.extractionStart')}
+                    onPress={() => void extractLocally()}
+                    style={styles.extractButton}
+                  />
+                  {extractionError !== null && (
+                    <AppText style={styles.errorText}>
+                      {t(
+                        extractionError === 'sanitized-source'
+                          ? 'labs.extractionSourceError'
+                          : extractionError === 'no-reviewable-measurements'
+                            ? 'labs.extractionNoMeasurementsError'
+                            : 'labs.extractionRecognitionError',
+                      )}
+                    </AppText>
+                  )}
+                </>
+              ) : (
+                <>
+                  <AppText style={styles.body}>{t('labs.extractionPrivacyRequired')}</AppText>
+                  {extractionError !== null && (
+                    <AppText style={styles.errorText}>
+                      {t(
+                        extractionError === 'sanitized-source'
+                          ? 'labs.extractionSourceError'
+                          : extractionError === 'no-reviewable-measurements'
+                            ? 'labs.extractionNoMeasurementsError'
+                            : 'labs.extractionRecognitionError',
+                      )}
+                    </AppText>
+                  )}
+                </>
+              )}
+            </View>
+          )}
           {report.importState === 'imported' && report.labRecordIds.length > 0 && (
             <AppText style={styles.actionStatus}>{t('labs.extractionAlreadyConfirmed')}</AppText>
           )}

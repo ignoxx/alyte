@@ -13,6 +13,7 @@ import { t } from '../../localization';
 import { AppButton, AppText } from '../../ui/primitives';
 import { colors, spacing } from '../../theme';
 import { AlytePDFWorkspace } from './AlytePDFWorkspace';
+import { AlyteImageWorkspace } from './image';
 
 type PreviewRoute = RouteProp<RootStackParamList, 'SanitizedSourcePreview'>;
 
@@ -21,6 +22,7 @@ export function SanitizedSourcePreviewScreen() {
   const route = useRoute<PreviewRoute>();
   const { reports } = useServices();
   const [artifactPath, setArtifactPath] = useState<string | null>(null);
+  const [sourceType, setSourceType] = useState<'pdf' | 'image' | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
@@ -39,7 +41,10 @@ export function SanitizedSourcePreviewScreen() {
       .then((preview) => {
         if (preview.uris[route.params.pageIndex] === undefined)
           throw new Error('Sanitized page is unavailable');
-        if (active) setArtifactPath(preview.artifactPath);
+        if (active) {
+          setArtifactPath(preview.artifactPath);
+          setSourceType(preview.sourceType);
+        }
       })
       .catch(() => {
         if (active) setFailed(true);
@@ -65,7 +70,8 @@ export function SanitizedSourcePreviewScreen() {
     );
   }
 
-  if (artifactPath === null) return <AppText style={styles.loading}>{t('labs.loading')}</AppText>;
+  if (artifactPath === null || sourceType === null)
+    return <AppText style={styles.loading}>{t('labs.loading')}</AppText>;
 
   const box = route.params.boundingBox;
   const sourceRegion: RedactionRegion = {
@@ -76,19 +82,31 @@ export function SanitizedSourcePreviewScreen() {
   };
   return (
     <View style={styles.root}>
-      <AlytePDFWorkspace
-        accessibilityLabel={`${t('labs.sanitizedExactCanvas')} ${route.params.pageIndex + 1}`}
-        accessibilityLabels={{ redaction: t('labs.extractionSourceRegionLabel') }}
-        crop={null}
-        focusRegion={box}
-        inspectionMode
-        pageIndex={route.params.pageIndex}
-        redactMode={false}
-        redactions={[sourceRegion]}
-        rotation={0}
-        sourcePath={artifactPath}
-        style={styles.workspace}
-      />
+      {sourceType === 'image' ? (
+        <AlyteImageWorkspace
+          accessibilityLabel={`${t('labs.sanitizedExactCanvas')} ${route.params.pageIndex + 1}`}
+          accessibilityLabels={{ redaction: t('labs.extractionSourceRegionLabel') }}
+          inspectionMode
+          redactMode={false}
+          redactions={[sourceRegion]}
+          sourcePath={artifactPath}
+          style={styles.workspace}
+        />
+      ) : (
+        <AlytePDFWorkspace
+          accessibilityLabel={`${t('labs.sanitizedExactCanvas')} ${route.params.pageIndex + 1}`}
+          accessibilityLabels={{ redaction: t('labs.extractionSourceRegionLabel') }}
+          crop={null}
+          focusRegion={box}
+          inspectionMode
+          pageIndex={route.params.pageIndex}
+          redactMode={false}
+          redactions={[sourceRegion]}
+          rotation={0}
+          sourcePath={artifactPath}
+          style={styles.workspace}
+        />
+      )}
       <AppText selectable style={styles.caption}>
         {t('labs.extractionSanitizedRegion')
           .replace('{page}', String(route.params.pageIndex + 1))

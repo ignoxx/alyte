@@ -473,6 +473,9 @@ public final class AlyteImageModule: Module {
       Prop("redactMode") { (view: AlyteImageWorkspaceView, enabled: Bool) in
         view.redactMode = enabled
       }
+      Prop("inspectionMode") { (view: AlyteImageWorkspaceView, enabled: Bool) in
+        view.inspectionMode = enabled
+      }
       Prop("redactions") { (view: AlyteImageWorkspaceView, redactions: [[String: Any]]) in
         view.setRedactions(redactions)
       }

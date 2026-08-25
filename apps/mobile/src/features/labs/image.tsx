@@ -87,6 +87,8 @@ export type NativeImageRedactionChange = {
 type ImageWorkspaceProps = ViewProps & {
   readonly sourcePath: string;
   readonly redactMode: boolean;
+  /** Read-only source navigation mode: show the stored region without editable redaction chrome. */
+  readonly inspectionMode?: boolean;
   readonly redactions: readonly RedactionRegion[];
   readonly accessibilityLabels: Readonly<Record<string, string>>;
   readonly onRedactionsChange?: (event: { nativeEvent: NativeImageRedactionChange }) => void;
