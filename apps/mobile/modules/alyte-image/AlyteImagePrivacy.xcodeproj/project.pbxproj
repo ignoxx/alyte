@@ -7,6 +7,8 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* AlyteImageModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011 /* AlyteImageModule.swift */; };
 		A10000000000000000000002 /* ImagePrivacyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000012 /* ImagePrivacyTests.swift */; };
+		A10000000000000000000008 /* ImageWorkspaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000014 /* ImageWorkspaceTests.swift */; };
+		A10000000000000000000009 /* AlyteImageWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000015 /* AlyteImageWorkspaceView.swift */; };
 		A10000000000000000000003 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000021 /* UIKit.framework */; };
 		A10000000000000000000004 /* ImageIO.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000022 /* ImageIO.framework */; };
 		A10000000000000000000005 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000023 /* XCTest.framework */; };
@@ -18,6 +20,8 @@
 		A10000000000000000000011 /* AlyteImageModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlyteImageModule.swift; sourceTree = "<group>"; };
 		A10000000000000000000012 /* ImagePrivacyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePrivacyTests.swift; sourceTree = "<group>"; };
 		A10000000000000000000013 /* AlyteImageWorkspaceGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlyteImageWorkspaceGeometry.swift; sourceTree = "<group>"; };
+		A10000000000000000000014 /* ImageWorkspaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageWorkspaceTests.swift; sourceTree = "<group>"; };
+		A10000000000000000000015 /* AlyteImageWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlyteImageWorkspaceView.swift; sourceTree = "<group>"; };
 		A10000000000000000000021 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		A10000000000000000000022 /* ImageIO.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ImageIO.framework; path = System/Library/Frameworks/ImageIO.framework; sourceTree = SDKROOT; };
 		A10000000000000000000023 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
@@ -43,8 +47,8 @@
 			A10000000000000000000044 /* Frameworks */,
 			A10000000000000000000045 /* Products */,
 		); sourceTree = "<group>"; };
-		A10000000000000000000042 /* ios */ = {isa = PBXGroup; children = (A10000000000000000000011 /* AlyteImageModule.swift */, A10000000000000000000013 /* AlyteImageWorkspaceGeometry.swift */); path = ios; sourceTree = "<group>"; };
-		A10000000000000000000043 /* tests */ = {isa = PBXGroup; children = (A10000000000000000000012 /* ImagePrivacyTests.swift */); path = tests; sourceTree = "<group>"; };
+		A10000000000000000000042 /* ios */ = {isa = PBXGroup; children = (A10000000000000000000011 /* AlyteImageModule.swift */, A10000000000000000000013 /* AlyteImageWorkspaceGeometry.swift */, A10000000000000000000015 /* AlyteImageWorkspaceView.swift */); path = ios; sourceTree = "<group>"; };
+		A10000000000000000000043 /* tests */ = {isa = PBXGroup; children = (A10000000000000000000012 /* ImagePrivacyTests.swift */, A10000000000000000000014 /* ImageWorkspaceTests.swift */); path = tests; sourceTree = "<group>"; };
 		A10000000000000000000044 /* Frameworks */ = {isa = PBXGroup; children = (
 			A10000000000000000000021 /* UIKit.framework */,
 			A10000000000000000000022 /* ImageIO.framework */,
@@ -73,8 +77,8 @@
 /* End PBXBuildRule section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A10000000000000000000071 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001 /* AlyteImageModule.swift in Sources */, A10000000000000000000007 /* AlyteImageWorkspaceGeometry.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
-		A10000000000000000000072 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000002 /* ImagePrivacyTests.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000071 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001 /* AlyteImageModule.swift in Sources */, A10000000000000000000007 /* AlyteImageWorkspaceGeometry.swift in Sources */, A10000000000000000000009 /* AlyteImageWorkspaceView.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000072 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000002 /* ImagePrivacyTests.swift in Sources */, A10000000000000000000008 /* ImageWorkspaceTests.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
