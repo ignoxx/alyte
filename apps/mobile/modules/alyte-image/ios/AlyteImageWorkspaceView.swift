@@ -83,7 +83,9 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   private var imageNeedsConfiguration = false
   private var isConfiguringImage = false
   private var focusRegion: CGRect?
+  private var pendingOverlayGestureTarget: ImageWorkspaceGestureTarget?
   private var overlayGestureRole: ImageWorkspaceOverlayRole?
+  private var lastEmittedRegions: [ImageWorkspaceRedaction] = []
 
   private enum InteractionMetrics {
     static let minimumHitTarget: CGFloat = 44
@@ -143,10 +145,12 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     doubleTap.delegate = self
     scrollView.addGestureRecognizer(doubleTap)
     let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+    tap.cancelsTouchesInView = false
     tap.require(toFail: doubleTap)
     overlay.addGestureRecognizer(tap)
     overlayPan.addTarget(self, action: #selector(overlayPanned(_:)))
     overlayPan.delegate = self
+    overlayPan.cancelsTouchesInView = false
     // The single overlay recognizer can explicitly fail for empty space, allowing the scroll
     // view to pan there. Per-redaction recognizers cannot express that arbitration reliably when
     // the touch begins on the overlay itself.
@@ -403,6 +407,27 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     manipulatedRect(id: id, translation: translation, role: kind == .resize ? .resizeHandle : .redaction)
   }
 
+  func beginOverlayGestureForTesting(at point: CGPoint) -> AlyteImageWorkspaceGesture? {
+    guard let target = gestureTarget(at: point) else { return nil }
+    pendingOverlayGestureTarget = target
+    guard gestureRecognizerShouldBegin(overlayPan) else { return nil }
+    return AlyteImageWorkspaceGesture(id: target.id, kind: target.role.gestureKind)
+  }
+
+  func overlayPannedForTesting(_ gesture: UIPanGestureRecognizer) {
+    overlayPanned(gesture)
+  }
+
+  func redactionsForTesting() -> [(id: String, rect: CGRect)] {
+    regions.map { (id: $0.id, rect: $0.rect) }
+  }
+
+  func lastEmittedRedactionsForTesting() -> [(id: String, rect: CGRect)] {
+    lastEmittedRegions.map { (id: $0.id, rect: $0.rect) }
+  }
+
+  func canUndoForTesting() -> Bool { !history.isEmpty }
+
   private func focusStoredRegion() {
     guard let focusRegion, imageView.bounds.width > 0, imageView.bounds.height > 0,
       scrollView.bounds.width > 0, scrollView.bounds.height > 0
@@ -489,6 +514,9 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
       if !inspectionMode, selectedID == region.id { view.accessibilityTraits.insert(.selected) }
       view.accessibilityValue = accessibilityValue(for: region.rect, selected: selectedID == region.id)
       view.accessibilityIdentifier = region.id
+      // Keep the ancestor overlay as the sole touch owner. These elements remain accessibility
+      // elements, while direct UIKit touches can reach the overlay pan recognizer reliably.
+      view.isUserInteractionEnabled = false
       if !inspectionMode {
         view.accessibilityCustomActions = accessibilityActions(for: region.id)
       }
@@ -513,6 +541,7 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
         handle.accessibilityValue = accessibilityValue(for: region.rect, selected: true)
         handle.accessibilityIdentifier = region.id
         handle.accessibilityCustomActions = accessibilityActions(for: region.id)
+        handle.isUserInteractionEnabled = false
         overlay.addSubview(handle)
       }
     }
@@ -586,11 +615,26 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     manipulate(gesture, role: overlayGestureRole ?? .redaction)
   }
 
+  func gestureRecognizer(
+    _ gestureRecognizer: UIGestureRecognizer,
+    shouldReceive touch: UITouch
+  ) -> Bool {
+    guard gestureRecognizer === overlayPan else { return true }
+    pendingOverlayGestureTarget = gestureTarget(at: touch.location(in: overlay))
+    return true
+  }
+
   override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
     guard gestureRecognizer === overlayPan else { return true }
-    guard redactMode, !inspectionMode else { return false }
-    let point = gestureRecognizer.location(in: overlay)
-    guard let target = gestureTarget(at: point) else {
+    guard redactMode, !inspectionMode else {
+      pendingOverlayGestureTarget = nil
+      overlayGestureRole = nil
+      return false
+    }
+    let target = pendingOverlayGestureTarget ??
+      gestureTarget(at: gestureRecognizer.location(in: overlay))
+    pendingOverlayGestureTarget = nil
+    guard let target else {
       overlayGestureRole = nil
       gestureRecognizer.name = nil
       return false
@@ -640,11 +684,14 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   private func manipulatedRect(
     id: String,
     translation: CGPoint,
-    role: ImageWorkspaceOverlayRole
+    role: ImageWorkspaceOverlayRole,
+    originalRect: CGRect? = nil
   ) -> CGRect? {
-    guard let original = regions.first(where: { $0.id == id }) else { return nil }
+    guard let original = originalRect ?? regions.first(where: { $0.id == id })?.rect else {
+      return nil
+    }
     return AlyteImageWorkspaceGeometry.manipulated(
-      original: original.rect,
+      original: original,
       translation: translation,
       pageFrame: imageView.bounds,
       resize: role == .resizeHandle,
@@ -667,7 +714,11 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
       let original = startRegions.first(where: { $0.id == id })
     else { return }
     let translation = gesture.translation(in: overlay)
-    regions[index].rect = manipulatedRect(id: id, translation: translation, role: role) ?? original.rect
+    regions[index].rect = manipulatedRect(
+      id: id,
+      translation: translation,
+      role: role,
+      originalRect: original.rect) ?? original.rect
     layoutActiveRegion(id: id)
     if gesture.state == .ended {
       if regions != startRegions {
@@ -752,6 +803,7 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   }
 
   private func emit() {
+    lastEmittedRegions = regions
     onRedactionsChange([
       "pageIndex": 0,
       "redactions": regions.map { [
