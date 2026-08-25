@@ -1,0 +1,14 @@
+# Structural grammar for alyte.semantic-mapper.v1.
+# Canonical Biomarker IDs and source observation IDs remain validator-owned because they are
+# fixture-specific. The deterministic validator rejects unknown IDs after grammar decoding.
+
+root ::= "{" ws "\"schemaVersion\"" ws ":" ws "\"alyte.semantic-mapper.v1\"" ws "," ws "\"proposals\"" ws ":" ws proposals ws "}"
+proposals ::= "[" ws (proposal (ws "," ws proposal)*)? ws "]"
+proposal ::= "{" ws "\"sourceObservationIds\"" ws ":" ws string-list ws "," ws "\"role\"" ws ":" ws role ws "," ws "\"specimenType\"" ws ":" ws specimen ws "," ws "\"biomarkerId\"" ws ":" ws (string | "null") ws "}"
+string-list ::= "[" ws string (ws "," ws string)* ws "]"
+role ::= "\"measurement\"" | "\"specimen-context\"" | "\"ignore\""
+specimen ::= "\"blood\"" | "\"serum\"" | "\"plasma\"" | "\"urine\"" | "\"stool\"" | "\"saliva\"" | "\"unknown\""
+string ::= "\"" ([^"\\] | escape)* "\""
+escape ::= "\\" (["\\/bfnrt] | "u" hex4)
+hex4 ::= [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]
+ws ::= [ \t\n\r]*
