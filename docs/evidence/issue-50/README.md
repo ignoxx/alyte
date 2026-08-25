@@ -2,9 +2,9 @@
 
 This directory records the reproducible harness and the evidence boundary. It intentionally does
 not contain model weights, prompts, OCR dumps, model responses, screenshots of health content, or
-device result bundles. A future device run may add a scrubbed aggregate JSON report here only after
-checking that it contains counts, timings, memory, thermal state, storage sizes, and pinned
-provenance—never source text or raw output.
+device result bundles. The scrubbed
+[`aggregate-20260825T1620.json`](aggregate-20260825T1620.json) report contains only counts, timings,
+memory, thermal state, storage sizes, and pinned provenance—never source text or raw output.
 
 ## Pinned preflight
 
@@ -53,8 +53,8 @@ export ALYTE_MODEL_EVAL_RUNTIME_SOURCE=/Users/ignas/.cache/alyte-model-eval-runt
 export ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK=/Users/ignas/.cache/alyte-model-eval-runtime/llama.cpp/build-apple/llama.xcframework
 export ALYTE_MODEL_EVAL_DERIVED_DATA=/Users/ignas/.cache/alyte-model-eval-derived
 export ALYTE_MODEL_EVAL_XCRESULT=/Users/ignas/.cache/alyte-model-eval.xcresult
-export ALYTE_MODEL_EVAL_TEAM_ID=ZF5CQGPNXN
-export ALYTE_MODEL_EVAL_DEVICE_UDID=9A3D3FF4-48A2-5D50-BCE4-E74E4CA018D9
+export ALYTE_MODEL_EVAL_TEAM_ID=YOUR_APPLE_DEVELOPMENT_TEAM_ID
+export ALYTE_MODEL_EVAL_DEVICE_UDID=YOUR_PAIRED_DEVICE_UDID
 ./scripts/run-model-evaluation-device.sh
 ```
 
@@ -68,10 +68,17 @@ inputs fail the test rather than turning it into a pass. The app is uninstalled 
 data is removed; the externally staged GGUF remains for explicit operator cleanup. If interrupted,
 manually run `xcrun devicectl device uninstall app --device <UDID> com.alyte.model-evaluation`.
 It never substitutes a simulator for device evidence. The paired-device workflow is currently
-blocked before installation because this Mac's Xcode account credentials are invalid and no
-development provisioning profile is available for `ZF5CQGPNXN`; no current-device Qwen metrics are
-claimed here. The supported floor is an iPhone SE (2nd generation/A13); no floor device is connected,
-so floor latency/memory/thermal evidence remains pending.
+validated on the current device: the xcresult summary reports 5 passed and 0 failed tests on an
+iPhone 17 running iOS 26.6.1. The runtime/current-device execution passes, but the Qwen 3.5 0.8B
+candidate fails the current acceptance recommendation: 12 expected rows, 2 referenced (16.67%
+recall), 1 accepted/correct proposal, review burden 11, 5 malformed-schema failures, and 1
+incompatible-specimen failure. Cold load was 7601.8245 ms; warm p50/p95 were 7646.790708/8294.800166
+ms; peak memory was 916193280 bytes; thermal state was nominal; pack/runtime bytes are retained in
+the aggregate report. This is not production-ready. #51 must not proceed from this candidate
+without an explicit replacement or tuning decision. The supported floor is an iPhone SE (2nd
+generation/A13); no floor device is connected, so A13 latency/memory/thermal evidence remains
+unavailable. The evaluator-only native fingerprint note still applies: changing the external
+runtime or evaluator bridge requires a new evaluator build.
 
 ## What is measured
 
