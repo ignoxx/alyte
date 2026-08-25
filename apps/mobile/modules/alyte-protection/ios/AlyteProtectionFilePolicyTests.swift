@@ -15,7 +15,14 @@ final class AlyteProtectionFilePolicyTests: XCTestCase {
     XCTAssertTrue(report.missingSidecarPaths.isEmpty)
     for path in fixture.paths {
       let attributes = try FileManager.default.attributesOfItem(atPath: path.path)
+#if targetEnvironment(simulator)
+      // The documented development-simulator fallback permits this operation, but the
+      // simulator does not expose the resulting NSFileProtection attribute for inspection.
+      XCTAssertNil(attributes[.protectionKey] as? FileProtectionType)
+#else
+      // This is the physical-device gate: keep the complete-protection assertion explicit.
       XCTAssertEqual(attributes[.protectionKey] as? FileProtectionType, .complete)
+#endif
       XCTAssertEqual(
         try path.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup,
         true

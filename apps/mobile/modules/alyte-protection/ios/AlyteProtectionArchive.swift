@@ -194,20 +194,42 @@ final class AlyteProtectionArchive {
       throw AlyteProtectionError.archiveInvalidInput
     }
     let exportsRoot = standardized.deletingLastPathComponent().standardizedFileURL
-    try validateCanonicalContainerPath(standardized, exportsRoot: exportsRoot)
+    try validateCanonicalContainerPath(
+      standardized,
+      exportsRoot: exportsRoot,
+      allowsMissingLeaf: kind == .partial || kind == .archive
+    )
     return exportsRoot
   }
 
-  private func validateCanonicalContainerPath(_ url: URL, exportsRoot: URL) throws {
+  private func validateCanonicalContainerPath(
+    _ url: URL,
+    exportsRoot: URL,
+    allowsMissingLeaf: Bool = false
+  ) throws {
     let path = url.standardizedFileURL.path
     let resolved = url.resolvingSymlinksInPath().standardizedFileURL.path
     guard path == resolved else { throw AlyteProtectionError.archiveSymlink }
 
     var cursor = URL(fileURLWithPath: "/", isDirectory: true)
-    for component in url.path.split(separator: "/") {
+    let components = url.path.split(separator: "/")
+    for (index, component) in components.enumerated() {
       cursor.appendPathComponent(String(component), isDirectory: true)
-      let resource = try cursor.resourceValues(forKeys: [.isSymbolicLinkKey])
-      if resource.isSymbolicLink == true { throw AlyteProtectionError.archiveSymlink }
+      let isLeaf = index == components.count - 1
+      if (try? fileManager.destinationOfSymbolicLink(atPath: cursor.path)) != nil {
+        throw AlyteProtectionError.archiveSymlink
+      }
+      if isLeaf && allowsMissingLeaf && !fileManager.fileExists(atPath: cursor.path) {
+        continue
+      }
+      do {
+        let resource = try cursor.resourceValues(forKeys: [.isSymbolicLinkKey])
+        if resource.isSymbolicLink == true { throw AlyteProtectionError.archiveSymlink }
+      } catch let error as AlyteProtectionError {
+        throw error
+      } catch {
+        throw AlyteProtectionError.archiveFailure
+      }
     }
 
     let rootComponents = exportsRoot.path.split(separator: "/").map(String.init)
@@ -256,7 +278,12 @@ final class AlyteProtectionArchive {
     expected: [AlyteZipExpectedEntry]
   ) throws {
     try validateCanonicalContainerPath(root, exportsRoot: root.deletingLastPathComponent().standardizedFileURL)
-    let rootResource = try root.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+    let rootResource: URLResourceValues
+    do {
+      rootResource = try root.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+    } catch {
+      throw AlyteProtectionError.archiveFailure
+    }
     guard rootResource.isSymbolicLink != true, rootResource.isDirectory == true else {
       throw AlyteProtectionError.archiveSymlink
     }
@@ -288,7 +315,12 @@ final class AlyteProtectionArchive {
     guard candidate.resolvingSymlinksInPath().standardizedFileURL.path == candidate.path else {
       throw AlyteProtectionError.archiveSymlink
     }
-    let resource = try candidate.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
+    let resource: URLResourceValues
+    do {
+      resource = try candidate.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
+    } catch {
+      throw AlyteProtectionError.archiveFailure
+    }
     guard resource.isSymbolicLink != true, resource.isRegularFile == true else {
       throw AlyteProtectionError.archiveSymlink
     }
