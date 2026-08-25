@@ -12,6 +12,8 @@ public struct NativeEvaluationReport: Codable, Equatable, Sendable {
     public let fixtureVersion: String
     public let schemaVersion: String
     public let thinking: Bool
+    public let chatTemplate: String?
+    public let chatTemplateSource: String?
     public let fixtureCount: Int
     public let expectedRowCount: Int
     public let modelReferencedRowCount: Int
@@ -37,6 +39,8 @@ public struct NativeEvaluationReport: Codable, Equatable, Sendable {
         fixtureVersion: String,
         schemaVersion: String,
         thinking: Bool,
+        chatTemplate: String?,
+        chatTemplateSource: String?,
         fixtureCount: Int,
         expectedRowCount: Int,
         modelReferencedRowCount: Int,
@@ -61,6 +65,8 @@ public struct NativeEvaluationReport: Codable, Equatable, Sendable {
         self.fixtureVersion = fixtureVersion
         self.schemaVersion = schemaVersion
         self.thinking = thinking
+        self.chatTemplate = chatTemplate
+        self.chatTemplateSource = chatTemplateSource
         self.fixtureCount = fixtureCount
         self.expectedRowCount = expectedRowCount
         self.modelReferencedRowCount = modelReferencedRowCount
@@ -125,7 +131,11 @@ public enum NativeEvaluationRunner {
 
         var aggregate = NativeFixtureResult()
         for fixture in contract.fixtures {
-            let prompt = prompt(for: fixture, schemaVersion: contract.schemaVersion)
+            let prompt = EvaluationPrompt.render(
+                fixture: fixture,
+                schemaVersion: contract.schemaVersion,
+                chatTemplate: contract.chatTemplate
+            )
             guard prompt.data(using: .utf8)?.count ?? .max <= contract.maxInputBytes else {
                 throw LlamaCppRuntimeError.inputLimitExceeded
             }
@@ -166,6 +176,8 @@ public enum NativeEvaluationRunner {
             fixtureVersion: contract.fixtureVersion,
             schemaVersion: contract.schemaVersion,
             thinking: contract.thinking,
+            chatTemplate: contract.chatTemplate,
+            chatTemplateSource: contract.chatTemplateSource,
             fixtureCount: contract.fixtures.count,
             expectedRowCount: aggregate.expectedRows,
             modelReferencedRowCount: aggregate.referencedRows,
@@ -181,7 +193,21 @@ public enum NativeEvaluationRunner {
         )
     }
 
-    private static func prompt(for fixture: CanonicalFixture, schemaVersion: String) -> String {
+}
+
+enum EvaluationPrompt {
+    static func render(
+        fixture: CanonicalFixture,
+        schemaVersion: String,
+        chatTemplate: String?
+    ) -> String {
+        if chatTemplate == "gemma4-v1" {
+            return gemma4Prompt(for: fixture, schemaVersion: schemaVersion)
+        }
+        return legacyQwenPrompt(for: fixture, schemaVersion: schemaVersion)
+    }
+
+    private static func legacyQwenPrompt(for fixture: CanonicalFixture, schemaVersion: String) -> String {
         """
 <|im_start|>system
 You are an offline semantic mapper. Return only the JSON object required by the grammar.
@@ -199,7 +225,26 @@ Select source IDs and propose only bounded semantic fields.<|im_end|>
 """
     }
 
-    private static func validate(
+    /// Exact text-only subset of Google's Gemma 4 template with reasoning disabled. The pinned
+    /// llama.cpp revision exposes metadata lookup but does not provide Gemma 4's newer `<|turn>`
+    /// template in its built-in apply API, so this reviewed template is bound explicitly.
+    private static func gemma4Prompt(for fixture: CanonicalFixture, schemaVersion: String) -> String {
+        let system = """
+You are an offline semantic mapper. Return only the JSON object required by the grammar.
+Do not provide values, units, intervals, translations, explanations or medical copy.
+""".trimmingCharacters(in: .whitespacesAndNewlines)
+        let user = """
+Schema version: \(schemaVersion). Locale: \(fixture.language).
+Known biomarker IDs are restricted to the checked-in catalogue allowlist.
+OCR chunk: \(fixture.serializedInput)
+Select source IDs and propose only bounded semantic fields.
+""".trimmingCharacters(in: .whitespacesAndNewlines)
+        return "<bos><|turn>system\n\(system)<turn|>\n<|turn>user\n\(user)<turn|>\n<|turn>model\n"
+    }
+}
+
+private extension NativeEvaluationRunner {
+    static func validate(
         output: String,
         fixture: CanonicalFixture,
         contract: EvaluationContract

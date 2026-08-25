@@ -1,4 +1,4 @@
-import { OCR_CHUNK_VERSION, qwenEvaluationManifest } from './manifest';
+import { OCR_CHUNK_VERSION, qwenEvaluationManifest, type EvaluationManifest } from './manifest';
 import type { FixtureObservation } from './fixtures';
 
 export type SerializedOCRObservation = {
@@ -42,13 +42,12 @@ export function serializeOCRChunk(
   observations: readonly FixtureObservation[],
   locale: string,
   knownBiomarkerIds: readonly string[] = qwenEvaluationManifest.allowedBiomarkerIds,
+  manifest: EvaluationManifest = qwenEvaluationManifest,
 ): string {
-  if (observations.length > qwenEvaluationManifest.prompt.maxObservations) {
+  if (observations.length > manifest.prompt.maxObservations) {
     throw new OCRSerializationError('too-many-observations');
   }
-  const allowedBiomarkerIds: ReadonlySet<string> = new Set(
-    qwenEvaluationManifest.allowedBiomarkerIds,
-  );
+  const allowedBiomarkerIds: ReadonlySet<string> = new Set(manifest.allowedBiomarkerIds);
   if (knownBiomarkerIds.some((id) => !allowedBiomarkerIds.has(id))) {
     throw new OCRSerializationError('unknown-catalogue-id');
   }
@@ -65,13 +64,12 @@ export function serializeOCRChunk(
       ) {
         throw new OCRSerializationError('invalid-observation');
       }
-      if (observation.text.length > qwenEvaluationManifest.prompt.maxObservationTextCharacters) {
+      if (observation.text.length > manifest.prompt.maxObservationTextCharacters) {
         throw new OCRSerializationError('observation-text-too-long');
       }
       if (
         observation.alternatives.some(
-          (alternative) =>
-            alternative.length > qwenEvaluationManifest.prompt.maxAlternativeCharacters,
+          (alternative) => alternative.length > manifest.prompt.maxAlternativeCharacters,
         )
       ) {
         throw new OCRSerializationError('observation-alternatives-too-long');
@@ -96,7 +94,7 @@ export function serializeOCRChunk(
     ),
   };
   const result = JSON.stringify(canonical);
-  if (new TextEncoder().encode(result).byteLength > qwenEvaluationManifest.prompt.maxInputBytes) {
+  if (new TextEncoder().encode(result).byteLength > manifest.prompt.maxInputBytes) {
     throw new OCRSerializationError('input-too-large');
   }
   return result;

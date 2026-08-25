@@ -15,6 +15,8 @@ struct EvaluationContract: Decodable, Sendable {
     let maxInputBytes: Int
     let maxOutputBytes: Int
     let maxProposals: Int
+    let chatTemplate: String?
+    let chatTemplateSource: String?
     let allowedBiomarkerIds: [String]
     let biomarkerCatalogue: [CanonicalBiomarker]
     let fixtures: [CanonicalFixture]
@@ -27,8 +29,10 @@ struct EvaluationContract: Decodable, Sendable {
     }
 
     func validate() throws {
-        guard contractVersion == "alyte.qwen-evaluation.contract.v1",
-              manifestVersion == "alyte.qwen-evaluation.manifest.v1",
+        guard [
+            ("alyte.qwen-evaluation.contract.v1", "alyte.qwen-evaluation.manifest.v1"),
+            ("alyte.gemma4-e2b-evaluation.contract.v1", "alyte.gemma4-e2b-evaluation.manifest.v1"),
+        ].contains(where: { $0.0 == contractVersion && $0.1 == manifestVersion }),
               fixtureVersion == "alyte.qwen-evaluation-fixtures.v1",
               schemaVersion == "alyte.semantic-mapper.v1",
               model.revision.count == 40,
@@ -49,6 +53,15 @@ struct EvaluationContract: Decodable, Sendable {
               !grammarRoot.isEmpty,
               fixtures.count == 6,
               Set(fixtures.map(\.language)) == ["en", "de", "lt", "pl", "fr", "es"] else {
+            throw EvaluationContractError.invalidContract
+        }
+        if let chatTemplate {
+            guard chatTemplate == "gemma4-v1",
+                  chatTemplateSource == "explicit-pinned-google-gemma-4-template-v1",
+                  contractVersion == "alyte.gemma4-e2b-evaluation.contract.v1" else {
+                throw EvaluationContractError.invalidContract
+            }
+        } else if chatTemplateSource != nil || contractVersion != "alyte.qwen-evaluation.contract.v1" {
             throw EvaluationContractError.invalidContract
         }
         let knownIds = Set(allowedBiomarkerIds)

@@ -54,6 +54,21 @@ test('device runner rejects a linked-but-unembedded or unsigned runtime before i
   assert.match(runner, /codesign --verify --deep --strict --verbose=2 "\$\{app_path\}"/);
 });
 
+test('device runner selects the pinned candidate artifact and external contract', () => {
+  assert.match(runner, /candidate="\$\{ALYTE_MODEL_EVAL_CANDIDATE:-qwen\}"/);
+  assert.match(runner, /gemma4\)/);
+  assert.match(runner, /model_filename="gemma-4-E2B-it-Q4_0\.gguf"/);
+  assert.match(runner, /model_bytes="2841481184"/);
+  assert.match(
+    runner,
+    /model_sha256="8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52"/,
+  );
+  assert.match(runner, /ALYTE_MODEL_EVAL_CONTRACT_PATH/);
+  assert.match(runner, /Evaluation contract provenance does not match candidate/);
+  assert.match(runner, /ALYTE_MODEL_EVAL_CANDIDATE="\$\{candidate\}"/);
+  assert.match(runner, /--destination "\$\{device_relative_directory\}\/\$\{model_filename\}"/);
+});
+
 test('native bridge honors llama token sizing and bounded prefill', () => {
   assert.match(llamaShim, /required_probe < 0 \? -required_probe : required_probe/);
   assert.match(llamaShim, /session->batch_tokens = batch_tokens/);

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { fixtureById, semanticEvaluationFixtures } from './fixtures';
+import { gemmaEvaluationManifest } from './manifest';
 import { aggregateFixtureScores, buildAggregateReport, scoreEvaluationFixture } from './scorer';
 
 const fixture = fixtureById('qwen-v1-en-mixed')!;
@@ -81,5 +82,20 @@ describe('evaluation scorer', () => {
     assert.equal(second.exactSourceFactsPreserved, 0);
     assert.equal(quality.exactSourceFactsPreserved, 1);
     assert.equal(quality.exactSourceValueUnitIntervalPreservation, 0.5);
+  });
+
+  it('uses candidate-specific aggregate identity without accepting different output fields', () => {
+    const scores = semanticEvaluationFixtures.map((candidate) =>
+      scoreEvaluationFixture(
+        candidate,
+        { schemaVersion: 'alyte.semantic-mapper.v1', proposals: [] },
+        gemmaEvaluationManifest,
+      ),
+    );
+    const report = buildAggregateReport(scores, [], gemmaEvaluationManifest);
+    assert.equal(report.reportVersion, 'alyte.model-evaluation.aggregate.v1');
+    assert.equal(report.provenance.manifestVersion, gemmaEvaluationManifest.manifestVersion);
+    assert.equal(report.provenance.modelFilename, 'gemma-4-E2B-it-Q4_0.gguf');
+    assert.equal('rawModelOutput' in report, false);
   });
 });

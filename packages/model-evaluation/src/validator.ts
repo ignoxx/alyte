@@ -1,4 +1,8 @@
-import { qwenEvaluationManifest, SEMANTIC_MAPPER_SCHEMA_VERSION } from './manifest';
+import {
+  qwenEvaluationManifest,
+  SEMANTIC_MAPPER_SCHEMA_VERSION,
+  type EvaluationManifest,
+} from './manifest';
 import type { FixtureObservation } from './fixtures';
 import {
   authoritativeFieldNames,
@@ -117,6 +121,7 @@ function objectKeys(value: object): string[] {
 export function validateEvaluationOutput(
   raw: unknown,
   observations: readonly FixtureObservation[],
+  manifest: EvaluationManifest = qwenEvaluationManifest,
 ): ValidationResult {
   const measured = measureCanonicalJson(raw);
   if (!measured.ok) {
@@ -127,7 +132,7 @@ export function validateEvaluationOutput(
       rejected: true,
     };
   }
-  if (measured.bytes > qwenEvaluationManifest.prompt.maxOutputBytes) {
+  if (measured.bytes > manifest.prompt.maxOutputBytes) {
     return {
       accepted: [],
       failures: [failure('oversized-output', null)],
@@ -149,7 +154,7 @@ export function validateEvaluationOutput(
   const consumedRows = new Set<string>();
   const accepted: AcceptedProposal[] = [];
   const failures: ValidationFailure[] = [];
-  if (output.proposals.length > qwenEvaluationManifest.prompt.maxProposals) {
+  if (output.proposals.length > manifest.prompt.maxProposals) {
     failures.push(failure('oversized-output', null));
     return { accepted: [], failures, outputBytes: measured.bytes, rejected: true };
   }

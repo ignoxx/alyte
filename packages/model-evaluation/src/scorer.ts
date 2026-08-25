@@ -1,5 +1,5 @@
 import type { SemanticEvaluationFixture } from './fixtures';
-import { qwenEvaluationManifest, MODEL_EVALUATION_MANIFEST_VERSION } from './manifest';
+import { qwenEvaluationManifest, type EvaluationManifest } from './manifest';
 import {
   countFailures,
   validateEvaluationOutput,
@@ -54,9 +54,10 @@ export type DeviceMetricSnapshot = {
 };
 
 export type EvaluationAggregateReport = {
-  readonly reportVersion: 'alyte.qwen-evaluation.aggregate.v1';
+  readonly reportVersion:
+    'alyte.qwen-evaluation.aggregate.v1' | 'alyte.model-evaluation.aggregate.v1';
   readonly provenance: {
-    readonly manifestVersion: typeof MODEL_EVALUATION_MANIFEST_VERSION;
+    readonly manifestVersion: string;
     readonly modelId: string;
     readonly modelRepository: string;
     readonly modelRevision: string;
@@ -134,8 +135,9 @@ function exactSourceFactsPreservedCount(
 export function scoreEvaluationFixture(
   fixture: SemanticEvaluationFixture,
   rawModelOutput: unknown,
+  manifest: EvaluationManifest = qwenEvaluationManifest,
 ): FixtureScore {
-  const validation = validateEvaluationOutput(rawModelOutput, fixture.observations);
+  const validation = validateEvaluationOutput(rawModelOutput, fixture.observations, manifest);
   const modelReferencedRows = lenientReferencedRows(fixture, rawModelOutput);
   const correctAcceptedProposals = correctAcceptedCount(fixture, validation.accepted);
   const exactSourceFactsPreserved = exactSourceFactsPreservedCount(fixture, validation.accepted);
@@ -208,27 +210,32 @@ export function aggregateFixtureScores(scores: readonly FixtureScore[]): Aggrega
 export function buildAggregateReport(
   scores: readonly FixtureScore[],
   devices: readonly DeviceMetricSnapshot[] = [],
+  manifest: EvaluationManifest = qwenEvaluationManifest,
 ): EvaluationAggregateReport {
+  const reportVersion =
+    manifest.manifestVersion === qwenEvaluationManifest.manifestVersion
+      ? 'alyte.qwen-evaluation.aggregate.v1'
+      : 'alyte.model-evaluation.aggregate.v1';
   return {
-    reportVersion: 'alyte.qwen-evaluation.aggregate.v1',
+    reportVersion,
     provenance: {
-      manifestVersion: MODEL_EVALUATION_MANIFEST_VERSION,
-      modelId: qwenEvaluationManifest.model.id,
-      modelRepository: qwenEvaluationManifest.model.repository,
-      modelRevision: qwenEvaluationManifest.model.revision,
-      modelFilename: qwenEvaluationManifest.model.filename,
-      modelSha256: qwenEvaluationManifest.model.sha256,
-      runtimeId: qwenEvaluationManifest.runtime.id,
-      runtimeRepository: qwenEvaluationManifest.runtime.repository,
-      runtimeRevision: qwenEvaluationManifest.runtime.revision,
-      schemaVersion: qwenEvaluationManifest.prompt.schemaVersion,
-      ocrChunkVersion: qwenEvaluationManifest.prompt.ocrChunkVersion,
-      catalogueVersion: qwenEvaluationManifest.prompt.catalogueVersion,
-      contextWindowTokens: qwenEvaluationManifest.prompt.contextWindowTokens,
-      outputTokenLimit: qwenEvaluationManifest.prompt.outputTokenLimit,
-      maxOutputBytes: qwenEvaluationManifest.prompt.maxOutputBytes,
-      temperature: qwenEvaluationManifest.prompt.temperature,
-      thinking: qwenEvaluationManifest.prompt.thinking,
+      manifestVersion: manifest.manifestVersion,
+      modelId: manifest.model.id,
+      modelRepository: manifest.model.repository,
+      modelRevision: manifest.model.revision,
+      modelFilename: manifest.model.filename,
+      modelSha256: manifest.model.sha256,
+      runtimeId: manifest.runtime.id,
+      runtimeRepository: manifest.runtime.repository,
+      runtimeRevision: manifest.runtime.revision,
+      schemaVersion: manifest.prompt.schemaVersion,
+      ocrChunkVersion: manifest.prompt.ocrChunkVersion,
+      catalogueVersion: manifest.prompt.catalogueVersion,
+      contextWindowTokens: manifest.prompt.contextWindowTokens,
+      outputTokenLimit: manifest.prompt.outputTokenLimit,
+      maxOutputBytes: manifest.prompt.maxOutputBytes,
+      temperature: manifest.prompt.temperature,
+      thinking: manifest.prompt.thinking,
     },
     quality: aggregateFixtureScores(scores),
     devices,

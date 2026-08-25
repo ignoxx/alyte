@@ -10,14 +10,18 @@ import {
   semanticEvaluationFixtures,
   type SemanticEvaluationFixture,
 } from './fixtures';
-import { qwenEvaluationManifest, SEMANTIC_MAPPER_SCHEMA_VERSION } from './manifest';
+import {
+  qwenEvaluationManifest,
+  SEMANTIC_MAPPER_SCHEMA_VERSION,
+  type EvaluationManifest,
+} from './manifest';
 import { serializeOCRChunk } from './serialization';
 
 export const MODEL_EVALUATION_CONTRACT_VERSION = 'alyte.qwen-evaluation.contract.v1' as const;
 
 export type CanonicalEvaluationContract = {
-  readonly contractVersion: typeof MODEL_EVALUATION_CONTRACT_VERSION;
-  readonly manifestVersion: typeof qwenEvaluationManifest.manifestVersion;
+  readonly contractVersion: string;
+  readonly manifestVersion: string;
   readonly fixtureVersion: typeof MODEL_EVALUATION_FIXTURE_VERSION;
   readonly schemaVersion: typeof SEMANTIC_MAPPER_SCHEMA_VERSION;
   readonly catalogueVersion: typeof CATALOGUE_VERSION;
@@ -34,6 +38,8 @@ export type CanonicalEvaluationContract = {
     readonly revision: string;
   };
   readonly thinking: boolean;
+  readonly chatTemplate?: 'gemma4-v1';
+  readonly chatTemplateSource?: string;
   readonly grammar: string;
   readonly grammarRoot: string;
   readonly maxInputBytes: number;
@@ -80,7 +86,11 @@ function grammarText(): string {
   return readFileSync(new URL('../schema/semantic-mapper-v1.gbnf', import.meta.url), 'utf8');
 }
 
-function promptFor(fixture: SemanticEvaluationFixture, serializedInput: string): string {
+function promptFor(
+  fixture: SemanticEvaluationFixture,
+  serializedInput: string,
+  manifest: EvaluationManifest,
+): string {
   const prompt = `<|im_start|>system
 You are an offline semantic mapper. Return only the JSON object required by the grammar.
 Do not provide values, units, intervals, translations, explanations or medical copy.<|im_end|>
@@ -95,13 +105,16 @@ Select source IDs and propose only bounded semantic fields.<|im_end|>
 </think>
 
 `;
-  if (new TextEncoder().encode(prompt).byteLength > qwenEvaluationManifest.prompt.maxInputBytes) {
+  if (new TextEncoder().encode(prompt).byteLength > manifest.prompt.maxInputBytes) {
     throw new Error(`input-too-large:${fixture.id}`);
   }
   return prompt;
 }
 
-function canonicalFixture(fixture: SemanticEvaluationFixture): CanonicalFixture {
+function canonicalFixture(
+  fixture: SemanticEvaluationFixture,
+  manifest: EvaluationManifest,
+): CanonicalFixture {
   const knownBiomarkerIds = [
     ...new Set(
       fixture.expected.flatMap((expected) =>
@@ -113,8 +126,9 @@ function canonicalFixture(fixture: SemanticEvaluationFixture): CanonicalFixture 
     fixture.observations,
     fixture.language,
     knownBiomarkerIds,
+    manifest,
   );
-  promptFor(fixture, serializedInput);
+  promptFor(fixture, serializedInput, manifest);
   return {
     id: fixture.id,
     language: fixture.language,
@@ -124,31 +138,39 @@ function canonicalFixture(fixture: SemanticEvaluationFixture): CanonicalFixture 
   };
 }
 
-export function createCanonicalEvaluationContract(): CanonicalEvaluationContract {
+export function createCanonicalEvaluationContract(
+  manifest: EvaluationManifest = qwenEvaluationManifest,
+): CanonicalEvaluationContract {
   return {
-    contractVersion: MODEL_EVALUATION_CONTRACT_VERSION,
-    manifestVersion: qwenEvaluationManifest.manifestVersion,
+    contractVersion: manifest.contractVersion ?? MODEL_EVALUATION_CONTRACT_VERSION,
+    manifestVersion: manifest.manifestVersion,
     fixtureVersion: MODEL_EVALUATION_FIXTURE_VERSION,
     schemaVersion: SEMANTIC_MAPPER_SCHEMA_VERSION,
     catalogueVersion: CATALOGUE_VERSION,
     catalogueSchemaVersion: CATALOGUE_SCHEMA_VERSION,
     model: {
-      repository: qwenEvaluationManifest.model.repository,
-      revision: qwenEvaluationManifest.model.revision,
-      filename: qwenEvaluationManifest.model.filename,
-      sha256: qwenEvaluationManifest.model.sha256,
+      repository: manifest.model.repository,
+      revision: manifest.model.revision,
+      filename: manifest.model.filename,
+      sha256: manifest.model.sha256,
     },
     runtime: {
-      repository: qwenEvaluationManifest.runtime.repository,
-      release: qwenEvaluationManifest.runtime.release,
-      revision: qwenEvaluationManifest.runtime.revision,
+      repository: manifest.runtime.repository,
+      release: manifest.runtime.release,
+      revision: manifest.runtime.revision,
     },
-    thinking: qwenEvaluationManifest.prompt.thinking,
+    thinking: manifest.prompt.thinking,
+    ...(manifest.prompt.chatTemplate === undefined
+      ? {}
+      : {
+          chatTemplate: manifest.prompt.chatTemplate,
+          chatTemplateSource: manifest.prompt.chatTemplateSource,
+        }),
     grammar: grammarText(),
-    grammarRoot: qwenEvaluationManifest.prompt.grammarRoot,
-    maxInputBytes: qwenEvaluationManifest.prompt.maxInputBytes,
-    maxOutputBytes: qwenEvaluationManifest.prompt.maxOutputBytes,
-    maxProposals: qwenEvaluationManifest.prompt.maxProposals,
+    grammarRoot: manifest.prompt.grammarRoot,
+    maxInputBytes: manifest.prompt.maxInputBytes,
+    maxOutputBytes: manifest.prompt.maxOutputBytes,
+    maxProposals: manifest.prompt.maxProposals,
     allowedBiomarkerIds: [...ALL_COMPARABLE_BIOMARKER_IDS].sort(),
     biomarkerCatalogue: comparableBiomarkers.map((entry) => ({
       id: entry.id,
@@ -157,6 +179,6 @@ export function createCanonicalEvaluationContract(): CanonicalEvaluationContract
         ? {}
         : { specimenCompatibility: entry.specimenCompatibility }),
     })),
-    fixtures: semanticEvaluationFixtures.map(canonicalFixture),
+    fixtures: semanticEvaluationFixtures.map((fixture) => canonicalFixture(fixture, manifest)),
   };
 }

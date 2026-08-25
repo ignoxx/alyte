@@ -70,6 +70,45 @@ final class MetricRecorderTests: XCTestCase {
         )
     }
 
+    func testGemma4PromptUsesThePinnedTurnTemplateWithoutThinkingMarkers() {
+        let fixture = CanonicalFixture(
+            id: "synthetic-gemma",
+            language: "de",
+            serializedInput: "{\"version\":\"alyte.semantic-ocr-chunk.v1\"}",
+            observations: [],
+            expected: []
+        )
+        let prompt = EvaluationPrompt.render(
+            fixture: fixture,
+            schemaVersion: "alyte.semantic-mapper.v1",
+            chatTemplate: "gemma4-v1"
+        )
+        XCTAssertTrue(prompt.hasPrefix("<bos><|turn>system\n"))
+        XCTAssertTrue(prompt.contains("<|turn>user\nSchema version: alyte.semantic-mapper.v1. Locale: de."))
+        XCTAssertTrue(prompt.hasSuffix("<|turn>model\n"))
+        XCTAssertFalse(prompt.contains("<|im_start|>"))
+        XCTAssertFalse(prompt.contains("<think>"))
+    }
+
+    func testQwenPromptPathRetainsTheExistingChatMLTemplate() {
+        let fixture = CanonicalFixture(
+            id: "synthetic-qwen",
+            language: "en",
+            serializedInput: "{\"version\":\"alyte.semantic-ocr-chunk.v1\"}",
+            observations: [],
+            expected: []
+        )
+        let prompt = EvaluationPrompt.render(
+            fixture: fixture,
+            schemaVersion: "alyte.semantic-mapper.v1",
+            chatTemplate: nil
+        )
+        XCTAssertTrue(prompt.contains("<|im_start|>system"))
+        XCTAssertTrue(prompt.contains("<|im_start|>assistant"))
+        XCTAssertTrue(prompt.contains("<think>"))
+        XCTAssertFalse(prompt.contains("<|turn>"))
+    }
+
     func testPinnedRuntimeEvaluationWritesAggregateOnlyWhenStaged() throws {
         guard configuredValue("ALYTE_MODEL_EVAL_DEVICE_RUN") == "1" else {
             return

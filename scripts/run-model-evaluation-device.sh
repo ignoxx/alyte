@@ -10,17 +10,60 @@ set -euo pipefail
 : "${ALYTE_MODEL_EVAL_XCRESULT:?Set ALYTE_MODEL_EVAL_XCRESULT outside the repository}"
 : "${ALYTE_MODEL_EVAL_TEAM_ID:?Set ALYTE_MODEL_EVAL_TEAM_ID to the Apple Development team used for this evaluator build}"
 
+repo_root="$(git rev-parse --show-toplevel)"
+candidate="${ALYTE_MODEL_EVAL_CANDIDATE:-qwen}"
+case "${candidate}" in
+  qwen)
+    model_filename="Qwen3.5-0.8B-Q4_0.gguf"
+    model_bytes="563036064"
+    model_sha256="57d1997790d1744fba5b40a7317df71ea5e2acee28c47e78f0cce39c0703f8cf"
+    expected_contract_version="alyte.qwen-evaluation.contract.v1"
+    expected_manifest_version="alyte.qwen-evaluation.manifest.v1"
+    contract_path="${ALYTE_MODEL_EVAL_CONTRACT_PATH:-${repo_root}/packages/model-evaluation/generated/evaluation-contract-v1.json}"
+    ;;
+  gemma4)
+    model_filename="gemma-4-E2B-it-Q4_0.gguf"
+    model_bytes="2841481184"
+    model_sha256="8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52"
+    expected_contract_version="alyte.gemma4-e2b-evaluation.contract.v1"
+    expected_manifest_version="alyte.gemma4-e2b-evaluation.manifest.v1"
+    : "${ALYTE_MODEL_EVAL_CONTRACT_PATH:?Set ALYTE_MODEL_EVAL_CONTRACT_PATH to an external Gemma contract generated with --candidate gemma4}"
+    contract_path="${ALYTE_MODEL_EVAL_CONTRACT_PATH}"
+    ;;
+  *)
+    print -u2 "Unsupported evaluation candidate: ${candidate} (expected qwen or gemma4)"
+    exit 2
+    ;;
+esac
+
 eval_device_udid="${ALYTE_MODEL_EVAL_DEVICE_UDID:-9A3D3FF4-48A2-5D50-BCE4-E74E4CA018D9}"
 eval_device_class="${ALYTE_MODEL_EVAL_DEVICE_CLASS:-current}"
 eval_device_model="${ALYTE_MODEL_EVAL_DEVICE_MODEL:-iPhone 17 (iPhone18,3)}"
 bundle_id="com.alyte.model-evaluation"
 device_relative_directory="Library/Application Support/AlyteModelEvaluation"
-test_model_relative_path="AlyteModelEvaluation/Qwen3.5-0.8B-Q4_0.gguf"
+test_model_relative_path="AlyteModelEvaluation/${model_filename}"
 test_aggregate_relative_path="AlyteModelEvaluation/aggregate.json"
-repo_root="$(git rev-parse --show-toplevel)"
 runtime_source="${ALYTE_MODEL_EVAL_RUNTIME_SOURCE}"
-model_path="${ALYTE_MODEL_EVAL_CACHE}/Qwen3.5-0.8B-Q4_0.gguf"
+model_path="${ALYTE_MODEL_EVAL_CACHE}/${model_filename}"
 aggregate_path="${ALYTE_MODEL_EVAL_AGGREGATE_PATH:-${ALYTE_MODEL_EVAL_CACHE}/aggregate.json}"
+
+if [[ ! -f "${contract_path}" ]]; then
+  print -u2 "Missing ${candidate} evaluation contract: ${contract_path}"
+  exit 2
+fi
+contract_field() {
+  node -e 'const value=JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[process.argv[2]]; if (typeof value !== "string") process.exit(1); process.stdout.write(value)' "${contract_path}" "$1"
+}
+contract_model_field() {
+  node -e 'const value=JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).model[process.argv[2]]; if (typeof value !== "string") process.exit(1); process.stdout.write(value)' "${contract_path}" "$1"
+}
+if [[ "$(contract_field contractVersion)" != "${expected_contract_version}" ||
+      "$(contract_field manifestVersion)" != "${expected_manifest_version}" ||
+      "$(contract_model_field filename)" != "${model_filename}" ||
+      "$(contract_model_field sha256)" != "${model_sha256}" ]]; then
+  print -u2 "Evaluation contract provenance does not match candidate ${candidate}"
+  exit 2
+fi
 
 case "${ALYTE_MODEL_EVAL_CACHE}" in
   "${repo_root}"|"${repo_root}"/*)
@@ -83,7 +126,7 @@ if [[ "${ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK}" != "${runtime_source}/build-apple/
 fi
 
 if [[ ! -f "${model_path}" ]]; then
-  print -u2 "Missing externally staged Qwen artifact: ${model_path}"
+  print -u2 "Missing externally staged ${candidate} artifact: ${model_path}"
   print -u2 "Stage only the pinned public GGUF; this script does not download it."
   exit 2
 fi
@@ -126,12 +169,12 @@ if [[ "$(shasum -a 256 "${device_binary}" | cut -d ' ' -f 1)" != "${runtime_bina
   print -u2 "llama device binary does not match the pinned runtime identity manifest"
   exit 2
 fi
-if [[ "$(stat -f '%z' "${model_path}")" != "563036064" ]]; then
-  print -u2 "Pinned Qwen artifact has the wrong byte size"
+if [[ "$(stat -f '%z' "${model_path}")" != "${model_bytes}" ]]; then
+  print -u2 "Pinned ${candidate} artifact has the wrong byte size"
   exit 2
 fi
-if [[ "$(shasum -a 256 "${model_path}" | cut -d ' ' -f 1)" != "57d1997790d1744fba5b40a7317df71ea5e2acee28c47e78f0cce39c0703f8cf" ]]; then
-  print -u2 "Pinned Qwen artifact has the wrong SHA-256"
+if [[ "$(shasum -a 256 "${model_path}" | cut -d ' ' -f 1)" != "${model_sha256}" ]]; then
+  print -u2 "Pinned ${candidate} artifact has the wrong SHA-256"
   exit 2
 fi
 
@@ -186,6 +229,8 @@ xcodebuild \
   ALYTE_MODEL_EVAL_DEVICE_RUN=1 \
   ALYTE_MODEL_EVAL_DEVICE_CLASS="${eval_device_class}" \
   ALYTE_MODEL_EVAL_DEVICE_MODEL="${eval_device_model}" \
+  ALYTE_MODEL_EVAL_CANDIDATE="${candidate}" \
+  ALYTE_MODEL_EVAL_CONTRACT_PATH="${contract_path}" \
   ALYTE_MODEL_EVAL_MODEL_PATH="${test_model_relative_path}" \
   ALYTE_MODEL_EVAL_AGGREGATE_PATH="${test_aggregate_relative_path}" \
   SWIFT_ACTIVE_COMPILATION_CONDITIONS="ALYTE_LLAMA_EVAL" \
@@ -253,7 +298,7 @@ installed_app=1
 xcrun devicectl device copy to \
   --device "${eval_device_udid}" \
   --source "${model_path}" \
-  --destination "${device_relative_directory}/Qwen3.5-0.8B-Q4_0.gguf" \
+  --destination "${device_relative_directory}/${model_filename}" \
   --domain-type appDataContainer \
   --domain-identifier "${bundle_id}"
 
@@ -280,7 +325,7 @@ const fs = require('node:fs');
 const path = process.argv[2];
 const report = JSON.parse(fs.readFileSync(path, 'utf8'));
 const serialized = JSON.stringify(report);
-if (serialized.includes('<|im_start|>') || serialized.includes('sourceFacts') || serialized.includes('rawModelOutput')) {
+if (serialized.includes('<|im_start|>') || serialized.includes('<|turn>') || serialized.includes('<bos>') || serialized.includes('sourceFacts') || serialized.includes('rawModelOutput')) {
   throw new Error('aggregate report contains forbidden raw evaluation content');
 }
 if (!report.deviceMetrics || typeof report.fixtureCount !== 'number' || typeof report.expectedRowCount !== 'number') {
