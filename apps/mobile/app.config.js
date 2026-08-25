@@ -40,6 +40,8 @@ module.exports = ({ config }) => {
           'Alyte uses the camera to save an Intake Image on this iPhone when you tap Snap.',
         NSPhotoLibraryUsageDescription:
           'Alyte uses Photos only when you choose an existing image for an Intake Event.',
+        NSFaceIDUsageDescription:
+          'Alyte uses Face ID to unlock your local Alyte history when you choose app lock.',
         ITSAppUsesNonExemptEncryption: false,
       },
     },
@@ -49,6 +51,16 @@ module.exports = ({ config }) => {
       apiEnvironment: variant === 'production' ? 'production' : 'none',
       showcaseAllowed: variant !== 'production',
     },
-    plugins: ['expo-image', ...(variant === 'development' ? ['expo-dev-client'] : [])],
+    plugins: [
+      'expo-image',
+      [
+        'expo-local-authentication',
+        {
+          faceIDPermission:
+            'Alyte uses Face ID to unlock your local Alyte history when you choose app lock.',
+        },
+      ],
+      ...(variant === 'development' ? ['expo-dev-client'] : []),
+    ],
   };
 };

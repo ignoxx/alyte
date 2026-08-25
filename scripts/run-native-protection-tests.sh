@@ -233,9 +233,11 @@ cp "${package_template}" "${harness_root}/Package.swift"
 cp "${package_lock}" "${harness_root}/Package.resolved"
 cp "${module_root}/ios/AlyteProtectionArchive.swift" \
   "${module_root}/ios/AlyteProtectionFilePolicy.swift" \
+  "${module_root}/ios/AlyteProtectionSnapshotShield.swift" \
   "${harness_root}/Sources/AlyteProtection/"
 cp "${module_root}/ios/AlyteProtectionArchiveTests.swift" \
   "${module_root}/ios/AlyteProtectionFilePolicyTests.swift" \
+  "${module_root}/ios/AlyteProtectionSnapshotShieldTests.swift" \
   "${harness_root}/Tests/AlyteProtectionTests/"
 
 echo "Running AlyteProtection XCTest fixtures on ${simulator_name} (iOS Simulator ${simulator_runtime_version})"

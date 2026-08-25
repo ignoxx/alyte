@@ -6,6 +6,7 @@ export type HomeStackParamList = {
 
 export type SettingsStackParamList = {
   SettingsRoot: undefined;
+  AppLock: undefined;
   PrivacyStorage: undefined;
   ModelStorage: undefined;
   SupportFaq: undefined;

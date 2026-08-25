@@ -7,11 +7,16 @@ import type { MainTabParamList } from '../../navigation/types';
 import { t } from '../../localization';
 import { AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
+import { useAppLock } from '../app-lock/AppLockProvider';
 
 type SettingsScreenProps = BottomTabScreenProps<MainTabParamList, 'Settings'>;
 
 export function SettingsScreen(_props: SettingsScreenProps) {
   const navigation = useNavigation<any>();
+  const { state } = useAppLock();
+  const appLockStatus = state.preferences?.enabled
+    ? t('settings.appLockEnabled')
+    : t('settings.appLockDisabled');
 
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
@@ -22,6 +27,14 @@ export function SettingsScreen(_props: SettingsScreenProps) {
         <Host matchContents>
           <FieldGroup>
             <FieldGroup.Section>
+              <ListItem
+                leading={<Icon name="lock.shield" size={22} color={colors.accent} />}
+                trailing={<AppText>›</AppText>}
+                supportingText={`${t('settings.appLockSubtitle')} · ${appLockStatus}`}
+                onPress={() => navigation.navigate('AppLock')}
+              >
+                {t('settings.appLockTitle')}
+              </ListItem>
               <ListItem
                 leading={<Icon name="lock.shield" size={22} color={colors.accent} />}
                 trailing={<AppText>›</AppText>}

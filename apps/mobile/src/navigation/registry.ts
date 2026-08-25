@@ -13,6 +13,7 @@ import { SnapScreen } from '../features/intake/SnapScreen';
 import { PrivacyStorageScreen } from '../features/settings/PrivacyStorageScreen';
 import { ModelStorageScreen } from '../features/settings/ModelStorageScreen';
 import { SupportFaqScreen } from '../features/settings/SupportFaqScreen';
+import { AppLockScreen } from '../features/app-lock/AppLockScreen';
 import { DiagnosticsScreen } from '../features/settings/DiagnosticsScreen';
 import { DeleteLocalDataScreen } from '../features/settings/DeleteLocalDataScreen';
 import {
@@ -85,6 +86,12 @@ const intakeFeatures: readonly NavigationFeature[] = [
 ];
 
 const settingsFeatures: readonly NavigationFeature[] = [
+  {
+    name: 'AppLock',
+    target: 'settings',
+    component: AppLockScreen,
+    titleKey: 'settings.appLockTitle',
+  },
   {
     name: 'PrivacyStorage',
     target: 'settings',

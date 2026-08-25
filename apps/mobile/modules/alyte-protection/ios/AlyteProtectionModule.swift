@@ -7,6 +7,14 @@ public final class AlyteProtectionModule: Module {
   public func definition() -> ModuleDefinition {
     Name("AlyteProtection")
 
+    Function("clearSnapshotShield") {
+      AlyteSnapshotShield.shared.clear()
+    }
+
+    Function("isSnapshotShieldInstalled") {
+      AlyteSnapshotShield.shared.isInstalled()
+    }
+
     AsyncFunction("protectDatabaseFiles") { (databasePath: String, options: [String: Bool]) throws -> [String: Any] in
       let path = Self.filePath(from: databasePath)
       let requireSidecars = options["requireSidecars"] ?? true
