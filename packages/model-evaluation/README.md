@@ -11,7 +11,10 @@ catalogue-compatibility, and bound contract consumed by the native target. Gener
 Gemma contract into an external cache with `--candidate gemma4 --output <external-path>`; expected
 fixtures and semantic bounds are unchanged. Gemma's contract records the explicit pinned
 `gemma4-v1` template because the pinned llama.cpp revision's built-in template API does not apply
-the newer Gemma 4 `<|turn>` template. Both native paths run with `thinking = false`, deterministic
+the newer Gemma 4 `<|turn>` template. The Gemma contract also records the upstream source model
+`google/gemma-4-E2B-it` at revision
+`3e22461f65e89153144f8adb70e3b8c2cc9845a7`, distinct from the converted GGUF repository and
+revision. Both native paths run with `thinking = false`, deterministic
 greedy sampling, and only `sourceObservationIds`, a bounded semantic role, a known specimen type,
 and a known catalogue Biomarker ID in model output. `validateEvaluationOutput` is the TypeScript
 acceptance boundary, and the native target applies the same contract-driven acceptance rules before

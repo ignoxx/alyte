@@ -96,6 +96,22 @@ describe('evaluation scorer', () => {
     assert.equal(report.reportVersion, 'alyte.model-evaluation.aggregate.v1');
     assert.equal(report.provenance.manifestVersion, gemmaEvaluationManifest.manifestVersion);
     assert.equal(report.provenance.modelFilename, 'gemma-4-E2B-it-Q4_0.gguf');
+    assert.equal(report.provenance.sourceModelRepository, 'google/gemma-4-E2B-it');
+    assert.equal(report.provenance.sourceModelRevision, '3e22461f65e89153144f8adb70e3b8c2cc9845a7');
     assert.equal('rawModelOutput' in report, false);
+  });
+
+  it('rejects tampered candidate provenance before aggregate emission', () => {
+    const tampered = {
+      ...gemmaEvaluationManifest,
+      sourceModel: {
+        ...gemmaEvaluationManifest.sourceModel,
+        revision: '0000000000000000000000000000000000000000',
+      },
+    };
+    assert.throws(
+      () => buildAggregateReport([], [], tampered),
+      /unsupported_evaluation_candidate_manifest/,
+    );
   });
 });

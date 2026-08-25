@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  assertEvaluationCandidateManifest,
   candidateEvaluationManifests,
   gemmaEvaluationManifest,
   qwenEvaluationManifest,
@@ -21,8 +22,27 @@ describe('evaluation candidate manifests', () => {
       '8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52',
     );
     assert.equal(gemmaEvaluationManifest.model.license, 'Apache-2.0');
+    assert.deepEqual(gemmaEvaluationManifest.sourceModel, {
+      id: 'gemma-4-e2b-it',
+      repository: 'google/gemma-4-E2B-it',
+      revision: '3e22461f65e89153144f8adb70e3b8c2cc9845a7',
+    });
     assert.equal(gemmaEvaluationManifest.prompt.chatTemplate, 'gemma4-v1');
     assert.equal(gemmaEvaluationManifest.prompt.thinking, false);
     assert.deepEqual(Object.keys(candidateEvaluationManifests).sort(), ['gemma4', 'qwen']);
+  });
+
+  it('rejects a tampered candidate identity before contract or aggregate emission', () => {
+    const tampered = {
+      ...gemmaEvaluationManifest,
+      model: {
+        ...gemmaEvaluationManifest.model,
+        repository: 'ggml-org/other-GGUF',
+      },
+    };
+    assert.throws(
+      () => assertEvaluationCandidateManifest(tampered),
+      /unsupported_evaluation_candidate_manifest/,
+    );
   });
 });

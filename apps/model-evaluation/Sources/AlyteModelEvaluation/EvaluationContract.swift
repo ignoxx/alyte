@@ -8,6 +8,7 @@ struct EvaluationContract: Decodable, Sendable {
     let catalogueVersion: String
     let catalogueSchemaVersion: String
     let model: CanonicalModelProvenance
+    let sourceModel: CanonicalSourceModelProvenance?
     let runtime: CanonicalRuntimeProvenance
     let thinking: Bool
     let grammar: String
@@ -29,10 +30,8 @@ struct EvaluationContract: Decodable, Sendable {
     }
 
     func validate() throws {
-        guard [
-            ("alyte.qwen-evaluation.contract.v1", "alyte.qwen-evaluation.manifest.v1"),
-            ("alyte.gemma4-e2b-evaluation.contract.v1", "alyte.gemma4-e2b-evaluation.manifest.v1"),
-        ].contains(where: { $0.0 == contractVersion && $0.1 == manifestVersion }),
+        guard let identity = EvaluationCandidateIdentity(contractVersion: contractVersion),
+              manifestVersion == identity.manifestVersion,
               fixtureVersion == "alyte.qwen-evaluation-fixtures.v1",
               schemaVersion == "alyte.semantic-mapper.v1",
               model.revision.count == 40,
@@ -53,6 +52,20 @@ struct EvaluationContract: Decodable, Sendable {
               !grammarRoot.isEmpty,
               fixtures.count == 6,
               Set(fixtures.map(\.language)) == ["en", "de", "lt", "pl", "fr", "es"] else {
+            throw EvaluationContractError.invalidContract
+        }
+        guard model.repository == identity.modelRepository,
+              model.revision == identity.modelRevision,
+              model.filename == identity.modelFilename,
+              model.sha256 == identity.modelSha256,
+              runtime.repository == identity.runtimeRepository,
+              runtime.release == identity.runtimeRelease,
+              runtime.revision == identity.runtimeRevision,
+              sourceModel?.id == identity.sourceModelID,
+              sourceModel?.repository == identity.sourceModelRepository,
+              sourceModel?.revision == identity.sourceModelRevision,
+              chatTemplate == identity.chatTemplate,
+              chatTemplateSource == identity.chatTemplateSource else {
             throw EvaluationContractError.invalidContract
         }
         if let chatTemplate {
@@ -109,10 +122,101 @@ struct CanonicalModelProvenance: Decodable, Sendable {
     let sha256: String
 }
 
+struct CanonicalSourceModelProvenance: Decodable, Sendable {
+    let id: String
+    let repository: String
+    let revision: String
+}
+
 struct CanonicalRuntimeProvenance: Decodable, Sendable {
     let repository: String
     let release: String
     let revision: String
+}
+
+private struct EvaluationCandidateIdentity {
+    let manifestVersion: String
+    let modelRepository: String
+    let modelRevision: String
+    let modelFilename: String
+    let modelSha256: String
+    let sourceModelID: String?
+    let sourceModelRepository: String?
+    let sourceModelRevision: String?
+    let runtimeRepository: String
+    let runtimeRelease: String
+    let runtimeRevision: String
+    let chatTemplate: String?
+    let chatTemplateSource: String?
+
+    private init(
+        manifestVersion: String,
+        modelRepository: String,
+        modelRevision: String,
+        modelFilename: String,
+        modelSha256: String,
+        sourceModelID: String?,
+        sourceModelRepository: String?,
+        sourceModelRevision: String?,
+        runtimeRepository: String,
+        runtimeRelease: String,
+        runtimeRevision: String,
+        chatTemplate: String?,
+        chatTemplateSource: String?
+    ) {
+        self.manifestVersion = manifestVersion
+        self.modelRepository = modelRepository
+        self.modelRevision = modelRevision
+        self.modelFilename = modelFilename
+        self.modelSha256 = modelSha256
+        self.sourceModelID = sourceModelID
+        self.sourceModelRepository = sourceModelRepository
+        self.sourceModelRevision = sourceModelRevision
+        self.runtimeRepository = runtimeRepository
+        self.runtimeRelease = runtimeRelease
+        self.runtimeRevision = runtimeRevision
+        self.chatTemplate = chatTemplate
+        self.chatTemplateSource = chatTemplateSource
+    }
+
+    init?(contractVersion: String) {
+        switch contractVersion {
+        case "alyte.qwen-evaluation.contract.v1":
+            self.init(
+                manifestVersion: "alyte.qwen-evaluation.manifest.v1",
+                modelRepository: "ggml-org/Qwen3.5-0.8B-GGUF",
+                modelRevision: "8fea620810c4afa23dd6443f999a48574c1611a3",
+                modelFilename: "Qwen3.5-0.8B-Q4_0.gguf",
+                modelSha256: "57d1997790d1744fba5b40a7317df71ea5e2acee28c47e78f0cce39c0703f8cf",
+                sourceModelID: nil,
+                sourceModelRepository: nil,
+                sourceModelRevision: nil,
+                runtimeRepository: "ggml-org/llama.cpp",
+                runtimeRelease: "v0.2.0",
+                runtimeRevision: "bb4caa7540188872173c44d161602d9271386413",
+                chatTemplate: nil,
+                chatTemplateSource: nil
+            )
+        case "alyte.gemma4-e2b-evaluation.contract.v1":
+            self.init(
+                manifestVersion: "alyte.gemma4-e2b-evaluation.manifest.v1",
+                modelRepository: "ggml-org/gemma-4-E2B-it-GGUF",
+                modelRevision: "b4243c156154b6dca9324415f8c7ccc098b4aed1",
+                modelFilename: "gemma-4-E2B-it-Q4_0.gguf",
+                modelSha256: "8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52",
+                sourceModelID: "gemma-4-e2b-it",
+                sourceModelRepository: "google/gemma-4-E2B-it",
+                sourceModelRevision: "3e22461f65e89153144f8adb70e3b8c2cc9845a7",
+                runtimeRepository: "ggml-org/llama.cpp",
+                runtimeRelease: "v0.2.0",
+                runtimeRevision: "bb4caa7540188872173c44d161602d9271386413",
+                chatTemplate: "gemma4-v1",
+                chatTemplateSource: "explicit-pinned-google-gemma-4-template-v1"
+            )
+        default:
+            return nil
+        }
+    }
 }
 
 struct CanonicalFixture: Decodable, Sendable {

@@ -6,6 +6,9 @@ public struct NativeEvaluationReport: Codable, Equatable, Sendable {
     public let modelRevision: String
     public let modelFilename: String
     public let modelSha256: String
+    public let sourceModelId: String?
+    public let sourceModelRepository: String?
+    public let sourceModelRevision: String?
     public let runtimeRepository: String
     public let runtimeRelease: String
     public let runtimeRevision: String
@@ -33,6 +36,9 @@ public struct NativeEvaluationReport: Codable, Equatable, Sendable {
         modelRevision: String,
         modelFilename: String,
         modelSha256: String,
+        sourceModelId: String?,
+        sourceModelRepository: String?,
+        sourceModelRevision: String?,
         runtimeRepository: String,
         runtimeRelease: String,
         runtimeRevision: String,
@@ -59,6 +65,9 @@ public struct NativeEvaluationReport: Codable, Equatable, Sendable {
         self.modelRevision = modelRevision
         self.modelFilename = modelFilename
         self.modelSha256 = modelSha256
+        self.sourceModelId = sourceModelId
+        self.sourceModelRepository = sourceModelRepository
+        self.sourceModelRevision = sourceModelRevision
         self.runtimeRepository = runtimeRepository
         self.runtimeRelease = runtimeRelease
         self.runtimeRevision = runtimeRevision
@@ -170,6 +179,9 @@ public enum NativeEvaluationRunner {
             modelRevision: contract.model.revision,
             modelFilename: contract.model.filename,
             modelSha256: contract.model.sha256,
+            sourceModelId: contract.sourceModel?.id,
+            sourceModelRepository: contract.sourceModel?.repository,
+            sourceModelRevision: contract.sourceModel?.revision,
             runtimeRepository: contract.runtime.repository,
             runtimeRelease: contract.runtime.release,
             runtimeRevision: contract.runtime.revision,

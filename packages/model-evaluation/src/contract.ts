@@ -11,13 +11,15 @@ import {
   type SemanticEvaluationFixture,
 } from './fixtures';
 import {
+  assertEvaluationCandidateManifest,
+  QWEN_EVALUATION_CONTRACT_VERSION,
   qwenEvaluationManifest,
   SEMANTIC_MAPPER_SCHEMA_VERSION,
   type EvaluationManifest,
 } from './manifest';
 import { serializeOCRChunk } from './serialization';
 
-export const MODEL_EVALUATION_CONTRACT_VERSION = 'alyte.qwen-evaluation.contract.v1' as const;
+export const MODEL_EVALUATION_CONTRACT_VERSION = QWEN_EVALUATION_CONTRACT_VERSION;
 
 export type CanonicalEvaluationContract = {
   readonly contractVersion: string;
@@ -31,6 +33,11 @@ export type CanonicalEvaluationContract = {
     readonly revision: string;
     readonly filename: string;
     readonly sha256: string;
+  };
+  readonly sourceModel?: {
+    readonly id: string;
+    readonly repository: string;
+    readonly revision: string;
   };
   readonly runtime: {
     readonly repository: string;
@@ -141,6 +148,7 @@ function canonicalFixture(
 export function createCanonicalEvaluationContract(
   manifest: EvaluationManifest = qwenEvaluationManifest,
 ): CanonicalEvaluationContract {
+  assertEvaluationCandidateManifest(manifest);
   return {
     contractVersion: manifest.contractVersion ?? MODEL_EVALUATION_CONTRACT_VERSION,
     manifestVersion: manifest.manifestVersion,
@@ -154,6 +162,7 @@ export function createCanonicalEvaluationContract(
       filename: manifest.model.filename,
       sha256: manifest.model.sha256,
     },
+    ...(manifest.sourceModel === undefined ? {} : { sourceModel: manifest.sourceModel }),
     runtime: {
       repository: manifest.runtime.repository,
       release: manifest.runtime.release,

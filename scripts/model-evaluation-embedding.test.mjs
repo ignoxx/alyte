@@ -64,6 +64,13 @@ test('device runner selects the pinned candidate artifact and external contract'
     /model_sha256="8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52"/,
   );
   assert.match(runner, /ALYTE_MODEL_EVAL_CONTRACT_PATH/);
+  assert.match(runner, /model_repository="ggml-org\/gemma-4-E2B-it-GGUF"/);
+  assert.match(runner, /model_revision="b4243c156154b6dca9324415f8c7ccc098b4aed1"/);
+  assert.match(runner, /source_model_repository="google\/gemma-4-E2B-it"/);
+  assert.match(runner, /source_model_revision="3e22461f65e89153144f8adb70e3b8c2cc9845a7"/);
+  assert.match(runner, /runtime_repository="ggml-org\/llama\.cpp"/);
+  assert.match(runner, /runtime_revision="bb4caa7540188872173c44d161602d9271386413"/);
+  assert.match(runner, /contract_source_model_field/);
   assert.match(runner, /Evaluation contract provenance does not match candidate/);
   assert.match(runner, /ALYTE_MODEL_EVAL_CANDIDATE="\$\{candidate\}"/);
   assert.match(runner, /--destination "\$\{device_relative_directory\}\/\$\{model_filename\}"/);

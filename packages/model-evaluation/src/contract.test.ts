@@ -47,6 +47,11 @@ describe('canonical native evaluation contract', () => {
       gemma.model.sha256,
       '8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52',
     );
+    assert.deepEqual(gemma.sourceModel, {
+      id: 'gemma-4-e2b-it',
+      repository: 'google/gemma-4-E2B-it',
+      revision: '3e22461f65e89153144f8adb70e3b8c2cc9845a7',
+    });
     assert.equal(gemma.chatTemplate, 'gemma4-v1');
     assert.equal(gemma.chatTemplateSource, 'explicit-pinned-google-gemma-4-template-v1');
     assert.deepEqual(

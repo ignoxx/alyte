@@ -15,18 +15,36 @@ candidate="${ALYTE_MODEL_EVAL_CANDIDATE:-qwen}"
 case "${candidate}" in
   qwen)
     model_filename="Qwen3.5-0.8B-Q4_0.gguf"
+    model_repository="ggml-org/Qwen3.5-0.8B-GGUF"
+    model_revision="8fea620810c4afa23dd6443f999a48574c1611a3"
     model_bytes="563036064"
     model_sha256="57d1997790d1744fba5b40a7317df71ea5e2acee28c47e78f0cce39c0703f8cf"
+    source_model_id=""
+    source_model_repository=""
+    source_model_revision=""
     expected_contract_version="alyte.qwen-evaluation.contract.v1"
     expected_manifest_version="alyte.qwen-evaluation.manifest.v1"
+    runtime_repository="ggml-org/llama.cpp"
+    runtime_revision="bb4caa7540188872173c44d161602d9271386413"
+    expected_chat_template=""
+    expected_chat_template_source=""
     contract_path="${ALYTE_MODEL_EVAL_CONTRACT_PATH:-${repo_root}/packages/model-evaluation/generated/evaluation-contract-v1.json}"
     ;;
   gemma4)
     model_filename="gemma-4-E2B-it-Q4_0.gguf"
+    model_repository="ggml-org/gemma-4-E2B-it-GGUF"
+    model_revision="b4243c156154b6dca9324415f8c7ccc098b4aed1"
     model_bytes="2841481184"
     model_sha256="8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52"
+    source_model_id="gemma-4-e2b-it"
+    source_model_repository="google/gemma-4-E2B-it"
+    source_model_revision="3e22461f65e89153144f8adb70e3b8c2cc9845a7"
     expected_contract_version="alyte.gemma4-e2b-evaluation.contract.v1"
     expected_manifest_version="alyte.gemma4-e2b-evaluation.manifest.v1"
+    runtime_repository="ggml-org/llama.cpp"
+    runtime_revision="bb4caa7540188872173c44d161602d9271386413"
+    expected_chat_template="gemma4-v1"
+    expected_chat_template_source="explicit-pinned-google-gemma-4-template-v1"
     : "${ALYTE_MODEL_EVAL_CONTRACT_PATH:?Set ALYTE_MODEL_EVAL_CONTRACT_PATH to an external Gemma contract generated with --candidate gemma4}"
     contract_path="${ALYTE_MODEL_EVAL_CONTRACT_PATH}"
     ;;
@@ -52,15 +70,30 @@ if [[ ! -f "${contract_path}" ]]; then
   exit 2
 fi
 contract_field() {
-  node -e 'const value=JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[process.argv[2]]; if (typeof value !== "string") process.exit(1); process.stdout.write(value)' "${contract_path}" "$1"
+  node -e 'const value=process.argv[2].split(".").reduce((object, key) => object?.[key], JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))); if (typeof value !== "string") process.exit(1); process.stdout.write(value)' "${contract_path}" "$1"
 }
 contract_model_field() {
   node -e 'const value=JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).model[process.argv[2]]; if (typeof value !== "string") process.exit(1); process.stdout.write(value)' "${contract_path}" "$1"
 }
+contract_optional_field() {
+  node -e 'const value=JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[process.argv[2]]; if (value === undefined || value === null) process.exit(0); if (typeof value !== "string") process.exit(1); process.stdout.write(value)' "${contract_path}" "$1"
+}
+contract_source_model_field() {
+  node -e 'const value=JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).sourceModel?.[process.argv[2]]; if (value === undefined || value === null) process.exit(0); if (typeof value !== "string") process.exit(1); process.stdout.write(value)' "${contract_path}" "$1"
+}
 if [[ "$(contract_field contractVersion)" != "${expected_contract_version}" ||
       "$(contract_field manifestVersion)" != "${expected_manifest_version}" ||
+      "$(contract_model_field repository)" != "${model_repository}" ||
+      "$(contract_model_field revision)" != "${model_revision}" ||
       "$(contract_model_field filename)" != "${model_filename}" ||
-      "$(contract_model_field sha256)" != "${model_sha256}" ]]; then
+      "$(contract_model_field sha256)" != "${model_sha256}" ||
+      "$(contract_field runtime.repository)" != "${runtime_repository}" ||
+      "$(contract_field runtime.revision)" != "${runtime_revision}" ||
+      "$(contract_source_model_field id)" != "${source_model_id}" ||
+      "$(contract_source_model_field repository)" != "${source_model_repository}" ||
+      "$(contract_source_model_field revision)" != "${source_model_revision}" ||
+      "$(contract_optional_field chatTemplate)" != "${expected_chat_template}" ||
+      "$(contract_optional_field chatTemplateSource)" != "${expected_chat_template_source}" ]]; then
   print -u2 "Evaluation contract provenance does not match candidate ${candidate}"
   exit 2
 fi

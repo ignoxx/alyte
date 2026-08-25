@@ -5,6 +5,7 @@ import {
 } from '@alyte/catalogue';
 
 export const MODEL_EVALUATION_MANIFEST_VERSION = 'alyte.qwen-evaluation.manifest.v1' as const;
+export const QWEN_EVALUATION_CONTRACT_VERSION = 'alyte.qwen-evaluation.contract.v1' as const;
 export const SEMANTIC_MAPPER_SCHEMA_VERSION = 'alyte.semantic-mapper.v1' as const;
 export const OCR_CHUNK_VERSION = 'alyte.semantic-ocr-chunk.v1' as const;
 export const GEMMA_EVALUATION_MANIFEST_VERSION = 'alyte.gemma4-e2b-evaluation.manifest.v1' as const;
@@ -13,6 +14,11 @@ export const GEMMA_EVALUATION_CONTRACT_VERSION = 'alyte.gemma4-e2b-evaluation.co
 export type EvaluationManifest = {
   readonly manifestVersion: string;
   readonly contractVersion?: string;
+  readonly sourceModel?: {
+    readonly id: string;
+    readonly repository: string;
+    readonly revision: string;
+  };
   readonly model: {
     readonly id: string;
     readonly repository: string;
@@ -124,6 +130,11 @@ export type QwenEvaluationManifest = typeof qwenEvaluationManifest;
 export const gemmaEvaluationManifest = Object.freeze({
   manifestVersion: GEMMA_EVALUATION_MANIFEST_VERSION,
   contractVersion: GEMMA_EVALUATION_CONTRACT_VERSION,
+  sourceModel: Object.freeze({
+    id: 'gemma-4-e2b-it',
+    repository: 'google/gemma-4-E2B-it',
+    revision: '3e22461f65e89153144f8adb70e3b8c2cc9845a7',
+  }),
   model: Object.freeze({
     id: 'gemma-4-e2b-it',
     repository: 'ggml-org/gemma-4-E2B-it-GGUF',
@@ -156,6 +167,45 @@ export const candidateEvaluationManifests = Object.freeze({
 } as const);
 
 export type EvaluationCandidate = keyof typeof candidateEvaluationManifests;
+
+function candidateIdentity(manifest: EvaluationManifest): string {
+  return JSON.stringify({
+    contractVersion: manifest.contractVersion ?? QWEN_EVALUATION_CONTRACT_VERSION,
+    manifestVersion: manifest.manifestVersion,
+    sourceModel: manifest.sourceModel ?? null,
+    model: {
+      id: manifest.model.id,
+      repository: manifest.model.repository,
+      revision: manifest.model.revision,
+      filename: manifest.model.filename,
+      bytes: manifest.model.bytes,
+      sha256: manifest.model.sha256,
+    },
+    runtime: {
+      id: manifest.runtime.id,
+      repository: manifest.runtime.repository,
+      release: manifest.runtime.release,
+      revision: manifest.runtime.revision,
+    },
+    prompt: {
+      schemaVersion: manifest.prompt.schemaVersion,
+      ocrChunkVersion: manifest.prompt.ocrChunkVersion,
+      catalogueVersion: manifest.prompt.catalogueVersion,
+      catalogueSchemaVersion: manifest.prompt.catalogueSchemaVersion,
+      contextWindowTokens: manifest.prompt.contextWindowTokens,
+      outputTokenLimit: manifest.prompt.outputTokenLimit,
+      maxInputBytes: manifest.prompt.maxInputBytes,
+      maxOutputBytes: manifest.prompt.maxOutputBytes,
+      maxProposals: manifest.prompt.maxProposals,
+      temperature: manifest.prompt.temperature,
+      topP: manifest.prompt.topP,
+      thinking: manifest.prompt.thinking,
+      grammarRoot: manifest.prompt.grammarRoot,
+      chatTemplate: manifest.prompt.chatTemplate ?? null,
+      chatTemplateSource: manifest.prompt.chatTemplateSource ?? null,
+    },
+  });
+}
 
 export function modelArtifactUrl(manifest: EvaluationManifest = qwenEvaluationManifest): string {
   return manifest.model.url;
@@ -195,5 +245,16 @@ export function assertEvaluationManifest(manifest: EvaluationManifest): void {
   }
 }
 
-assertEvaluationManifest(qwenEvaluationManifest);
-assertEvaluationManifest(gemmaEvaluationManifest);
+export function assertEvaluationCandidateManifest(manifest: EvaluationManifest): void {
+  assertEvaluationManifest(manifest);
+  if (
+    !Object.values(candidateEvaluationManifests).some(
+      (candidate) => candidateIdentity(candidate) === candidateIdentity(manifest),
+    )
+  ) {
+    throw new Error('unsupported_evaluation_candidate_manifest');
+  }
+}
+
+assertEvaluationCandidateManifest(qwenEvaluationManifest);
+assertEvaluationCandidateManifest(gemmaEvaluationManifest);

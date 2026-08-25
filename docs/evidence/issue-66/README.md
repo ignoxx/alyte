@@ -33,6 +33,9 @@ $ALYTE_MODEL_EVAL_CACHE/gemma-4-E2B-it-Q4_0.gguf
 
 The runner verifies the exact 2,841,481,184-byte artifact and SHA-256
 `8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52`; it never downloads the GGUF.
+The contract separately pins the upstream source model `google/gemma-4-E2B-it` at revision
+`3e22461f65e89153144f8adb70e3b8c2cc9845a7`; this is distinct from the converted GGUF repository
+revision and is checked before the evaluator build.
 
 ## Run on the paired current device
 

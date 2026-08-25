@@ -1,5 +1,9 @@
 import type { SemanticEvaluationFixture } from './fixtures';
-import { qwenEvaluationManifest, type EvaluationManifest } from './manifest';
+import {
+  assertEvaluationCandidateManifest,
+  qwenEvaluationManifest,
+  type EvaluationManifest,
+} from './manifest';
 import {
   countFailures,
   validateEvaluationOutput,
@@ -63,6 +67,9 @@ export type EvaluationAggregateReport = {
     readonly modelRevision: string;
     readonly modelFilename: string;
     readonly modelSha256: string;
+    readonly sourceModelId?: string;
+    readonly sourceModelRepository?: string;
+    readonly sourceModelRevision?: string;
     readonly runtimeId: string;
     readonly runtimeRepository: string;
     readonly runtimeRevision: string;
@@ -212,6 +219,7 @@ export function buildAggregateReport(
   devices: readonly DeviceMetricSnapshot[] = [],
   manifest: EvaluationManifest = qwenEvaluationManifest,
 ): EvaluationAggregateReport {
+  assertEvaluationCandidateManifest(manifest);
   const reportVersion =
     manifest.manifestVersion === qwenEvaluationManifest.manifestVersion
       ? 'alyte.qwen-evaluation.aggregate.v1'
@@ -225,6 +233,13 @@ export function buildAggregateReport(
       modelRevision: manifest.model.revision,
       modelFilename: manifest.model.filename,
       modelSha256: manifest.model.sha256,
+      ...(manifest.sourceModel === undefined
+        ? {}
+        : {
+            sourceModelId: manifest.sourceModel.id,
+            sourceModelRepository: manifest.sourceModel.repository,
+            sourceModelRevision: manifest.sourceModel.revision,
+          }),
       runtimeId: manifest.runtime.id,
       runtimeRepository: manifest.runtime.repository,
       runtimeRevision: manifest.runtime.revision,
