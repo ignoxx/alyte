@@ -46,6 +46,26 @@ final class AlyteProtectionSnapshotShieldTests: XCTestCase {
     XCTAssertEqual(Self.shieldedViews(in: window).count, 1)
   }
 
+  func testClearWhileInactiveKeepsShieldInstalledUntilActive() {
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
+    let shield = AlyteSnapshotShield(windowProvider: { [window] })
+
+    shield.install()
+    shield.setApplicationActive(false)
+    shield.clear()
+
+    XCTAssertTrue(shield.isInstalled())
+    XCTAssertEqual(Self.shieldedViews(in: window).count, 1)
+
+    shield.setApplicationActive(true)
+    XCTAssertTrue(shield.isInstalled())
+    XCTAssertEqual(Self.shieldedViews(in: window).count, 1)
+
+    shield.clear()
+    XCTAssertFalse(shield.isInstalled())
+    XCTAssertEqual(Self.shieldedViews(in: window).count, 0)
+  }
+
   func testConcurrentInstallAndClearLeavesDeterministicClearResult() {
     let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
     let shield = AlyteSnapshotShield(windowProvider: { [window] })

@@ -47,6 +47,7 @@ function AppContent({ services }: { readonly services: AlyteServices }) {
   }, [controller]);
 
   useEffect(() => {
+    if (appLockState.phase !== 'unlocked') return;
     let active = true;
     void services.intake
       .getLocalPreference(ONBOARDING_COMPLETED_PREFERENCE)
@@ -61,7 +62,16 @@ function AppContent({ services }: { readonly services: AlyteServices }) {
     return () => {
       active = false;
     };
-  }, [services]);
+  }, [appLockState.phase, services]);
+
+  useEffect(() => {
+    if (appLockState.phase !== 'unlocked') return;
+    // These services open the shared local SQLite file lazily. Starting them only after the
+    // app-lock policy has resolved prevents first-launch migration/connection races from making a
+    // valid default policy look unreadable to the neutral gate.
+    void services.export.startup().catch(() => undefined);
+    void services.controls.reconcile().catch(() => undefined);
+  }, [appLockState.phase, services]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState: AppStateStatus) => {
@@ -69,7 +79,7 @@ function AppContent({ services }: { readonly services: AlyteServices }) {
         void controller.onForeground().then(resumeCloudIfUnlocked);
       } else {
         cloudResumeHandledForActiveCycle.current = false;
-        controller.onBackground();
+        controller.onBackground(nextState === 'inactive' ? 'inactive' : 'background');
       }
     });
     return () => subscription.remove();

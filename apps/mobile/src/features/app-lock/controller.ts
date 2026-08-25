@@ -1,3 +1,4 @@
+import { t } from '../../localization';
 import {
   initialAppLockState,
   reduceAppLockState,
@@ -9,16 +10,18 @@ import type { AppLockAuthService } from './auth';
 import type { AppLockPreferenceStore } from './preferences';
 import type { SnapshotShieldBridge } from './shield';
 
+type AppLockOperationResult = { readonly ok: boolean };
+
 export type AppLockController = {
   readonly getSnapshot: () => AppLockState;
   readonly subscribe: (listener: () => void) => () => void;
   readonly bootstrap: () => Promise<void>;
-  readonly onBackground: () => void;
+  readonly onBackground: (reason?: 'inactive' | 'background') => void;
   readonly onForeground: () => Promise<void>;
   readonly retry: () => Promise<void>;
   readonly unlock: () => Promise<void>;
-  readonly setEnabled: (enabled: boolean) => Promise<{ readonly ok: boolean }>;
-  readonly setGrace: (grace: AppLockPreferences['grace']) => Promise<{ readonly ok: boolean }>;
+  readonly setEnabled: (enabled: boolean) => Promise<AppLockOperationResult>;
+  readonly setGrace: (grace: AppLockPreferences['grace']) => Promise<AppLockOperationResult>;
 };
 
 export type AppLockControllerOptions = {
@@ -41,7 +44,12 @@ export function createAppLockController(options: AppLockControllerOptions): AppL
   let generation = 0;
   let bootstrapPromise: Promise<void> | null = null;
   let foregroundPromise: Promise<void> | null = null;
-  let authPromise: Promise<AppLockAuthOutcome> | null = null;
+  let authenticationPromise: Promise<AppLockAuthOutcome> | null = null;
+  let authenticationToken: number | null = null;
+  let authenticationPromptInactive = false;
+  let authenticationPromptActivePromise: Promise<void> | null = null;
+  let resolveAuthenticationPromptActive: (() => void) | null = null;
+  let settingsOperationPromise: Promise<AppLockOperationResult> | null = null;
   const listeners = new Set<() => void>();
 
   function notify(): void {
@@ -62,47 +70,123 @@ export function createAppLockController(options: AppLockControllerOptions): AppL
     }
   }
 
-  async function runAuthentication(token: number, promptMessage: string): Promise<void> {
-    // A lifecycle event can invalidate a prompt while LocalAuthentication is still presenting it.
-    // Wait for that stale context to settle, then request a fresh context for the current gate.
-    if (authPromise !== null) {
-      const staleAttempt = authPromise;
+  function beginAuthenticationPromptLifecycle(): void {
+    if (authenticationPromptActivePromise !== null) return;
+    authenticationPromptActivePromise = new Promise<void>((resolve) => {
+      resolveAuthenticationPromptActive = resolve;
+    });
+  }
+
+  function markAuthenticationPromptActive(): void {
+    authenticationPromptInactive = false;
+    const resolve = resolveAuthenticationPromptActive;
+    resolveAuthenticationPromptActive = null;
+    authenticationPromptActivePromise = null;
+    resolve?.();
+  }
+
+  /**
+   * All auth callers use this path so stale lifecycle generations cannot publish a result. A
+   * pending system context is allowed to settle, then the current operation receives a fresh
+   * context from the auth service.
+   */
+  async function authenticateFor(
+    token: number,
+    promptMessage: string,
+  ): Promise<AppLockAuthOutcome | null> {
+    if (authenticationPromise !== null) {
+      const staleAttempt = authenticationPromise;
       try {
         await staleAttempt;
       } catch {
-        // The service maps provider failures to a locked outcome; injected providers may throw.
+        // Providers are mapped to an auth outcome; injected providers may still throw.
       }
-      if (token !== generation) return;
+      if (token !== generation) return null;
     }
+
     transition({ type: 'authentication-started' });
     let attempt: Promise<AppLockAuthOutcome>;
     try {
       attempt = options.authentication.authenticate(promptMessage);
     } catch {
-      transition({ type: 'authentication-finished', outcome: { kind: 'failed' } });
-      return;
+      const outcome = { kind: 'failed' } as const;
+      transition({ type: 'authentication-finished', outcome });
+      return outcome;
     }
-    authPromise = attempt;
+
+    authenticationPromise = attempt;
+    authenticationToken = token;
     let outcome: AppLockAuthOutcome;
     try {
       outcome = await attempt;
+    } catch {
+      outcome = { kind: 'failed' };
     } finally {
-      if (authPromise === attempt) authPromise = null;
+      if (authenticationPromise === attempt) authenticationPromise = null;
+      if (authenticationToken === token) authenticationToken = null;
     }
-    if (token !== generation) return;
-    if (outcome.kind !== 'success') {
-      transition({ type: 'authentication-finished', outcome });
-      return;
-    }
+    if (token !== generation) return null;
+    if (outcome.kind !== 'success') markAuthenticationPromptActive();
+    if (outcome.kind !== 'success') transition({ type: 'authentication-finished', outcome });
+    return outcome;
+  }
+
+  async function releaseAfterAuthentication(
+    token: number,
+    outcome: AppLockAuthOutcome,
+  ): Promise<boolean> {
+    if (outcome.kind !== 'success' || token !== generation) return false;
+    if (!(await waitForAuthenticationActive(token))) return false;
     try {
-      // Clear first, then publish unlocked, so health content cannot appear while the native
-      // shield is still in place or if clearing it fails.
+      // The native shield is cleared before the unlocked phase is published.
       await clearShieldOrThrow();
     } catch {
-      return;
+      return false;
     }
-    if (token !== generation) return;
+    if (token !== generation) return false;
     transition({ type: 'authentication-finished', outcome });
+    return true;
+  }
+
+  async function waitForAuthenticationActive(token: number): Promise<boolean> {
+    // LocalAuthentication can finish while UIKit is still transitioning its system sheet back
+    // to Alyte. Wait for the matching active callback before any caller clears the shield; a true
+    // background transition increments the generation and invalidates the stale operation.
+    const activeTransition = authenticationPromptActivePromise;
+    if (activeTransition !== null) await activeTransition;
+    return token === generation;
+  }
+
+  async function persistPolicy(token: number, preferences: AppLockPreferences): Promise<boolean> {
+    try {
+      await options.preferences.write(preferences);
+    } catch {
+      if (token === generation) transition({ type: 'preference-write-failed' });
+      return false;
+    }
+    return token === generation;
+  }
+
+  async function readForForeground(token: number): Promise<AppLockPreferences | null> {
+    let preferences: AppLockPreferences;
+    try {
+      preferences = await options.preferences.read();
+    } catch {
+      if (token === generation) transition({ type: 'preference-read-failed' });
+      return null;
+    }
+    if (token !== generation) return null;
+
+    // Keep the background timestamp while replacing in-memory policy with the durable value.
+    // This is what reconciles a write that completed after a lifecycle transition.
+    if (
+      state.preferences?.enabled !== preferences.enabled ||
+      state.preferences?.grace !== preferences.grace
+    ) {
+      state = { ...state, preferences };
+      notify();
+    }
+    return preferences;
   }
 
   async function bootstrap(): Promise<void> {
@@ -121,8 +205,6 @@ export function createAppLockController(options: AppLockControllerOptions): AppL
       if (token !== generation) return;
       const resolved = reduceAppLockState(state, { type: 'bootstrap-resolved', preferences });
       if (!preferences.enabled) {
-        // Keep the gate opaque until the native shield is gone. The reducer's unlocked result is
-        // useful policy state, but must not be published before this platform side effect.
         state = { ...resolved, phase: 'loading' };
         notify();
         try {
@@ -135,7 +217,8 @@ export function createAppLockController(options: AppLockControllerOptions): AppL
         return;
       }
       transition({ type: 'bootstrap-resolved', preferences });
-      await runAuthentication(token, 'Unlock Alyte');
+      const outcome = await authenticateFor(token, t('settings.appLock.promptUnlock'));
+      if (outcome !== null) await releaseAfterAuthentication(token, outcome);
     })();
     bootstrapPromise = work;
     try {
@@ -145,31 +228,58 @@ export function createAppLockController(options: AppLockControllerOptions): AppL
     }
   }
 
-  function onBackground(): void {
+  function onBackground(reason: 'inactive' | 'background' = 'background'): void {
+    // LocalAuthentication presents a system sheet that temporarily makes the app inactive. The
+    // native subscriber still installs the snapshot shield, but that sheet must not invalidate
+    // the auth context or cause the active callback to start a second prompt.
+    if (reason === 'inactive' && authenticationPromise !== null) {
+      authenticationPromptInactive = true;
+      beginAuthenticationPromptLifecycle();
+      return;
+    }
     generation += 1;
+    if (reason === 'background') markAuthenticationPromptActive();
     transition({ type: 'backgrounded', at: now() });
   }
 
   async function onForeground(): Promise<void> {
     if (foregroundPromise !== null) return foregroundPromise;
+    if (authenticationPromptInactive) {
+      // This active callback belongs to the LocalAuthentication sheet, not a new unlock
+      // attempt. Resolving the lifecycle waiter lets the original successful attempt clear the
+      // shield exactly once without starting a duplicate system prompt.
+      markAuthenticationPromptActive();
+      return;
+    }
+    if (authenticationPromise !== null && authenticationToken === generation) return;
+    // Active notifications can repeat without a background transition. They must not invalidate
+    // a Settings write or prompt a second time.
+    if (state.phase === 'unlocked' && state.backgroundedAt === null) return;
+    if (state.phase === 'retry' || state.phase === 'loading') return;
+
     const token = ++generation;
     const work = (async () => {
-      if (state.preferences === null) {
-        // If background interrupted preference bootstrap, let the stale read settle and start a
-        // fresh read while the native shield remains in place.
-        const pendingBootstrap = bootstrapPromise;
-        if (pendingBootstrap !== null) await pendingBootstrap;
-        if (state.preferences === null && state.phase !== 'retry') await bootstrap();
-        return;
+      // A stale Settings operation may have already changed durable policy after background. Wait
+      // for its single-value write to settle before reading policy or deciding whether auth is
+      // required; otherwise persisted enabled=true could be exposed under old in-memory state.
+      const pendingSettings = settingsOperationPromise;
+      if (pendingSettings !== null) {
+        try {
+          await pendingSettings;
+        } catch {
+          // The operation reports failure to its caller; foreground still re-reads the policy.
+        }
       }
-      if (state.phase === 'retry' || state.phase === 'loading') return;
-      if (state.phase === 'unlocked' && state.backgroundedAt === null) return;
-      const shouldAuthenticate = state.preferences.enabled;
+      if (token !== generation) return;
+
+      const preferences = await readForForeground(token);
+      if (preferences === null || token !== generation) return;
       const at = now();
-      const foregrounded = reduceAppLockState(state, { type: 'foregrounded', at });
+      const foregrounded = reduceAppLockState(
+        { ...state, preferences },
+        { type: 'foregrounded', at },
+      );
       if (foregrounded.phase === 'unlocked') {
-        // Do not expose the mounted navigator until the native shield has been cleared. This is
-        // also the path for disabled lock and in-memory grace periods.
         state = { ...foregrounded, phase: 'loading' };
         notify();
         try {
@@ -182,7 +292,8 @@ export function createAppLockController(options: AppLockControllerOptions): AppL
         return;
       }
       transition({ type: 'foregrounded', at });
-      if (shouldAuthenticate) await runAuthentication(token, 'Unlock Alyte');
+      const outcome = await authenticateFor(token, t('settings.appLock.promptUnlock'));
+      if (outcome !== null) await releaseAfterAuthentication(token, outcome);
     })();
     foregroundPromise = work;
     try {
@@ -201,56 +312,60 @@ export function createAppLockController(options: AppLockControllerOptions): AppL
   }
 
   async function unlock(): Promise<void> {
+    // A gate tap cannot bypass a pending lifecycle recovery. Foreground reconciliation waits for
+    // any stale Settings write, re-reads the atomic policy, and only then authenticates/clears.
+    if (settingsOperationPromise !== null || state.backgroundedAt !== null) {
+      await onForeground();
+      return;
+    }
     if (state.preferences === null || !state.preferences.enabled) {
       await bootstrap();
       return;
     }
-    if (authPromise !== null) {
-      await authPromise;
+    if (authenticationPromise !== null) {
+      await authenticationPromise;
       return;
     }
     const token = ++generation;
-    await runAuthentication(token, 'Unlock Alyte');
+    const outcome = await authenticateFor(token, t('settings.appLock.promptUnlock'));
+    if (outcome !== null) await releaseAfterAuthentication(token, outcome);
   }
 
-  async function setEnabled(enabled: boolean): Promise<{ readonly ok: boolean }> {
+  function enqueueSettingsOperation(
+    operation: () => Promise<AppLockOperationResult>,
+  ): Promise<AppLockOperationResult> {
+    const previous = settingsOperationPromise;
+    const work = (previous === null ? Promise.resolve() : previous.catch(() => undefined)).then(
+      operation,
+    );
+    settingsOperationPromise = work;
+    void work.then(
+      () => {
+        if (settingsOperationPromise === work) settingsOperationPromise = null;
+      },
+      () => {
+        if (settingsOperationPromise === work) settingsOperationPromise = null;
+      },
+    );
+    return work;
+  }
+
+  async function setEnabledOperation(enabled: boolean): Promise<AppLockOperationResult> {
     const current = state.preferences;
     if (current === null || state.phase !== 'unlocked') return { ok: false };
-    if (authPromise !== null) {
-      await authPromise;
-      return { ok: false };
-    }
+
     const token = ++generation;
-    transition({ type: 'authentication-started' });
-    let attempt: Promise<AppLockAuthOutcome>;
-    try {
-      attempt = options.authentication.authenticate(
-        enabled ? 'Turn on Alyte app lock' : 'Turn off Alyte app lock',
-      );
-    } catch {
-      transition({ type: 'authentication-finished', outcome: { kind: 'failed' } });
+    const outcome = await authenticateFor(
+      token,
+      enabled ? t('settings.appLock.promptEnable') : t('settings.appLock.promptDisable'),
+    );
+    if (outcome === null || outcome.kind !== 'success' || token !== generation) {
       return { ok: false };
     }
-    authPromise = attempt;
-    let outcome: AppLockAuthOutcome;
-    try {
-      outcome = await attempt;
-    } catch {
-      outcome = { kind: 'failed' };
-    } finally {
-      if (authPromise === attempt) authPromise = null;
-    }
-    if (token !== generation || outcome.kind !== 'success') {
-      if (token === generation) transition({ type: 'authentication-finished', outcome });
-      return { ok: false };
-    }
+
     const next = { ...current, enabled };
-    try {
-      await options.preferences.write(next);
-    } catch {
-      if (token === generation) transition({ type: 'preference-write-failed' });
-      return { ok: false };
-    }
+    if (!(await waitForAuthenticationActive(token))) return { ok: false };
+    if (!(await persistPolicy(token, next))) return { ok: false };
     try {
       await clearShieldOrThrow();
     } catch {
@@ -261,18 +376,25 @@ export function createAppLockController(options: AppLockControllerOptions): AppL
     return { ok: true };
   }
 
-  async function setGrace(grace: AppLockPreferences['grace']): Promise<{ readonly ok: boolean }> {
+  function setEnabled(enabled: boolean): Promise<AppLockOperationResult> {
+    return enqueueSettingsOperation(() => setEnabledOperation(enabled));
+  }
+
+  async function setGraceOperation(
+    grace: AppLockPreferences['grace'],
+  ): Promise<AppLockOperationResult> {
     const current = state.preferences;
     if (current === null || state.phase !== 'unlocked') return { ok: false };
+    const token = ++generation;
     const next = { ...current, grace };
-    try {
-      await options.preferences.write(next);
-    } catch {
-      transition({ type: 'preference-write-failed' });
-      return { ok: false };
-    }
+    if (!(await persistPolicy(token, next))) return { ok: false };
+    if (token !== generation) return { ok: false };
     transition({ type: 'preferences-updated', preferences: next });
     return { ok: true };
+  }
+
+  function setGrace(grace: AppLockPreferences['grace']): Promise<AppLockOperationResult> {
+    return enqueueSettingsOperation(() => setGraceOperation(grace));
   }
 
   return {

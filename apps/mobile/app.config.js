@@ -12,6 +12,8 @@ const variants = {
     bundleIdentifier: 'com.alyte.app',
   },
 };
+const localization = require('./src/localization/en.json');
+const faceIDPermission = localization.settings.appLock.faceIDPermission;
 
 module.exports = ({ config }) => {
   const requestedVariant = process.env.APP_VARIANT;
@@ -40,8 +42,7 @@ module.exports = ({ config }) => {
           'Alyte uses the camera to save an Intake Image on this iPhone when you tap Snap.',
         NSPhotoLibraryUsageDescription:
           'Alyte uses Photos only when you choose an existing image for an Intake Event.',
-        NSFaceIDUsageDescription:
-          'Alyte uses Face ID to unlock your local Alyte history when you choose app lock.',
+        NSFaceIDUsageDescription: faceIDPermission,
         ITSAppUsesNonExemptEncryption: false,
       },
     },
@@ -56,8 +57,7 @@ module.exports = ({ config }) => {
       [
         'expo-local-authentication',
         {
-          faceIDPermission:
-            'Alyte uses Face ID to unlock your local Alyte history when you choose app lock.',
+          faceIDPermission,
         },
       ],
       ...(variant === 'development' ? ['expo-dev-client'] : []),

@@ -29,6 +29,9 @@ final class AlyteSnapshotShield: @unchecked Sendable {
   private let windowProvider: () -> [UIWindow]
   private let stateLock = NSLock()
   private var installed = false
+  // The lifecycle subscriber changes this before installing on resignation. A JS clear that
+  // arrives after that boundary must be a no-op; otherwise it could remove the fresh shield.
+  private var applicationActive = true
   private var lifecycleObserversInstalled = false
 
   init(
@@ -55,6 +58,11 @@ final class AlyteSnapshotShield: @unchecked Sendable {
 
   func clear() {
     performOnMainSync { [self] in
+      guard isApplicationActive() else {
+        setInstalled(true)
+        applyToAllWindows()
+        return
+      }
       setInstalled(false)
       for window in windowProvider() {
         window.subviews
@@ -70,6 +78,20 @@ final class AlyteSnapshotShield: @unchecked Sendable {
     return installed
   }
 
+  /// Called only by the native app-delegate subscriber. JS intentionally has no install or
+  /// lifecycle-control API; this state makes the clear boundary fail safe during deactivation.
+  func setApplicationActive(_ active: Bool) {
+    performOnMainSync { [self] in
+      stateLock.lock()
+      applicationActive = active
+      stateLock.unlock()
+      if !active {
+        setInstalled(true)
+        applyToAllWindows()
+      }
+    }
+  }
+
   /// Reconciles all windows after a newly connected scene. Kept internal for deterministic tests.
   func reconcileConnectedScenes() {
     performOnMainSync { [self] in
@@ -82,6 +104,12 @@ final class AlyteSnapshotShield: @unchecked Sendable {
     stateLock.lock()
     installed = value
     stateLock.unlock()
+  }
+
+  private func isApplicationActive() -> Bool {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return applicationActive
   }
 
   private func installLifecycleObserversIfNeeded() {
@@ -132,19 +160,18 @@ final class AlyteSnapshotShield: @unchecked Sendable {
 
   private static func connectedWindows() -> [UIWindow] {
     if Thread.isMainThread {
-      return MainActor.assumeIsolated {
-        UIApplication.shared.connectedScenes
-          .compactMap { $0 as? UIWindowScene }
-          .flatMap { $0.windows }
-      }
+      return MainActor.assumeIsolated { allConnectedWindows() }
     }
 
     return DispatchQueue.main.sync {
-      MainActor.assumeIsolated {
-        UIApplication.shared.connectedScenes
-          .compactMap { $0 as? UIWindowScene }
-          .flatMap { $0.windows }
-      }
+      MainActor.assumeIsolated { allConnectedWindows() }
     }
+  }
+
+  @MainActor
+  private static func allConnectedWindows() -> [UIWindow] {
+    UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .flatMap { $0.windows }
   }
 }
