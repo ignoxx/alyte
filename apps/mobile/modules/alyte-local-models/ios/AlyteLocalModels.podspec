@@ -6,9 +6,17 @@ Pod::Spec.new do |s|
   s.author         = 'Alyte'
   s.homepage       = 'https://alyte.app'
   s.platforms      = { :ios => '26.0' }
-  s.source         = { git: '' }
+  s.source         = { :path => '.' }
+  s.license        = {
+    :type => 'Proprietary',
+    :text => 'Alyte local model support is distributed only as part of the private Alyte application.',
+  }
   s.static_framework = true
   s.dependency 'ExpoModulesCore'
+  repository_root = File.expand_path('../../../../..', __dir__)
+  pod_root = File.expand_path(__dir__)
+  staged_runtime_root = File.join(pod_root, '.alyte-local-model-runtime')
+  require File.join(pod_root, 'stage-runtime.rb')
   runtime_xcframework = ENV['ALYTE_LOCAL_MODEL_RUNTIME_XCFRAMEWORK'] || ENV['ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK']
   runtime_manifest = runtime_xcframework && "#{runtime_xcframework}.alyte-eval.json"
   allow_simulator_fake = ENV['ALYTE_LOCAL_MODEL_ALLOW_SIMULATOR_FAKE'] == '1' &&
@@ -39,15 +47,23 @@ Pod::Spec.new do |s|
     unless identity['deviceBinarySha256'] == Digest::SHA256.file(device_binary).hexdigest
       raise 'Pinned llama.cpp runtime binary checksum does not match its identity manifest'
     end
-    s.vendored_frameworks = device_framework
+    staged_framework = stage_runtime!(
+      runtime_xcframework,
+      staged_runtime_root,
+      repository_root: repository_root,
+    )
+    staged_relative_framework = File.join(File.basename(staged_runtime_root), 'llama.framework')
+    raise 'AlyteLocalModels staged runtime path must be relative' if Pathname.new(staged_relative_framework).absolute?
+    raise 'AlyteLocalModels staged runtime path is missing' unless File.directory?(staged_framework)
+    s.vendored_frameworks = staged_relative_framework
     s.pod_target_xcconfig = {
       'DEFINES_MODULE' => 'YES',
       'SWIFT_ACTIVE_COMPILATION_CONDITIONS' => '$(inherited) ALYTE_LLAMA_RUNTIME',
       'OTHER_CFLAGS' => '$(inherited) -DALYTE_LLAMA_RUNTIME',
-      'HEADER_SEARCH_PATHS' => "$(inherited) #{File.join(device_framework, 'Headers')}",
-      'FRAMEWORK_SEARCH_PATHS' => "$(inherited) #{File.dirname(device_framework)}",
+      'HEADER_SEARCH_PATHS' => "$(inherited) $(PODS_TARGET_SRCROOT)/#{File.basename(staged_runtime_root)}/llama.framework/Headers",
+      'FRAMEWORK_SEARCH_PATHS' => "$(inherited) $(PODS_TARGET_SRCROOT)/#{File.basename(staged_runtime_root)}",
     }
-    runtime_checker = File.expand_path('../../../../..', __dir__) + '/scripts/check-local-model-runtime.mjs'
+    runtime_checker = File.join(repository_root, 'scripts/check-local-model-runtime.mjs')
     s.script_phase = {
       :name => 'Verify pinned Alyte llama.cpp runtime',
       :script => <<-SCRIPT,
@@ -62,7 +78,10 @@ SCRIPT
     raise 'AlyteLocalModels requires ALYTE_LOCAL_MODEL_RUNTIME_XCFRAMEWORK built from the exact pinned llama.cpp revision; simulator-only fake builds must set ALYTE_LOCAL_MODEL_ALLOW_SIMULATOR_FAKE=1 and ALYTE_LOCAL_MODEL_SIMULATOR=1'
   end
   s.source_files = '**/*.{h,m,mm,c,swift,hpp,cpp}'
-  s.exclude_files = '**/*Tests.swift'
+  s.exclude_files = [
+    '**/*Tests.swift',
+    "#{File.basename(staged_runtime_root)}/**/*",
+  ]
   s.test_spec 'Tests' do |test_spec|
     test_spec.source_files = '*Tests.swift'
     test_spec.frameworks = 'XCTest'
