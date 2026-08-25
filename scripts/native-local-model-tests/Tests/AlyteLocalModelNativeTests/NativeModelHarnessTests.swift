@@ -4,12 +4,15 @@ import XCTest
 
 private final class SyntheticRuntime: AlyteLocalModelRuntimeSession {
   private(set) var isClosed = false
+  private(set) var cancellationRequested = false
   func generate(prompt: String, maxOutputTokens: Int, outputCapacity: Int) throws -> String {
+    if cancellationRequested { throw AlyteLocalModelRuntimeError.cancelled }
     _ = prompt
     _ = maxOutputTokens
     _ = outputCapacity
     return "{\"schemaVersion\":\"alyte.semantic-mapper.v1\",\"proposals\":[]}"
   }
+  func cancelInference() { cancellationRequested = true }
   func close() { isClosed = true }
 }
 
@@ -189,5 +192,19 @@ final class NativeModelHarnessTests: XCTestCase {
       maxOutputTokens: 1,
       outputCapacity: 128
     ))
+  }
+
+  func testPressureSignalsCancellationBeforeQueuedRelease() throws {
+    let (core, _, runtime) = try makeCore()
+    _ = FileManager.default.createFile(atPath: core.readyURL.path, contents: Data("valid".utf8))
+    core.reconcileInstalledPack()
+    _ = try core.load()
+    let loaded = try XCTUnwrap(runtime())
+
+    core.requestInferenceCancellation()
+    XCTAssertTrue(loaded.cancellationRequested)
+    XCTAssertThrowsError(try core.infer(prompt: "synthetic", maxOutputTokens: 1, outputCapacity: 128))
+    core.releaseForPressure()
+    XCTAssertTrue(loaded.isClosed)
   }
 }

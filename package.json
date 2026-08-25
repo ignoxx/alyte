@@ -32,13 +32,15 @@
     "test:native:local-models": "bash scripts/run-native-local-model-tests.sh",
     "generate:local-model-manifest": "node scripts/generate-local-model-manifest.mjs",
     "check:local-model-manifest": "node scripts/generate-local-model-manifest.mjs --check",
+    "generate:semantic-mapper-grammar": "node scripts/generate-semantic-mapper-grammar.mjs",
+    "check:semantic-mapper-grammar": "node scripts/generate-semantic-mapper-grammar.mjs --check",
     "test:local-model-runtime": "node --test scripts/local-model-runtime-config.test.mjs",
     "test:local-model-runtime-packaging": "node --test scripts/local-model-runtime-packaging.test.mjs",
     "ios:local-model-runtime:check": "node scripts/check-local-model-runtime.mjs",
     "ios:local-model-runtime:build": "bash scripts/build-local-model-runtime.sh",
     "contract:check": "npm run build --workspace=@alyte/contracts && npm run contract:check --workspace=@alyte/contracts",
     "ios:config:check": "node scripts/check-expo-config.mjs",
-    "ci": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run check:local-model-manifest && npm run test && npm run test:mobile-bundle && npm run test:boundaries && npm run test:showcase && npm run contract:check && npm run ios:config:check && npm run test:local-model-runtime && npm run test:local-model-runtime-packaging && npm run test:native:local-models"
+    "ci": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run check:local-model-manifest && npm run check:semantic-mapper-grammar && npm run test && npm run test:mobile-bundle && npm run test:boundaries && npm run test:showcase && npm run contract:check && npm run ios:config:check && npm run test:local-model-runtime && npm run test:local-model-runtime-packaging && npm run test:native:local-models"
   },
   "devDependencies": {
     "@types/node": "26.2.0",

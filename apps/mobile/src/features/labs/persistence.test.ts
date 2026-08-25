@@ -180,11 +180,14 @@ describe('protected manual Lab Record persistence', () => {
     });
     assert.equal(draft.rows[0]?.source.pageIndex, 0);
     assert.equal(draft.rows[0]?.source.observations?.[0]?.text, ' LDL-C 3,8 mmol/L ');
+    assert.equal(draft.rows[0]?.source.raw?.value, '3,8');
+    assert.equal(draft.rows[0]?.source.raw?.unit, 'mmol/L');
     assert.equal(draft.rows[0]?.source.observations?.[0]?.structure?.tableId, 'table-0');
     await database.closeAsync();
     const relaunched = createRepository(databasePath);
     const reopened = await relaunched.repository.getExtractionDraft(draft.id);
     assert.equal(reopened?.rows[0]?.source.observations?.[0]?.text, ' LDL-C 3,8 mmol/L ');
+    assert.equal(reopened?.rows[0]?.source.raw?.value, '3,8');
     const records = await relaunched.repository.confirmExtractionDraft(draft.id);
     assert.equal(records.length, 1);
     assert.equal(records[0]?.collectionDate.kind, 'missing');

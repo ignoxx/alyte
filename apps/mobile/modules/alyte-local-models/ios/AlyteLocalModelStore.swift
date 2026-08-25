@@ -58,6 +58,7 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
 
   deinit {
     NotificationCenter.default.removeObserver(self)
+    core.requestInferenceCancellation()
     queue.sync { core.releaseForPressure() }
     session?.invalidateAndCancel()
   }
@@ -144,6 +145,11 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
     }
   }
 
+  /// Direct atomic signal; unlike unload/release it never waits behind an in-flight inference.
+  func cancelInference() {
+    core.requestInferenceCancellation()
+  }
+
   func unload() -> [String: Any] { queue.sync { core.unload() } }
 
   func deletePack(packID: String) async throws -> [String: Any] {
@@ -170,7 +176,12 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
     }
   }
 
-  func releaseForBackground() { queue.async { self.core.releaseForPressure() } }
+  func releaseForBackground() {
+    // Pressure callbacks can arrive while the serialized inference job is decoding. Signal the
+    // C loop first, then let the queue close the runtime after that job returns.
+    core.requestInferenceCancellation()
+    queue.async { self.core.releaseForPressure() }
+  }
 
   @objc private func memoryWarning() { releaseForBackground() }
 

@@ -187,6 +187,38 @@ describe('local extraction domain', () => {
     assert.equal(rows[0]?.source.pageIndex, 0);
   });
 
+  it('preserves Lithuanian and Polish decimal-comma source tokens byte-for-byte', () => {
+    for (const [language, text, value] of [
+      ['lt', 'MTL cholesterolis 3,8 mmol/L', '3,8'],
+      ['pl', 'LDL-C 3,8 mmol/L 1,2-3,4', '3,8'],
+    ] as const) {
+      const row = groupObservationsIntoRows(
+        [
+          {
+            id: `raw-${language}`,
+            text,
+            alternatives: [],
+            boundingBox: { x: 0.1, y: 0.2, width: 0.7, height: 0.04 },
+            pageIndex: 0,
+            orientation: 0,
+            recognition: { level: 'accurate', language, internalConfidence: null },
+          },
+        ],
+        {
+          aliases,
+          locale: `${language}-${language === 'lt' ? 'LT' : 'PL'}`,
+          collectionDate: { kind: 'known', value: '2026-08-22' },
+          specimenType: 'serum',
+        },
+      )[0];
+      assert.equal(row?.source.raw?.value, value);
+      assert.equal(row?.source.raw?.unit, 'mmol/L');
+      assert.equal(row?.source.observations?.[0]?.text, text);
+      assert.equal(row?.sourceValue.kind, 'numeric');
+      assert.equal(row?.sourceValue.value, 3.8);
+    }
+  });
+
   it('selects the numeric token from split OCR columns and unions only observed regions', () => {
     const rows = groupObservationsIntoRows(
       [

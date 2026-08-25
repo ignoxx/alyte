@@ -3,12 +3,15 @@ import Foundation
 /// Narrow runtime seam used by the production lifecycle core and by injected native tests.
 protocol AlyteLocalModelRuntimeSession: AnyObject {
   func generate(prompt: String, maxOutputTokens: Int, outputCapacity: Int) throws -> String
+  /// Must be non-blocking and safe to call from outside the serialized inference queue.
+  func cancelInference()
   func close()
 }
 
 enum AlyteLocalModelRuntimeError: Error {
   case unavailable
   case loadFailed
+  case cancelled
 }
 
 enum AlyteLocalModelCoreCompletion {
@@ -283,6 +286,7 @@ final class AlyteLocalModelCore: @unchecked Sendable {
       switch error {
       case .unavailable: throw AlyteLocalModelError.unavailable(.unavailable)
       case .loadFailed: throw AlyteLocalModelError.failed(.runtimeFailed)
+      case .cancelled: throw AlyteLocalModelError.failed(.cancelled)
       }
     } catch {
       throw AlyteLocalModelError.failed(.runtimeFailed)
@@ -305,6 +309,12 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     )
   }
 
+  /// Signals the C generation loop directly. It intentionally does not touch lifecycle state or
+  /// wait for the store queue, so memory/thermal callbacks can interrupt an in-flight decode.
+  func requestInferenceCancellation() {
+    loadedRuntime?.cancelInference()
+  }
+
   func unload() -> [String: Any] {
     releaseLoadedModel()
     if fileManager.fileExists(atPath: readyURL.path) { setState(.ready, failure: nil) }
@@ -312,6 +322,7 @@ final class AlyteLocalModelCore: @unchecked Sendable {
   }
 
   func releaseForPressure() {
+    requestInferenceCancellation()
     releaseLoadedModel()
   }
 

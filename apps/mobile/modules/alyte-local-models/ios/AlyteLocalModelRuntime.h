@@ -9,6 +9,7 @@ void *alyte_local_model_runtime_create(
     const char *model_path,
     const char *grammar,
     const char *grammar_root);
+void alyte_local_model_runtime_cancel(void *runtime);
 int alyte_local_model_runtime_generate(
     void *runtime,
     const char *prompt,

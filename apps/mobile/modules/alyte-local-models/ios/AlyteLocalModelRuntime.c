@@ -1,6 +1,8 @@
 #include "AlyteLocalModelRuntime.h"
 
 #include <stdlib.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 
 #if defined(ALYTE_LLAMA_RUNTIME)
 #include <llama.h>
@@ -16,6 +18,7 @@ enum {
     ALYTE_LOCAL_MODEL_STATUS_TOKENIZATION_FAILED = -4,
     ALYTE_LOCAL_MODEL_STATUS_PROMPT_DECODE_FAILED = -5,
     ALYTE_LOCAL_MODEL_STATUS_TOKEN_DECODE_FAILED = -6,
+    ALYTE_LOCAL_MODEL_STATUS_CANCELLED = -7,
 };
 
 struct AlyteLocalModelRuntime {
@@ -25,6 +28,7 @@ struct AlyteLocalModelRuntime {
     struct llama_sampler *sampler_chain;
     int context_tokens;
     int batch_tokens;
+    atomic_bool cancel_requested;
 };
 
 static void alyte_local_model_discard_log(enum ggml_log_level level, const char *text, void *user_data) {
@@ -112,7 +116,13 @@ void *alyte_local_model_runtime_create(
     runtime->sampler_chain = sampler_chain;
     runtime->context_tokens = 2_048;
     runtime->batch_tokens = 256;
+    atomic_init(&runtime->cancel_requested, false);
     return runtime;
+}
+
+void alyte_local_model_runtime_cancel(void *opaque_runtime) {
+    struct AlyteLocalModelRuntime *runtime = (struct AlyteLocalModelRuntime *) opaque_runtime;
+    if (runtime != NULL) atomic_store_explicit(&runtime->cancel_requested, true, memory_order_release);
 }
 
 int alyte_local_model_runtime_generate(
@@ -124,6 +134,12 @@ int alyte_local_model_runtime_generate(
     struct AlyteLocalModelRuntime *runtime = (struct AlyteLocalModelRuntime *) opaque_runtime;
     if (runtime == NULL || prompt == NULL || output == NULL || output_capacity == 0 || max_output_tokens <= 0)
         return ALYTE_LOCAL_MODEL_STATUS_INVALID_ARGUMENT;
+    // Consume a pressure/timeout signal that arrived while this request was waiting on the
+    // serialized store queue. Do not clear it blindly: that would let a queued generation start
+    // after the OS had already asked us to stop.
+    if (atomic_exchange_explicit(&runtime->cancel_requested, false, memory_order_acq_rel)) {
+        return ALYTE_LOCAL_MODEL_STATUS_CANCELLED;
+    }
     output[0] = '\0';
     llama_memory_clear(llama_get_memory(runtime->context), true);
     llama_sampler_reset(runtime->sampler_chain);
@@ -135,6 +151,11 @@ int alyte_local_model_runtime_generate(
         return ALYTE_LOCAL_MODEL_STATUS_INPUT_LIMIT;
     }
     for (int offset = 0; offset < prompt_count;) {
+        if (atomic_load_explicit(&runtime->cancel_requested, memory_order_acquire)) {
+            free(prompt_tokens);
+            atomic_store_explicit(&runtime->cancel_requested, false, memory_order_release);
+            return ALYTE_LOCAL_MODEL_STATUS_CANCELLED;
+        }
         int count = prompt_count - offset;
         if (count > runtime->batch_tokens) count = runtime->batch_tokens;
         struct llama_batch batch = llama_batch_get_one(prompt_tokens + offset, count);
@@ -146,6 +167,12 @@ int alyte_local_model_runtime_generate(
     }
     size_t output_length = 0;
     for (int index = 0; index < max_output_tokens; index += 1) {
+        if (atomic_load_explicit(&runtime->cancel_requested, memory_order_acquire)) {
+            free(prompt_tokens);
+            output[0] = '\0';
+            atomic_store_explicit(&runtime->cancel_requested, false, memory_order_release);
+            return ALYTE_LOCAL_MODEL_STATUS_CANCELLED;
+        }
         llama_token token = llama_sampler_sample(runtime->sampler_chain, runtime->context, -1);
         if (token < 0) {
             free(prompt_tokens);
@@ -171,6 +198,7 @@ int alyte_local_model_runtime_generate(
         }
     }
     free(prompt_tokens);
+    atomic_store_explicit(&runtime->cancel_requested, false, memory_order_release);
     return (int) output_length;
 }
 
@@ -206,6 +234,10 @@ int alyte_local_model_runtime_generate(
     (void) max_output_tokens;
     if (output != NULL && output_capacity > 0) output[0] = '\0';
     return -1;
+}
+
+void alyte_local_model_runtime_cancel(void *runtime) {
+    (void) runtime;
 }
 
 void alyte_local_model_runtime_destroy(void *runtime) {

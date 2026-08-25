@@ -7,7 +7,11 @@ import {
   type ServiceClock,
 } from '@alyte/domain';
 import { createLabsService, type LabsService } from '../features/labs/service';
-import { createLabReportsService, type LabReportsService } from '../features/labs/report-service';
+import {
+  createDefaultExtractionAliases,
+  createLabReportsService,
+  type LabReportsService,
+} from '../features/labs/report-service';
 import { openProtectedLabDatabase, type LabRepository } from '../features/labs/persistence';
 import { createIntakeService, type IntakeService } from '../features/intake/service';
 import { openProtectedIntakeDatabase, type IntakeRepository } from '../features/intake/persistence';
@@ -83,7 +87,10 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     fakeModelState && variant !== 'production'
       ? createLocalModelService({ native: createFakeLocalModelNativeModule() })
       : createLocalModelService();
-  const semanticMapper = createLocalSemanticMapper({ models });
+  const semanticMapper = createLocalSemanticMapper({
+    models,
+    aliases: createDefaultExtractionAliases(),
+  });
 
   if (showcase !== null) {
     void seedShowcaseLabRecords(labs);

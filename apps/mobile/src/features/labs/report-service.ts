@@ -1287,6 +1287,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         context: 'collection',
         ambiguous: ambiguous || parsed === null,
         collectionDate: parsed ?? { kind: 'missing' },
+        sourceText: observation.text,
       });
     }
     const known = contexts.filter((context) => context.collectionDate.kind === 'known');
@@ -1370,9 +1371,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   async function applySemanticMappings(
     rows: readonly ExtractionDraftRow[],
     observations: readonly VisionTextObservation[],
-    enabled = true,
   ): Promise<readonly ExtractionDraftRow[]> {
-    if (semanticMapper === undefined || !enabled) return rows;
+    if (semanticMapper === undefined) return rows;
     // A model request is a bounded set of already-filtered candidate rows. Never send the whole
     // page or a raw OCR wall: unrelated headers, addresses, and footers are not model input.
     const observationById = new Map(
@@ -1408,16 +1408,19 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             return observation === undefined ? [] : [observation];
           }),
         );
-        // Heading observations are retained only when Vision marked them as table cells outside
-        // a candidate row. This preserves section context without expanding the payload to an OCR
-        // page dump.
+        // Preserve nearby section/table headings even when Vision placed them outside the table
+        // cells. A heading is context only: it is never added to the candidate row itself.
+        const anchor = rowChunk[0]?.source.observations?.[0];
+        const anchorY = anchor?.boundingBox.y ?? 0;
+        const anchorTableId = anchor?.structure?.tableId ?? null;
         const headings = observations.filter((observation) => {
           const structure = observation.structure;
-          return (
-            !candidateSourceIds.has(observation.id) &&
-            structure?.kind === 'table-cell' &&
-            structure.tableId === rowChunk[0]?.source.observations?.[0]?.structure?.tableId
-          );
+          if (candidateSourceIds.has(observation.id) || observation.pageIndex !== anchor?.pageIndex)
+            return false;
+          if (structure?.kind === 'table-cell' && structure.tableId === anchorTableId) return true;
+          const specimenHeading = specimenTypeFromText(observation.text) !== null;
+          const isAbove = observation.boundingBox.y <= anchorY;
+          return specimenHeading && isAbove && anchorY - observation.boundingBox.y <= 0.25;
         });
         if (chunk.length > 0) chunks.push({ observations: chunk, headings });
         rowChunk = [];
@@ -1536,6 +1539,21 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       // produced it; if that derivative disappeared or changed, it must not be confirmable.
       const existingDraft = await repo.getExtractionDraftForReport(id, extractionAliases);
       if (existingDraft !== null) return existingDraft;
+      // The verified pack is a prerequisite for new automated extraction. This gate intentionally
+      // happens before Vision so a missing/deleted/corrupt pack routes to the contextual reinstall
+      // flow instead of being misreported as a successful deterministic fallback. Runtime errors
+      // after this point remain recoverable inside applySemanticMappings.
+      if (semanticMapper?.prepare !== undefined) {
+        try {
+          await semanticMapper.prepare();
+        } catch (error) {
+          throw new LabReportExtractionError(
+            'model-unavailable',
+            'Install the verified Gemma model pack to extract this Lab Report',
+            { cause: error },
+          );
+        }
+      }
       const sourcePath = sanitized.artifactPath;
       try {
         const results: VisionOCRResult[] = [];
@@ -1581,21 +1599,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             );
           })
           .map((row, order) => ({ ...row, order }));
-        let semanticMappingAvailable = semanticMapper !== undefined;
-        if (semanticMapper !== undefined) {
-          try {
-            await semanticMapper.prepare?.();
-          } catch {
-            // Vision and deterministic parsing remain a complete local fallback when the
-            // optional semantic pack is missing, deleted, or cannot be loaded.
-            semanticMappingAvailable = false;
-          }
-        }
-        const rows = await applySemanticMappings(
-          deterministicRows,
-          observations,
-          semanticMappingAvailable,
-        );
+        const rows = await applySemanticMappings(deterministicRows, observations);
         if (rows.length === 0) {
           throw new LabReportExtractionError(
             'no-reviewable-measurements',

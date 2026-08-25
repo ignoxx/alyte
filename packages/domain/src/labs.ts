@@ -45,6 +45,15 @@ export type MeasurementSourceLocation = {
       readonly height: number;
     };
   }[];
+  /** Exact source tokens retained beside normalized Measurement fields. */
+  readonly raw?: {
+    readonly label: string | null;
+    readonly value: string | null;
+    readonly unit: string | null;
+    readonly referenceInterval: string | null;
+    readonly flag: string | null;
+    readonly collectionDate: string | null;
+  };
   readonly semantic?: {
     readonly adapterVersion: string;
     readonly schemaVersion: 'alyte.semantic-mapper.v1';

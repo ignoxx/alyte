@@ -1,0 +1,10 @@
+root ::= "{" ws "\"schemaVersion\"" ws ":" ws "\"alyte.semantic-mapper.v1\"" ws "," ws "\"proposals\"" ws ":" ws proposals ws "}"
+proposals ::= "[" ws (proposal (ws "," ws proposal)*)? ws "]"
+proposal ::= "{" ws "\"sourceObservationIds\"" ws ":" ws stringList ws "," ws "\"role\"" ws ":" ws role ws "," ws "\"specimenType\"" ws ":" ws specimen ws "," ws "\"biomarkerId\"" ws ":" ws (string | "null") ws "}"
+stringList ::= "[" ws string (ws "," ws string)* ws "]"
+role ::= "\"measurement\"" | "\"specimen-context\"" | "\"ignore\""
+specimen ::= "\"blood\"" | "\"serum\"" | "\"plasma\"" | "\"urine\"" | "\"other\"" | "\"unknown\""
+string ::= "\"" ([^"\\] | escape)* "\""
+escape ::= "\\" (["\\/bfnrt] | "u" hex4)
+hex4 ::= [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]
+ws ::= [ \t\n\r]*

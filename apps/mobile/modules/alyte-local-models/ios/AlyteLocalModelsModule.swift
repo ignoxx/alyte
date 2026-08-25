@@ -60,6 +60,12 @@ public final class AlyteLocalModelsModule: Module {
       }
     }
 
+    // This is deliberately synchronous/non-queueing: JS timeouts and OS pressure must reach the
+    // native generation loop while the serialized infer task is still running.
+    Function("cancelInference") {
+      self.store.cancelInference()
+    }
+
     Function("unload") {
       self.store.unload()
     }

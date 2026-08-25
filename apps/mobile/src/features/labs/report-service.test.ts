@@ -1278,7 +1278,101 @@ describe('protected Lab Report import lifecycle', () => {
     );
   });
 
-  test('falls back to Vision and deterministic parsing when the semantic pack is unavailable', async () => {
+  test('passes nearby section headings as context without turning them into measurements', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const observations = [
+      {
+        id: 'serum-heading',
+        text: 'Serum',
+        alternatives: [],
+        pageIndex: 0,
+        orientation: 0,
+        boundingBox: { x: 0.1, y: 0.1, width: 0.2, height: 0.03 },
+        recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+      },
+      {
+        id: 'serum-row',
+        text: 'LDL-C 3.8 mmol/L',
+        alternatives: [],
+        pageIndex: 0,
+        orientation: 0,
+        boundingBox: { x: 0.1, y: 0.18, width: 0.6, height: 0.03 },
+        structure: {
+          kind: 'table-cell' as const,
+          tableId: 'serum-table',
+          rowIndex: 1,
+          columnIndex: 0,
+        },
+        recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+      },
+      {
+        id: 'urine-heading',
+        text: 'Urine',
+        alternatives: [],
+        pageIndex: 0,
+        orientation: 0,
+        boundingBox: { x: 0.1, y: 0.58, width: 0.2, height: 0.03 },
+        recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+      },
+      {
+        id: 'urine-row',
+        text: 'LDL-C 3.8 mmol/L',
+        alternatives: [],
+        pageIndex: 0,
+        orientation: 0,
+        boundingBox: { x: 0.1, y: 0.66, width: 0.6, height: 0.03 },
+        structure: {
+          kind: 'table-cell' as const,
+          tableId: 'urine-table',
+          rowIndex: 1,
+          columnIndex: 0,
+        },
+        recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+      },
+    ];
+    const headingChunks: string[][] = [];
+    const mapper: ExtractionSemanticMapper = {
+      adapterVersion: 'heading-context.mapper.v1',
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      supports: () => true,
+      async map(input) {
+        headingChunks.push((input.headings ?? []).map((heading) => heading.id));
+        return [];
+      },
+    };
+    const service = createService(
+      repository,
+      files,
+      sanitizingPdf(files),
+      {
+        async recognize() {
+          return {
+            contractVersion: 'alyte.vision.document.v2',
+            pageIndex: 0,
+            orientation: 0,
+            observations,
+          };
+        },
+      },
+      mapper,
+    );
+    const report = (await service.importPdf(source('heading-context')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+    const draft = await service.startExtraction(report.id);
+    assert.equal(draft.rows.length, 2);
+    assert.deepEqual(headingChunks, [['serum-heading'], ['urine-heading']]);
+    assert.deepEqual(
+      draft.rows.map((row) => row.source.observationIds),
+      [['serum-row'], ['urine-row']],
+    );
+    assert.deepEqual(
+      draft.rows.map((row) => row.proposedSpecimenType),
+      ['unknown', 'unknown'],
+    );
+  });
+
+  test('gates missing packs before Vision while preserving a distinct runtime fallback path', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
     let recognitionCalls = 0;
@@ -1319,11 +1413,12 @@ describe('protected Lab Report import lifecycle', () => {
     const service = createService(repository, files, sanitizingPdf(files), ocr, mapper);
     const report = (await service.importPdf(source('missing-pack')))!.report;
     await prepareSanitizedExtraction(service, report.id);
-    const draft = await service.startExtraction(report.id);
-    assert.equal(recognitionCalls, 1);
-    assert.equal(draft.rows.length, 1);
-    assert.equal(draft.rows[0]?.proposedBiomarkerId, 'biomarker.ldl_c');
-    assert.equal(draft.rows[0]?.source.semantic, null);
+    await assert.rejects(
+      service.startExtraction(report.id),
+      (error: unknown) =>
+        error instanceof LabReportExtractionError && error.reason === 'model-unavailable',
+    );
+    assert.equal(recognitionCalls, 0);
   });
 
   test('keeps deterministic extraction when the semantic mapper does not support the language', async () => {

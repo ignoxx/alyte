@@ -12,6 +12,7 @@ export type NativeLocalModelsModule = {
     maxOutputTokens: number,
     outputCapacity: number,
   ) => Promise<unknown>;
+  readonly cancelInference: () => unknown;
   readonly unload: () => unknown;
   readonly deletePack: (packId: string) => Promise<unknown>;
   readonly addListener?: (
@@ -29,6 +30,8 @@ export type LocalModelService = {
   readonly load: () => Promise<LocalModelSnapshot>;
   /** Returns one bounded, grammar-constrained JSON response; raw output never gets logged. */
   readonly infer: (prompt: string) => Promise<string>;
+  /** Signals the native generation loop without waiting behind its serialized work queue. */
+  readonly cancelInference: () => void;
   readonly unload: () => Promise<LocalModelSnapshot>;
   readonly deletePack: () => Promise<LocalModelSnapshot>;
 };
@@ -125,6 +128,9 @@ export function createLocalModelService(options: LocalModelServiceOptions = {}):
       }
       return output;
     },
+    cancelInference: () => {
+      native?.cancelInference();
+    },
     unload: () => stateAfter(() => native?.unload()),
     deletePack: () => stateAfter(() => native?.deletePack(productionLocalModelManifest.pack.id)),
   };
@@ -210,6 +216,7 @@ export function createFakeLocalModelNativeModule(): NativeLocalModelsModule {
     },
     infer: async (_prompt, _maxOutputTokens, _outputCapacity) =>
       JSON.stringify({ schemaVersion: 'alyte.semantic-mapper.v1', proposals: [] }),
+    cancelInference: () => undefined,
     unload: () =>
       emit({ ...state, state: state.state === 'loaded' ? 'ready' : state.state, loaded: false }),
     deletePack: async (packId) => {

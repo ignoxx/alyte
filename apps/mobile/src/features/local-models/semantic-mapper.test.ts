@@ -4,6 +4,7 @@ import type { LocalModelService } from './native';
 import type { LocalModelSnapshot } from './model';
 import { productionLocalModelManifest } from './manifest';
 import { createLocalSemanticMapper, SemanticModelUnavailableError } from './semantic-mapper';
+import { createSemanticMapperPrompt } from './semantic-contract';
 import type { VisionTextObservation } from '@alyte/domain';
 
 const loadedState = {
@@ -30,13 +31,19 @@ const observation: VisionTextObservation = {
 function models(
   infer: (prompt: string) => Promise<string>,
   state: LocalModelSnapshot = loadedState,
+  cancelInference: () => void = () => undefined,
 ): LocalModelService {
   return {
     getState: async () => state,
     load: async () => loadedState,
     infer,
+    cancelInference,
   } as unknown as LocalModelService;
 }
+
+const aliases = [
+  { id: 'biomarker.ldl_c', aliases: ['LDL-C'], specimens: ['serum'], units: ['mmol/L'] },
+] as const;
 
 test('routes missing packs before Vision/model inference', async () => {
   const mapper = createLocalSemanticMapper({
@@ -48,6 +55,7 @@ test('routes missing packs before Vision/model inference', async () => {
       storageBytes: 0,
       loaded: false,
     }),
+    aliases,
   });
   await assert.rejects(mapper.prepare!(), (error: unknown) => {
     assert.ok(error instanceof SemanticModelUnavailableError);
@@ -70,6 +78,7 @@ test('accepts only validated source selections and preserves versioned provenanc
         ],
       }),
     ),
+    aliases,
   });
   const mapped = await mapper.map({ pageIndex: 0, observations: [observation] });
   assert.deepEqual(mapped, [
@@ -84,37 +93,70 @@ test('accepts only validated source selections and preserves versioned provenanc
   assert.equal(mapper.maxRowsPerChunk, 12);
 });
 
+test('rejects invented root keys before semantic validation', async () => {
+  const mapper = createLocalSemanticMapper({
+    models: models(async () =>
+      JSON.stringify({
+        schemaVersion: 'alyte.semantic-mapper.v1',
+        proposals: [],
+        medicalExplanation: 'not allowed',
+      }),
+    ),
+    aliases,
+  });
+  assert.deepEqual(await mapper.map({ pageIndex: 0, observations: [observation] }), []);
+});
+
 test('rejects a partial envelope and times out without retaining model output', async () => {
   let calls = 0;
+  let cancelled = 0;
   const mapper = createLocalSemanticMapper({
     timeoutMs: 5,
-    models: models(async () => {
-      calls += 1;
-      if (calls === 1) {
-        return JSON.stringify({
-          schemaVersion: 'alyte.semantic-mapper.v1',
-          proposals: [
-            {
-              sourceObservationIds: ['synthetic-ldl'],
-              role: 'measurement',
-              specimenType: 'serum',
-              biomarkerId: 'biomarker.ldl_c',
-            },
-            {
-              sourceObservationIds: ['invented-source'],
-              role: 'measurement',
-              specimenType: 'serum',
-              biomarkerId: 'biomarker.ldl_c',
-            },
-          ],
-        });
-      }
-      return new Promise<string>(() => {});
-    }),
+    models: models(
+      async () => {
+        calls += 1;
+        if (calls === 1) {
+          return JSON.stringify({
+            schemaVersion: 'alyte.semantic-mapper.v1',
+            proposals: [
+              {
+                sourceObservationIds: ['synthetic-ldl'],
+                role: 'measurement',
+                specimenType: 'serum',
+                biomarkerId: 'biomarker.ldl_c',
+              },
+              {
+                sourceObservationIds: ['invented-source'],
+                role: 'measurement',
+                specimenType: 'serum',
+                biomarkerId: 'biomarker.ldl_c',
+              },
+            ],
+          });
+        }
+        return new Promise<string>(() => {});
+      },
+      loadedState,
+      () => {
+        cancelled += 1;
+      },
+    ),
+    aliases,
   });
   assert.deepEqual(await mapper.map({ pageIndex: 0, observations: [observation] }), []);
   await assert.rejects(
     mapper.map({ pageIndex: 0, observations: [observation] }),
     /semantic-inference-timeout/,
   );
+  // The timeout is a cooperative native cancellation request, not only a JS race.
+  assert.equal(cancelled, 1);
+});
+
+test('uses the production Gemma turn template and reviewed row instruction', () => {
+  const prompt = createSemanticMapperPrompt('lt', '{"observations":[]}');
+  assert.match(prompt, /^<bos><\|turn>system\n/u);
+  assert.match(prompt, /<\|turn>user\n/u);
+  assert.match(prompt, /<\|turn>model\n$/u);
+  assert.match(prompt, /one proposal/u);
+  assert.doesNotMatch(prompt, /<\|im_start>|<think>/u);
 });

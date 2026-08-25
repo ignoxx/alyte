@@ -202,8 +202,8 @@ export function LabReportDetailScreen() {
     setError(false);
     setExtractionError(null);
     try {
-      // The report service owns the lazy model load and keeps Vision/OCR usable when the
-      // optional semantic runtime is unavailable at this moment.
+      // The report service owns the authoritative pre-Vision pack gate and reports runtime
+      // failures separately so deterministic progress can remain recoverable.
       const draft = await reports.startExtraction(report.id, promptPassword());
       navigation.navigate('ExtractionDraft', { reportId: report.id, draftId: draft.id });
     } catch (caught) {
@@ -236,6 +236,14 @@ export function LabReportDetailScreen() {
       { text: t('labs.reportDelete'), onPress: showDelete, style: 'destructive' },
       { text: t('intake.cancel'), style: 'cancel' },
     ]);
+  }
+
+  function extractionErrorKey(reason: LabReportExtractionError['reason']) {
+    if (reason === 'sanitized-source') return 'labs.extractionSourceError' as const;
+    if (reason === 'no-reviewable-measurements')
+      return 'labs.extractionNoMeasurementsError' as const;
+    if (reason === 'model-unavailable') return 'labs.extractionModelRequired' as const;
+    return 'labs.extractionRecognitionError' as const;
   }
 
   function confirmDelete() {
@@ -355,15 +363,7 @@ export function LabReportDetailScreen() {
                   />
                   {extractionError !== null && (
                     <AppText style={styles.errorText}>
-                      {t(
-                        extractionError === 'sanitized-source'
-                          ? 'labs.extractionSourceError'
-                          : extractionError === 'no-reviewable-measurements'
-                            ? 'labs.extractionNoMeasurementsError'
-                            : extractionError === 'model-unavailable'
-                              ? 'labs.extractionModelRequired'
-                              : 'labs.extractionRecognitionError',
-                      )}
+                      {t(extractionErrorKey(extractionError))}
                     </AppText>
                   )}
                 </>
@@ -372,15 +372,7 @@ export function LabReportDetailScreen() {
                   <AppText style={styles.body}>{t('labs.extractionPrivacyRequired')}</AppText>
                   {extractionError !== null && (
                     <AppText style={styles.errorText}>
-                      {t(
-                        extractionError === 'sanitized-source'
-                          ? 'labs.extractionSourceError'
-                          : extractionError === 'no-reviewable-measurements'
-                            ? 'labs.extractionNoMeasurementsError'
-                            : extractionError === 'model-unavailable'
-                              ? 'labs.extractionModelRequired'
-                              : 'labs.extractionRecognitionError',
-                      )}
+                      {t(extractionErrorKey(extractionError))}
                     </AppText>
                   )}
                 </>

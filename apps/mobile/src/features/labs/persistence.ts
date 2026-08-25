@@ -266,9 +266,40 @@ function sourceLocationFromUnknown(row: {
     orientation: row.source_orientation,
     observationIds,
     observations,
+    raw: decodeStoredRawSource(box.raw) ?? emptyRawSource,
     semantic: decodeStoredSemantic(box.semantic),
   };
 }
+
+function decodeStoredRawSource(value: unknown) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object') throw new Error('Invalid raw source tokens in local database');
+  const raw = value as Record<string, unknown>;
+  const field = (name: string): string | null => {
+    const candidate = raw[name];
+    if (candidate !== null && candidate !== undefined && typeof candidate !== 'string') {
+      throw new Error('Invalid raw source token in local database');
+    }
+    return candidate === undefined ? null : candidate;
+  };
+  return {
+    label: field('label'),
+    value: field('value'),
+    unit: field('unit'),
+    referenceInterval: field('referenceInterval'),
+    flag: field('flag'),
+    collectionDate: field('collectionDate'),
+  };
+}
+
+const emptyRawSource = Object.freeze({
+  label: null,
+  value: null,
+  unit: null,
+  referenceInterval: null,
+  flag: null,
+  collectionDate: null,
+});
 
 function decodeStoredObservations(value: unknown, pageIndex: number, orientation: number) {
   if (value === undefined) return [];
@@ -319,6 +350,7 @@ function sourceLocationValue(value: unknown): Measurement['source'] {
         : {}),
       observationIds: candidate.observationIds,
       observations: candidate.observations,
+      raw: candidate.raw,
       semantic: candidate.semantic,
     }),
     source_orientation: candidate.orientation,
@@ -412,6 +444,7 @@ function extractionRowFromDb(row: ExtractionDraftRowDb): ExtractionDraftRow {
       orientation,
       observationIds,
       observations,
+      raw: decodeStoredRawSource(sourceBox.raw) ?? emptyRawSource,
       semantic: decodeStoredSemantic(sourceBox.semantic),
     },
     collectionDateContext: dateContext,
@@ -897,6 +930,7 @@ export function createLabRepository(
                 ...measurementInput.source.boundingBox,
                 observationIds: measurementInput.source.observationIds ?? [],
                 observations: measurementInput.source.observations ?? [],
+                raw: measurementInput.source.raw ?? null,
                 semantic: measurementInput.source.semantic ?? null,
               }),
           measurementInput.source?.orientation ?? null,
@@ -1040,6 +1074,7 @@ export function createLabRepository(
                 ...existing.source.boundingBox,
                 observationIds: existing.source.observationIds ?? [],
                 observations: existing.source.observations ?? [],
+                raw: existing.source.raw ?? null,
                 semantic: existing.source.semantic ?? null,
               })
           : input.source === null
@@ -1048,6 +1083,7 @@ export function createLabRepository(
                 ...input.source.boundingBox,
                 observationIds: input.source.observationIds ?? [],
                 observations: input.source.observations ?? [],
+                raw: input.source.raw ?? null,
                 semantic: input.source.semantic ?? null,
               }),
         input.source === undefined
@@ -1376,6 +1412,7 @@ export function createLabRepository(
             ...row.source.boundingBox,
             observationIds: row.source.observationIds,
             observations: row.source.observations ?? [],
+            raw: row.source.raw ?? null,
             semantic: row.source.semantic ?? null,
           }),
           row.source.orientation,

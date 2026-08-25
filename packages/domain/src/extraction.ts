@@ -51,6 +51,8 @@ export type ExtractionSourceLocation = {
   readonly orientation: number;
   readonly observationIds: readonly string[];
   readonly observations?: readonly VisionTextObservation[];
+  /** Exact OCR tokens copied before parsing or normalization. */
+  readonly raw?: ExtractionRawSourceTokens;
   readonly semantic?: {
     readonly adapterVersion: string;
     readonly schemaVersion: 'alyte.semantic-mapper.v1';
@@ -64,6 +66,15 @@ export type ExtractionSourceLocation = {
   } | null;
 };
 
+export type ExtractionRawSourceTokens = {
+  readonly label: string | null;
+  readonly value: string | null;
+  readonly unit: string | null;
+  readonly referenceInterval: string | null;
+  readonly flag: string | null;
+  readonly collectionDate: string | null;
+};
+
 export type ExtractionDateContext = {
   readonly observationId: string;
   readonly pageIndex: number;
@@ -72,6 +83,8 @@ export type ExtractionDateContext = {
   readonly context: 'collection' | 'unknown';
   readonly ambiguous: boolean;
   readonly collectionDate: LabDateState;
+  /** The unmodified OCR observation containing the date candidate. */
+  readonly sourceText?: string;
 };
 
 export type ExtractionRowDecision = 'unresolved' | 'preserve' | 'skip' | 'resolve';
@@ -810,13 +823,6 @@ function findAliasMatches(
   return matches;
 }
 
-function findUnitInText(sourceText: string): string | null {
-  const match = sourceText.match(
-    /(?:mg\s*\/\s*dL?|mmol\s*\/\s*L|g\s*\/\s*dL?|g\s*\/\s*L|ng\s*\/\s*mL|nmol\s*\/\s*L|µ?g\s*\/\s*L|pg\s*\/\s*mL|pmol\s*\/\s*L|IU\s*\/\s*L|U\s*\/\s*L|L\s*\/\s*L|fL|%|mmol\s*\/\s*mol)/iu,
-  );
-  return normalizeUnit(match?.[0] ?? null);
-}
-
 type NumericSourceCandidate = {
   readonly raw: string;
   readonly start: number;
@@ -1054,7 +1060,11 @@ function parseSourceRow(
     categoricalMatch !== null
       ? { kind: 'categorical' as const, value: rawValue }
       : (parseComparatorValue(rawValue) ?? { kind: 'free_text' as const, value: sourceText });
-  const unit = findUnitInText(sourceText);
+  const unitMatch = sourceText.match(
+    /(?:mg\s*\/\s*dL?|mmol\s*\/\s*L|g\s*\/\s*dL?|g\s*\/\s*L|ng\s*\/\s*mL|nmol\s*\/\s*L|µ?g\s*\/\s*L|pg\s*\/\s*mL|pmol\s*\/\s*L|IU\s*\/\s*L|U\s*\/\s*L|L\s*\/\s*L|fL|%|mmol\s*\/\s*mol)/iu,
+  );
+  const rawUnit = unitMatch?.[0] ?? null;
+  const unit = normalizeUnit(rawUnit);
   const referenceCandidate = effectiveReferences[0]?.raw ?? null;
   const reference = parseReferenceInterval(referenceCandidate);
   const flagCandidate =
@@ -1098,7 +1108,17 @@ function parseSourceRow(
     sourceUnit: unit,
     sourceReferenceInterval: reference,
     sourceFlag: flagCandidate,
-    source,
+    source: {
+      ...source,
+      raw: {
+        label: first?.text ?? null,
+        value: rawValue || null,
+        unit: rawUnit,
+        referenceInterval: referenceCandidate,
+        flag: flagCandidate,
+        collectionDate: nearestDateContext?.sourceText ?? null,
+      },
+    },
     collectionDateContext: nearestDateContext ?? null,
     proposedLabel: label,
     proposedValue,
