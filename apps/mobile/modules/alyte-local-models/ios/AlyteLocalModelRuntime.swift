@@ -1,14 +1,5 @@
 import Foundation
 
-protocol AlyteLocalModelRuntimeSession: AnyObject {
-  func close()
-}
-
-enum AlyteLocalModelRuntimeError: Error {
-  case unavailable
-  case loadFailed
-}
-
 /// Owns one real llama.cpp model/context pair when the externally built, pinned XCFramework is
 /// linked. The no-runtime implementation is intentionally unavailable rather than a file proxy;
 /// simulator UI tests inject a synthetic session at the store seam and never enable this path.

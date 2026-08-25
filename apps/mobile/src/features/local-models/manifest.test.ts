@@ -1,10 +1,26 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { test } from 'node:test';
 import {
   assertLocalModelManifest,
   LOCAL_MODEL_PACK_ID,
   productionLocalModelManifest,
 } from './manifest';
+
+const mobileRoot = process.cwd().endsWith('apps/mobile')
+  ? process.cwd()
+  : resolve(process.cwd(), 'apps/mobile');
+
+test('generated TypeScript manifest decodes exactly from the authoritative production source', () => {
+  const source = JSON.parse(
+    readFileSync(
+      resolve(mobileRoot, 'modules/alyte-local-models/manifest/production.json'),
+      'utf8',
+    ),
+  );
+  assert.deepEqual(productionLocalModelManifest, source);
+});
 
 test('production model manifest pins one public Gemma artifact and runtime', () => {
   assert.doesNotThrow(() => assertLocalModelManifest());

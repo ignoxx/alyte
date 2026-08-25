@@ -27,3 +27,14 @@ test('explicit simulator fake cancellation remains active during transfer', asyn
   assert.equal(cancelled.state, 'not-installed');
   assert.equal((await download).state, 'not-installed');
 });
+
+test('native and JavaScript manifest identity mismatch fails closed before download', async () => {
+  const native = createFakeLocalModelNativeModule();
+  const manifest = native.getManifest() as Record<string, any>;
+  const mismatchedNative = {
+    ...native,
+    getManifest: () => ({ ...manifest, runtime: { ...manifest.runtime, revision: 'tampered' } }),
+  };
+  const service = createLocalModelService({ native: mismatchedNative });
+  await assert.rejects(() => service.startDownload(), /local model module is unavailable/);
+});

@@ -1,0 +1,48 @@
+{
+  "manifestVersion": "alyte.local-model.manifest.v1",
+  "pack": {
+    "id": "gemma-4-e2b-it-q4-0",
+    "source": {
+      "repository": "google/gemma-4-E2B-it",
+      "revision": "3e22461f65e89153144f8adb70e3b8c2cc9845a7"
+    },
+    "artifact": {
+      "repository": "ggml-org/gemma-4-E2B-it-GGUF",
+      "revision": "b4243c156154b6dca9324415f8c7ccc098b4aed1",
+      "filename": "gemma-4-E2B-it-Q4_0.gguf",
+      "url": "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/b4243c156154b6dca9324415f8c7ccc098b4aed1/gemma-4-E2B-it-Q4_0.gguf?download=true",
+      "bytes": 2841481184,
+      "sha256": "8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52"
+    },
+    "publisher": "Google / ggml-org",
+    "license": "Apache-2.0",
+    "format": "GGUF",
+    "quantization": "Q4_0"
+  },
+  "runtime": {
+    "id": "llama.cpp",
+    "repository": "ggml-org/llama.cpp",
+    "revision": "bb4caa7540188872173c44d161602d9271386413"
+  },
+  "compatibility": {
+    "languages": ["en", "de", "lt", "fr", "es", "it", "pt", "nl", "pl"],
+    "promptBundle": "alyte.semantic-mapper.prompt.v1",
+    "semanticSchema": "alyte.semantic-mapper.v1"
+  },
+  "requirements": {
+    "minimumIOS": "26.0",
+    "minimumFreeBytes": 6000000000,
+    "minimumMemoryBytes": 4000000000
+  },
+  "allowlist": {
+    "hosts": [
+      "huggingface.co",
+      "cdn-lfs.huggingface.co",
+      "cdn-lfs-us-1.hf.co",
+      "cdn-lfs-eu-1.hf.co",
+      "cdn-lfs.hf.co",
+      "cas-bridge.xethub.hf.co"
+    ],
+    "files": ["gemma-4-E2B-it-Q4_0.gguf"]
+  }
+}

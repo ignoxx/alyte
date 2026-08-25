@@ -7,30 +7,11 @@ const mobileRoot = process.cwd().endsWith('apps/mobile')
   ? process.cwd()
   : resolve(process.cwd(), 'apps/mobile');
 const nativeRoot = resolve(mobileRoot, 'modules/alyte-local-models/ios');
-const manifestSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModelManifest.swift'), 'utf8');
 const storeSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModelStore.swift'), 'utf8');
+const coreSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModelCore.swift'), 'utf8');
 const moduleSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModelsModule.swift'), 'utf8');
 const podspecSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModels.podspec'), 'utf8');
 const runtimeSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModelRuntime.c'), 'utf8');
-
-test('native manifest mirrors the immutable production pack contract', () => {
-  for (const value of [
-    'gemma-4-e2b-it-q4-0',
-    '3e22461f65e89153144f8adb70e3b8c2cc9845a7',
-    'b4243c156154b6dca9324415f8c7ccc098b4aed1',
-    'gemma-4-E2B-it-Q4_0.gguf',
-    '2_841_481_184',
-    '8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52',
-    'bb4caa7540188872173c44d161602d9271386413',
-    'alyte.semantic-mapper.prompt.v1',
-    'alyte.semantic-mapper.v1',
-  ]) {
-    assert.equal(manifestSource.includes(value), true, value);
-  }
-  assert.equal(manifestSource.includes('/main/'), false);
-  assert.equal(manifestSource.includes('pickle'), false);
-  assert.equal(manifestSource.includes('Authorization'), false);
-});
 
 test('native store owns resumable verification, protection, promotion, and release hooks', () => {
   for (const value of [
@@ -39,7 +20,6 @@ test('native store owns resumable verification, protection, promotion, and relea
     'SHA256',
     'FileProtectionType.complete',
     'isExcludedFromBackup',
-    'replaceItemAt(ready, withItemAt: partial',
     'didReceiveMemoryWarningNotification',
     'thermalStateDidChangeNotification',
     'releaseForBackground',
@@ -52,6 +32,18 @@ test('native store owns resumable verification, protection, promotion, and relea
   assert.equal(storeSource.includes('resumeURL'), false);
   assert.equal(storeSource.includes('.gguf"'), false);
   assert.equal(moduleSource.includes('OnAppEntersBackground'), true);
+});
+
+test('the production lifecycle core owns promotion and runtime cleanup', () => {
+  for (const value of [
+    'replaceItemAt(readyURL, withItemAt: partialURL',
+    'copyItem(at: readyURL, to: backup)',
+    'requestCancellation()',
+    'acceptResponse(status:',
+    'releaseForPressure()',
+  ]) {
+    assert.equal(coreSource.includes(value), true, value);
+  }
 });
 
 test('device and production builds cannot silently omit the pinned runtime', () => {

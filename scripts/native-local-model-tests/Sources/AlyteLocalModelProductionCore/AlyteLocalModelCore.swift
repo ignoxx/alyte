@@ -1,0 +1,1 @@
+../../../../apps/mobile/modules/alyte-local-models/ios/AlyteLocalModelCore.swift

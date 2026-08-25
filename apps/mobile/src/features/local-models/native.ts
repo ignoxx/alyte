@@ -30,12 +30,43 @@ export type LocalModelServiceOptions = {
   readonly native?: NativeLocalModelsModule | null;
 };
 
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonical(nested)]),
+    );
+  }
+  return value;
+}
+
+function nativeManifestMatches(value: unknown): boolean {
+  try {
+    return (
+      JSON.stringify(canonical(value)) === JSON.stringify(canonical(productionLocalModelManifest))
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function createLocalModelService(options: LocalModelServiceOptions = {}): LocalModelService {
   let native: NativeLocalModelsModule | null;
   if (options.native !== undefined) {
     native = options.native;
   } else {
     native = resolveNativeModule();
+  }
+  // Native and JS must agree on the reviewed pack before any operation can proceed. A mismatch
+  // becomes the ordinary unavailable gate; it never falls back to a different model contract.
+  if (native !== null) {
+    try {
+      if (!nativeManifestMatches(native.getManifest())) native = null;
+    } catch {
+      native = null;
+    }
   }
   let snapshot = normalizeLocalModelSnapshot(native?.getState(), productionLocalModelManifest);
   const listeners = new Set<(value: LocalModelSnapshot) => void>();
