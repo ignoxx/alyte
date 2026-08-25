@@ -104,6 +104,26 @@ test('Extraction confirmation includes valid rows by default and gates only true
     ),
     false,
   );
+  assert.equal(
+    extractionNeedsResolution(
+      row({
+        decision: 'preserve',
+        reviewReasons: ['ambiguous-assay', 'unsupported-layout'],
+        reviewState: 'needs-review',
+      }),
+    ),
+    true,
+  );
+  assert.equal(
+    extractionNeedsResolution(
+      row({
+        decision: 'unresolved',
+        reviewReasons: ['missing-unit'],
+        reviewState: 'needs-review',
+      }),
+    ),
+    true,
+  );
 });
 
 test('groups compact rows by Lab Record and panel while keeping date and specimen in headers', () => {

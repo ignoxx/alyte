@@ -4,6 +4,7 @@ import { metabolicMicronutrientBiomarkers } from '@alyte/catalogue';
 import {
   buildExtractionConfirmationPlan,
   decodeVisionOCRResult,
+  extractionReviewBlocksConfirmation,
   groupObservationsIntoRows,
   parseComparatorValue,
   parseLabDate,
@@ -29,13 +30,13 @@ const tableAliases: readonly ExtractionAliasEntry[] = [
   },
   {
     id: 'biomarker.ldl_c',
-    aliases: ['LDL cholesterol'],
+    aliases: ['LDL cholesterol', 'LDL-C'],
     specimens: ['blood', 'serum', 'plasma', 'unknown'],
     units: ['mg/dL', 'mmol/L'],
   },
   {
     id: 'biomarker.hdl_c',
-    aliases: ['HDL cholesterol'],
+    aliases: ['HDL cholesterol', 'HDL-C'],
     specimens: ['blood', 'serum', 'plasma', 'unknown'],
     units: ['mg/dL', 'mmol/L'],
   },
@@ -359,6 +360,108 @@ describe('local extraction domain', () => {
           { record: () => 'record', measurement: () => 'measurement' },
         ),
       /unresolved required fields/,
+    );
+  });
+
+  it('keeps a malformed multi-row OCR scalar review-only when its unit is missing', () => {
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'vision-multi-row-block',
+          text: 'Triglycerides ReFEFeRCE 9.839 leference 0.0-1.7',
+          alternatives: [],
+          boundingBox: { x: 0.12, y: 0.42, width: 0.69, height: 0.03 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+      ],
+      {
+        aliases: tableAliases,
+        collectionDate: { kind: 'known', value: '2026-08-20' },
+        specimenType: 'serum',
+      },
+    );
+    assert.equal(row?.proposedBiomarkerId, 'biomarker.triglycerides');
+    assert.deepEqual(row?.proposedValue, { kind: 'numeric', value: 9.839 });
+    assert.equal(row?.proposedUnit, null);
+    assert.ok(row?.reviewReasons.includes('missing-unit'));
+    assert.equal(row?.reviewState, 'needs-review');
+    assert.equal(row?.decision, 'unresolved');
+    assert.equal(row === undefined ? false : extractionReviewBlocksConfirmation(row), true);
+    assert.throws(
+      () =>
+        buildExtractionConfirmationPlan(
+          {
+            id: 'multi-row-draft',
+            reportId: 'synthetic-report',
+            state: 'draft',
+            ocrContractVersion: 'alyte.vision.document.v2',
+            parserVersion: 'alyte.local-parser.v2',
+            collectionDate: { kind: 'known', value: '2026-08-20' },
+            rows: row === undefined ? [] : [row],
+            createdAt: '2026-08-20T00:00:00.000Z',
+            updatedAt: '2026-08-20T00:00:00.000Z',
+            confirmedAt: null,
+          },
+          { record: () => 'record', measurement: () => 'measurement' },
+        ),
+      /unresolved required fields/,
+    );
+  });
+
+  it('keeps separated three-row table observations distinct with exact source provenance', () => {
+    const rows = groupObservationsIntoRows(
+      [
+        ['ldl-row', 'LDL-C 3.8 mmol/L', 0.2, 3.8, 'biomarker.ldl_c'],
+        ['hdl-row', 'HDL-C 1.4 mmol/L', 0.3, 1.4, 'biomarker.hdl_c'],
+        ['triglycerides-row', 'Triglycerides 1.2 mmol/L', 0.4, 1.2, 'biomarker.triglycerides'],
+      ].map(([id, text, y]) => ({
+        id: id as string,
+        text: text as string,
+        alternatives: [],
+        boundingBox: { x: 0.12, y: y as number, width: 0.69, height: 0.03 },
+        pageIndex: 0,
+        orientation: 0,
+        structure: {
+          kind: 'table-cell' as const,
+          tableId: 'synthetic-lipids',
+          rowIndex: Math.round(((y as number) - 0.2) * 10),
+          columnIndex: 0,
+        },
+        recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+      })),
+      {
+        aliases: tableAliases,
+        collectionDate: { kind: 'known', value: '2026-08-20' },
+        specimenType: 'serum',
+      },
+    );
+    assert.equal(rows.length, 3);
+    assert.deepEqual(
+      rows.map((row) => [row.id, row.proposedBiomarkerId, row.proposedValue, row.proposedUnit]),
+      [
+        ['ldl-row', 'biomarker.ldl_c', { kind: 'numeric', value: 3.8 }, 'mmol/L'],
+        ['hdl-row', 'biomarker.hdl_c', { kind: 'numeric', value: 1.4 }, 'mmol/L'],
+        ['triglycerides-row', 'biomarker.triglycerides', { kind: 'numeric', value: 1.2 }, 'mmol/L'],
+      ],
+    );
+    assert.deepEqual(
+      rows.map((row) => ({ ids: row.source.observationIds, box: row.source.boundingBox })),
+      [
+        {
+          ids: ['ldl-row'],
+          box: { x: 0.12, y: 0.2, width: 0.69, height: 0.03 },
+        },
+        {
+          ids: ['hdl-row'],
+          box: { x: 0.12, y: 0.3, width: 0.69, height: 0.03 },
+        },
+        {
+          ids: ['triglycerides-row'],
+          box: { x: 0.12, y: 0.4, width: 0.69, height: 0.03 },
+        },
+      ],
     );
   });
 

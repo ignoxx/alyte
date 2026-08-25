@@ -75,6 +75,7 @@ export const EXTRACTION_REVIEW_REASONS = [
   'missing-value',
   'unparseable-value',
   'unsupported-alias',
+  'missing-unit',
   'incompatible-unit',
   'incompatible-specimen',
   'ambiguous-assay',
@@ -91,6 +92,7 @@ const REQUIRED_EXTRACTION_REVIEW_REASONS = new Set<ExtractionReviewReason>([
   'missing-label',
   'missing-value',
   'unparseable-value',
+  'missing-unit',
   'unsupported-layout',
 ]);
 
@@ -98,7 +100,7 @@ export function extractionReviewBlocksConfirmation(
   row: Pick<ExtractionDraftRow, 'decision' | 'reviewReasons'>,
 ): boolean {
   return (
-    row.decision === 'unresolved' &&
+    row.decision !== 'skip' &&
     row.reviewReasons.some((reason) => REQUIRED_EXTRACTION_REVIEW_REASONS.has(reason))
   );
 }
@@ -866,13 +868,15 @@ function parseSourceRow(
   if (!label) reasons.push('missing-label');
   if (!rawValue) reasons.push('missing-value');
   if (proposedValue.kind === 'free_text') reasons.push('unparseable-value');
-  if (valueCandidates.length > 1 || effectiveReferences.length > 1)
+  if (valueCandidates.length > 1 || effectiveReferences.length > 1 || hasSiblingAlias)
     reasons.push('unsupported-layout');
   if (biomarkerId === null) reasons.push('unsupported-alias');
   if (unsafeMatch !== null || globalUnsafeMatch !== null || hasSiblingAlias)
     reasons.push('ambiguous-assay');
   else if (!methodCompatible(sourceText, biomarkerId, aliases)) reasons.push('incompatible-method');
   if (!unitCompatible(unit, biomarkerId, aliases)) reasons.push('incompatible-unit');
+  if (unit === null && (proposedValue.kind === 'numeric' || proposedValue.kind === 'bounded'))
+    reasons.push('missing-unit');
   if (!specimenCompatible(specimenType, biomarkerId, aliases))
     reasons.push('incompatible-specimen');
   if (referenceCandidate !== null && reference === null)
@@ -942,7 +946,13 @@ export function revalidateExtractionRow(
   if (unsafeMatch !== null || globalUnsafeMatch !== null || hasSiblingAlias)
     reasons.add('ambiguous-assay');
   else if (!methodCompatible(next.sourceText, id, aliases)) reasons.add('incompatible-method');
+  if (hasSiblingAlias) reasons.add('unsupported-layout');
   if (!unitCompatible(next.proposedUnit, id, aliases)) reasons.add('incompatible-unit');
+  if (
+    next.proposedUnit === null &&
+    (next.proposedValue.kind === 'numeric' || next.proposedValue.kind === 'bounded')
+  )
+    reasons.add('missing-unit');
   if (!specimenCompatible(next.proposedSpecimenType, id, aliases))
     reasons.add('incompatible-specimen');
   if (next.collectionDate.kind === 'missing') reasons.add('missing-collection-date');

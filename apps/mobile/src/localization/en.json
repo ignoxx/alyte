@@ -262,6 +262,7 @@
       "missing-value": "Missing value",
       "unparseable-value": "Value needs review",
       "unsupported-alias": "Biomarker not safely mapped",
+      "missing-unit": "Unit is missing",
       "incompatible-unit": "Unit is not compatible",
       "incompatible-specimen": "Specimen is not compatible",
       "ambiguous-assay": "Assay needs review",
