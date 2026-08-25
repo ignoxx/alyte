@@ -56,9 +56,8 @@ final class MetricRecorderTests: XCTestCase {
             return
         }
         guard let modelPath = configuredValue("ALYTE_MODEL_EVAL_MODEL_PATH"),
-              let aggregatePath = configuredValue("ALYTE_MODEL_EVAL_AGGREGATE_PATH"),
-              let runtimePath = configuredValue("ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK") else {
-            XCTFail("device mode requires model, aggregate, and pinned runtime paths")
+              let aggregatePath = configuredValue("ALYTE_MODEL_EVAL_AGGREGATE_PATH") else {
+            XCTFail("device mode requires container-relative model and aggregate paths")
             return
         }
         guard LlamaCppRuntimeBridge.isFrameworkLinked else {
@@ -72,17 +71,34 @@ final class MetricRecorderTests: XCTestCase {
             XCTFail("canonical evaluation contract resource is missing")
             return
         }
-        let modelURL = URL(fileURLWithPath: modelPath)
+        let modelURL: URL
+        let aggregateURL: URL
+        do {
+            modelURL = try applicationSupportURL(for: modelPath)
+            aggregateURL = try applicationSupportURL(for: aggregatePath)
+        } catch {
+            XCTFail("device mode paths must resolve inside the app data container: \(error)")
+            return
+        }
+        let runtimeBytes = embeddedRuntimeBytes()
+        guard runtimeBytes > 0 else {
+            XCTFail("pinned llama.cpp framework is not embedded in the evaluator app")
+            return
+        }
         let report = try NativeEvaluationRunner.run(
             modelURL: modelURL,
             contractURL: contractURL,
             packBytes: fileSize(modelURL),
-            runtimeBytes: directorySize(URL(fileURLWithPath: runtimePath)),
+            runtimeBytes: runtimeBytes,
             deviceClass: configuredValue("ALYTE_MODEL_EVAL_DEVICE_CLASS") ?? "paired",
             deviceModel: configuredValue("ALYTE_MODEL_EVAL_DEVICE_MODEL") ?? "unknown",
             osVersion: ProcessInfo.processInfo.operatingSystemVersionString
         )
-        try AggregateReportWriter.write(report, to: URL(fileURLWithPath: aggregatePath))
+        try FileManager.default.createDirectory(
+            at: aggregateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try AggregateReportWriter.write(report, to: aggregateURL)
         XCTAssertEqual(report.fixtureCount, 6)
         XCTAssertEqual(report.expectedRowCount, 12)
         XCTAssertLessThanOrEqual(report.schemaFailureCount + report.acceptedProposalCount, 24 * 6)
@@ -94,6 +110,24 @@ private func configuredValue(_ key: String) -> String? {
         return value
     }
     return Bundle(for: MetricRecorderTests.self).object(forInfoDictionaryKey: key) as? String
+}
+
+private func applicationSupportURL(for relativePath: String) throws -> URL {
+    guard !relativePath.isEmpty, !relativePath.hasPrefix("/") else {
+        throw NSError(domain: "AlyteModelEvaluationTests", code: 1)
+    }
+    guard let applicationSupport = FileManager.default.urls(
+        for: .applicationSupportDirectory,
+        in: .userDomainMask
+    ).first else {
+        throw NSError(domain: "AlyteModelEvaluationTests", code: 2)
+    }
+    let root = applicationSupport.standardizedFileURL
+    let candidate = root.appendingPathComponent(relativePath).standardizedFileURL
+    guard candidate.path == root.path || candidate.path.hasPrefix(root.path + "/") else {
+        throw NSError(domain: "AlyteModelEvaluationTests", code: 3)
+    }
+    return candidate
 }
 
 private struct AggregateFixture: Codable {
@@ -114,4 +148,12 @@ private func directorySize(_ url: URL) -> UInt64 {
               let size = values.fileSize else { return nil }
         return UInt64(size)
     }.reduce(0, +)
+}
+
+private func embeddedRuntimeBytes() -> UInt64 {
+    let appBundle = Bundle(identifier: "com.alyte.model-evaluation") ?? Bundle.main
+    guard let frameworks = appBundle.privateFrameworksURL else {
+        return 0
+    }
+    return directorySize(frameworks.appendingPathComponent("llama.framework"))
 }

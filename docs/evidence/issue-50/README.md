@@ -53,21 +53,25 @@ export ALYTE_MODEL_EVAL_RUNTIME_SOURCE=/Users/ignas/.cache/alyte-model-eval-runt
 export ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK=/Users/ignas/.cache/alyte-model-eval-runtime/llama.cpp/build-apple/llama.xcframework
 export ALYTE_MODEL_EVAL_DERIVED_DATA=/Users/ignas/.cache/alyte-model-eval-derived
 export ALYTE_MODEL_EVAL_XCRESULT=/Users/ignas/.cache/alyte-model-eval.xcresult
+export ALYTE_MODEL_EVAL_TEAM_ID=ZF5CQGPNXN
 export ALYTE_MODEL_EVAL_DEVICE_UDID=9A3D3FF4-48A2-5D50-BCE4-E74E4CA018D9
 ./scripts/run-model-evaluation-device.sh
 ```
 
 The script validates the exact target, external paths, artifact size, and SHA-256, enables the
-`ALYTE_LLAMA_EVAL` native bridge, embeds only the externally staged runtime, injects the external
-paths into the XCTest bundle, and runs only `AlyteModelEvaluationTests` on the requested device.
-The XCTest decodes the generated canonical contract and invokes all six two-row synthetic locale
-fixtures (including OCR alternatives and mixed specimen contexts), then writes only the aggregate
-report path. Missing device-run inputs fail the test rather than turning it into a pass. It never
-substitutes a simulator for device evidence. The paired-device attempt on `Ignas iPhone` validated
-the staged artifact and pinned runtime, but stopped before XCTest because the evaluation app and test
-target require a development team for code signing; no current-device Qwen metrics are claimed here.
-The supported floor is an iPhone SE (2nd generation/A13); no floor device is connected, so floor
-latency/memory/thermal evidence remains pending.
+`ALYTE_LLAMA_EVAL` native bridge, signs and installs only the evaluation app, copies the verified
+GGUF into that app's `appDataContainer`, and passes container-relative paths to
+`AlyteModelEvaluationTests`. The XCTest decodes the generated canonical contract and invokes all
+six two-row synthetic locale fixtures (including OCR alternatives and mixed specimen contexts),
+then the script copies only the aggregate JSON back to the external destination. Missing device-run
+inputs fail the test rather than turning it into a pass. The app is uninstalled on exit so its model
+data is removed; the externally staged GGUF remains for explicit operator cleanup. If interrupted,
+manually run `xcrun devicectl device uninstall app --device <UDID> com.alyte.model-evaluation`.
+It never substitutes a simulator for device evidence. The paired-device workflow is currently
+blocked before installation because this Mac's Xcode account credentials are invalid and no
+development provisioning profile is available for `ZF5CQGPNXN`; no current-device Qwen metrics are
+claimed here. The supported floor is an iPhone SE (2nd generation/A13); no floor device is connected,
+so floor latency/memory/thermal evidence remains pending.
 
 ## What is measured
 

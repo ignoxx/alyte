@@ -24,7 +24,5 @@
 	<string>$(ALYTE_MODEL_EVAL_MODEL_PATH)</string>
 	<key>ALYTE_MODEL_EVAL_AGGREGATE_PATH</key>
 	<string>$(ALYTE_MODEL_EVAL_AGGREGATE_PATH)</string>
-	<key>ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK</key>
-	<string>$(ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK)</string>
 </dict>
 </plist>

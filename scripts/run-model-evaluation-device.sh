@@ -8,10 +8,15 @@ set -euo pipefail
 : "${ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK:?Set ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK to the externally built llama.xcframework directory}"
 : "${ALYTE_MODEL_EVAL_DERIVED_DATA:?Set ALYTE_MODEL_EVAL_DERIVED_DATA outside the repository}"
 : "${ALYTE_MODEL_EVAL_XCRESULT:?Set ALYTE_MODEL_EVAL_XCRESULT outside the repository}"
+: "${ALYTE_MODEL_EVAL_TEAM_ID:?Set ALYTE_MODEL_EVAL_TEAM_ID to the Apple Development team used for this evaluator build}"
 
 eval_device_udid="${ALYTE_MODEL_EVAL_DEVICE_UDID:-9A3D3FF4-48A2-5D50-BCE4-E74E4CA018D9}"
 eval_device_class="${ALYTE_MODEL_EVAL_DEVICE_CLASS:-current}"
 eval_device_model="${ALYTE_MODEL_EVAL_DEVICE_MODEL:-iPhone 17 (iPhone18,3)}"
+bundle_id="com.alyte.model-evaluation"
+device_relative_directory="Library/Application Support/AlyteModelEvaluation"
+test_model_relative_path="AlyteModelEvaluation/Qwen3.5-0.8B-Q4_0.gguf"
+test_aggregate_relative_path="AlyteModelEvaluation/aggregate.json"
 repo_root="$(git rev-parse --show-toplevel)"
 runtime_source="${ALYTE_MODEL_EVAL_RUNTIME_SOURCE}"
 model_path="${ALYTE_MODEL_EVAL_CACHE}/Qwen3.5-0.8B-Q4_0.gguf"
@@ -53,6 +58,12 @@ case "${aggregate_path}" in
     exit 2
     ;;
 esac
+if [[ -e "${aggregate_path}" ]]; then
+  print -u2 "Aggregate destination already exists; choose a new external path"
+  exit 2
+fi
+aggregate_parent="$(dirname "${aggregate_path}")"
+mkdir -p "${aggregate_parent}"
 
 if [[ ! -x "${runtime_source}/build-xcframework.sh" ]]; then
   print -u2 "Missing pinned llama.cpp build script: ${runtime_source}/build-xcframework.sh"
@@ -138,25 +149,112 @@ if ! xcrun devicectl list devices | "${rg_bin}" -q "${eval_device_udid}.*availab
   exit 3
 fi
 
-# The app/test target is evaluation-only and has no production Alyte routes or report-service
-# dependency. Its XCTest output must remain aggregate-only; inspect the resulting JSON manually
-# before sharing it. Device execution is intentionally separate from simulator evidence.
+# Build, install, stage, test, and retrieve in separate phases. The model is never put in the app
+# bundle or the result bundle: it is copied into the installed app data container only after the
+# signed evaluator is installed. XCTest receives container-relative paths and resolves them through
+# Application Support on the phone. The evaluator is uninstalled on exit after aggregate retrieval.
+app_path="${ALYTE_MODEL_EVAL_DERIVED_DATA}/Build/Products/Debug-iphoneos/AlyteModelEvaluation.app"
+xctestrun_path=""
+installed_app=0
+cleanup() {
+  local exit_code=$?
+  set +e
+  if [[ "${installed_app}" == "1" ]]; then
+    xcrun devicectl device uninstall app \
+      --device "${eval_device_udid}" \
+      "${bundle_id}" >/dev/null 2>&1
+    local uninstall_code=$?
+    if [[ "${exit_code}" == "0" && "${uninstall_code}" != "0" ]]; then
+      print -u2 "Failed to uninstall evaluation app; remove ${bundle_id} manually from the device"
+      exit_code="${uninstall_code}"
+    fi
+  fi
+  exit "${exit_code}"
+}
+trap cleanup EXIT
+
 xcodebuild \
   -project "${repo_root}/apps/model-evaluation/AlyteModelEvaluation.xcodeproj" \
   -scheme AlyteModelEvaluation \
   -destination "id=${eval_device_udid}" \
   -derivedDataPath "${ALYTE_MODEL_EVAL_DERIVED_DATA}" \
-  -resultBundlePath "${ALYTE_MODEL_EVAL_XCRESULT}" \
+  DEVELOPMENT_TEAM="${ALYTE_MODEL_EVAL_TEAM_ID}" \
+  CODE_SIGN_IDENTITY="Apple Development" \
+  CODE_SIGN_STYLE=Automatic \
+  CODE_SIGNING_ALLOWED=YES \
   ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK="${ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK}" \
   ALYTE_MODEL_EVAL_DEVICE_RUN=1 \
   ALYTE_MODEL_EVAL_DEVICE_CLASS="${eval_device_class}" \
   ALYTE_MODEL_EVAL_DEVICE_MODEL="${eval_device_model}" \
-  ALYTE_MODEL_EVAL_MODEL_PATH="${model_path}" \
-  ALYTE_MODEL_EVAL_AGGREGATE_PATH="${aggregate_path}" \
+  ALYTE_MODEL_EVAL_MODEL_PATH="${test_model_relative_path}" \
+  ALYTE_MODEL_EVAL_AGGREGATE_PATH="${test_aggregate_relative_path}" \
   SWIFT_ACTIVE_COMPILATION_CONDITIONS="ALYTE_LLAMA_EVAL" \
   OTHER_CFLAGS="-DALYTE_LLAMA_EVAL" \
   HEADER_SEARCH_PATHS="${ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK}/ios-arm64/llama.framework/Headers" \
   FRAMEWORK_SEARCH_PATHS="${ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK}/ios-arm64" \
   OTHER_LDFLAGS="-framework llama" \
-  -only-testing:AlyteModelEvaluationTests \
-  test
+  -allowProvisioningUpdates \
+  build-for-testing
+
+if [[ ! -d "${app_path}" ]]; then
+  print -u2 "Signed evaluator app was not produced: ${app_path}"
+  exit 2
+fi
+xctestrun_path="$(find "${ALYTE_MODEL_EVAL_DERIVED_DATA}/Build/Products" -maxdepth 1 -name '*.xctestrun' -type f -print -quit)"
+if [[ -z "${xctestrun_path}" || ! -f "${xctestrun_path}" ]]; then
+  print -u2 "Signed XCTest run specification was not produced"
+  exit 2
+fi
+test_info="${app_path}/PlugIns/AlyteModelEvaluationTests.xctest/Info.plist"
+if [[ ! -f "${test_info}" ]]; then
+  print -u2 "Signed XCTest bundle is missing its Info.plist"
+  exit 2
+fi
+if [[ "$(plutil -extract ALYTE_MODEL_EVAL_MODEL_PATH raw -o - "${test_info}")" != "${test_model_relative_path}" ||
+      "$(plutil -extract ALYTE_MODEL_EVAL_AGGREGATE_PATH raw -o - "${test_info}")" != "${test_aggregate_relative_path}" ]]; then
+  print -u2 "XCTest inputs are not container-relative"
+  exit 2
+fi
+
+xcrun devicectl device install app \
+  --device "${eval_device_udid}" \
+  "${app_path}"
+installed_app=1
+
+xcrun devicectl device copy to \
+  --device "${eval_device_udid}" \
+  --source "${model_path}" \
+  --destination "${device_relative_directory}/Qwen3.5-0.8B-Q4_0.gguf" \
+  --domain-type appDataContainer \
+  --domain-identifier "${bundle_id}"
+
+xcodebuild \
+  test-without-building \
+  -xctestrun "${xctestrun_path}" \
+  -destination "id=${eval_device_udid}" \
+  -resultBundlePath "${ALYTE_MODEL_EVAL_XCRESULT}" \
+  -only-testing:AlyteModelEvaluationTests
+
+xcrun devicectl device copy from \
+  --device "${eval_device_udid}" \
+  --source "${device_relative_directory}/aggregate.json" \
+  --destination "${aggregate_path}" \
+  --domain-type appDataContainer \
+  --domain-identifier "${bundle_id}"
+
+if [[ ! -s "${aggregate_path}" ]]; then
+  print -u2 "Device evaluation did not return a non-empty aggregate report"
+  exit 2
+fi
+node - "${aggregate_path}" <<'NODE'
+const fs = require('node:fs');
+const path = process.argv[2];
+const report = JSON.parse(fs.readFileSync(path, 'utf8'));
+const serialized = JSON.stringify(report);
+if (serialized.includes('<|im_start|>') || serialized.includes('sourceFacts') || serialized.includes('rawModelOutput')) {
+  throw new Error('aggregate report contains forbidden raw evaluation content');
+}
+if (!report.deviceMetrics || typeof report.fixtureCount !== 'number' || typeof report.expectedRowCount !== 'number') {
+  throw new Error('aggregate report is missing required evaluation metrics');
+}
+NODE
