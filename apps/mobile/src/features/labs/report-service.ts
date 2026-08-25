@@ -1121,7 +1121,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     const contexts: ExtractionDateContext[] = [];
     const excludedObservationIds = new Set<string>();
     const collectionWords =
-      /\b(collection|collected|sample|specimen|date of collection|abnahme|entnahme|proben|prélèvement|prelevement|muestra|toma de muestra|prelievo|campione|colheita|amostra|afname|monster|pobranie|próbka|paėmimo data|mėginys|ėminys|paimta)\b/iu;
+      /\b(collection|collected|sample|specimen|date of collection|abnahme|entnahme|proben(?:entnahme)?|prélèvement|prelevement|muestra|toma de muestra|prelievo|campione|colheita|amostra|afname|monster|pobranie|próbka|paėmimo data|mėginys|ėminys|paimta)\b/iu;
     const nonCollectionWords =
       /\b(issued|report date|birth|dob|date of birth|ausgestellt|geburt|naissance|nacimiento|nascita|nascimento|geboorte|urodzenia|wydania|išdavimo data|gimimo data)\b/iu;
     for (const observation of observations) {
@@ -1161,17 +1161,74 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     return { contexts, excludedObservationIds, collectionDate };
   }
 
-  function specimenTypeFromOCR(results: readonly VisionOCRResult[]): SpecimenType {
-    const text = results
-      .flatMap((result) => result.observations.map((observation) => observation.text))
-      .join(' ')
-      .toLocaleLowerCase();
-    if (/\b(plasma|plasma)\b/u.test(text)) return 'plasma';
-    if (/\b(serum|sérum|serum)\b/u.test(text)) return 'serum';
-    if (/\b(urine|urin|orina|urina|urine)\b/u.test(text)) return 'urine';
-    if (/\b(blood|blut|sang|sangue|bloed|krew)\b/u.test(text)) return 'blood';
-    if (/\b(kraujas|kraujo)\b/u.test(text)) return 'blood';
-    return 'unknown';
+  function specimenTypeFromText(text: string): SpecimenType | null {
+    const candidates = new Set<SpecimenType>();
+    if (/\bplasma\b/iu.test(text)) candidates.add('plasma');
+    if (/\b(?:serum|sérum|serumas)\b/iu.test(text)) candidates.add('serum');
+    if (/\b(?:urine|urin|orina|urina)\b/iu.test(text)) candidates.add('urine');
+    if (
+      /\b(?:blood|whole blood|blut|vollblut|sang|sangue|bloed|krew|kraujas|kraujo)\b/iu.test(text)
+    )
+      candidates.add('blood');
+    return candidates.size === 1 ? [...candidates][0]! : null;
+  }
+
+  function specimenContextGroups(observations: readonly VisionTextObservation[]): readonly {
+    readonly specimenType: SpecimenType;
+    readonly observations: readonly VisionTextObservation[];
+  }[] {
+    const tableGroups = new Map<string, VisionTextObservation[]>();
+    const rowGroups = new Map<string, VisionTextObservation[]>();
+    for (const observation of observations) {
+      const structure = observation.structure;
+      const tableKey =
+        structure?.kind === 'table-cell' && structure.tableId !== null
+          ? `${observation.pageIndex}:${structure.tableId}`
+          : `${observation.pageIndex}:loose:${observation.id}`;
+      const rowKey =
+        structure?.kind === 'table-cell' &&
+        structure.tableId !== null &&
+        structure.rowIndex !== null
+          ? `${observation.pageIndex}:${structure.tableId}:${structure.rowIndex}`
+          : `${observation.pageIndex}:loose:${observation.id}`;
+      const table = tableGroups.get(tableKey) ?? [];
+      table.push(observation);
+      tableGroups.set(tableKey, table);
+      const row = rowGroups.get(rowKey) ?? [];
+      row.push(observation);
+      rowGroups.set(rowKey, row);
+    }
+
+    const tableSpecimens = new Map<string, SpecimenType | null>();
+    for (const [tableKey, group] of tableGroups) {
+      tableSpecimens.set(tableKey, specimenTypeFromText(group.map((item) => item.text).join(' ')));
+    }
+
+    const grouped = new Map<SpecimenType, VisionTextObservation[]>();
+    for (const observation of observations) {
+      const structure = observation.structure;
+      const tableKey =
+        structure?.kind === 'table-cell' && structure.tableId !== null
+          ? `${observation.pageIndex}:${structure.tableId}`
+          : `${observation.pageIndex}:loose:${observation.id}`;
+      const rowKey =
+        structure?.kind === 'table-cell' &&
+        structure.tableId !== null &&
+        structure.rowIndex !== null
+          ? `${observation.pageIndex}:${structure.tableId}:${structure.rowIndex}`
+          : `${observation.pageIndex}:loose:${observation.id}`;
+      const rowSpecimen = specimenTypeFromText(
+        (rowGroups.get(rowKey) ?? [observation]).map((item) => item.text).join(' '),
+      );
+      const specimenType = rowSpecimen ?? tableSpecimens.get(tableKey) ?? 'unknown';
+      const context = grouped.get(specimenType) ?? [];
+      context.push(observation);
+      grouped.set(specimenType, context);
+    }
+    return [...grouped.entries()].map(([specimenType, context]) => ({
+      specimenType,
+      observations: context,
+    }));
   }
 
   async function applySemanticMappings(
@@ -1268,14 +1325,29 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         const observations = results
           .flatMap((result) => result.observations)
           .filter((observation) => !dateContext.excludedObservationIds.has(observation.id));
-        const specimenType = specimenTypeFromOCR(results);
-        const deterministicRows = groupObservationsIntoRows(observations, {
-          locale: Intl.DateTimeFormat().resolvedOptions().locale,
-          collectionDate: dateContext.collectionDate,
-          collectionDateContexts: dateContext.contexts,
-          specimenType,
-          aliases: extractionAliases,
-        });
+        const deterministicRows = specimenContextGroups(observations)
+          .flatMap(({ observations: contextObservations, specimenType }) =>
+            groupObservationsIntoRows(contextObservations, {
+              locale: Intl.DateTimeFormat().resolvedOptions().locale,
+              collectionDate: dateContext.collectionDate,
+              collectionDateContexts: dateContext.contexts,
+              specimenType,
+              aliases: extractionAliases,
+            }),
+          )
+          // Context grouping is an extraction implementation detail. Restore the report's visual
+          // row order before assigning draft order so interleaved specimen sections cannot move
+          // source rows across one another or change their provenance sequence.
+          .sort((left, right) => {
+            const leftSource = left.source.observations?.[0];
+            const rightSource = right.source.observations?.[0];
+            return (
+              (leftSource?.pageIndex ?? 0) - (rightSource?.pageIndex ?? 0) ||
+              (leftSource?.boundingBox.y ?? 0) - (rightSource?.boundingBox.y ?? 0) ||
+              (leftSource?.boundingBox.x ?? 0) - (rightSource?.boundingBox.x ?? 0)
+            );
+          })
+          .map((row, order) => ({ ...row, order }));
         const rows = await applySemanticMappings(deterministicRows, observations);
         if (rows.length === 0) {
           throw new LabReportExtractionError(

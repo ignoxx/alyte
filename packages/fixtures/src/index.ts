@@ -81,7 +81,6 @@ export {
   type SyntheticLabSpecimen,
 } from './metabolic-lab-reports.js';
 export {
-  allBloodLiverLabReportFixtures,
   bloodLiverLabReportFixtures,
   bloodLiverSafetyReportFixture,
   type BloodLiverExpectedMeasurement,

@@ -44,6 +44,8 @@ import { addRedaction } from '@alyte/domain';
 import { createSanitizationRecipe } from '@alyte/domain';
 import { comparableBiomarkers } from '@alyte/catalogue';
 import {
+  bloodLiverSafetyReportFixture,
+  bloodLiverLabReportFixtures,
   metabolicLabReportFixtures,
   mixedSpecimenMetabolicLabReportFixture,
   multilingualLabTableFixtures,
@@ -652,6 +654,236 @@ describe('protected Lab Report import lifecycle', () => {
         assert.equal(unknownTrend.points.length, 0);
         assert.equal(unknownTrend.nonPoints[0]?.kind, 'incompatible');
         assert.equal(unknownTrend.nonPoints[0]?.reason, 'incompatible-specimen');
+      }
+    }
+  });
+
+  test('resolves a mixed blood/serum/plasma/unknown report per table in production extraction', async () => {
+    const fixture = bloodLiverSafetyReportFixture;
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const ocr: VisionOCR = {
+      async recognize(): Promise<VisionOCRResult> {
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations: fixture.observations,
+        });
+      },
+    };
+    const service = createService(repository, files, sanitizingPdf(files), ocr);
+    const report = (await service.importPdf(source('blood-liver-mixed-production')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+
+    const draft = await service.startExtraction(report.id);
+    const rowByObservation = new Map(
+      draft.rows.flatMap((row) => row.source.observationIds.map((id) => [id, row] as const)),
+    );
+    const expectedSpecimens = {
+      'safety-unknown-mcv': 'unknown',
+      'safety-urine-hemoglobin': 'urine',
+      'safety-blood-mcv': 'blood',
+      'safety-incompatible-unit': 'blood',
+      'safety-ambiguous-sibling': 'serum',
+      'safety-incomplete-alt-method': 'serum',
+      'safety-incompatible-ast-unit': 'serum',
+      'safety-unsafe-ggt-method': 'serum',
+      'safety-plasma-ggt': 'plasma',
+    } as const;
+    assert.equal(draft.collectionDate.kind, 'known');
+    assert.equal(draft.collectionDate.value, fixture.expectedCollectionDate);
+    assert.equal(draft.rows.length, Object.keys(expectedSpecimens).length);
+    assert.deepEqual(
+      draft.rows.map((row) => row.source.observationIds[0]),
+      [
+        'safety-unknown-mcv',
+        'safety-urine-hemoglobin',
+        'safety-blood-mcv',
+        'safety-incompatible-unit',
+        'safety-ambiguous-sibling',
+        'safety-plasma-ggt',
+        'safety-incomplete-alt-method',
+        'safety-incompatible-ast-unit',
+        'safety-unsafe-ggt-method',
+      ],
+    );
+    assert.deepEqual(
+      draft.rows.map((row) => row.order),
+      draft.rows.map((_row, order) => order),
+    );
+    for (const [observationId, specimenType] of Object.entries(expectedSpecimens)) {
+      const row = rowByObservation.get(observationId);
+      assert.ok(row, observationId);
+      assert.equal(row?.proposedSpecimenType, specimenType, observationId);
+      assert.deepEqual(row?.source.observationIds, [observationId], observationId);
+    }
+    for (const expected of fixture.expected.credible) {
+      const row = rowByObservation.get(expected.observationId);
+      assert.equal(row?.reviewState, 'ready', expected.observationId);
+      assert.equal(row?.sourceReferenceInterval, expected.referenceInterval);
+    }
+    for (const expected of fixture.expected.needsReview) {
+      const row = rowByObservation.get(expected.observationId);
+      assert.ok(row, expected.observationId);
+      assert.equal(row?.proposedBiomarkerId, expected.biomarkerId, expected.observationId);
+      assert.equal(row?.proposedSpecimenType, expected.specimenType, expected.observationId);
+      assert.equal(row?.reviewState, 'needs-review', expected.observationId);
+      assert.ok(row?.reviewReasons.includes(expected.reason), expected.observationId);
+    }
+    for (const excludedObservationId of fixture.expected.excludedObservationIds) {
+      assert.equal(rowByObservation.has(excludedObservationId), false, excludedObservationId);
+    }
+
+    const records = await service.confirmExtraction(draft.id);
+    const mcvTrend = buildMeasuredTrend(
+      records,
+      canonicalId('biomarker.mcv'),
+      comparableBiomarkers,
+    );
+    assert.equal(mcvTrend.points.length, 1);
+    assert.deepEqual(
+      records
+        .flatMap((record) => record.measurements)
+        .find((measurement) => measurement.source?.observationIds?.includes('safety-blood-mcv'))
+        ?.source?.observationIds,
+      ['safety-blood-mcv'],
+    );
+    assert.equal(mcvTrend.points[0]?.laboratoryReference.interval, '80-100');
+    assert.equal(
+      mcvTrend.nonPoints.some((point) => point.reason === 'incompatible-specimen'),
+      true,
+    );
+    const hemoglobinTrend = buildMeasuredTrend(
+      records,
+      canonicalId('biomarker.hemoglobin'),
+      comparableBiomarkers,
+    );
+    assert.equal(hemoglobinTrend.points.length, 0);
+    assert.equal(
+      hemoglobinTrend.nonPoints.some((point) => point.reason === 'unconfirmed'),
+      true,
+    );
+    const ggtTrend = buildMeasuredTrend(
+      records,
+      canonicalId('biomarker.ggt'),
+      comparableBiomarkers,
+    );
+    assert.equal(ggtTrend.points.length, 1);
+    assert.deepEqual(
+      records
+        .flatMap((record) => record.measurements)
+        .find((measurement) => measurement.source?.observationIds?.includes('safety-plasma-ggt'))
+        ?.source?.observationIds,
+      ['safety-plasma-ggt'],
+    );
+    assert.equal(ggtTrend.points[0]?.laboratoryReference.interval, '9-48');
+  });
+
+  test('runs multilingual blood-liver fixtures through production extraction and preserves source intervals', async () => {
+    for (const fixture of bloodLiverLabReportFixtures) {
+      const repository = createRepository();
+      const files = new FakeFiles();
+      const ocr: VisionOCR = {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v2',
+            pageIndex: 0,
+            orientation: 0,
+            observations: fixture.observations,
+          });
+        },
+      };
+      const service = createService(repository, files, sanitizingPdf(files), ocr);
+      const report = (await service.importPdf(source(`${fixture.id}-production`)))!.report;
+      await prepareSanitizedExtraction(service, report.id);
+      const draft = await service.startExtraction(report.id);
+      const rowByObservation = new Map(
+        draft.rows.flatMap((row) => row.source.observationIds.map((id) => [id, row] as const)),
+      );
+
+      assert.deepEqual(draft.collectionDate, {
+        kind: 'known',
+        value: fixture.expectedCollectionDate,
+      });
+      for (const expected of fixture.expected.credible) {
+        const row = rowByObservation.get(expected.observationId);
+        assert.ok(row, `${fixture.id}:${expected.observationId}`);
+        assert.equal(
+          row?.proposedBiomarkerId,
+          expected.biomarkerId,
+          `${fixture.id}:${expected.observationId}`,
+        );
+        assert.equal(
+          row?.proposedSpecimenType,
+          expected.specimenType,
+          `${fixture.id}:${expected.observationId}`,
+        );
+        assert.equal(row?.reviewState, 'ready', `${fixture.id}:${expected.observationId}`);
+        assert.deepEqual(row?.proposedValue, { kind: 'numeric', value: expected.value });
+        assert.equal(row?.sourceValueString, expected.valueString);
+        assert.equal(row?.sourceUnit, expected.unit);
+        assert.equal(row?.sourceReferenceInterval, expected.referenceInterval);
+        assert.equal(row?.proposedReferenceInterval, expected.referenceInterval);
+        assert.equal(row?.sourceFlag, expected.flag ?? null);
+        assert.equal(row?.proposedFlag, expected.flag ?? null);
+        assert.deepEqual(row?.source.observationIds, [expected.observationId]);
+        if (expected.sourceContext !== undefined) {
+          assert.ok(
+            fixture.observations.some((observation) =>
+              observation.text.includes(expected.sourceContext!),
+            ),
+            `${fixture.id}:${expected.observationId} source context`,
+          );
+        }
+        if (
+          expected.biomarkerId === 'biomarker.alt' ||
+          expected.biomarkerId === 'biomarker.ast' ||
+          expected.biomarkerId === 'biomarker.ggt'
+        ) {
+          assert.match(row?.sourceText ?? '', /IFCC 37 C with P5P/u);
+        }
+      }
+      for (const excludedId of fixture.expected.excludedObservationIds) {
+        assert.equal(rowByObservation.has(excludedId), false, `${fixture.id}:${excludedId}`);
+      }
+
+      const records = await service.confirmExtraction(draft.id);
+      assert.equal(
+        records.every((record) => record.labReportId === report.id),
+        true,
+      );
+      assert.equal(
+        records.every(
+          (record) =>
+            record.collectionDate.kind === 'known' &&
+            record.collectionDate.value === fixture.expectedCollectionDate,
+        ),
+        true,
+      );
+      for (const expected of fixture.expected.credible) {
+        const measurement = records
+          .flatMap((record) => record.measurements)
+          .find((candidate) => candidate.source?.observationIds?.includes(expected.observationId));
+        assert.ok(measurement, `${fixture.id}:${expected.observationId} persisted`);
+        assert.deepEqual(measurement?.original.value, { kind: 'numeric', value: expected.value });
+        assert.equal(measurement?.original.valueString, expected.valueString);
+        assert.equal(measurement?.original.unit, expected.unit);
+        assert.equal(measurement?.original.referenceInterval, expected.referenceInterval);
+        assert.equal(measurement?.original.flag, expected.flag ?? null);
+        assert.deepEqual(measurement?.source?.observationIds, [expected.observationId]);
+
+        const trend = buildMeasuredTrend(
+          records,
+          canonicalId(expected.biomarkerId),
+          comparableBiomarkers,
+        );
+        const point = trend.points.find((candidate) => candidate.measurementId === measurement?.id);
+        assert.ok(point, `${fixture.id}:${expected.observationId} trend point`);
+        assert.equal(point?.normalized.value, expected.normalizedValue);
+        assert.deepEqual(point?.current.value, { kind: 'numeric', value: expected.value });
+        assert.equal(point?.laboratoryReference.interval, expected.referenceInterval);
+        assert.equal(point?.laboratoryReference.flag, expected.flag ?? null);
       }
     }
   });

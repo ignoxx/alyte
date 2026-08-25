@@ -41,6 +41,10 @@ export type BloodLiverExpectedMeasurement = {
   readonly valueString: string;
   readonly unit: string;
   readonly referenceInterval: string;
+  /** Source-only laboratory context printed with the row, when present. */
+  readonly sourceContext?: string;
+  /** Source-only laboratory flag; Alyte must preserve it without interpreting it. */
+  readonly flag?: string | null;
   readonly canonicalUnit: string;
   readonly normalizedValue: number;
 };
@@ -58,7 +62,6 @@ export type BloodLiverLabReportFixture = {
   readonly locale: 'en-US' | 'de-DE' | 'lt-LT';
   readonly collectionDateText: string;
   readonly expectedCollectionDate: string;
-  readonly reportSpecimenType: BloodLiverFixtureSpecimen;
   readonly observations: readonly BloodLiverOCRObservation[];
   readonly expected: {
     readonly credible: readonly BloodLiverExpectedMeasurement[];
@@ -106,7 +109,6 @@ function report(
     locale: input.locale,
     collectionDateText: input.collectionDateText,
     expectedCollectionDate: input.expectedCollectionDate,
-    reportSpecimenType: input.reportSpecimenType,
     observations: Object.freeze(
       input.rows.map((row, rowIndex) => observation(row, rowIndex, input.locale)),
     ),
@@ -129,15 +131,19 @@ export const bloodLiverLabReportFixtures: readonly BloodLiverLabReportFixture[] 
     locale: 'en-US',
     collectionDateText: '08/20/2026',
     expectedCollectionDate: '2026-08-20',
-    reportSpecimenType: 'unknown',
     rows: [
+      {
+        id: 'en-collection-date',
+        text: 'Collection date 08/20/2026',
+        tableId: 'metadata',
+      },
       { id: 'en-cbc-header', text: 'Complete Blood Count · Whole blood', tableId: cbcBlood },
       {
         id: 'en-hemoglobin',
-        text: 'Hemoglobin 14.2 g/dL 13.5-17.5',
+        text: 'Hemoglobin · Synthetic Lab A · adult male 14.2 g/dL 13.5-17.5',
         tableId: cbcBlood,
       },
-      { id: 'en-hematocrit', text: 'Hematocrit 42.6 % 40-52', tableId: cbcBlood },
+      { id: 'en-hematocrit', text: 'Hematocrit 42.6 % 40-52 H', tableId: cbcBlood },
       { id: 'en-mcv', text: 'MCV 88.5 fL 80-100', tableId: cbcBlood },
       { id: 'en-liver-header', text: 'Liver enzymes · Serum', tableId: liverSerum },
       {
@@ -171,6 +177,7 @@ export const bloodLiverLabReportFixtures: readonly BloodLiverLabReportFixture[] 
           valueString: '14.2',
           unit: 'g/dL',
           referenceInterval: '13.5-17.5',
+          sourceContext: 'Synthetic Lab A · adult male',
           canonicalUnit: 'g/dL',
           normalizedValue: 14.2,
         },
@@ -182,6 +189,7 @@ export const bloodLiverLabReportFixtures: readonly BloodLiverLabReportFixture[] 
           valueString: '42.6',
           unit: '%',
           referenceInterval: '40-52',
+          flag: 'H',
           canonicalUnit: '%',
           normalizedValue: 42.6,
         },
@@ -231,7 +239,12 @@ export const bloodLiverLabReportFixtures: readonly BloodLiverLabReportFixture[] 
         },
       ],
       needsReview: [],
-      excludedObservationIds: ['en-cbc-header', 'en-liver-header', 'en-footer'],
+      excludedObservationIds: [
+        'en-collection-date',
+        'en-cbc-header',
+        'en-liver-header',
+        'en-footer',
+      ],
       specimenContexts: [
         {
           tableId: cbcBlood,
@@ -252,8 +265,13 @@ export const bloodLiverLabReportFixtures: readonly BloodLiverLabReportFixture[] 
     locale: 'de-DE',
     collectionDateText: '21.08.2026',
     expectedCollectionDate: '2026-08-21',
-    reportSpecimenType: 'unknown',
     rows: [
+      {
+        id: 'de-collection-date',
+        text: 'Probenentnahme 21.08.2026',
+        tableId: 'metadata',
+      },
+      { id: 'de-lab-context', text: 'Synthetic Lab B · adult female', tableId: cbcBlood },
       { id: 'de-cbc-header', text: 'Blutbild · Vollblut', tableId: cbcBlood },
       {
         id: 'de-hemoglobin',
@@ -273,7 +291,7 @@ export const bloodLiverLabReportFixtures: readonly BloodLiverLabReportFixture[] 
       { id: 'de-liver-header', text: 'Leberenzyme · Plasma', tableId: liverPlasma },
       {
         id: 'de-alt',
-        text: 'ALAT IFCC 37 C with P5P 24,0 U/L 7-56',
+        text: 'ALAT IFCC 37 C with P5P 24,0 U/L 7-56 H',
         tableId: liverPlasma,
       },
       {
@@ -302,6 +320,7 @@ export const bloodLiverLabReportFixtures: readonly BloodLiverLabReportFixture[] 
           valueString: '142',
           unit: 'g/L',
           referenceInterval: '135-175',
+          sourceContext: 'Synthetic Lab B · adult female',
           canonicalUnit: 'g/dL',
           normalizedValue: 14.2,
         },
@@ -335,6 +354,7 @@ export const bloodLiverLabReportFixtures: readonly BloodLiverLabReportFixture[] 
           valueString: '24,0',
           unit: 'U/L',
           referenceInterval: '7-56',
+          flag: 'H',
           canonicalUnit: 'U/L',
           normalizedValue: 24,
         },
@@ -362,12 +382,24 @@ export const bloodLiverLabReportFixtures: readonly BloodLiverLabReportFixture[] 
         },
       ],
       needsReview: [],
-      excludedObservationIds: ['de-cbc-header', 'de-liver-header', 'de-footer'],
+      excludedObservationIds: [
+        'de-collection-date',
+        'de-lab-context',
+        'de-cbc-header',
+        'de-liver-header',
+        'de-footer',
+      ],
       specimenContexts: [
         {
           tableId: cbcBlood,
           specimenType: 'blood',
-          observationIds: ['de-cbc-header', 'de-hemoglobin', 'de-hematocrit', 'de-mcv'],
+          observationIds: [
+            'de-lab-context',
+            'de-cbc-header',
+            'de-hemoglobin',
+            'de-hematocrit',
+            'de-mcv',
+          ],
         },
         {
           tableId: liverPlasma,
@@ -383,12 +415,16 @@ export const bloodLiverLabReportFixtures: readonly BloodLiverLabReportFixture[] 
     locale: 'lt-LT',
     collectionDateText: '22.08.2026',
     expectedCollectionDate: '2026-08-22',
-    reportSpecimenType: 'unknown',
     rows: [
+      {
+        id: 'lt-collection-date',
+        text: 'Mėginio paėmimo data 22.08.2026',
+        tableId: 'metadata',
+      },
       { id: 'lt-cbc-header', text: 'Bendras kraujo tyrimas · Kraujas', tableId: cbcBlood },
       {
         id: 'lt-hemoglobin',
-        text: 'Hemoglobinas 141 g/L 130-170',
+        text: 'Hemoglobinas · Synthetic Lab C · adult 141 g/L 130-170',
         tableId: cbcBlood,
       },
       {
@@ -414,7 +450,7 @@ export const bloodLiverLabReportFixtures: readonly BloodLiverLabReportFixture[] 
       },
       {
         id: 'lt-ggt',
-        text: 'Gama glutamil transferase IFCC 37 C with P5P 16,2 U/L 9-48',
+        text: 'Gama glutamil transferase IFCC 37 C with P5P 16,2 U/L 9-48 L',
         tableId: liverSerum,
       },
       {
@@ -433,6 +469,7 @@ export const bloodLiverLabReportFixtures: readonly BloodLiverLabReportFixture[] 
           valueString: '141',
           unit: 'g/L',
           referenceInterval: '130-170',
+          sourceContext: 'Synthetic Lab C · adult',
           canonicalUnit: 'g/dL',
           normalizedValue: 14.1,
         },
@@ -488,12 +525,18 @@ export const bloodLiverLabReportFixtures: readonly BloodLiverLabReportFixture[] 
           valueString: '16,2',
           unit: 'U/L',
           referenceInterval: '9-48',
+          flag: 'L',
           canonicalUnit: 'U/L',
           normalizedValue: 16.2,
         },
       ],
       needsReview: [],
-      excludedObservationIds: ['lt-cbc-header', 'lt-liver-header', 'lt-footer'],
+      excludedObservationIds: [
+        'lt-collection-date',
+        'lt-cbc-header',
+        'lt-liver-header',
+        'lt-footer',
+      ],
       specimenContexts: [
         {
           tableId: cbcBlood,
@@ -521,8 +564,12 @@ export const bloodLiverSafetyReportFixture: BloodLiverLabReportFixture = report(
   locale: 'en-US',
   collectionDateText: '08/23/2026',
   expectedCollectionDate: '2026-08-23',
-  reportSpecimenType: 'unknown',
   rows: [
+    {
+      id: 'safety-collection-date',
+      text: 'Collection date 08/23/2026',
+      tableId: 'metadata',
+    },
     {
       id: 'safety-unknown-header',
       text: 'Additional result · specimen not stated',
@@ -536,6 +583,7 @@ export const bloodLiverSafetyReportFixture: BloodLiverLabReportFixture = report(
       tableId: 'urine-section',
     },
     { id: 'safety-unit-header', text: 'CBC unit exception · Blood', tableId: 'unit-section' },
+    { id: 'safety-blood-mcv', text: 'MCV 92 fL 80-100', tableId: 'unit-section' },
     {
       id: 'safety-incompatible-unit',
       text: 'Hematocrit 42 mg/dL 40-52',
@@ -550,6 +598,16 @@ export const bloodLiverSafetyReportFixture: BloodLiverLabReportFixture = report(
       id: 'safety-ambiguous-sibling',
       text: 'ALT / AST IFCC 37 C with P5P 20 U/L 7-56',
       tableId: 'method-section',
+    },
+    {
+      id: 'safety-plasma-header',
+      text: 'Additional enzyme result · Plasma',
+      tableId: 'plasma-section',
+    },
+    {
+      id: 'safety-plasma-ggt',
+      text: 'GGT IFCC 37 C with P5P 19 U/L 9-48',
+      tableId: 'plasma-section',
     },
     {
       id: 'safety-incomplete-alt-method',
@@ -584,6 +642,28 @@ export const bloodLiverSafetyReportFixture: BloodLiverLabReportFixture = report(
         referenceInterval: '80-100',
         canonicalUnit: 'fL',
         normalizedValue: 91,
+      },
+      {
+        observationId: 'safety-blood-mcv',
+        biomarkerId: 'biomarker.mcv',
+        specimenType: 'blood',
+        value: 92,
+        valueString: '92',
+        unit: 'fL',
+        referenceInterval: '80-100',
+        canonicalUnit: 'fL',
+        normalizedValue: 92,
+      },
+      {
+        observationId: 'safety-plasma-ggt',
+        biomarkerId: 'biomarker.ggt',
+        specimenType: 'plasma',
+        value: 19,
+        valueString: '19',
+        unit: 'U/L',
+        referenceInterval: '9-48',
+        canonicalUnit: 'U/L',
+        normalizedValue: 19,
       },
     ],
     needsReview: [
@@ -629,7 +709,9 @@ export const bloodLiverSafetyReportFixture: BloodLiverLabReportFixture = report(
       'safety-urine-header',
       'safety-unit-header',
       'safety-method-header',
+      'safety-plasma-header',
       'safety-footer',
+      'safety-collection-date',
     ],
     specimenContexts: [
       {
@@ -645,7 +727,7 @@ export const bloodLiverSafetyReportFixture: BloodLiverLabReportFixture = report(
       {
         tableId: 'unit-section',
         specimenType: 'blood',
-        observationIds: ['safety-unit-header', 'safety-incompatible-unit'],
+        observationIds: ['safety-unit-header', 'safety-blood-mcv', 'safety-incompatible-unit'],
       },
       {
         tableId: 'method-section',
@@ -658,12 +740,17 @@ export const bloodLiverSafetyReportFixture: BloodLiverLabReportFixture = report(
           'safety-unsafe-ggt-method',
         ],
       },
+      {
+        tableId: 'plasma-section',
+        specimenType: 'plasma',
+        observationIds: ['safety-plasma-header', 'safety-plasma-ggt'],
+      },
+      {
+        tableId: 'metadata',
+        specimenType: 'unknown',
+        observationIds: ['safety-collection-date'],
+      },
       { tableId: 'footer', specimenType: 'unknown', observationIds: ['safety-footer'] },
     ],
   },
 });
-
-export const allBloodLiverLabReportFixtures: readonly BloodLiverLabReportFixture[] = Object.freeze([
-  ...bloodLiverLabReportFixtures,
-  bloodLiverSafetyReportFixture,
-]);
