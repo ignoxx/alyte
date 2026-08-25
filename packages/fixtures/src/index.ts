@@ -75,6 +75,7 @@ export const multilingualLabTableFixtures = Object.freeze({
 
 export {
   metabolicLabReportFixtures,
+  mixedSpecimenMetabolicLabReportFixture,
   type MetabolicLabReportFixture,
   type SyntheticOCRObservation,
   type SyntheticLabSpecimen,

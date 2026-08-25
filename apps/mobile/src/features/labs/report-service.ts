@@ -167,6 +167,34 @@ export type LabReportsServiceOptions = {
   readonly semanticMapper?: ExtractionSemanticMapper;
 };
 
+/**
+ * The app's one catalogue-to-extraction adapter. Tests and semantic adapters must use the same
+ * projection as the running service so an alias or method-policy change cannot silently leave
+ * fixture coverage behind.
+ */
+export function createDefaultExtractionAliases(): readonly ExtractionAliasEntry[] {
+  return comparableBiomarkers.map((entry) => ({
+    id: entry.id,
+    aliases: entry.aliases,
+    specimens: entry.specimens,
+    units: entry.units,
+    ...(entry.unsafeAliases === undefined ? {} : { unsafeAliases: entry.unsafeAliases }),
+    ...(entry.methodPolicy === undefined
+      ? {}
+      : {
+          methodPolicy: {
+            version: entry.methodPolicy.version,
+            kind: entry.methodPolicy.kind,
+            allowedMethods: entry.methodPolicy.allowedMethods,
+            unsafePatterns: entry.methodPolicy.unsafePatterns,
+            ...(entry.methodPolicy.profiles === undefined
+              ? {}
+              : { profiles: entry.methodPolicy.profiles }),
+          },
+        }),
+  }));
+}
+
 type ImportOutcome = { readonly report: LabReport; readonly duplicate: boolean };
 
 function isoNow(): string {
@@ -269,28 +297,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   const picker = options.picker ?? createSystemLabSourcePicker();
   const pdfInspector = options.pdfInspector ?? nativePdfInspector;
   const visionOCR = options.visionOCR ?? nativeVisionOCR;
-  const extractionAliases =
-    options.extractionAliases ??
-    comparableBiomarkers.map((entry) => ({
-      id: entry.id,
-      aliases: entry.aliases,
-      specimens: entry.specimens,
-      units: entry.units,
-      ...(entry.unsafeAliases === undefined ? {} : { unsafeAliases: entry.unsafeAliases }),
-      ...(entry.methodPolicy === undefined
-        ? {}
-        : {
-            methodPolicy: {
-              version: entry.methodPolicy.version,
-              kind: entry.methodPolicy.kind,
-              allowedMethods: entry.methodPolicy.allowedMethods,
-              unsafePatterns: entry.methodPolicy.unsafePatterns,
-              ...(entry.methodPolicy.profiles === undefined
-                ? {}
-                : { profiles: entry.methodPolicy.profiles }),
-            },
-          }),
-    }));
+  const extractionAliases = options.extractionAliases ?? createDefaultExtractionAliases();
   const semanticMapper = options.semanticMapper;
   const now = options.now ?? isoNow;
   const makeId = options.idGenerator ?? ((prefix: string) => createSortableOpaqueId(prefix));

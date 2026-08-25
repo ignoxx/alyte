@@ -5,12 +5,24 @@ import { join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type {
+  ExtractionDraftRow,
   ExtractionSemanticMapper,
-  ExtractionAliasEntry,
   LabReportSourceIntegrity,
+  LabRecord,
+  Measurement,
+  MeasurementSnapshot,
   VisionOCRResult,
 } from '@alyte/domain';
-import { decodeVisionOCRResult } from '@alyte/domain';
+import {
+  buildExtractionConfirmationPlan,
+  buildMeasuredTrend,
+  canonicalId,
+  convertComparableValue,
+  decodeVisionOCRResult,
+  groupObservationsIntoRows,
+  parseLabDate,
+  revalidateExtractionRow,
+} from '@alyte/domain';
 import { createLabRepository, type LabRepository, type SqliteDatabase } from './persistence';
 import {
   type LabSourceSelection,
@@ -19,6 +31,7 @@ import {
 } from './file-service';
 import {
   createLabReportsService,
+  createDefaultExtractionAliases,
   LabReportExtractionError,
   type LabReportsService,
 } from './report-service';
@@ -29,9 +42,12 @@ import type { VisionOCR } from './vision';
 import type { DatabaseProtection } from './protection';
 import { addRedaction } from '@alyte/domain';
 import { createSanitizationRecipe } from '@alyte/domain';
-import { groupObservationsIntoRows, parseLabDate } from '@alyte/domain';
 import { comparableBiomarkers } from '@alyte/catalogue';
-import { metabolicLabReportFixtures, multilingualLabTableFixtures } from '@alyte/fixtures';
+import {
+  metabolicLabReportFixtures,
+  mixedSpecimenMetabolicLabReportFixture,
+  multilingualLabTableFixtures,
+} from '@alyte/fixtures';
 import { createLabsService } from './service';
 
 class NodeSqliteDatabase implements SqliteDatabase {
@@ -342,14 +358,72 @@ function sanitizingPdf(files: FakeFiles): SanitizingPdf {
   return pdf;
 }
 
+function measurementFromExtractionRow(
+  row: ExtractionDraftRow,
+  recordId: string,
+  specimenType: LabRecord['specimenType'],
+): Measurement {
+  const valueString =
+    row.proposedValue.kind === 'numeric'
+      ? String(row.proposedValue.value)
+      : row.proposedValue.kind === 'bounded'
+        ? `${row.proposedValue.comparator}${row.proposedValue.value}`
+        : row.proposedValue.value;
+  const snapshot: MeasurementSnapshot = {
+    label: row.proposedLabel,
+    value: row.proposedValue,
+    valueString,
+    unit: row.proposedUnit,
+    referenceInterval: row.proposedReferenceInterval,
+    flag: row.proposedFlag,
+  };
+  const biomarkerId =
+    row.proposedBiomarkerId === null ? null : canonicalId(row.proposedBiomarkerId);
+  const state = {
+    biomarkerId,
+    specimenType,
+    snapshot,
+    reviewState: row.reviewState === 'ready' ? ('confirmed' as const) : ('needs-review' as const),
+    provenance: 'extracted' as const,
+    source: row.source,
+  };
+  return {
+    id: `${recordId}-${row.id}`,
+    labRecordId: recordId,
+    biomarkerId,
+    specimenType,
+    panelLabel: row.panelLabel,
+    original: snapshot,
+    originalState: state,
+    current: snapshot,
+    provenance: 'extracted',
+    reviewState: state.reviewState,
+    source: row.source,
+    corrections: [],
+  };
+}
+
+function recordFromMeasurements(
+  id: string,
+  specimenType: LabRecord['specimenType'],
+  measurements: readonly Measurement[],
+): LabRecord {
+  return {
+    id,
+    labReportId: `report-${id}`,
+    collectionDate: { kind: 'known', value: '2026-08-20' },
+    specimenType,
+    laboratoryName: 'Synthetic Laboratory',
+    notes: null,
+    createdAt: '2026-08-20T00:00:00.000Z',
+    updatedAt: '2026-08-20T00:00:00.000Z',
+    measurements,
+  };
+}
+
 describe('protected Lab Report import lifecycle', () => {
   test('exercises the synthetic Lithuanian, English, and German extraction fixtures', () => {
-    const aliases = comparableBiomarkers.map((entry) => ({
-      id: entry.id,
-      aliases: entry.aliases,
-      specimens: entry.specimens,
-      units: entry.units,
-    }));
+    const aliases = createDefaultExtractionAliases();
     const counts = Object.fromEntries(
       Object.entries(multilingualLabTableFixtures).map(([locale, lines]) => {
         const observations = lines.map((text, index) => ({
@@ -368,43 +442,68 @@ describe('protected Lab Report import lifecycle', () => {
   });
 
   test('extracts metabolic report fixtures through the production catalogue aliases', () => {
-    const aliases: readonly ExtractionAliasEntry[] = comparableBiomarkers.map((entry) => ({
-      id: entry.id,
-      aliases: entry.aliases,
-      specimens: entry.specimens,
-      units: entry.units,
-      ...(entry.unsafeAliases === undefined ? {} : { unsafeAliases: entry.unsafeAliases }),
-      ...(entry.methodPolicy === undefined
-        ? {}
-        : {
-            methodPolicy: {
-              version: entry.methodPolicy.version,
-              kind: entry.methodPolicy.kind,
-              allowedMethods: entry.methodPolicy.allowedMethods,
-              unsafePatterns: entry.methodPolicy.unsafePatterns,
-              ...(entry.methodPolicy.profiles === undefined
-                ? {}
-                : { profiles: entry.methodPolicy.profiles }),
-            },
-          }),
-    }));
+    const aliases = createDefaultExtractionAliases();
+    const fixtures = [...metabolicLabReportFixtures, mixedSpecimenMetabolicLabReportFixture];
 
-    for (const fixture of metabolicLabReportFixtures) {
+    for (const fixture of fixtures) {
       const ocr = decodeVisionOCRResult({
         contractVersion: 'alyte.vision.document.v2',
         pageIndex: 0,
         orientation: 0,
         observations: fixture.observations,
       });
-      const rows = groupObservationsIntoRows(ocr.observations, {
-        aliases,
-        locale: fixture.locale,
-        collectionDate: parseLabDate(fixture.collectionDateText, fixture.locale) ?? {
-          kind: 'missing',
-        },
-        specimenType: fixture.specimenType,
-      });
+      const collectionDate = parseLabDate(fixture.collectionDateText, fixture.locale) ?? {
+        kind: 'missing' as const,
+      };
+      const contexts =
+        fixture.expected.specimenContexts ??
+        ([
+          {
+            tableId: 'synthetic-results',
+            specimenType: fixture.specimenType,
+            observationIds: fixture.observations.map((observation) => observation.id),
+          },
+        ] as const);
+      const rows = contexts.flatMap((context) =>
+        groupObservationsIntoRows(
+          ocr.observations.filter((observation) => context.observationIds.includes(observation.id)),
+          {
+            aliases,
+            locale: fixture.locale,
+            collectionDate,
+            specimenType: context.specimenType,
+          },
+        ),
+      );
       const rowByObservation = new Map(rows.map((row) => [row.id, row]));
+      const specimenByObservation = new Map(
+        contexts.flatMap((context) =>
+          context.observationIds.map(
+            (observationId) => [observationId, context.specimenType] as const,
+          ),
+        ),
+      );
+      const draft = {
+        id: fixture.id,
+        reportId: `${fixture.id}-source`,
+        state: 'draft' as const,
+        ocrContractVersion: 'alyte.vision.document.v2' as const,
+        parserVersion: 'alyte.local-parser.v2' as const,
+        collectionDate,
+        rows,
+        createdAt: '2026-08-20T00:00:00.000Z',
+        updatedAt: '2026-08-20T00:00:00.000Z',
+        confirmedAt: null,
+      };
+      const confirmationPlan = buildExtractionConfirmationPlan(draft, {
+        record: (key) => `${fixture.id}-record-${key}`,
+        measurement: (rowId) => `${fixture.id}-measurement-${rowId}`,
+      });
+      const plannedMeasurements = new Map(
+        confirmationPlan.records
+          .flatMap((record) => record.measurements)
+          .map((measurement) => [measurement.sourceRowId, measurement]),
+      );
 
       assert.deepEqual(
         fixture.expected.credible.map(({ observationId }) => rowByObservation.has(observationId)),
@@ -413,26 +512,146 @@ describe('protected Lab Report import lifecycle', () => {
       );
       for (const expected of fixture.expected.credible) {
         const row = rowByObservation.get(expected.observationId);
+        const expectedContext = contexts.find((context) =>
+          context.observationIds.includes(expected.observationId),
+        );
+        assert.ok(expectedContext, `${fixture.id}: context ${expected.observationId}`);
         assert.equal(row?.proposedBiomarkerId, expected.biomarkerId, fixture.id);
         assert.equal(
           row?.reviewState,
           'ready',
           `${fixture.id}:${expected.observationId}:${row?.reviewReasons.join(',') ?? 'missing'}`,
         );
-        assert.equal(row?.proposedSpecimenType, fixture.specimenType, fixture.id);
+        assert.equal(
+          row?.proposedSpecimenType,
+          specimenByObservation.get(expected.observationId),
+          fixture.id,
+        );
         assert.equal(row?.collectionDate.kind, 'known', fixture.id);
+        assert.deepEqual(
+          row?.proposedValue,
+          { kind: 'numeric', value: expected.value },
+          fixture.id,
+        );
+        assert.equal(row?.sourceValueString, expected.valueString, fixture.id);
+        assert.equal(row?.sourceUnit, expected.unit, fixture.id);
+        assert.equal(row?.proposedUnit, expected.unit, fixture.id);
+        assert.equal(row?.sourceReferenceInterval, expected.referenceInterval, fixture.id);
+        assert.equal(row?.proposedReferenceInterval, expected.referenceInterval, fixture.id);
+        assert.ok(
+          row?.source.observations?.every(
+            (observation) => observation.structure?.tableId === expectedContext.tableId,
+          ),
+          `${fixture.id}:${expected.observationId} table context`,
+        );
+
+        const entry = comparableBiomarkers.find(
+          (candidate) => candidate.id === expected.biomarkerId,
+        );
+        assert.ok(entry, `${fixture.id}: catalogue entry ${expected.biomarkerId}`);
+        const normalized = convertComparableValue(expected.value, expected.unit, entry);
+        assert.equal(normalized?.unit, expected.canonicalUnit, fixture.id);
+        assert.ok(
+          normalized !== null &&
+            Math.abs(normalized.value - expected.normalizedValue) < 0.000000001,
+          `${fixture.id}:${expected.observationId} normalized value`,
+        );
+
+        const planned = plannedMeasurements.get(expected.observationId);
+        assert.ok(planned, `${fixture.id}: confirmation plan ${expected.observationId}`);
+        assert.deepEqual(planned?.value, { kind: 'numeric', value: expected.value }, fixture.id);
+        assert.equal(planned?.valueString, String(expected.value), fixture.id);
+        assert.equal(planned?.unit, expected.unit, fixture.id);
+        assert.equal(planned?.referenceInterval, expected.referenceInterval, fixture.id);
       }
 
       for (const expected of fixture.expected.needsReview) {
         const row = rowByObservation.get(expected.observationId);
+        const expectedContext = contexts.find((context) =>
+          context.observationIds.includes(expected.observationId),
+        );
         assert.ok(row, `${fixture.id}: expected review row ${expected.observationId}`);
+        assert.ok(expectedContext, `${fixture.id}: context ${expected.observationId}`);
         assert.equal(row?.proposedBiomarkerId, expected.biomarkerId, fixture.id);
         assert.ok(row?.reviewReasons.includes(expected.reason), fixture.id);
         assert.equal(row?.reviewState, 'needs-review', fixture.id);
+        assert.ok(
+          row?.source.observations?.every(
+            (observation) => observation.structure?.tableId === expectedContext.tableId,
+          ),
+          `${fixture.id}:${expected.observationId} table context`,
+        );
+        const planned = plannedMeasurements.get(expected.observationId);
+        assert.ok(planned, `${fixture.id}: review confirmation plan ${expected.observationId}`);
+        assert.equal(planned?.biomarkerId, expected.biomarkerId, fixture.id);
       }
 
       for (const excludedId of fixture.expected.excludedObservationIds) {
         assert.equal(rowByObservation.has(excludedId), false, `${fixture.id}: ${excludedId}`);
+      }
+
+      if (fixture.id === 'metabolic-report-de-v1') {
+        const unsafeRow = rowByObservation.get('de-vitamin-d3');
+        assert.ok(unsafeRow);
+        const attemptedUnsafeCorrection = revalidateExtractionRow(
+          unsafeRow,
+          {
+            proposedBiomarkerId: canonicalId('biomarker.vitamin_d_total'),
+            decision: 'resolve',
+          },
+          aliases,
+        );
+        assert.equal(attemptedUnsafeCorrection.proposedBiomarkerId, null);
+        assert.ok(attemptedUnsafeCorrection.reviewReasons.includes('ambiguous-assay'));
+        assert.equal(attemptedUnsafeCorrection.reviewState, 'needs-review');
+        assert.equal(
+          plannedMeasurements.get('de-vitamin-d3')?.biomarkerId,
+          null,
+          'unsafe vitamin-D form never becomes the canonical mapping',
+        );
+        const correctedDraft = {
+          ...draft,
+          rows: draft.rows.map((row) =>
+            row.id === attemptedUnsafeCorrection.id ? attemptedUnsafeCorrection : row,
+          ),
+        };
+        const correctedPlan = buildExtractionConfirmationPlan(correctedDraft, {
+          record: (key) => `${fixture.id}-corrected-record-${key}`,
+          measurement: (rowId) => `${fixture.id}-corrected-measurement-${rowId}`,
+        });
+        const correctedMeasurement = correctedPlan.records
+          .flatMap((record) => record.measurements)
+          .find((measurement) => measurement.sourceRowId === 'de-vitamin-d3');
+        assert.equal(correctedMeasurement?.biomarkerId, null);
+        assert.equal(correctedMeasurement?.reviewState, 'needs-review');
+        const unsafeTrend = buildMeasuredTrend(
+          [
+            recordFromMeasurements('unsafe-vitamin-d', 'serum', [
+              measurementFromExtractionRow(attemptedUnsafeCorrection, 'unsafe-vitamin-d', 'serum'),
+            ]),
+          ],
+          canonicalId('biomarker.vitamin_d_total'),
+          comparableBiomarkers,
+        );
+        assert.equal(unsafeTrend.points.length, 0);
+        assert.equal(unsafeTrend.nonPoints[0]?.kind, 'not-measured');
+      }
+
+      if (fixture.id === 'metabolic-report-mixed-specimen-v1') {
+        const unknownRow = rowByObservation.get('mixed-unknown-glucose');
+        assert.ok(unknownRow);
+        const unknownTrend = buildMeasuredTrend(
+          [
+            recordFromMeasurements('unknown-glucose', 'unknown', [
+              measurementFromExtractionRow(unknownRow, 'unknown-glucose', 'unknown'),
+            ]),
+          ],
+          canonicalId('biomarker.glucose'),
+          comparableBiomarkers,
+        );
+        assert.equal(unknownTrend.points.length, 0);
+        assert.equal(unknownTrend.nonPoints[0]?.kind, 'incompatible');
+        assert.equal(unknownTrend.nonPoints[0]?.reason, 'incompatible-specimen');
       }
     }
   });
