@@ -15,6 +15,11 @@ function bundle(label, showcaseMode) {
   const outputDirectory = join(temporaryRoot, 'ios');
   const environment = { ...process.env };
 
+  delete environment.APP_VARIANT;
+  delete environment.EXPO_PUBLIC_APP_VARIANT;
+  environment.APP_VARIANT = 'development';
+  environment.EXPO_PUBLIC_APP_VARIANT = 'development';
+
   if (showcaseMode) {
     environment.EXPO_PUBLIC_SHOWCASE_MODE = 'true';
   } else {
