@@ -1,4 +1,6 @@
+#if canImport(ExpoModulesCore)
 import ExpoModulesCore
+#endif
 import Foundation
 import ImageIO
 import UIKit
@@ -11,20 +13,25 @@ private struct AlyteImageRect {
   let height: CGFloat
 
   var cgRect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
+  var minX: CGFloat { x }
+  var minY: CGFloat { y }
+  var maxX: CGFloat { x + width }
+  var maxY: CGFloat { y + height }
 }
 
 private enum AlyteImageError: LocalizedError {
   case unreadable
   case malformedRecipe
   case renderFailed
-  case verificationFailed
+  case verificationFailed([String])
 
   var errorDescription: String? {
     switch self {
     case .unreadable: return "The image could not be opened"
     case .malformedRecipe: return "The image sanitization recipe is invalid"
     case .renderFailed: return "The sanitized image could not be rendered"
-    case .verificationFailed: return "The sanitized image failed verification"
+    case .verificationFailed(let reasons):
+      return "The sanitized image failed verification: \(reasons.joined(separator: ","))"
     }
   }
 }
@@ -232,8 +239,9 @@ private func renderImage(_ source: UIImage, recipe: [String: Any]) throws -> UII
 }
 
 private let userMetadataNames = [
-  "exif", "gps", "tiff", "iptc", "png", "makerapple", "8bim", "xmp", "iccprofile",
-  "comment", "photoshop", "profile",
+  // JFIF/TIFF technical dictionaries emitted by a fresh ImageIO destination are not user data.
+  // The derivative must still reject descriptive EXIF/GPS/IPTC/XMP and profile/comment payloads.
+  "gps", "iptc", "makerapple", "8bim", "xmp", "comment", "photoshop",
 ]
 
 private func hasUserMetadata(_ data: Data) -> Bool {
@@ -243,6 +251,20 @@ private func hasUserMetadata(_ data: Data) -> Bool {
   return properties.keys.contains { key in
     let normalized = key.lowercased().replacingOccurrences(of: "{", with: "")
       .replacingOccurrences(of: "}", with: "")
+    // ImageIO may add a technical Exif dictionary and a color ProfileName to a new JPEG. They
+    // are safe only when orientation is already physical (1); user-bearing GPS/IPTC/XMP keys
+    // still fail through the key check above.
+    if normalized == "exif" {
+      guard let exif = bridgeDictionary(properties[key]) else { return true }
+      let technicalKeys = Set([
+        kCGImagePropertyExifPixelXDimension as String,
+        kCGImagePropertyExifPixelYDimension as String,
+        kCGImagePropertyExifColorSpace as String,
+        kCGImagePropertyExifVersion as String,
+      ])
+      return exif.keys.contains { !technicalKeys.contains($0) }
+    }
+    if normalized == "profilename" { return false }
     if userMetadataNames.contains(where: { normalized.contains($0) }) { return true }
     // ImageIO may preserve the technical orientation field. It is safe only when the image has
     // already been physically normalized to the upright orientation.
@@ -253,25 +275,141 @@ private func hasUserMetadata(_ data: Data) -> Bool {
   }
 }
 
-private func verification(_ data: Data) throws -> [String: Any] {
+private struct AlyteImagePixels {
+  let width: Int
+  let height: Int
+  let bytes: [UInt8]
+
+  func pixel(x: Int, y: Int) -> (UInt8, UInt8, UInt8) {
+    let offset = (y * width + x) * 4
+    return (bytes[offset], bytes[offset + 1], bytes[offset + 2])
+  }
+}
+
+private func rgbaPixels(_ image: CGImage) -> AlyteImagePixels? {
+  let width = image.width
+  let height = image.height
+  guard width > 0, height > 0 else { return nil }
+  var bytes = [UInt8](repeating: 0, count: width * height * 4)
+  guard let context = CGContext(
+    data: &bytes,
+    width: width,
+    height: height,
+    bitsPerComponent: 8,
+    bytesPerRow: width * 4,
+    space: CGColorSpaceCreateDeviceRGB(),
+    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+  ) else { return nil }
+  // Row zero is the top of the image, matching normalized recipe coordinates.
+  context.translateBy(x: 0, y: CGFloat(height))
+  context.scaleBy(x: 1, y: -1)
+  context.interpolationQuality = .none
+  context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+  return AlyteImagePixels(width: width, height: height, bytes: bytes)
+}
+
+private func imageSource(_ data: Data) throws -> CGImage {
   guard let source = CGImageSourceCreateWithData(data as CFData, nil),
     let image = CGImageSourceCreateImageAtIndex(source, 0, nil), image.width > 0, image.height > 0
-  else { throw AlyteImageError.verificationFailed }
+  else { throw AlyteImageError.verificationFailed(["unreadable-derivative"]) }
+  return image
+}
+
+private func compareSourceAware(
+  actualData: Data,
+  expectedImage: UIImage,
+  page: (crop: AlyteImageRect?, rotation: Int, redactions: [AlyteImageRect])
+) throws -> (sourceAwareChecked: Bool, sourceContentRemoved: Bool, failureReasons: [String]) {
+  let actual = try imageSource(actualData)
+  guard let expectedPixels = expectedImage.cgImage.flatMap(rgbaPixels),
+    let actualPixels = rgbaPixels(actual),
+    expectedPixels.width == actualPixels.width,
+    expectedPixels.height == actualPixels.height
+  else {
+    return (false, false, ["source-binding-geometry-mismatch"])
+  }
+
+  let width = actualPixels.width
+  let height = actualPixels.height
+  let stepX = max(1, width / 64)
+  let stepY = max(1, height / 64)
+  var mismatches = 0
+  var compared = 0
+  for y in stride(from: 0, to: height, by: stepY) {
+    for x in stride(from: 0, to: width, by: stepX) {
+      let expected = expectedPixels.pixel(x: x, y: y)
+      let actual = actualPixels.pixel(x: x, y: y)
+      let error = max(
+        abs(Int(expected.0) - Int(actual.0)),
+        abs(Int(expected.1) - Int(actual.1)),
+        abs(Int(expected.2) - Int(actual.2)))
+      compared += 1
+      if error > 55 { mismatches += 1 }
+    }
+  }
+  let mismatchLimit = max(2, compared / 100)
+  var failures: [String] = []
+  if mismatches > mismatchLimit { failures.append("source-binding-pixel-mismatch") }
+
+  var redactionsRemoved = true
+  for redaction in page.redactions {
+    let output = try transformedRect(redaction, crop: page.crop, rotation: page.rotation)
+    // Check a small grid throughout every expected mask, not just its centre. This catches a
+    // shifted or partially applied mask even when a source happens to contain a dark centre.
+    var samples: [(CGFloat, CGFloat)] = []
+    for row in 0..<8 {
+      for column in 0..<8 {
+        let x = output.minX + output.width * (CGFloat(column) + 0.5) / 8
+        let y = output.minY + output.height * (CGFloat(row) + 0.5) / 8
+        samples.append((x, y))
+      }
+    }
+    for (x, y) in samples {
+      let pixelX = min(width - 1, max(0, Int(x * CGFloat(width))))
+      let pixelY = min(height - 1, max(0, Int(y * CGFloat(height))))
+      let pixel = actualPixels.pixel(x: pixelX, y: pixelY)
+      if max(Int(pixel.0), Int(pixel.1), Int(pixel.2)) > 70 {
+        redactionsRemoved = false
+        break
+      }
+    }
+    if !redactionsRemoved { break }
+  }
+  if !redactionsRemoved { failures.append("redaction-pixels-unredacted") }
+  return (failures.isEmpty, redactionsRemoved, failures)
+}
+
+private func verification(
+  _ data: Data,
+  sourcePath: String? = nil,
+  recipe: [String: Any]? = nil
+) throws -> [String: Any] {
+  let image = try imageSource(data)
   let metadata = hasUserMetadata(data)
   let reloadChecked = CGImageSourceCreateWithData(data as CFData, nil) != nil
-  let reasons = [metadata ? "metadata-or-profile" : nil, reloadChecked ? nil : "reload-failed"]
+  var reasons = [metadata ? "metadata-or-profile" : nil, reloadChecked ? nil : "reload-failed"]
     .compactMap { $0 }
+  var sourceAwareChecked = false
+  var sourceContentRemoved = false
+  if let sourcePath, let recipe {
+    let expected = try renderImage(loadImage(path: sourcePath), recipe: recipe)
+    let comparison = try compareSourceAware(
+      actualData: data, expectedImage: expected, page: try recipePage(recipe))
+    sourceAwareChecked = comparison.sourceAwareChecked
+    sourceContentRemoved = comparison.sourceContentRemoved
+    reasons.append(contentsOf: comparison.failureReasons)
+  }
   return [
-    "verified": reasons.isEmpty,
+    "verified": reasons.isEmpty && sourceAwareChecked,
     "selectableText": false,
     "annotations": false,
     "attachments": false,
     "metadata": metadata,
     "removableRedactions": false,
     "reloadChecked": reloadChecked,
-    "sourceAwareChecked": true,
-    "sourceContentRemoved": true,
-    "verificationVersion": "image-source-aware-v1",
+    "sourceAwareChecked": sourceAwareChecked,
+    "sourceContentRemoved": sourceContentRemoved,
+    "verificationVersion": "image-source-aware-v2",
     "failureReasons": reasons,
     "pixelWidth": image.width,
     "pixelHeight": image.height,
@@ -300,15 +438,16 @@ private func sanitizeImage(sourcePath: String, destinationPath: String, recipe: 
   let data = try encodedImage(image)
   let destinationURL = URL(fileURLWithPath: alyteImageFilePath(destinationPath))
   let partialURL = destinationURL.appendingPathExtension("partial")
+  defer { try? FileManager.default.removeItem(at: partialURL) }
   try FileManager.default.createDirectory(
     at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
   try? FileManager.default.removeItem(at: partialURL)
   try data.write(to: partialURL, options: .atomic)
   let written = try Data(contentsOf: partialURL)
-  let facts = try verification(written)
+  let facts = try verification(written, sourcePath: sourcePath, recipe: recipe)
   guard facts["verified"] as? Bool == true else {
-    try? FileManager.default.removeItem(at: partialURL)
-    throw AlyteImageError.verificationFailed
+    throw AlyteImageError.verificationFailed(
+      (facts["failureReasons"] as? [String]) ?? ["sanitized-verification-failed"])
   }
   if FileManager.default.fileExists(atPath: destinationURL.path) {
     _ = try FileManager.default.replaceItemAt(destinationURL, withItemAt: partialURL)
@@ -322,6 +461,7 @@ private func sanitizeImage(sourcePath: String, destinationPath: String, recipe: 
   ]
 }
 
+#if canImport(ExpoModulesCore)
 public final class AlyteImageModule: Module {
   public func definition() -> ModuleDefinition {
     Name("AlyteImage")
@@ -365,12 +505,14 @@ public final class AlyteImageModule: Module {
       try sanitizeImage(sourcePath: sourcePath, destinationPath: destinationPath, recipe: recipe)
     }
 
-    AsyncFunction("verifySanitized") { (path: String) throws -> [String: Any] in
+    AsyncFunction("verifySanitized") {
+      (path: String, sourcePath: String, recipe: [String: Any]) throws -> [String: Any] in
       let data = try Data(contentsOf: URL(fileURLWithPath: alyteImageFilePath(path)))
-      return try verification(data)
+      return try verification(data, sourcePath: sourcePath, recipe: recipe)
     }
   }
 }
+#endif
 
 public enum AlyteImageSanitizationTestSupport {
   public static func render(sourceURL: URL, destinationURL: URL, recipe: [String: Any]) throws
@@ -379,7 +521,7 @@ public enum AlyteImageSanitizationTestSupport {
     try sanitizeImage(sourcePath: sourceURL.path, destinationPath: destinationURL.path, recipe: recipe)
   }
 
-  public static func verify(url: URL) throws -> [String: Any] {
-    try verification(Data(contentsOf: url))
+  public static func verify(url: URL, sourceURL: URL, recipe: [String: Any]) throws -> [String: Any] {
+    try verification(Data(contentsOf: url), sourcePath: sourceURL.path, recipe: recipe)
   }
 }

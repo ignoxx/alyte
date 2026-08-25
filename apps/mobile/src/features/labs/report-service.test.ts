@@ -194,6 +194,14 @@ class FakeFiles implements ProtectedReportFileService {
     if (file === undefined) throw new Error('sanitized artifact missing');
     return { path, sourceHash: file.hash, byteSize: file.size };
   }
+
+  async listOwnedFiles(): Promise<readonly string[]> {
+    return [...this.files.keys()].filter((path) => path.startsWith('protected://'));
+  }
+
+  async removeOwnedFile(path: string): Promise<void> {
+    await this.remove(path);
+  }
 }
 
 class FailingDeleteFiles extends FakeFiles {
@@ -333,7 +341,7 @@ const verifiedImage: ImageSanitizedVerification = {
   reloadChecked: true,
   sourceAwareChecked: true,
   sourceContentRemoved: true,
-  verificationVersion: 'image-source-aware-v1',
+  verificationVersion: 'image-source-aware-v2',
   failureReasons: [],
   pixelWidth: 1200,
   pixelHeight: 900,
@@ -360,7 +368,11 @@ class SanitizingImage {
     return { destinationPath, byteSize: 256, verification: verifiedImage };
   }
 
-  async verifySanitized(_path: string): Promise<ImageSanitizedVerification> {
+  async verifySanitized(
+    _path: string,
+    _sourcePath: string,
+    _recipe: Parameters<NonNullable<LabReportsServiceOptions['imageInspector']>['sanitize']>[2],
+  ): Promise<ImageSanitizedVerification> {
     return verifiedImage;
   }
 }
@@ -1795,7 +1807,7 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(await files.exists(imported.originalPath!), true);
   });
 
-  test('recipe changes regenerate a new derivative and deletion is independent from the source', async () => {
+  test('failed regeneration preserves the last verified derivative and relaunch cleans stale bytes', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
     const pdf = new SanitizingPdf();
@@ -1810,6 +1822,19 @@ describe('protected Lab Report import lifecycle', () => {
       origin: 'user',
       label: 'address',
     });
+    pdf.verification = {
+      ...verifiedSanitized,
+      verified: false,
+      sourceAwareChecked: false,
+      sourceContentRemoved: false,
+      failureReasons: ['synthetic replacement failure'],
+    };
+    await assert.rejects(service.saveSanitizedReport(imported.id, secondRecipe), /replacement/);
+    const preserved = await repository.getSanitizedReport(imported.id);
+    assert.equal(preserved?.artifactPath, first.artifactPath);
+    assert.equal(await files.exists(first.artifactPath!), true);
+
+    pdf.verification = verifiedSanitized;
     const second = await service.saveSanitizedReport(imported.id, secondRecipe);
     assert.notEqual(second.recipeHash, first.recipeHash);
     assert.equal(await files.exists(first.artifactPath!), false);
@@ -1817,6 +1842,36 @@ describe('protected Lab Report import lifecycle', () => {
     await service.deleteSanitizedReport(imported.id);
     assert.equal(await repository.getSanitizedReport(imported.id), null);
     assert.equal(await files.exists(imported.originalPath!), true);
+  });
+
+  test('relaunch removes an unreferenced sanitized artifact after cleanup was interrupted', async () => {
+    const repository = createRepository();
+    const files = new FailingDeleteFiles();
+    const pdf = new SanitizingPdf();
+    pdf.files = files;
+    const service = createService(repository, files, pdf);
+    const imported = (await service.importPdf(source('sanitize-orphan-recovery')))!.report;
+    const first = await service.saveSanitizedReport(
+      imported.id,
+      (await service.openSanitizationEditor(imported.id)).recipe,
+    );
+    const nextRecipe = addRedaction(first.recipe, 0, {
+      id: 'redaction-next',
+      rect: { x: 0.3, y: 0.3, width: 0.15, height: 0.08 },
+      origin: 'user',
+      label: 'next',
+    });
+    files.failRemoval = true;
+    const next = await service.saveSanitizedReport(imported.id, nextRecipe);
+    assert.equal(await files.exists(first.artifactPath!), true);
+    assert.equal(await files.exists(next.artifactPath!), true);
+    files.failRemoval = false;
+    const relaunched = createService(repository, files, pdf);
+    assert.equal(
+      (await relaunched.getSanitizedReport(imported.id))?.artifactPath,
+      next.artifactPath,
+    );
+    assert.equal(await files.exists(first.artifactPath!), false);
   });
 
   test('preview invalidates a derivative after hash or structural tampering', async () => {

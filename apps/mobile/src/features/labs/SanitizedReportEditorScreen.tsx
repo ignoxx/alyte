@@ -260,6 +260,10 @@ export function SanitizedReportEditorScreen() {
             moveDown: t('labs.sanitizedEditorMoveDown'),
             grow: t('labs.sanitizedEditorResize'),
             shrink: t('labs.sanitizedEditorResizeSmaller'),
+            resize: t('labs.sanitizedEditorResize'),
+            value: t('labs.sanitizedEditorOverlayValue'),
+            selected: t('labs.sanitizedEditorSelected'),
+            notSelected: t('labs.sanitizedEditorNotSelected'),
             remove: t('labs.sanitizedEditorRemove'),
           }}
           onRedactionsChange={(event) => applyImageRedactions(event.nativeEvent)}
@@ -287,6 +291,10 @@ export function SanitizedReportEditorScreen() {
             moveDown: t('labs.sanitizedEditorMoveDown'),
             grow: t('labs.sanitizedEditorResize'),
             shrink: t('labs.sanitizedEditorResizeSmaller'),
+            resize: t('labs.sanitizedEditorResize'),
+            value: t('labs.sanitizedEditorOverlayValue'),
+            selected: t('labs.sanitizedEditorSelected'),
+            notSelected: t('labs.sanitizedEditorNotSelected'),
             remove: t('labs.sanitizedEditorRemove'),
           }}
           onRedactionsChange={(event) => applyNativeRedactions(event.nativeEvent)}

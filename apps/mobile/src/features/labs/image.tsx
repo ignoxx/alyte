@@ -20,7 +20,7 @@ export type ImageSanitizedVerification = {
   readonly reloadChecked: boolean;
   readonly sourceAwareChecked: true;
   readonly sourceContentRemoved: true;
-  readonly verificationVersion: 'image-source-aware-v1';
+  readonly verificationVersion: 'image-source-aware-v2';
   readonly failureReasons: readonly string[];
   readonly pixelWidth: number;
   readonly pixelHeight: number;
@@ -39,7 +39,11 @@ type NativeImageModule = {
     destinationPath: string,
     recipe: SanitizationRecipe,
   ): Promise<ImageSanitizationResult>;
-  verifySanitized(path: string): Promise<ImageSanitizedVerification>;
+  verifySanitized(
+    path: string,
+    sourcePath: string,
+    recipe: SanitizationRecipe,
+  ): Promise<ImageSanitizedVerification>;
 };
 
 export const nativeImageInspector = {
@@ -59,13 +63,17 @@ export const nativeImageInspector = {
     if (native === null) throw new Error('AlyteImage is unavailable for image sanitization');
     return native.sanitize(sourcePath, destinationPath, recipe);
   },
-  async verifySanitized(path: string): Promise<ImageSanitizedVerification> {
+  async verifySanitized(
+    path: string,
+    sourcePath: string,
+    recipe: SanitizationRecipe,
+  ): Promise<ImageSanitizedVerification> {
     const { requireOptionalNativeModule } = await import('expo-modules-core');
     const native = requireOptionalNativeModule<NativeImageModule>('AlyteImage');
     if (native === null) {
       throw new Error('AlyteImage is unavailable for image sanitization verification');
     }
-    return native.verifySanitized(path);
+    return native.verifySanitized(path, sourcePath, recipe);
   },
 };
 

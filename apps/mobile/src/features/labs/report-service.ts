@@ -278,22 +278,7 @@ function verificationPassed(
     verification.reloadChecked &&
     verification.sourceAwareChecked &&
     verification.sourceContentRemoved &&
-    ['source-aware-v1', 'image-source-aware-v1'].includes(verification.verificationVersion) &&
-    verification.failureReasons.length === 0
-  );
-}
-
-function structuralVerificationPassed(
-  verification: PdfSanitizedVerification | ImageSanitizedVerification,
-): boolean {
-  return (
-    verification.verified &&
-    !verification.selectableText &&
-    !verification.annotations &&
-    !verification.attachments &&
-    !verification.metadata &&
-    !verification.removableRedactions &&
-    verification.reloadChecked &&
+    ['source-aware-v1', 'image-source-aware-v2'].includes(verification.verificationVersion) &&
     verification.failureReasons.length === 0
   );
 }
@@ -436,6 +421,39 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           }
         } catch {
           // Keep the failure state and artifact path for an actionable retry.
+        }
+      }
+      // A derivative is promoted by replacing the database pointer only after its bytes have
+      // passed protection and verification. Any staged or superseded sanitized artifact left by
+      // a crash is therefore safe to remove when it has no live database reference.
+      if (fileService.listOwnedFiles !== undefined && fileService.removeOwnedFile !== undefined) {
+        const referencedSanitized = new Set<string>();
+        for (const report of await repo.listReports()) {
+          const derivative = await repo.getSanitizedReport(report.id);
+          if (derivative?.artifactPath !== null && derivative?.artifactPath !== undefined) {
+            try {
+              referencedSanitized.add(persistedPath(derivative.artifactPath));
+            } catch {
+              // The repository row remains visible, but an unowned path is never matched for
+              // cleanup. The protected-file adapter will reject it if opened.
+            }
+          }
+        }
+        for (const path of await fileService.listOwnedFiles()) {
+          let portable: string;
+          try {
+            portable = persistedPath(path);
+          } catch {
+            continue;
+          }
+          if (!portable.startsWith('protected://sanitized/')) continue;
+          if (!portable.endsWith('.partial') && referencedSanitized.has(portable)) continue;
+          try {
+            await fileService.removeOwnedFile(path);
+          } catch {
+            // Keep the orphan for the next launch; never hide a cleanup failure by deleting a
+            // database reference or touching another protected directory.
+          }
         }
       }
       initialized = true;
@@ -887,9 +905,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const sourcePath = await openOriginal(id);
       const recipeHash = sanitizationRecipeHash(recipe);
       const current = await repo.getSanitizedReport(id);
+      const currentVerificationVersion =
+        report.sourceType === 'image' ? 'image-source-aware-v2' : 'source-aware-v1';
       if (
         current?.verificationState === 'verified' &&
         current.verification?.sourceAwareChecked === true &&
+        current.verification.sourceContentRemoved === true &&
+        current.verification.verificationVersion === currentVerificationVersion &&
         current.recipeHash === recipeHash &&
         current.artifactPath !== null &&
         current.artifactHash !== null &&
@@ -897,15 +919,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       ) {
         return current;
       }
-      if (current?.artifactPath !== null && current?.artifactPath !== undefined) {
-        await fileService.remove(current.artifactPath);
-      }
-      // A changed recipe receives a new derivative identity. The prior artifact is removed before
-      // rendering, so a stale path can never be mistaken for the current exact preview.
-      const derivativeId =
-        current !== null && current !== undefined && current.recipeHash === recipeHash
-          ? current.id
-          : makeId('sanitized-report');
+      // Every replacement gets a fresh identity and destination. The current verified derivative
+      // remains readable until the replacement has rendered, been source-aware verified, been
+      // protected, and been durably promoted in the repository.
+      const derivativeId = makeId('sanitized-report');
       const destination =
         report.sourceType === 'image'
           ? fileService.sanitizedImageDestination === undefined
@@ -916,26 +933,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           : fileService.sanitizedDestination === undefined
             ? `${sourcePath}.alyte-sanitized-${derivativeId}.pdf`
             : await fileService.sanitizedDestination(id, derivativeId);
-      const pending = await repo.saveSanitizedReport({
-        id: derivativeId,
-        reportId: id,
-        recipe,
-        recipeHash,
-        artifactPath: persistedPath(destination),
-        artifactHash: null,
-        byteSize: null,
-        verificationState: 'pending',
-        verification: null,
-        failureReason: null,
-        deletedAt: null,
-      });
+      let promoted = false;
       try {
         const session = sanitizationSessions.get(id);
         let rendered: PdfSanitizationResult | ImageSanitizationResult;
         let structural: PdfSanitizedVerification | ImageSanitizedVerification;
         if (report.sourceType === 'image') {
           rendered = await imageInspector.sanitize(sourcePath, destination, recipe);
-          structural = await imageInspector.verifySanitized(destination);
+          structural = await imageInspector.verifySanitized(destination, sourcePath, recipe);
         } else {
           rendered =
             session?.sanitize !== undefined
@@ -960,21 +965,37 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
               };
         if (!verificationPassed(verification)) {
           await fileService.remove(destination);
-          return repo.updateSanitizedReport(pending.id, {
+          const failureReason =
+            verification.failureReasons.join('; ') || 'sanitized-verification-failed';
+          if (current !== null) {
+            throw new LabReportSanitizationError(
+              id,
+              'The replacement Sanitized Report could not be verified',
+            );
+          }
+          return repo.saveSanitizedReport({
+            id: derivativeId,
+            reportId: id,
+            recipe,
+            recipeHash,
             artifactPath: null,
             artifactHash: null,
             byteSize: null,
             verificationState: 'failed',
             verification: verificationForSanitizedReport(verification),
-            failureReason:
-              verification.failureReasons.join('; ') || 'sanitized-verification-failed',
+            failureReason,
+            deletedAt: null,
           });
         }
         if (fileService.protectArtifact === undefined) {
           throw new Error('Protected derivative storage is unavailable');
         }
         const protectedArtifact = await fileService.protectArtifact(destination);
-        const verified = await repo.updateSanitizedReport(pending.id, {
+        const verified = await repo.saveSanitizedReport({
+          id: derivativeId,
+          reportId: id,
+          recipe,
+          recipeHash,
           artifactPath: persistedPath(protectedArtifact.path),
           artifactHash: protectedArtifact.sourceHash,
           byteSize: protectedArtifact.byteSize,
@@ -983,17 +1004,39 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           failureReason: null,
           deletedAt: null,
         });
-        await repo.clearSanitizationDraft(id);
+        promoted = true;
+        if (current?.artifactPath !== null && current?.artifactPath !== undefined) {
+          try {
+            await deleteProtectedReportArtifacts(fileService, [current.artifactPath], (path) =>
+              repo.countProtectedPathReferences(path, id),
+            );
+          } catch {
+            // The new pointer is already durable. Startup reconciliation removes this stale
+            // unreferenced artifact after a transient cleanup failure.
+          }
+        }
+        await repo.clearSanitizationDraft(id).catch(() => undefined);
         return verified;
       } catch (error) {
-        await fileService.remove(destination).catch(() => undefined);
-        await repo.updateSanitizedReport(pending.id, {
-          artifactPath: null,
-          artifactHash: null,
-          byteSize: null,
-          verificationState: 'failed',
-          failureReason: error instanceof Error ? error.message : 'sanitized-render-failed',
-        });
+        if (!promoted) await fileService.remove(destination).catch(() => undefined);
+        if (current === null && !(error instanceof LabReportSanitizationError)) {
+          await repo
+            .saveSanitizedReport({
+              id: derivativeId,
+              reportId: id,
+              recipe,
+              recipeHash,
+              artifactPath: null,
+              artifactHash: null,
+              byteSize: null,
+              verificationState: 'failed',
+              verification: null,
+              failureReason: error instanceof Error ? error.message : 'sanitized-render-failed',
+              deletedAt: null,
+            })
+            .catch(() => undefined);
+        }
+        if (error instanceof LabReportSanitizationError) throw error;
         throw new LabReportSanitizationError(id, 'The Sanitized Report could not be verified', {
           cause: error,
         });
@@ -1047,9 +1090,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       });
       throw new LabReportSanitizationError(id, 'The verified Sanitized Report hash changed');
     }
+    const sourcePath = await openOriginal(id);
     const verification =
       report.sourceType === 'image'
-        ? await imageInspector.verifySanitized(artifactPath)
+        ? await imageInspector.verifySanitized(artifactPath, sourcePath, derivative.recipe)
         : pdfInspector.verifySanitized === undefined
           ? (() => {
               throw new LabReportSanitizationError(
@@ -1058,7 +1102,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
               );
             })()
           : await pdfInspector.verifySanitized(artifactPath);
-    if (!structuralVerificationPassed(verification)) {
+    if (!verificationPassed(verification)) {
       await fileService.remove(derivative.artifactPath);
       await (
         await repository()

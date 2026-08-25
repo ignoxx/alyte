@@ -41,7 +41,8 @@ final class AlyteImageModuleTests: XCTestCase {
     XCTAssertEqual(facts["sourceContentRemoved"] as? Bool, true)
     XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
 
-    let reloaded = try AlyteImageSanitizationTestSupport.verify(url: destination)
+    let reloaded = try AlyteImageSanitizationTestSupport.verify(
+      url: destination, sourceURL: source, recipe: recipe)
     XCTAssertEqual(reloaded["verified"] as? Bool, true)
     XCTAssertEqual(reloaded["metadata"] as? Bool, false)
   }

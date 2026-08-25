@@ -26,6 +26,7 @@
     "test:boundaries": "node --test scripts/boundaries.test.mjs",
     "test:showcase": "tsx --test scripts/showcase.test.ts",
     "test:native:protection": "bash scripts/run-native-protection-tests.sh",
+    "test:native:image": "bash scripts/run-native-image-tests.sh",
     "contract:check": "npm run build --workspace=@alyte/contracts && npm run contract:check --workspace=@alyte/contracts",
     "ios:config:check": "node scripts/check-expo-config.mjs",
     "ci": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test && npm run test:mobile-bundle && npm run test:boundaries && npm run test:showcase && npm run contract:check && npm run ios:config:check"

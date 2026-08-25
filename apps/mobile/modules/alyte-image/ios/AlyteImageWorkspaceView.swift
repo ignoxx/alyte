@@ -220,7 +220,10 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
       view.layer.borderColor = UIColor.systemYellow.cgColor
       view.layer.borderWidth = selectedID == region.id ? 2 : 0
       view.accessibilityLabel = labels["redaction"] ?? "Redaction"
+      view.isAccessibilityElement = true
       view.accessibilityTraits = .adjustable
+      if selectedID == region.id { view.accessibilityTraits.insert(.selected) }
+      view.accessibilityValue = accessibilityValue(for: region.rect, selected: selectedID == region.id)
       view.accessibilityIdentifier = region.id
       view.accessibilityCustomActions = accessibilityActions(for: region.id)
       let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
@@ -235,7 +238,11 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
         knob.layer.cornerRadius = 8
         handle.addSubview(knob)
         handle.accessibilityLabel = labels["resize"] ?? "Resize redaction"
+        handle.isAccessibilityElement = true
+        handle.accessibilityTraits = .adjustable
+        handle.accessibilityValue = accessibilityValue(for: region.rect, selected: true)
         handle.accessibilityIdentifier = region.id
+        handle.accessibilityCustomActions = accessibilityActions(for: region.id)
         let resize = UIPanGestureRecognizer(target: self, action: #selector(resized(_:)))
         resize.name = region.id
         handle.addGestureRecognizer(resize)
@@ -358,6 +365,12 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     ]
   }
 
+  private func accessibilityValue(for rect: CGRect, selected: Bool) -> String {
+    let prefix = labels["value"] ?? "Size"
+    let state = selected ? (labels["selected"] ?? "Selected") : (labels["notSelected"] ?? "Not selected")
+    return "\(prefix): \(Int(rect.width * 100))% × \(Int(rect.height * 100))%; \(state)"
+  }
+
   private func adjust(id: String, dx: CGFloat, dy: CGFloat, size: CGFloat) {
     guard let index = regions.firstIndex(where: { $0.id == id }) else { return }
     history.append(regions)
@@ -375,7 +388,10 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
 
   @objc private func doubleTapped(_ gesture: UITapGestureRecognizer) {
     let minimum = scrollView.minimumZoomScale
-    scrollView.setZoomScale(scrollView.zoomScale > minimum * 1.2 ? minimum : min(scrollView.maximumZoomScale, minimum * 2.5), animated: true)
+    let zoom = scrollView.zoomScale > minimum * 1.2
+      ? minimum
+      : min(scrollView.maximumZoomScale, minimum * 2.5)
+    scrollView.setZoomScale(zoom, animated: !UIAccessibility.isReduceMotionEnabled)
   }
 
   private func emit() {
