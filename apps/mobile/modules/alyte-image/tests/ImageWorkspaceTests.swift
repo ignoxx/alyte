@@ -51,6 +51,47 @@ final class ImageWorkspaceTests: XCTestCase {
     XCTAssertEqual(resized.width, 0.35, accuracy: 0.000001)
     XCTAssertEqual(resized.height, 0.25, accuracy: 0.000001)
   }
+
+  func testWorkspaceDefersSourceLayoutUntilMountedAndRecentersAfterRepeatedProps() throws {
+    let sourceURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("alyte-workspace-\(UUID().uuidString).jpg")
+    let image = UIImage.workspaceTestImage(size: CGSize(width: 640, height: 400))
+    try XCTUnwrap(image.jpegData(compressionQuality: 1)).write(to: sourceURL)
+    defer { try? FileManager.default.removeItem(at: sourceURL) }
+
+    let workspace = AlyteImageWorkspaceView(appContext: nil)
+    // Expo can deliver props while the native view still has a zero-sized frame.
+    workspace.sourcePath = sourceURL.path
+    workspace.redactMode = true
+    workspace.setRedactions([[
+      "id": "existing-redaction",
+      "rect": ["x": 0.64, "y": 0.18, "width": 0.18, "height": 0.08],
+    ]])
+    workspace.setFocusRegion(nil)
+    workspace.layoutIfNeeded()
+
+    workspace.frame = CGRect(x: 0, y: 0, width: 365, height: 580)
+    workspace.layoutIfNeeded()
+    // Repeated prop delivery during the first mounted layout must not move the image to a stale
+    // zero-bounds zoom state or apply a second content inset on top of the first one.
+    workspace.sourcePath = sourceURL.path
+    workspace.redactMode = true
+    workspace.setRedactions([[
+      "id": "existing-redaction",
+      "rect": ["x": 0.64, "y": 0.18, "width": 0.18, "height": 0.08],
+    ]])
+    workspace.setFocusRegion(nil)
+    workspace.layoutIfNeeded()
+
+    let layout = workspace.layoutSnapshotForTesting()
+    XCTAssertEqual(layout.zoomScale, 365.0 / 640.0, accuracy: 0.000001)
+    XCTAssertEqual(layout.displayedSize.width, 365, accuracy: 0.000001)
+    XCTAssertEqual(layout.displayedSize.height, 228.125, accuracy: 0.000001)
+    XCTAssertEqual(layout.contentInset.top, (580 - 228.125) / 2, accuracy: 0.1)
+    XCTAssertEqual(layout.contentInset.left, 0, accuracy: 0.1)
+    XCTAssertEqual(layout.contentOffset.x, 0, accuracy: 0.1)
+    XCTAssertEqual(layout.contentOffset.y, -layout.contentInset.top, accuracy: 0.1)
+  }
 }
 
 private extension CGRect {
@@ -59,7 +100,9 @@ private extension CGRect {
 
 private extension UIImage {
   static func workspaceTestImage(size: CGSize) -> UIImage {
-    UIGraphicsImageRenderer(size: size).image { context in
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    return UIGraphicsImageRenderer(size: size, format: format).image { context in
       UIColor.systemRed.setFill()
       context.fill(CGRect(origin: .zero, size: size))
     }

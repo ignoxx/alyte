@@ -80,6 +80,8 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   private var labels: [String: String] = [:]
   private var deferredRegions: [ImageWorkspaceRedaction]?
   private var lastViewportSize = CGSize.zero
+  private var imageNeedsConfiguration = false
+  private var isConfiguringImage = false
   private var focusRegion: CGRect?
   private var overlayGestureRole: ImageWorkspaceOverlayRole?
 
@@ -164,9 +166,11 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     super.layoutSubviews()
     scrollView.frame = bounds
     guard let image else { return }
-    if imageView.bounds.size == .zero || imageView.image !== image || lastViewportSize != bounds.size {
+    if imageNeedsConfiguration || imageView.bounds.size == .zero || imageView.image !== image ||
+      lastViewportSize != scrollView.bounds.size {
       configureImage(image)
     }
+    guard imageView.bounds.width > 0, imageView.bounds.height > 0 else { return }
     overlay.frame = imageView.bounds
     layoutRegions()
     centerImage()
@@ -257,15 +261,41 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
       onFailure(["message": "The image could not be opened in the privacy workspace"])
       return
     }
-    image = loaded
-    configureImage(loaded)
+    prepareImage(loaded)
     onReady([
       "width": loaded.size.width,
       "height": loaded.size.height,
     ])
   }
 
+  private func prepareImage(_ image: UIImage) {
+    self.image = image
+    imageView.image = image
+    imageView.frame = .zero
+    imageView.bounds = .zero
+    overlay.frame = .zero
+    scrollView.contentSize = .zero
+    scrollView.contentInset = .zero
+    scrollView.setContentOffset(.zero, animated: false)
+    lastViewportSize = .zero
+    imageNeedsConfiguration = true
+    setNeedsLayout()
+    configureImageIfPossible()
+  }
+
+  private func configureImageIfPossible() {
+    guard let image, scrollView.bounds.width > 0, scrollView.bounds.height > 0 else { return }
+    configureImage(image)
+  }
+
   private func configureImage(_ image: UIImage) {
+    guard scrollView.bounds.width > 0, scrollView.bounds.height > 0 else {
+      imageNeedsConfiguration = true
+      return
+    }
+    guard !isConfiguringImage else { return }
+    isConfiguringImage = true
+    defer { isConfiguringImage = false }
     self.image = image
     imageView.image = image
     imageView.frame = CGRect(origin: .zero, size: image.size)
@@ -286,6 +316,7 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
       insets: viewport.insets,
       resetContentOffset: true)
     focusStoredRegion()
+    imageNeedsConfiguration = false
   }
 
   private func centerImage(
@@ -307,14 +338,18 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
       bottom: resolvedInsets.bottom,
       right: resolvedInsets.right)
 
-    let minOffset = CGPoint(x: -resolvedInsets.left, y: -resolvedInsets.top)
+    // `contentInsetAdjustmentBehavior` is disabled above, but use the resolved inset in case a
+    // host changes that policy while mounting the Expo view. Content offsets are expressed in
+    // the adjusted coordinate space, not the raw content inset space.
+    let adjustedInsets = scrollView.adjustedContentInset
+    let minOffset = CGPoint(x: -adjustedInsets.left, y: -adjustedInsets.top)
     let maxOffset = CGPoint(
       x: max(
         minOffset.x,
-        scrollView.contentSize.width - scrollView.bounds.width + resolvedInsets.right),
+        scrollView.contentSize.width - scrollView.bounds.width + adjustedInsets.right),
       y: max(
         minOffset.y,
-        scrollView.contentSize.height - scrollView.bounds.height + resolvedInsets.bottom))
+        scrollView.contentSize.height - scrollView.bounds.height + adjustedInsets.bottom))
     let current = resetContentOffset ? minOffset : scrollView.contentOffset
     let clamped = CGPoint(
       x: min(max(current.x, minOffset.x), maxOffset.x),
@@ -337,7 +372,7 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   }
 
   func configureImageForTesting(_ image: UIImage) {
-    configureImage(image)
+    prepareImage(image)
   }
 
   func selectRedactionForTesting(_ id: String?) {
