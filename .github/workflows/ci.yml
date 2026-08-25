@@ -17,3 +17,4 @@ jobs:
       - run: npm ci
       - run: npm run ci
       - run: npm run test:native:protection
+      - run: npm run test:native:image
