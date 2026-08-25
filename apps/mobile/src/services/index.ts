@@ -13,6 +13,10 @@ import { createIntakeService, type IntakeService } from '../features/intake/serv
 import { openProtectedIntakeDatabase, type IntakeRepository } from '../features/intake/persistence';
 import { createProtectedIntakeMediaStore } from '../features/intake/media-store';
 import {
+  createDefaultLocalExportService,
+  type LocalExportService,
+} from '../features/export/service';
+import {
   missingShowcaseIntakeInputs,
   seedShowcaseLabRecords,
   showcaseIntakeInputs,
@@ -25,6 +29,7 @@ export interface AlyteServices {
   readonly labs: LabsService;
   readonly reports: LabReportsService;
   readonly intake: IntakeService;
+  readonly export: LocalExportService;
 }
 
 export function runtimeVariant(): RuntimeVariant {
@@ -56,6 +61,7 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
   });
 
   const labs = createLabsService({ repositoryFactory });
+  const exportService = createDefaultLocalExportService();
 
   if (showcase !== null) {
     void seedShowcaseLabRecords(labs);
@@ -72,6 +78,7 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
     labs,
     reports: createLabReportsService({ repositoryFactory }),
     intake,
+    export: exportService,
   };
 }
 

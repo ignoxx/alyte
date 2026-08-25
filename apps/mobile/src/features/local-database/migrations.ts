@@ -19,7 +19,7 @@ type CallbackMigration = {
 
 export type Migration = SqlMigration | CallbackMigration;
 
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 const INTAKE_CAPTURE_RECOVERY_DDL = `
   CREATE TABLE IF NOT EXISTS intake_capture_recovery (
@@ -387,5 +387,31 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
           ON lab_combined_deletions(state, updated_at ASC);
       `);
     },
+  },
+  {
+    version: 10,
+    sql: `
+      CREATE TABLE IF NOT EXISTS local_export_jobs (
+        id TEXT PRIMARY KEY NOT NULL,
+        state TEXT NOT NULL CHECK (state IN (
+          'staging', 'archiving', 'ready', 'failed', 'cancelled', 'completed'
+        )),
+        selection_json TEXT NOT NULL,
+        portable_staging_reference TEXT,
+        portable_archive_reference TEXT,
+        failure_category TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        staging_started_at TEXT,
+        archiving_started_at TEXT,
+        ready_at TEXT,
+        failed_at TEXT,
+        cancelled_at TEXT,
+        completed_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS local_export_jobs_state_idx
+        ON local_export_jobs(state, updated_at ASC);
+    `,
   },
 ];

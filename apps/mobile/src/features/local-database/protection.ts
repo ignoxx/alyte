@@ -9,6 +9,7 @@ export const PROTECTION_FAILURE_CATEGORIES = [
   'backup_exclusion_verification',
   'file_missing',
   'invalid_hash',
+  'invalid_file_type',
   'native_module_unavailable',
   'invalid_native_report',
   'native_failure',

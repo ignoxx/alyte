@@ -247,4 +247,49 @@ describe('protected Original Report file adapter', () => {
     assert.equal(await fixture.service.exists(removable), false);
     assert.equal(await fixture.service.exists(shared), true);
   });
+
+  test('keeps export workspaces narrow and rejects traversal, wrong roots, and directories', async () => {
+    const fixture = makeFixture();
+    fixtures.push(fixture);
+    await fixture.service.initialize();
+    const workspace = await fixture.service.createExportWorkspace!('export-job-1');
+
+    await assert.rejects(
+      fixture.service.writeExportFile!(workspace, '../outside.json', '{}'),
+      /relative path is invalid/,
+    );
+    await assert.rejects(
+      fixture.service.writeExportFile!(workspace, 'data/\u0000.json', '{}'),
+      /relative path is invalid/,
+    );
+    await assert.rejects(
+      fixture.service.createExportWorkspace!('export.job'),
+      /identifier is not safe/,
+    );
+
+    const sourcePath = 'file:///sandbox/alyte-protected/original-reports/source.pdf';
+    fixture.fileSystem.files.set(sourcePath, { content: 'source' });
+    const source = await fixture.service.inspectExportSource!(
+      'protected://original-reports/source.pdf',
+      'original-reports',
+    );
+    assert.equal(source?.portablePath, 'protected://original-reports/source.pdf');
+    await assert.rejects(
+      fixture.service.inspectExportSource!(
+        'protected://intake-media/../source.pdf',
+        'intake-images',
+      ),
+      /owned protected file/,
+    );
+
+    const directoryPath = 'file:///sandbox/alyte-protected/original-reports/directory';
+    fixture.fileSystem.directories.add(directoryPath);
+    await assert.rejects(
+      fixture.service.inspectExportSource!(
+        'protected://original-reports/directory',
+        'original-reports',
+      ),
+      /regular file/,
+    );
+  });
 });

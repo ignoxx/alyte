@@ -12,6 +12,14 @@ enum AlyteProtectionFailureCategory: String {
   case backupExclusionVerification = "backup_exclusion_verification"
   case fileMissing = "file_missing"
   case invalidHash = "invalid_hash"
+  case invalidFileType = "invalid_file_type"
+  case archiveInvalidInput = "archive_invalid_input"
+  case archiveSymlink = "archive_symlink_rejected"
+  case archivePathEscape = "archive_path_escape"
+  case archiveChecksum = "archive_checksum_mismatch"
+  case archiveEntryMismatch = "archive_entry_mismatch"
+  case archiveFailure = "archive_failure"
+  case cancelled = "cancelled"
   case nativeFailure = "native_failure"
 }
 
@@ -21,6 +29,14 @@ enum AlyteProtectionError: Error {
   case backupExclusionVerificationFailed
   case fileMissing
   case invalidHash
+  case invalidFileType
+  case archiveInvalidInput
+  case archiveSymlink
+  case archivePathEscape
+  case archiveChecksum
+  case archiveEntryMismatch
+  case archiveFailure
+  case cancelled
 
   var failureCategory: AlyteProtectionFailureCategory {
     switch self {
@@ -34,6 +50,22 @@ enum AlyteProtectionError: Error {
       return .fileMissing
     case .invalidHash:
       return .invalidHash
+    case .invalidFileType:
+      return .invalidFileType
+    case .archiveInvalidInput:
+      return .archiveInvalidInput
+    case .archiveSymlink:
+      return .archiveSymlink
+    case .archivePathEscape:
+      return .archivePathEscape
+    case .archiveChecksum:
+      return .archiveChecksum
+    case .archiveEntryMismatch:
+      return .archiveEntryMismatch
+    case .archiveFailure:
+      return .archiveFailure
+    case .cancelled:
+      return .cancelled
     }
   }
 }
@@ -99,6 +131,10 @@ final class AlyteProtectionFilePolicy {
       throw AlyteProtectionError.fileMissing
     }
     do {
+      let resourceValues = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
+      guard resourceValues.isSymbolicLink != true, resourceValues.isRegularFile == true else {
+        throw AlyteProtectionError.invalidFileType
+      }
       let handle = try FileHandle(forReadingFrom: url)
       defer { try? handle.close() }
       var hasher = SHA256()

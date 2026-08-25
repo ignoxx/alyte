@@ -51,6 +51,28 @@ export type ProtectedCopy = {
   readonly protection?: ProtectedPathFacts;
 };
 
+export type ProtectedExportWorkspace = {
+  readonly stagingPath: string;
+  readonly portableStagingReference: string;
+  readonly archivePartialPath: string;
+  readonly archivePath: string;
+  readonly portableArchiveReference: string;
+};
+
+export type ProtectedExportSource = {
+  readonly path: string;
+  readonly portablePath: string;
+  readonly sourceHash: string;
+  readonly byteSize: number | null;
+};
+
+export type ProtectedExportFile = {
+  readonly path: string;
+  readonly relativePath: string;
+  readonly sourceHash: string;
+  readonly byteSize: number | null;
+};
+
 export type IntakeImageSource = {
   readonly uri: string;
   readonly name?: string | null;
@@ -84,6 +106,31 @@ export type ProtectedReportFileService = {
   stageIntake?(source: IntakeImageSource, captureId: string): Promise<ProtectedCopy>;
   inspectIntake?(path: string): Promise<ProtectedCopy | null>;
   listIntake?(): Promise<readonly string[]>;
+  /** Narrow workspace operations for local Full Export; no arbitrary recursive path API is exposed. */
+  createExportWorkspace?(jobId: string): Promise<ProtectedExportWorkspace>;
+  writeExportFile?(
+    workspace: ProtectedExportWorkspace,
+    relativePath: string,
+    contents: string,
+  ): Promise<ProtectedExportFile>;
+  copyExportMedia?(
+    workspace: ProtectedExportWorkspace,
+    source: ProtectedExportSource,
+    relativePath: string,
+  ): Promise<ProtectedExportFile>;
+  inspectExportSource?(
+    path: string,
+    category: 'original-reports' | 'sanitized-reports' | 'intake-images',
+  ): Promise<ProtectedExportSource | null>;
+  protectExportArchive?(path: string): Promise<ProtectedCopy>;
+  removeExportArtifacts?(
+    workspace: ProtectedExportWorkspace,
+    options?: { readonly removeArchive?: boolean },
+  ): Promise<void>;
+  removeExportArtifactsByReference?(
+    portableStagingReference: string | null,
+    portableArchiveReference: string | null,
+  ): Promise<void>;
 };
 
 export type ProtectedReportFileServiceOptions = {
@@ -418,9 +465,12 @@ export function createProtectedReportFileService(
 
   async function protectArtifact(path: string): Promise<ProtectedCopy> {
     await initialize();
-    const nativePath = await resolvePath(path);
-    const protectionReport = await protection.protectPath(nativePath);
+    return protectedNativeArtifact(await resolvePath(path));
+  }
+
+  async function protectedNativeArtifact(nativePath: string): Promise<ProtectedCopy> {
     const sourceHash = await protection.hashFile(nativePath);
+    const protectionReport = await protection.protectPath(nativePath);
     const fileInfo = await info(nativePath);
     if (!fileInfo.exists) throw new Error('Sanitized Report artifact disappeared');
     return {
@@ -484,10 +534,11 @@ export function createProtectedReportFileService(
     const nativePath = nativePathForSuffix(suffix);
     if (!(await exists(nativePath))) return null;
     const fileInfo = await info(nativePath);
+    const sourceHash = await protection.hashFile(nativePath);
     const protectionReport = await protection.protectPath(nativePath);
     return {
       path: nativePath,
-      sourceHash: await protection.hashFile(nativePath),
+      sourceHash,
       byteSize: fileInfo.size,
       protection: {
         status: 'verified',
@@ -504,6 +555,222 @@ export function createProtectedReportFileService(
     return (await fileSystem.readDirectoryAsync(directory)).map((name) =>
       joinPath(directory, name),
     );
+  }
+
+  function exportJobName(jobId: string): string {
+    const value = safeFilename(jobId, 'export-job');
+    if (value !== jobId || value.length === 0 || value.includes('.')) {
+      throw new Error('The export job identifier is not safe');
+    }
+    return value;
+  }
+
+  function exportRelativePath(relativePath: string): string {
+    if (
+      relativePath.length === 0 ||
+      relativePath.includes('\\') ||
+      relativePath.includes('\u0000') ||
+      relativePath.startsWith('/') ||
+      hasUnsafePathSegment(relativePath)
+    ) {
+      throw new Error('The export relative path is invalid');
+    }
+    return relativePath;
+  }
+
+  function exportWorkspaceRoot(workspace: ProtectedExportWorkspace): string {
+    const suffix = suffixForOwnedPath(workspace.portableStagingReference);
+    if (!suffix.startsWith(`${PROTECTED_REPORT_DIRECTORIES.exports}/`)) {
+      throw new Error('The export workspace is not owned by Alyte');
+    }
+    const native = nativePathForSuffix(suffix);
+    if (native !== workspace.stagingPath) throw new Error('The export workspace changed');
+    return native;
+  }
+
+  function exportArchivePath(path: string): string {
+    const suffix = suffixForOwnedPath(path);
+    if (!suffix.startsWith(`${PROTECTED_REPORT_DIRECTORIES.exports}/`)) {
+      throw new Error('The export archive is not owned by Alyte');
+    }
+    return nativePathForSuffix(suffix);
+  }
+
+  async function regularFileInfo(path: string): Promise<{ exists: boolean; size: number | null }> {
+    const result = (await fileSystem.getInfoAsync(path)) as {
+      readonly exists: boolean;
+      readonly isDirectory?: boolean;
+      readonly size?: number;
+    };
+    if (!result.exists) return { exists: false, size: null };
+    if (result.isDirectory === true) throw new Error('Export media must be a regular file');
+    return { exists: true, size: typeof result.size === 'number' ? result.size : null };
+  }
+
+  async function createExportWorkspace(jobId: string): Promise<ProtectedExportWorkspace> {
+    await initialize();
+    if (root === null) throw new Error('Protected report storage is not initialized');
+    const name = exportJobName(jobId);
+    const exportsRoot = joinPath(root, PROTECTED_REPORT_DIRECTORIES.exports);
+    const stagingPath = joinPath(exportsRoot, `${name}.partial`);
+    const archivePartialPath = joinPath(exportsRoot, `${name}.zip.partial`);
+    const archivePath = joinPath(exportsRoot, `${name}.zip`);
+    if (
+      (await fileSystem.getInfoAsync(stagingPath)).exists ||
+      (await fileSystem.getInfoAsync(archivePartialPath)).exists ||
+      (await fileSystem.getInfoAsync(archivePath)).exists
+    ) {
+      throw new Error('The export workspace already exists');
+    }
+    await fileSystem.makeDirectoryAsync(stagingPath, { intermediates: false });
+    await protectDirectory(stagingPath);
+    return {
+      stagingPath,
+      portableStagingReference: portablePath(stagingPath),
+      archivePartialPath,
+      archivePath,
+      portableArchiveReference: portablePath(archivePath),
+    };
+  }
+
+  async function workspaceDestination(
+    workspace: ProtectedExportWorkspace,
+    relativePath: string,
+  ): Promise<string> {
+    const destination = joinPath(exportWorkspaceRoot(workspace), exportRelativePath(relativePath));
+    const parent = destination.slice(0, destination.lastIndexOf('/'));
+    await fileSystem.makeDirectoryAsync(parent, { intermediates: true });
+    await protectDirectory(parent);
+    return destination;
+  }
+
+  async function writeExportFile(
+    workspace: ProtectedExportWorkspace,
+    relativePath: string,
+    contents: string,
+  ): Promise<ProtectedExportFile> {
+    const destination = await workspaceDestination(workspace, relativePath);
+    const writer = fileSystem as typeof fileSystem & {
+      writeAsStringAsync(
+        path: string,
+        value: string,
+        options?: { readonly encoding?: unknown },
+      ): Promise<void>;
+    };
+    await writer.writeAsStringAsync(destination, contents, { encoding: 'utf8' });
+    const protectedArtifact = await protectedNativeArtifact(destination);
+    return {
+      path: destination,
+      relativePath,
+      sourceHash: protectedArtifact.sourceHash,
+      byteSize: protectedArtifact.byteSize,
+    };
+  }
+
+  async function copyExportMedia(
+    workspace: ProtectedExportWorkspace,
+    source: ProtectedExportSource,
+    relativePath: string,
+  ): Promise<ProtectedExportFile> {
+    const destination = await workspaceDestination(workspace, relativePath);
+    await fileSystem.copyAsync({ from: source.path, to: destination });
+    try {
+      const protectedArtifact = await protectedNativeArtifact(destination);
+      if (protectedArtifact.sourceHash !== source.sourceHash) {
+        throw new Error('Export media hash changed during copy');
+      }
+      return {
+        path: destination,
+        relativePath,
+        sourceHash: protectedArtifact.sourceHash,
+        byteSize: protectedArtifact.byteSize,
+      };
+    } catch (error) {
+      await fileSystem.deleteAsync(destination, { idempotent: true });
+      throw error;
+    }
+  }
+
+  async function inspectExportSource(
+    path: string,
+    category: 'original-reports' | 'sanitized-reports' | 'intake-images',
+  ): Promise<ProtectedExportSource | null> {
+    await initialize();
+    const suffix = suffixForOwnedPath(path);
+    const expectedDirectory =
+      category === 'original-reports'
+        ? PROTECTED_REPORT_DIRECTORIES.originals
+        : category === 'sanitized-reports'
+          ? PROTECTED_REPORT_DIRECTORIES.sanitized
+          : PROTECTED_REPORT_DIRECTORIES.intake;
+    if (!suffix.startsWith(`${expectedDirectory}/`)) {
+      throw new Error('The selected export media is not in its declared category');
+    }
+    const native = nativePathForSuffix(suffix);
+    const fileInfo = await regularFileInfo(native);
+    if (!fileInfo.exists) return null;
+    const protectedArtifact = await protectedNativeArtifact(native);
+    return {
+      path: native,
+      portablePath: portablePath(native),
+      sourceHash: protectedArtifact.sourceHash,
+      byteSize: fileInfo.size,
+    };
+  }
+
+  async function protectExportArchive(path: string): Promise<ProtectedCopy> {
+    return protectArtifact(exportArchivePath(path));
+  }
+
+  async function removeExportArtifacts(
+    workspace: ProtectedExportWorkspace,
+    options: { readonly removeArchive?: boolean } = {},
+  ): Promise<void> {
+    await initialize();
+    const rootPath = exportWorkspaceRoot(workspace);
+    const archivePartial = exportArchivePath(workspace.archivePartialPath);
+    const archive = exportArchivePath(workspace.archivePath);
+    await fileSystem.deleteAsync(rootPath, { idempotent: true });
+    await fileSystem.deleteAsync(archivePartial, { idempotent: true });
+    if (options.removeArchive !== false)
+      await fileSystem.deleteAsync(archive, { idempotent: true });
+    if ((await fileSystem.getInfoAsync(rootPath)).exists) {
+      throw new Error('Export staging workspace remained after deletion');
+    }
+    if ((await fileSystem.getInfoAsync(archivePartial)).exists) {
+      throw new Error('Export partial archive remained after deletion');
+    }
+    if (options.removeArchive !== false && (await fileSystem.getInfoAsync(archive)).exists) {
+      throw new Error('Export archive remained after deletion');
+    }
+  }
+
+  async function removeExportArtifactsByReference(
+    portableStagingReference: string | null,
+    portableArchiveReference: string | null,
+  ): Promise<void> {
+    await initialize();
+    const stagingPath =
+      portableStagingReference === null
+        ? null
+        : exportWorkspaceRoot({
+            stagingPath: await resolvePath(portableStagingReference),
+            portableStagingReference,
+            archivePartialPath: joinPath(root!, 'unused.partial'),
+            archivePath: joinPath(root!, 'unused.zip'),
+            portableArchiveReference: `${PROTECTED_PATH_SCHEME}${PROTECTED_REPORT_DIRECTORIES.exports}/unused.zip`,
+          });
+    const archivePath =
+      portableArchiveReference === null ? null : exportArchivePath(portableArchiveReference);
+    const partialPath = archivePath === null ? null : `${archivePath}.partial`;
+    if (stagingPath !== null) await fileSystem.deleteAsync(stagingPath, { idempotent: true });
+    if (partialPath !== null) await fileSystem.deleteAsync(partialPath, { idempotent: true });
+    if (archivePath !== null) await fileSystem.deleteAsync(archivePath, { idempotent: true });
+    for (const path of [stagingPath, partialPath, archivePath]) {
+      if (path !== null && (await fileSystem.getInfoAsync(path)).exists) {
+        throw new Error('Export artifact remained after relaunch cleanup');
+      }
+    }
   }
 
   return {
@@ -523,5 +790,12 @@ export function createProtectedReportFileService(
     stageIntake,
     inspectIntake,
     listIntake,
+    createExportWorkspace,
+    writeExportFile,
+    copyExportMedia,
+    inspectExportSource,
+    protectExportArchive,
+    removeExportArtifacts,
+    removeExportArtifactsByReference,
   };
 }

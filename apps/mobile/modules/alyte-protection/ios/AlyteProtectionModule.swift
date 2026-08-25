@@ -2,6 +2,8 @@ import ExpoModulesCore
 import Foundation
 
 public final class AlyteProtectionModule: Module {
+  private static let archiveAdapter = AlyteProtectionArchive()
+
   public func definition() -> ModuleDefinition {
     Name("AlyteProtection")
 
@@ -67,6 +69,72 @@ public final class AlyteProtectionModule: Module {
         )
       }
     }
+
+    AsyncFunction("createZip") {
+      (
+        operationId: String,
+        stagingPath: String,
+        partialArchivePath: String,
+        entriesJSON: String
+      ) throws -> [String: Any] in
+      do {
+        guard let data = entriesJSON.data(using: .utf8) else {
+          throw AlyteProtectionError.archiveInvalidInput
+        }
+        let expected = try JSONDecoder().decode([AlyteZipExpectedEntry].self, from: data)
+        let result = try Self.archiveAdapter.create(
+          operationId: operationId,
+          stagingURL: URL(fileURLWithPath: Self.filePath(from: stagingPath)),
+          partialURL: URL(fileURLWithPath: Self.filePath(from: partialArchivePath)),
+          expected: expected
+        )
+        return [
+          "operationId": result.operationId,
+          "phase": result.phase,
+          "entryCount": result.entryCount,
+          "bytes": result.bytes,
+        ]
+      } catch {
+        throw Self.nativeError(error, message: "Could not create local export archive", code: 4)
+      }
+    }
+
+    AsyncFunction("promoteZip") {
+      (operationId: String, partialArchivePath: String, archivePath: String) throws -> [String: Any] in
+      do {
+        let result = try Self.archiveAdapter.promote(
+          operationId: operationId,
+          partialURL: URL(fileURLWithPath: Self.filePath(from: partialArchivePath)),
+          archiveURL: URL(fileURLWithPath: Self.filePath(from: archivePath))
+        )
+        return [
+          "operationId": result.operationId,
+          "phase": result.phase,
+          "entryCount": result.entryCount,
+          "bytes": result.bytes,
+        ]
+      } catch {
+        throw Self.nativeError(error, message: "Could not promote local export archive", code: 5)
+      }
+    }
+
+    AsyncFunction("cancelZip") {
+      (operationId: String, partialArchivePath: String) throws -> [String: Any] in
+      do {
+        let result = try Self.archiveAdapter.cancel(
+          operationId: operationId,
+          partialURL: URL(fileURLWithPath: Self.filePath(from: partialArchivePath))
+        )
+        return [
+          "operationId": result.operationId,
+          "phase": result.phase,
+          "entryCount": result.entryCount,
+          "bytes": result.bytes,
+        ]
+      } catch {
+        throw Self.nativeError(error, message: "Could not cancel local export archive", code: 6)
+      }
+    }
   }
 
   private static func filePath(from value: String) -> String {
@@ -79,5 +147,18 @@ public final class AlyteProtectionModule: Module {
   private static func failureCategory(for error: Error) -> String {
     (error as? AlyteProtectionError)?.failureCategory.rawValue ??
       AlyteProtectionFailureCategory.nativeFailure.rawValue
+  }
+
+  private static func nativeError(_ error: Error, message: String, code: Int) -> NSError {
+    let category = failureCategory(for: error)
+    return NSError(
+      domain: "AlyteProtection",
+      code: code,
+      userInfo: [
+        NSLocalizedDescriptionKey: message,
+        NSLocalizedFailureReasonErrorKey: category,
+        "failureCategory": category,
+      ]
+    )
   }
 }

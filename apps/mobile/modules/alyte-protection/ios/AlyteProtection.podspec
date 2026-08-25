@@ -9,6 +9,7 @@ Pod::Spec.new do |s|
   s.source         = { git: '' }
   s.static_framework = true
   s.dependency 'ExpoModulesCore'
+  s.dependency 'ZIPFoundation', '0.9.20'
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
   s.exclude_files = "**/*Tests.swift"
