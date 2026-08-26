@@ -4,6 +4,38 @@ import XCTest
 @testable import AlytePDF
 
 final class AlytePDFWorkspaceTests: XCTestCase {
+  func testGestureTargetPrioritizesHandleThenBodyAndFailsBlankSpace() {
+    let body = AlytePDFWorkspaceOverlayFrame(
+      id: "region", frame: CGRect(x: 100, y: 140, width: 160, height: 90), kind: .move)
+    let handle = AlytePDFWorkspaceOverlayFrame(
+      id: "region", frame: CGRect(x: 216, y: 186, width: 44, height: 44), kind: .resize)
+
+    XCTAssertEqual(
+      AlytePDFWorkspaceGeometry.gestureTarget(
+        at: CGPoint(x: 236, y: 206), overlayFrames: [body, handle]),
+      AlytePDFWorkspaceGesture(id: "region", kind: .resize))
+    XCTAssertEqual(
+      AlytePDFWorkspaceGeometry.gestureTarget(
+        at: CGPoint(x: 160, y: 170), overlayFrames: [body, handle]),
+      AlytePDFWorkspaceGesture(id: "region", kind: .move))
+    XCTAssertNil(
+      AlytePDFWorkspaceGeometry.gestureTarget(
+        at: CGPoint(x: 20, y: 20), overlayFrames: [body, handle]))
+  }
+
+  func testSmallBodyUsesMinimumTouchTargetButBlankOutsideItFails() {
+    let body = AlytePDFWorkspaceOverlayFrame(
+      id: "tiny", frame: CGRect(x: 100, y: 100, width: 8, height: 8), kind: .move)
+
+    XCTAssertEqual(
+      AlytePDFWorkspaceGeometry.gestureTarget(
+        at: CGPoint(x: 95, y: 95), overlayFrames: [body]),
+      AlytePDFWorkspaceGesture(id: "tiny", kind: .move))
+    XCTAssertNil(
+      AlytePDFWorkspaceGeometry.gestureTarget(
+        at: CGPoint(x: 76, y: 76), overlayFrames: [body]))
+  }
+
   func testNormalizedCoordinatesRoundTripAcrossZoomAndPan() {
     let source = CGRect(x: 0.12, y: 0.34, width: 0.46, height: 0.08)
     for frame in [

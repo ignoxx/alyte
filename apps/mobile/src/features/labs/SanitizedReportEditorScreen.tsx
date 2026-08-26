@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image as ExpoImage } from 'expo-image';
-import { Alert, Image, Modal, Pressable, StyleSheet, View, type ColorValue } from 'react-native';
+import {
+  Alert,
+  Image,
+  Modal,
+  Pressable,
+  StyleSheet,
+  View,
+  type ColorValue,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   useNavigation,
@@ -359,15 +369,29 @@ export function SanitizedReportEditorScreen() {
                 }
               />
               {state.report.sourceType === 'pdf' && (
-                <ToolbarAction
-                  symbol="square.grid.2x2"
-                  label={`${t('labs.sanitizedPages')} ${pageIndex + 1}/${recipe.pages.length}`}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`${t('labs.sanitizedPages')} ${pageIndex + 1}/${recipe.pages.length}`}
+                  accessibilityState={{ disabled: false }}
                   onPress={() => setPagesOpen(true)}
-                />
+                  style={({ pressed }) => [
+                    styles.pageControl,
+                    pressed && styles.toolbarActionPressed,
+                  ]}
+                >
+                  <ExpoImage
+                    source="sf:square.grid.2x2"
+                    style={{ color: colors.mutedInk, height: 18, width: 18 }}
+                  />
+                  <AppText maxFontSizeMultiplier={1.35} numberOfLines={1} variant="caption">
+                    {t('labs.sanitizedPages')} {pageIndex + 1}/{recipe.pages.length}
+                  </AppText>
+                </Pressable>
               )}
             </View>
             <AppButton
               disabled={busy}
+              style={styles.sanitizeButton}
               label={
                 state.current === null ? t('labs.sanitizeReport') : t('labs.sanitizeReportAgain')
               }
@@ -378,6 +402,7 @@ export function SanitizedReportEditorScreen() {
           <AppButton
             label={t('labs.editRedactions')}
             onPress={() => setPreview(null)}
+            style={styles.sanitizeButton}
             tone="secondary"
           />
         )}
@@ -461,19 +486,19 @@ export function SanitizedReportEditorScreen() {
                       />
                     </>
                   )}
-                  <AppButton
+                  <ToolbarAction
+                    symbol="arrow.up"
+                    label={t('labs.sanitizedEditorMovePageEarlier')}
                     disabled={index === 0}
-                    label="↑"
-                    accessibilityLabel={t('labs.sanitizedEditorMovePageEarlier')}
                     onPress={() => move(page.pageIndex, -1)}
-                    tone="quiet"
+                    style={styles.pageIconAction}
                   />
-                  <AppButton
+                  <ToolbarAction
+                    symbol="arrow.down"
+                    label={t('labs.sanitizedEditorMovePageLater')}
                     disabled={index === recipe.pages.length - 1}
-                    label="↓"
-                    accessibilityLabel={t('labs.sanitizedEditorMovePageLater')}
                     onPress={() => move(page.pageIndex, 1)}
-                    tone="quiet"
+                    style={styles.pageIconAction}
                   />
                 </View>
               </View>
@@ -525,6 +550,7 @@ const styles = StyleSheet.create({
   pageThumbnailExcluded: { opacity: 0.4 },
   root: { backgroundColor: colors.canvas, flex: 1 },
   toolbar: {
+    alignItems: 'stretch',
     backgroundColor: colors.elevatedSurface,
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -535,24 +561,34 @@ const styles = StyleSheet.create({
   editingTools: {
     alignItems: 'stretch',
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'space-around',
+  },
+  pageControl: {
+    alignItems: 'center',
+    borderCurve: 'continuous',
+    borderRadius: 10,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    justifyContent: 'center',
+    minHeight: 44,
+    minWidth: 96,
+    paddingHorizontal: spacing.xs,
   },
   toolbarAction: {
     alignItems: 'center',
     borderCurve: 'continuous',
     borderRadius: 10,
-    flex: 1,
-    gap: 2,
+    height: 44,
     justifyContent: 'center',
-    minHeight: 48,
+    minHeight: 44,
     minWidth: 44,
-    paddingHorizontal: 2,
+    width: 44,
   },
+  pageIconAction: { flexGrow: 0 },
+  sanitizeButton: { alignSelf: 'stretch' },
   toolbarActionPressed: { backgroundColor: colors.accentSoft },
   toolbarActionSelected: { backgroundColor: colors.accentSoft },
   toolbarActionDisabled: { opacity: 0.38 },
-  toolbarActionLabel: { color: colors.mutedInk, fontSize: 11, lineHeight: 14 },
-  toolbarActionLabelSelected: { color: colors.accent, fontWeight: '700' },
   verified: {
     backgroundColor: colors.surface,
     paddingHorizontal: spacing.md,
@@ -566,12 +602,14 @@ function ToolbarAction({
   label,
   disabled = false,
   selected = false,
+  style,
   onPress,
 }: {
   readonly symbol: string;
   readonly label: string;
   readonly disabled?: boolean;
   readonly selected?: boolean;
+  readonly style?: StyleProp<ViewStyle>;
   readonly onPress: () => void;
 }) {
   const tint: ColorValue = selected ? colors.accent : colors.mutedInk;
@@ -585,20 +623,13 @@ function ToolbarAction({
       onPress={onPress}
       style={({ pressed }) => [
         styles.toolbarAction,
+        style,
         selected && styles.toolbarActionSelected,
         pressed && !disabled && styles.toolbarActionPressed,
         disabled && styles.toolbarActionDisabled,
       ]}
     >
       <ExpoImage source={`sf:${symbol}`} style={{ color: tint, height: 18, width: 18 }} />
-      <AppText
-        maxFontSizeMultiplier={1.35}
-        numberOfLines={1}
-        style={[styles.toolbarActionLabel, selected && styles.toolbarActionLabelSelected]}
-        variant="caption"
-      >
-        {label}
-      </AppText>
     </Pressable>
   );
 }

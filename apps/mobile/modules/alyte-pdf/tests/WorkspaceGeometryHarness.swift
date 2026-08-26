@@ -25,6 +25,22 @@ enum WorkspaceGeometryHarness {
       precondition(approximatelyEqual(restored, source))
     }
 
+    let body = AlytePDFWorkspaceOverlayFrame(
+      id: "region", frame: CGRect(x: 100, y: 140, width: 160, height: 90), kind: .move)
+    let handle = AlytePDFWorkspaceOverlayFrame(
+      id: "region", frame: CGRect(x: 216, y: 186, width: 44, height: 44), kind: .resize)
+    precondition(
+      AlytePDFWorkspaceGeometry.gestureTarget(
+        at: CGPoint(x: 236, y: 206), overlayFrames: [body, handle])
+        == AlytePDFWorkspaceGesture(id: "region", kind: .resize))
+    precondition(
+      AlytePDFWorkspaceGeometry.gestureTarget(
+        at: CGPoint(x: 160, y: 170), overlayFrames: [body, handle])
+        == AlytePDFWorkspaceGesture(id: "region", kind: .move))
+    precondition(
+      AlytePDFWorkspaceGeometry.gestureTarget(
+        at: CGPoint(x: 20, y: 20), overlayFrames: [body, handle]) == nil)
+
     let page = CGRect(x: -180, y: -240, width: 960, height: 1440)
     var move = AlytePDFWorkspaceGestureSession(regions: ["region": source])
     move.begin(id: "region")

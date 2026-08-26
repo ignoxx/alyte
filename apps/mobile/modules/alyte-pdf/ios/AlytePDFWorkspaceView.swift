@@ -7,11 +7,41 @@ private struct WorkspaceRedaction: Equatable {
   var rect: CGRect
 }
 
+private enum RedactionOverlayRole: Equatable {
+  case redaction
+  case resizeHandle
+
+  var gestureKind: AlytePDFWorkspaceGestureKind {
+    switch self {
+    case .redaction: return .move
+    case .resizeHandle: return .resize
+    }
+  }
+}
+
+private final class RedactionOverlayElement: UIView {
+  let role: RedactionOverlayRole
+
+  init(role: RedactionOverlayRole, frame: CGRect) {
+    self.role = role
+    super.init(frame: frame)
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
 private final class RedactionOverlayView: UIView {
   override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-    subviews.contains {
-      !$0.isHidden && $0.alpha > 0 && $0.frame.insetBy(dx: -8, dy: -8).contains(point)
+    let frames = subviews.compactMap { view -> AlytePDFWorkspaceOverlayFrame? in
+      guard let element = view as? RedactionOverlayElement,
+        !view.isHidden,
+        view.alpha > 0,
+        let id = view.accessibilityIdentifier
+      else { return nil }
+      return AlytePDFWorkspaceOverlayFrame(
+        id: id, frame: view.frame, kind: element.role.gestureKind)
     }
+    return AlytePDFWorkspaceGeometry.gestureTarget(at: point, overlayFrames: frames) != nil
   }
 }
 
@@ -26,6 +56,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
 
   private let pdfView = PDFView()
   private let overlay = RedactionOverlayView()
+  private let overlayPan = UIPanGestureRecognizer()
   private var document: PDFDocument?
   private var regions: [WorkspaceRedaction] = []
   private var selectedID: String?
@@ -34,10 +65,20 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   private var startRegions: [WorkspaceRedaction] = []
   private var labels: [String: String] = [:]
   private var activeGestureID: String?
+  private var pendingOverlayGestureTarget: PDFWorkspaceGestureTarget?
+  private var overlayGestureRole: RedactionOverlayRole?
   private var deferredRegions: [WorkspaceRedaction]?
   private var deferredLabels: [String: String]?
   private var focusRegion: CGRect?
-  var inspectionMode = false { didSet { if oldValue != inspectionMode { layoutRegions() } } }
+  private var lastEmittedRegions: [WorkspaceRedaction] = []
+  var inspectionMode = false {
+    didSet {
+      guard oldValue != inspectionMode else { return }
+      overlay.isUserInteractionEnabled = redactMode && !inspectionMode
+      if inspectionMode { clearSelection() }
+      layoutRegions()
+    }
+  }
 
   var sourcePath: String = "" { didSet { if oldValue != sourcePath { load() } } }
   var pageIndex: Int = 0 {
@@ -50,7 +91,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   }
   var redactMode = false {
     didSet {
-      overlay.isUserInteractionEnabled = redactMode
+      overlay.isUserInteractionEnabled = redactMode && !inspectionMode
       if !redactMode { clearSelection() }
     }
   }
@@ -76,6 +117,15 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
     tap.require(toFail: doubleTap)
     pdfView.addGestureRecognizer(tap)
+    let overlayTap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+    overlayTap.cancelsTouchesInView = false
+    overlayTap.require(toFail: doubleTap)
+    overlay.addGestureRecognizer(overlayTap)
+    overlayPan.addTarget(self, action: #selector(overlayPanned(_:)))
+    overlayPan.delegate = self
+    overlayPan.cancelsTouchesInView = false
+    overlay.addGestureRecognizer(overlayPan)
+    reapplyPDFGestureDependencies()
     NotificationCenter.default.addObserver(
       self, selector: #selector(pdfGeometryChanged), name: .PDFViewScaleChanged, object: pdfView)
     NotificationCenter.default.addObserver(
@@ -86,6 +136,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     super.layoutSubviews()
     pdfView.frame = bounds
     overlay.frame = bounds
+    reapplyPDFGestureDependencies()
     layoutRegions()
   }
 
@@ -216,9 +267,30 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     }
     pdfView.go(to: page)
     pdfView.autoScales = true
+    reapplyPDFGestureDependencies()
     layoutRegions()
     focusStoredRegion()
     onPageChange(["pageIndex": pageIndex])
+  }
+
+  /// PDFView's scroll view is private and may be recreated when a document or page is loaded.
+  /// Requiring its pan to fail the stable edit recognizer gives body/handle edits priority only
+  /// for touches that reached the redaction overlay. Blank page touches never hit that overlay,
+  /// so PDFKit's pan and pinch recognizers remain available there.
+  private func reapplyPDFGestureDependencies() {
+    for scrollView in descendantScrollViews(of: pdfView) {
+      scrollView.panGestureRecognizer.require(toFail: overlayPan)
+    }
+  }
+
+  private func descendantScrollViews(of view: UIView) -> [UIScrollView] {
+    view.subviews.flatMap { child in
+      let nested = descendantScrollViews(of: child)
+      if let scrollView = child as? UIScrollView {
+        return [scrollView] + nested
+      }
+      return nested
+    }
   }
 
   private func pageRect(_ normalized: CGRect) -> CGRect? {
@@ -252,7 +324,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     overlay.subviews.forEach { $0.removeFromSuperview() }
     for region in regions {
       guard let frame = pageRect(region.rect) else { continue }
-      let view = UIView(frame: frame)
+      let view = RedactionOverlayElement(role: .redaction, frame: frame)
       view.backgroundColor =
         inspectionMode
         ? UIColor.systemTeal.withAlphaComponent(0.14)
@@ -262,31 +334,89 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
       view.accessibilityLabel = labels["redaction"] ?? "Redaction"
       view.isAccessibilityElement = true
       view.accessibilityTraits = inspectionMode ? .image : .adjustable
+      view.accessibilityValue = accessibilityValue(for: region.rect, selected: selectedID == region.id)
       if !inspectionMode {
         if selectedID == region.id { view.accessibilityTraits.insert(.selected) }
         view.accessibilityCustomActions = accessibilityActions(for: region.id)
       }
-      let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
-      pan.name = region.id
-      view.addGestureRecognizer(pan)
       view.accessibilityIdentifier = region.id
+      // The ancestor overlay is the sole direct-touch owner. Keeping these views interaction-free
+      // avoids replacing the stable pan recognizer during a React/PDFKit layout pass while their
+      // accessibility elements and custom actions remain intact.
+      view.isUserInteractionEnabled = false
       overlay.addSubview(view)
-      if selectedID == region.id {
-        let handle = UIView(
-          frame: CGRect(x: frame.maxX - 22, y: frame.maxY - 22, width: 44, height: 44))
+      if !inspectionMode, selectedID == region.id {
+        let handle = RedactionOverlayElement(
+          role: .resizeHandle, frame: resizeHandleFrame(for: frame))
         handle.backgroundColor = .clear
         let knob = UIView(frame: CGRect(x: 14, y: 14, width: 16, height: 16))
         knob.backgroundColor = .systemYellow
         knob.layer.cornerRadius = 8
         handle.addSubview(knob)
+        handle.accessibilityLabel = labels["resize"] ?? "Resize redaction"
+        handle.isAccessibilityElement = true
+        handle.accessibilityTraits = .adjustable
+        handle.accessibilityValue = accessibilityValue(for: region.rect, selected: true)
         handle.accessibilityIdentifier = region.id
-        let resize = UIPanGestureRecognizer(target: self, action: #selector(resized(_:)))
-        resize.name = region.id
-        handle.addGestureRecognizer(resize)
+        handle.accessibilityCustomActions = accessibilityActions(for: region.id)
+        handle.isUserInteractionEnabled = false
         overlay.addSubview(handle)
       }
     }
   }
+
+  private func resizeHandleFrame(for regionFrame: CGRect) -> CGRect {
+    let size = AlytePDFWorkspaceGeometry.minimumHitTarget
+    let unclamped = CGRect(
+      x: regionFrame.maxX - size / 2,
+      y: regionFrame.maxY - size / 2,
+      width: size,
+      height: size)
+    let bounds = overlay.bounds
+    return CGRect(
+      x: min(max(unclamped.minX, bounds.minX), max(bounds.minX, bounds.maxX - size)),
+      y: min(max(unclamped.minY, bounds.minY), max(bounds.minY, bounds.maxY - size)),
+      width: size,
+      height: size)
+  }
+
+  func gestureTargetForTesting(at point: CGPoint) -> AlytePDFWorkspaceGesture? {
+    gestureTarget(at: point).map {
+      AlytePDFWorkspaceGesture(id: $0.id, kind: $0.role.gestureKind)
+    }
+  }
+
+  func overlayElementFrameForTesting(
+    id: String,
+    kind: AlytePDFWorkspaceGestureKind
+  ) -> CGRect? {
+    let role: RedactionOverlayRole = kind == .resize ? .resizeHandle : .redaction
+    return overlay.subviews.first {
+      ($0 as? RedactionOverlayElement)?.role == role
+        && $0.accessibilityIdentifier == id
+    }?.frame
+  }
+
+  func beginOverlayGestureForTesting(at point: CGPoint) -> AlytePDFWorkspaceGesture? {
+    guard let target = gestureTarget(at: point) else { return nil }
+    pendingOverlayGestureTarget = target
+    guard gestureRecognizerShouldBegin(overlayPan) else { return nil }
+    return AlytePDFWorkspaceGesture(id: target.id, kind: target.role.gestureKind)
+  }
+
+  func overlayPannedForTesting(_ gesture: UIPanGestureRecognizer) {
+    overlayPanned(gesture)
+  }
+
+  func redactionsForTesting() -> [(id: String, rect: CGRect)] {
+    regions.map { (id: $0.id, rect: $0.rect) }
+  }
+
+  func lastEmittedRedactionsForTesting() -> [(id: String, rect: CGRect)] {
+    lastEmittedRegions.map { (id: $0.id, rect: $0.rect) }
+  }
+
+  func canUndoForTesting() -> Bool { !history.isEmpty }
 
   private func focusStoredRegion() {
     guard let focusRegion,
@@ -325,6 +455,14 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     ]
   }
 
+  private func accessibilityValue(for rect: CGRect, selected: Bool) -> String {
+    let prefix = labels["value"] ?? "Size"
+    let state = selected
+      ? (labels["selected"] ?? "Selected")
+      : (labels["notSelected"] ?? "Not selected")
+    return "\(prefix): \(Int(rect.width * 100))% × \(Int(rect.height * 100))%; \(state)"
+  }
+
   private func adjust(id: String, dx: CGFloat, dy: CGFloat, size: CGFloat) {
     guard let index = regions.firstIndex(where: { $0.id == id }) else { return }
     history.append(regions)
@@ -343,10 +481,10 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   @objc private func tapped(_ gesture: UITapGestureRecognizer) {
     guard redactMode else { return }
     let point = gesture.location(in: overlay)
-    if let hit = overlay.subviews.reversed().first(where: {
-      $0.frame.contains(point) && $0.accessibilityIdentifier != nil
-    }) {
-      setSelection(hit.accessibilityIdentifier)
+    if let target = gestureTarget(at: point) {
+      // Use the same expanded hit target as the stable pan recognizer so a tap just outside a
+      // small redaction selects it instead of accidentally creating a second redaction.
+      setSelection(target.id)
     } else if redactMode,
       let rect = normalizedRect(CGRect(x: point.x - 55, y: point.y - 18, width: 110, height: 36))
     {
@@ -362,17 +500,73 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     layoutRegions()
   }
 
-  @objc private func panned(_ gesture: UIPanGestureRecognizer) {
-    manipulate(gesture, resize: false)
-  }
-  @objc private func resized(_ gesture: UIPanGestureRecognizer) {
-    manipulate(gesture, resize: true)
+  @objc private func overlayPanned(_ gesture: UIPanGestureRecognizer) {
+    manipulate(gesture)
   }
 
-  private func manipulate(_ gesture: UIPanGestureRecognizer, resize: Bool) {
-    guard let id = gesture.name,
+  func gestureRecognizer(
+    _ gestureRecognizer: UIGestureRecognizer,
+    shouldReceive touch: UITouch
+  ) -> Bool {
+    guard gestureRecognizer === overlayPan else { return true }
+    pendingOverlayGestureTarget = gestureTarget(at: touch.location(in: overlay))
+    return true
+  }
+
+  override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    guard gestureRecognizer === overlayPan else { return true }
+    guard redactMode, !inspectionMode else {
+      pendingOverlayGestureTarget = nil
+      overlayGestureRole = nil
+      return false
+    }
+    let target = pendingOverlayGestureTarget ??
+      gestureTarget(at: gestureRecognizer.location(in: overlay))
+    pendingOverlayGestureTarget = nil
+    guard let target else {
+      // This is the critical blank-space escape hatch. The edit recognizer fails immediately,
+      // leaving PDFKit's native pan/pinch recognizers untouched.
+      overlayGestureRole = nil
+      gestureRecognizer.name = nil
+      return false
+    }
+    overlayGestureRole = target.role
+    gestureRecognizer.name = target.id
+    return true
+  }
+
+  private struct PDFWorkspaceGestureTarget {
+    let id: String
+    let role: RedactionOverlayRole
+  }
+
+  private func gestureTarget(at point: CGPoint) -> PDFWorkspaceGestureTarget? {
+    let frames = overlay.subviews.compactMap { view -> AlytePDFWorkspaceOverlayFrame? in
+      guard let element = view as? RedactionOverlayElement,
+        let id = view.accessibilityIdentifier
+      else { return nil }
+      return AlytePDFWorkspaceOverlayFrame(
+        id: id, frame: view.frame, kind: element.role.gestureKind)
+    }
+    guard let target = AlytePDFWorkspaceGeometry.gestureTarget(
+      at: point, overlayFrames: frames)
+    else { return nil }
+    return PDFWorkspaceGestureTarget(
+      id: target.id,
+      role: target.kind == .resize ? .resizeHandle : .redaction)
+  }
+
+  private func manipulate(_ gesture: UIPanGestureRecognizer) {
+    guard let id = gesture.name else { return }
+    guard let role = overlayGestureRole,
       let index = regions.firstIndex(where: { $0.id == id })
-    else { return }
+    else {
+      if gesture.state == .failed {
+        overlayGestureRole = nil
+        gesture.name = nil
+      }
+      return
+    }
     if gesture.state == .began {
       activeGestureID = id
       setSelection(id)
@@ -390,7 +584,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
       translation: translation,
       pageFrame: pageFrame,
       rotation: rotation,
-      resize: resize
+      resize: role == .resizeHandle
     )
     layoutActiveRegion(id: id)
     if gesture.state == .ended {
@@ -412,20 +606,26 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
       let frame = pageRect(region.rect)
     else { return }
     let regionView = overlay.subviews.first {
-      $0.accessibilityIdentifier == id
-        && $0.gestureRecognizers?.contains(where: { $0 is UIPanGestureRecognizer }) == true
+      ($0 as? RedactionOverlayElement)?.role == .redaction
+        && $0.accessibilityIdentifier == id
     }
     regionView?.frame = frame
     regionView?.backgroundColor = UIColor.black.withAlphaComponent(0.72)
     regionView?.layer.borderWidth = 2
+    regionView?.accessibilityValue = accessibilityValue(for: region.rect, selected: true)
     let handle = overlay.subviews.first {
-      $0 !== regionView && $0.gestureRecognizers?.contains(where: { $0.name == id }) == true
+      ($0 as? RedactionOverlayElement)?.role == .resizeHandle
+        && $0.accessibilityIdentifier == id
     }
-    handle?.frame = CGRect(x: frame.maxX - 22, y: frame.maxY - 22, width: 44, height: 44)
+    handle?.frame = resizeHandleFrame(for: frame)
+    handle?.accessibilityValue = accessibilityValue(for: region.rect, selected: true)
   }
 
   private func finishGesture(applyDeferredRegions: Bool) {
     activeGestureID = nil
+    overlayGestureRole = nil
+    overlayPan.name = nil
+    pendingOverlayGestureTarget = nil
     if applyDeferredRegions, let deferredRegions { regions = deferredRegions }
     deferredRegions = nil
     if let deferredLabels { labels = deferredLabels }
@@ -456,9 +656,16 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     }
   }
 
-  @objc private func pdfGeometryChanged() { layoutRegions() }
+  @objc private func pdfGeometryChanged() {
+    // PDFKit can rebuild its internal scroll hierarchy after a document/page/scale change. Keep
+    // this dependency narrow and reapply it to the current hierarchy; blank-space touches still
+    // skip the overlay recognizer and remain fully native.
+    reapplyPDFGestureDependencies()
+    layoutRegions()
+  }
 
   private func emit() {
+    lastEmittedRegions = regions
     onRedactionsChange([
       "pageIndex": pageIndex,
       "redactions": regions.map {

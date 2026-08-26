@@ -1,7 +1,63 @@
 import CoreGraphics
 
+public enum AlytePDFWorkspaceGestureKind: Equatable {
+  case move
+  case resize
+}
+
+public struct AlytePDFWorkspaceGesture: Equatable {
+  public let id: String
+  public let kind: AlytePDFWorkspaceGestureKind
+
+  public init(id: String, kind: AlytePDFWorkspaceGestureKind) {
+    self.id = id
+    self.kind = kind
+  }
+}
+
+/// A displayed overlay frame used to keep touch routing independent from PDFKit's coordinate
+/// conversion. The view supplies frames in its own bounds; this pure helper decides which edit
+/// target, if any, owns a touch.
+public struct AlytePDFWorkspaceOverlayFrame: Equatable {
+  public let id: String
+  public let frame: CGRect
+  public let kind: AlytePDFWorkspaceGestureKind
+
+  public init(id: String, frame: CGRect, kind: AlytePDFWorkspaceGestureKind) {
+    self.id = id
+    self.frame = frame
+    self.kind = kind
+  }
+}
+
 public enum AlytePDFWorkspaceGeometry {
   public static let minimumViewSize: CGFloat = 24
+  public static let minimumHitTarget: CGFloat = 44
+
+  /// Selects resize handles first, then redaction bodies with a minimum touch target. Returning
+  /// nil for blank space is intentional: the stable overlay recognizer fails there, allowing the
+  /// native PDFKit pan and pinch recognizers to own the touch.
+  public static func gestureTarget(
+    at point: CGPoint,
+    overlayFrames: [AlytePDFWorkspaceOverlayFrame],
+    minimumHitTarget: CGFloat = AlytePDFWorkspaceGeometry.minimumHitTarget
+  ) -> AlytePDFWorkspaceGesture? {
+    let handles = overlayFrames.filter { $0.kind == .resize }
+    let regions = overlayFrames.filter { $0.kind == .move }
+
+    for handle in handles where handle.frame.contains(point) {
+      return AlytePDFWorkspaceGesture(id: handle.id, kind: .resize)
+    }
+
+    for region in regions.reversed() {
+      let horizontalSlop = max(8, (minimumHitTarget - region.frame.width) / 2)
+      let verticalSlop = max(8, (minimumHitTarget - region.frame.height) / 2)
+      if region.frame.insetBy(dx: -horizontalSlop, dy: -verticalSlop).contains(point) {
+        return AlytePDFWorkspaceGesture(id: region.id, kind: .move)
+      }
+    }
+    return nil
+  }
 
   public static func viewRect(normalized: CGRect, pageFrame: CGRect) -> CGRect {
     CGRect(
