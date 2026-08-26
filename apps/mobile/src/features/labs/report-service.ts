@@ -43,7 +43,11 @@ import {
   type ProtectedCopy,
   type ProtectedReportFileService,
 } from './file-service';
-import { createSystemLabSourcePicker, type LabSourcePicker } from './pickers';
+import {
+  createSystemLabSourcePicker,
+  LabSourceSelectionError,
+  type LabSourcePicker,
+} from './pickers';
 import {
   nativePdfInspector,
   type PdfInspection,
@@ -138,6 +142,12 @@ export class LabReportImportError extends Error {
   }
 }
 
+/**
+ * Selection validation happens before a Lab Report is created. This keeps hostile or stale
+ * picker adapters from turning an unsupported multi-image result into hidden local reports.
+ */
+export { LabSourceSelectionError as LabReportSelectionError } from './pickers';
+
 export class LabReportSanitizationError extends Error {
   override readonly name = 'LabReportSanitizationError';
   readonly reportId: string;
@@ -176,9 +186,9 @@ export type LabReportsService = {
     passwordRequest?: PasswordRequest,
   ): Promise<LabReportImportResult | null>;
   importImages(
-    sources?: readonly LabSourceSelection[],
+    source?: LabSourceSelection,
     passwordRequest?: PasswordRequest,
-  ): Promise<readonly LabReportImportResult[]>;
+  ): Promise<LabReportImportResult | null>;
   retryImport(id: string, passwordRequest?: PasswordRequest): Promise<LabReport>;
   verifySource(id: string): Promise<LabReportSourceIntegrity>;
   openOriginal(id: string): Promise<string>;
@@ -256,6 +266,38 @@ export function createDefaultExtractionAliases(): readonly ExtractionAliasEntry[
 }
 
 type ImportOutcome = { readonly report: LabReport; readonly duplicate: boolean };
+
+function isLabSourceSelection(value: unknown): value is LabSourceSelection {
+  if (value === null || typeof value !== 'object') return false;
+  const candidate = value as Partial<LabSourceSelection>;
+  return (
+    typeof candidate.uri === 'string' &&
+    candidate.uri.length > 0 &&
+    typeof candidate.name === 'string' &&
+    candidate.name.length > 0 &&
+    typeof candidate.mimeType === 'string' &&
+    candidate.mimeType.length > 0 &&
+    (candidate.sourceType === 'image' || candidate.sourceType === 'pdf')
+  );
+}
+
+function singleImageSelection(value: unknown): LabSourceSelection | null {
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) {
+    if (value.length === 0) return null;
+    if (value.length !== 1) {
+      throw new LabSourceSelectionError(
+        'multiple-images',
+        'Choose one report image at a time; each image becomes one Lab Report',
+      );
+    }
+    return singleImageSelection(value[0]);
+  }
+  if (!isLabSourceSelection(value) || value.sourceType !== 'image') {
+    throw new LabSourceSelectionError('invalid-image', 'The selected item is not a report image');
+  }
+  return value;
+}
 
 function isoNow(): string {
   return new Date().toISOString();
@@ -753,6 +795,27 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }
   }
 
+  async function cleanupUncommittedImport(
+    reportId: string,
+    source: LabSourceSelection,
+  ): Promise<void> {
+    // A native copy can fail after creating its destination but before returning its ProtectedCopy.
+    // Ask the protected-file owner to reconcile that deterministic destination, then clear any
+    // transient source. Both operations are scoped to Alyte-owned paths and are best effort so the
+    // original import failure remains the actionable result.
+    try {
+      const recovered = await fileService.recoverPromoted(reportId, source);
+      if (recovered !== null) await fileService.remove(recovered.path);
+    } catch {
+      // Relaunch reconciliation can surface a retained source if cleanup itself was interrupted.
+    }
+    try {
+      await fileService.cleanupTransientImports();
+    } catch {
+      // Keep the durable failed report; the next service initialization retries transient cleanup.
+    }
+  }
+
   async function importOne(
     source: LabSourceSelection,
     passwordRequest?: PasswordRequest,
@@ -829,6 +892,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       return { report, duplicate: false };
     } catch (error) {
       const reason = classifyFailure(error);
+      if (promoted === null) await cleanupUncommittedImport(reportId, source);
       const preservedPath = promoted === null ? null : persistedPath(promoted.path);
       const preservedHash = promoted?.sourceHash ?? staged?.sourceHash ?? null;
       report = await repo.updateReport(reportId, {
@@ -861,17 +925,15 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   }
 
   async function importImages(
-    sources?: readonly LabSourceSelection[],
+    source?: LabSourceSelection,
     passwordRequest?: PasswordRequest,
-  ): Promise<readonly LabReportImportResult[]> {
+  ): Promise<LabReportImportResult | null> {
     return serialized(async () => {
       await ensureInitialized();
-      const selected = sources ?? (await picker.pickImages());
-      const results: LabReportImportResult[] = [];
-      for (const source of selected) {
-        results.push(await importOne(source, passwordRequest));
-      }
-      return results;
+      const picked = source === undefined ? await picker.pickImages() : source;
+      const selected = singleImageSelection(picked);
+      if (selected === null) return null;
+      return importOne(selected, passwordRequest);
     });
   }
 

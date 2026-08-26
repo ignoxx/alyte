@@ -35,10 +35,12 @@ import {
   createDefaultExtractionAliases,
   LabReportExtractionError,
   LabReportImportError,
+  LabReportSelectionError,
   type LabReportsServiceOptions,
   type LabReportsService,
   type LabReportExtractionProgress,
 } from './report-service';
+import type { LabSourcePicker } from './pickers';
 import type {
   PdfInspection,
   PdfInspectionSession,
@@ -218,6 +220,35 @@ class FailingDeleteFiles extends FakeFiles {
   override async remove(path: string): Promise<void> {
     if (this.failRemoval) throw new Error('synthetic file cleanup failure');
     await super.remove(path);
+  }
+}
+
+class FailingStageFiles extends FakeFiles {
+  override async stage(source: LabSourceSelection, importId: string): Promise<ProtectedCopy> {
+    await super.stage(source, importId);
+    throw new Error('storage exhausted after stage copy');
+  }
+}
+
+class FailingPromotionFiles extends FakeFiles {
+  private failedPromotion: ProtectedCopy | null = null;
+
+  override async promote(
+    staged: ProtectedCopy,
+    reportId: string,
+    source: LabSourceSelection,
+  ): Promise<ProtectedCopy> {
+    this.failedPromotion = await super.promote(staged, reportId, source);
+    throw new Error('storage exhausted after promotion copy');
+  }
+
+  override async recoverPromoted(
+    _reportId: string,
+    _source: LabSourceSelection,
+  ): Promise<ProtectedCopy | null> {
+    const promoted = this.failedPromotion;
+    if (promoted === null || !this.files.has(promoted.path)) return null;
+    return promoted;
   }
 }
 
@@ -482,6 +513,7 @@ function createService(
   visionOCR?: VisionOCR,
   semanticMapper?: ExtractionSemanticMapper,
   imageInspector?: LabReportsServiceOptions['imageInspector'],
+  picker?: LabSourcePicker,
 ): LabReportsService {
   return createLabReportsService({
     repositoryFactory: async () => repository,
@@ -490,6 +522,7 @@ function createService(
     ...(visionOCR === undefined ? {} : { visionOCR }),
     ...(semanticMapper === undefined ? {} : { semanticMapper }),
     ...(imageInspector === undefined ? {} : { imageInspector }),
+    ...(picker === undefined ? {} : { picker }),
     idGenerator: (() => {
       let count = 0;
       return (prefix: string) => `${prefix}-fixed-${++count}`;
@@ -1240,7 +1273,7 @@ describe('protected Lab Report import lifecycle', () => {
         throw new Error('synthetic Vision failure');
       },
     });
-    const report = (await service.importImages([source('unsanitized', 'image')]))[0]!.report;
+    const report = (await service.importImages(source('unsanitized', 'image')))!.report;
     await assert.rejects(service.startExtraction(report.id), (error: unknown) => {
       assert.ok(error instanceof LabReportExtractionError);
       assert.equal(error.reason, 'recognition');
@@ -1721,9 +1754,9 @@ describe('protected Lab Report import lifecycle', () => {
     const repository = createRepository(databasePath);
     const files = new FakeFiles();
     const first = createService(repository, files);
-    const result = await first.importImages([source('image-1', 'image')]);
-    assert.equal(result.length, 1);
-    const report = result[0]?.report;
+    const result = await first.importImages(source('image-1', 'image'));
+    assert.ok(result);
+    const report = result.report;
     assert.equal(report?.importState, 'imported');
     assert.equal(report?.pages[0]?.width, 1200);
     assert.equal(report?.originalPath?.startsWith('protected://originals/'), true);
@@ -1735,6 +1768,125 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(reports.length, 1);
     assert.equal(reports[0]?.originalFilename, 'image-1.jpg');
     assert.equal(reports[0]?.sourceHash, report?.sourceHash);
+  });
+
+  test('picker cancellation is a no-op and creates no Lab Report', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const picker: LabSourcePicker = {
+      pickPdf: async () => null,
+      pickImages: async () => null,
+    };
+    const service = createService(
+      repository,
+      files,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      picker,
+    );
+
+    assert.equal(await service.importImages(), null);
+    assert.deepEqual(await service.listReports(), []);
+    assert.equal(files.files.size, 0);
+  });
+
+  test('picker one-image output creates exactly one discoverable Lab Report', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const picker: LabSourcePicker = {
+      pickPdf: async () => null,
+      pickImages: async () => source('picker-one', 'image'),
+    };
+    const service = createService(
+      repository,
+      files,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      picker,
+    );
+
+    const result = await service.importImages();
+    assert.ok(result);
+    assert.equal(result.duplicate, false);
+    const reports = await service.listReports();
+    assert.equal(reports.filter((report) => report.importState !== 'deleted').length, 1);
+    assert.equal(reports[0]?.id, result.report.id);
+  });
+
+  test('rejects hostile multiple-image picker output before creating hidden reports', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const picker = {
+      pickPdf: async () => null,
+      pickImages: async () => [source('picker-first', 'image'), source('picker-second', 'image')],
+    } as unknown as LabSourcePicker;
+    const service = createService(
+      repository,
+      files,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      picker,
+    );
+
+    await assert.rejects(service.importImages(), (error: unknown) => {
+      assert.ok(error instanceof LabReportSelectionError);
+      assert.equal(error.reason, 'multiple-images');
+      return true;
+    });
+    assert.deepEqual(await service.listReports(), []);
+    assert.equal(
+      [...files.files.keys()].some((path) => path.includes('/originals/')),
+      false,
+    );
+    assert.equal(files.transient.size, 0);
+  });
+
+  test('cleans transient and promoted orphans when copying one image fails', async () => {
+    const stagedRepository = createRepository();
+    const stagedFiles = new FailingStageFiles();
+    const stagedService = createService(stagedRepository, stagedFiles);
+    await assert.rejects(
+      stagedService.importImages(source('stage-failure', 'image')),
+      (error: unknown) => {
+        assert.ok(error instanceof LabReportImportError);
+        assert.equal(error.reason, 'protection');
+        return true;
+      },
+    );
+    assert.equal(stagedFiles.transient.size, 0);
+    assert.equal(
+      (await stagedService.listReports()).filter((report) => report.importState !== 'deleted')
+        .length,
+      1,
+    );
+
+    const promotedRepository = createRepository();
+    const promotedFiles = new FailingPromotionFiles();
+    const promotedService = createService(promotedRepository, promotedFiles);
+    await assert.rejects(
+      promotedService.importImages(source('promotion-failure', 'image')),
+      (error: unknown) => {
+        assert.ok(error instanceof LabReportImportError);
+        assert.equal(error.reason, 'protection');
+        return true;
+      },
+    );
+    assert.equal(
+      [...promotedFiles.files.keys()].some((path) => path.includes('/originals/')),
+      false,
+    );
+    assert.equal(promotedFiles.transient.size, 0);
+    assert.equal(
+      (await promotedService.listReports()).filter((report) => report.importState !== 'deleted')
+        .length,
+      1,
+    );
   });
 
   test('keeps one immutable source for duplicate hashes and cleans the transient copy', async () => {
@@ -1777,7 +1929,7 @@ describe('protected Lab Report import lifecycle', () => {
     const files = new FakeFiles();
     const pdf = new FakePdf();
     const service = createService(repository, files, pdf);
-    const image = (await service.importImages([source('preview-image', 'image')]))[0]!.report;
+    const image = (await service.importImages(source('preview-image', 'image')))!.report;
     const importedPdf = (await service.importPdf(source('preview-pdf')))!.report;
 
     const imagePreview = await service.previewOriginal(image.id);
@@ -1864,7 +2016,7 @@ describe('protected Lab Report import lifecycle', () => {
     const files = new FakeFiles();
     const image = new ViewerImage(files);
     const service = createService(repository, files, new FakePdf(), undefined, undefined, image);
-    const imported = (await service.importImages([source('image-viewer', 'image')]))[0]!.report;
+    const imported = (await service.importImages(source('image-viewer', 'image')))!.report;
 
     const viewer = await service.openOriginalViewer(imported.id);
 
@@ -2322,7 +2474,7 @@ describe('protected Lab Report import lifecycle', () => {
     const files = new FakeFiles();
     const image = new SanitizingImage(files);
     const service = createService(repository, files, new FakePdf(), undefined, undefined, image);
-    const imported = (await service.importImages([source('sanitize-image', 'image')]))[0]!.report;
+    const imported = (await service.importImages(source('sanitize-image', 'image')))!.report;
     const editor = await service.openSanitizationEditor(imported.id);
     const recipe = addRedaction(editor.recipe, 0, {
       id: 'image-redaction-name',
@@ -2386,7 +2538,7 @@ describe('protected Lab Report import lifecycle', () => {
       },
     };
     const service = createService(repository, files, new FakePdf(), ocr, undefined, image);
-    const imported = (await service.importImages([source('extract-image', 'image')]))[0]!.report;
+    const imported = (await service.importImages(source('extract-image', 'image')))!.report;
     const editor = await service.openSanitizationEditor(imported.id);
     const saved = await service.saveSanitizedReport(imported.id, editor.recipe);
 
@@ -2429,7 +2581,7 @@ describe('protected Lab Report import lifecycle', () => {
         undefined,
         image,
       );
-      const imported = (await service.importImages([source(`extract-image-${state}`, 'image')]))[0]!
+      const imported = (await service.importImages(source(`extract-image-${state}`, 'image')))!
         .report;
       await service.saveSanitizedReport(
         imported.id,
@@ -2479,8 +2631,7 @@ describe('protected Lab Report import lifecycle', () => {
       },
     };
     const service = createService(repository, files, new FakePdf(), ocr, undefined, image);
-    const imported = (await service.importImages([source('draft-invalidation', 'image')]))[0]!
-      .report;
+    const imported = (await service.importImages(source('draft-invalidation', 'image')))!.report;
     const first = await service.saveSanitizedReport(
       imported.id,
       (await service.openSanitizationEditor(imported.id)).recipe,
@@ -2547,8 +2698,7 @@ describe('protected Lab Report import lifecycle', () => {
       undefined,
       image,
     );
-    const imported = (await service.importImages([source('readiness-malformed', 'image')]))[0]!
-      .report;
+    const imported = (await service.importImages(source('readiness-malformed', 'image')))!.report;
     const saved = await service.saveSanitizedReport(
       imported.id,
       (await service.openSanitizationEditor(imported.id)).recipe,
@@ -3104,7 +3254,7 @@ describe('protected Lab Report import lifecycle', () => {
     const files = new FakeFiles();
     const image = new SanitizingImage(files);
     const service = createService(repository, files, new FakePdf(), undefined, undefined, image);
-    const report = (await service.importImages([source('sanitized-draft', 'image')]))[0]!.report;
+    const report = (await service.importImages(source('sanitized-draft', 'image')))!.report;
     const sanitized = await service.saveSanitizedReport(
       report.id,
       (await service.openSanitizationEditor(report.id)).recipe,

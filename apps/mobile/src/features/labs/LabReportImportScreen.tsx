@@ -8,7 +8,11 @@ import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
-import { LabReportImportError, type PasswordRequest } from './report-service';
+import {
+  LabReportImportError,
+  LabReportSelectionError,
+  type PasswordRequest,
+} from './report-service';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList, 'ReportImport'>;
 
@@ -28,6 +32,11 @@ function passwordRequest(): PasswordRequest {
 }
 
 function errorMessage(error: unknown): string {
+  if (error instanceof LabReportSelectionError) {
+    return error.reason === 'multiple-images'
+      ? t('labs.reportImportMultipleImages')
+      : t('labs.reportImportInvalidImage');
+  }
   if (!(error instanceof LabReportImportError)) return t('labs.reportImportError');
   if (error.reason === 'cancelled') return t('labs.reportImportCancelled');
   if (error.reason === 'wrong-password') return t('labs.reportWrongPassword');
@@ -86,11 +95,10 @@ export function LabReportImportScreen() {
     setBusy(true);
     setError(null);
     try {
-      const results = await reports.importImages(undefined, passwordRequest());
-      const first = results[0];
-      if (first !== undefined) {
-        setLastReport(first.report);
-        showImportedReport(first.report, true);
+      const result = await reports.importImages(undefined, passwordRequest());
+      if (result !== null) {
+        setLastReport(result.report);
+        showImportedReport(result.report, true);
       }
     } catch (caught) {
       setError(errorMessage(caught));

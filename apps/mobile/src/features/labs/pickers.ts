@@ -2,9 +2,20 @@ import type * as DocumentPickerTypes from 'expo-document-picker';
 import type * as ImagePickerTypes from 'expo-image-picker';
 import type { LabSourceSelection } from './file-service';
 
+export class LabSourceSelectionError extends Error {
+  override readonly name = 'LabSourceSelectionError';
+  readonly reason: 'multiple-images' | 'invalid-image';
+
+  constructor(reason: LabSourceSelectionError['reason'], message: string) {
+    super(message);
+    this.reason = reason;
+  }
+}
+
 export interface LabSourcePicker {
   pickPdf(): Promise<LabSourceSelection | null>;
-  pickImages(): Promise<readonly LabSourceSelection[]>;
+  /** Photos import is intentionally one image per Lab Report until ordered page provenance exists. */
+  pickImages(): Promise<LabSourceSelection | null>;
 }
 
 export type LabSourcePickerOptions = {
@@ -40,24 +51,33 @@ export function createSystemLabSourcePicker(options: LabSourcePickerOptions = {}
     };
   }
 
-  async function pickImages(): Promise<readonly LabSourceSelection[]> {
+  async function pickImages(): Promise<LabSourceSelection | null> {
     imagePickerPromise ??= import('expo-image-picker');
     const imagePicker = await imagePickerPromise;
     const result = await imagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      allowsMultipleSelection: true,
+      allowsMultipleSelection: false,
       quality: 1,
     });
-    if (result.canceled) return [];
-    return result.assets.map((asset, index) => ({
+    if (result.canceled) return null;
+    if (!Array.isArray(result.assets) || result.assets.length === 0) return null;
+    if (result.assets.length !== 1) {
+      throw new LabSourceSelectionError(
+        'multiple-images',
+        'Choose one report image at a time; each image becomes one Lab Report',
+      );
+    }
+    const asset = result.assets[0];
+    if (asset === undefined) return null;
+    return {
       uri: asset.uri,
-      name: asset.fileName ?? `lab-report-image-${index + 1}.jpg`,
+      name: asset.fileName ?? 'lab-report-image.jpg',
       mimeType: asset.mimeType ?? 'image/jpeg',
       sourceType: 'image' as const,
       byteSize: asset.fileSize ?? null,
       width: asset.width,
       height: asset.height,
-    }));
+    };
   }
 
   return { pickPdf, pickImages };
