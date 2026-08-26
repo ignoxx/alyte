@@ -10,7 +10,7 @@ protocol AlyteLocalModelRuntimeSession: AnyObject {
 
 enum AlyteLocalModelRuntimeError: Error {
   case unavailable
-  case loadFailed
+  case loadFailed(AlyteLocalModelRuntimeFailureStage)
   case cancelled
 }
 
@@ -303,7 +303,7 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     } catch let error as AlyteLocalModelRuntimeError {
       switch error {
       case .unavailable: throw AlyteLocalModelError.unavailable(.unavailable)
-      case .loadFailed: throw AlyteLocalModelError.failed(.runtimeFailed)
+      case .loadFailed(let stage): throw AlyteLocalModelError.runtimeFailed(stage)
       case .cancelled: throw AlyteLocalModelError.failed(.cancelled)
       }
     } catch {

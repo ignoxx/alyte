@@ -46,6 +46,7 @@ static const AlyteLocalModelActivationHooks hooks = {
 int main(void) {
     AlyteLocalModelActivation activation;
     assert(alyte_local_model_activate_with_fallback("synthetic", &hooks, &activation));
+    assert(activation.failure_stage == ALYTE_LOCAL_MODEL_ACTIVATION_FAILURE_NONE);
     assert(activation.backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY);
     assert(activation.batch_tokens == 128);
     assert(load_count == 2);

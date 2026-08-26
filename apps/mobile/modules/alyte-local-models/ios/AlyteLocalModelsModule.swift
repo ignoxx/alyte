@@ -1,7 +1,13 @@
 import ExpoModulesCore
 import Foundation
+#if DEBUG
+import os
+#endif
 
 public final class AlyteLocalModelsModule: Module {
+#if DEBUG
+  private static let activationLogger = Logger(subsystem: "com.alyte.local-models", category: "activation")
+#endif
   private var store: AlyteLocalModelStore!
 
   public func definition() -> ModuleDefinition {
@@ -78,15 +84,23 @@ public final class AlyteLocalModelsModule: Module {
   }
 
   private static func nativeError(_ error: Error, message: String, code: Int) -> NSError {
-    let category = (error as? AlyteLocalModelError)?.failure.rawValue ?? AlyteLocalModelFailure.unknown.rawValue
+    let localError = error as? AlyteLocalModelError
+    let category = localError?.failure.rawValue ?? AlyteLocalModelFailure.unknown.rawValue
+    var userInfo: [String: Any] = [
+      NSLocalizedDescriptionKey: message,
+      NSLocalizedFailureReasonErrorKey: category,
+      "failureCategory": category,
+    ]
+    if let stage = localError?.runtimeFailureStage {
+      userInfo["failureStage"] = stage.rawValue
+      #if DEBUG
+      activationLogger.debug("Local model activation failed at stage \(stage.rawValue, privacy: .public)")
+      #endif
+    }
     return NSError(
       domain: "AlyteLocalModels",
       code: code,
-      userInfo: [
-        NSLocalizedDescriptionKey: message,
-        NSLocalizedFailureReasonErrorKey: category,
-        "failureCategory": category,
-      ]
+      userInfo: userInfo
     )
   }
 }

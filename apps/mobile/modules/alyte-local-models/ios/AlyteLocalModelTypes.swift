@@ -201,16 +201,47 @@ enum AlyteLocalModelFailure: String {
   case unknown = "unknown"
 }
 
+/// Debug-safe stage from the native runtime creation boundary. It intentionally carries no
+/// path, prompt, model, or health data; release-facing errors continue to use runtime-failed.
+enum AlyteLocalModelRuntimeFailureStage: String {
+  case modelLoad = "model-load"
+  case context
+  case grammar
+  case sampler
+  case allocation
+  case unknown
+
+  init(rawValueFromNative value: Int32) {
+    switch value {
+    case 1: self = .modelLoad
+    case 2: self = .context
+    case 3: self = .grammar
+    case 4: self = .sampler
+    case 5: self = .allocation
+    default: self = .unknown
+    }
+  }
+}
+
 enum AlyteLocalModelError: Error {
   case unsupportedPack
   case invalidManifest
   case unavailable(AlyteLocalModelFailure)
   case failed(AlyteLocalModelFailure)
+  case runtimeFailed(AlyteLocalModelRuntimeFailureStage)
 
   var failure: AlyteLocalModelFailure {
     switch self {
     case .unsupportedPack, .invalidManifest: return .incompatible
     case .unavailable(let value), .failed(let value): return value
+    case .runtimeFailed: return .runtimeFailed
+    }
+  }
+
+  var runtimeFailureStage: AlyteLocalModelRuntimeFailureStage? {
+    switch self {
+    case .runtimeFailed(let stage): return stage
+    default: return nil
     }
   }
 }

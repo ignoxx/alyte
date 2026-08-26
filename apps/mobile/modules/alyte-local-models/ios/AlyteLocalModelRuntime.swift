@@ -7,16 +7,18 @@ final class AlytePinnedLlamaRuntimeSession: AlyteLocalModelRuntimeSession, @unch
   private var runtime: UnsafeMutableRawPointer?
 
   init(modelURL: URL) throws {
+    var failureStage: Int32 = 0
     let created = modelURL.path.withCString { path in
       AlyteSemanticMapperGrammar.root.withCString { grammarText in
         "root".withCString { root in
-          alyte_local_model_runtime_create(path, grammarText, root)
+          alyte_local_model_runtime_create(path, grammarText, root, &failureStage)
         }
       }
     }
     guard let created else {
       #if ALYTE_LLAMA_RUNTIME
-      throw AlyteLocalModelRuntimeError.loadFailed
+      throw AlyteLocalModelRuntimeError.loadFailed(
+        AlyteLocalModelRuntimeFailureStage(rawValueFromNative: failureStage))
       #else
       throw AlyteLocalModelRuntimeError.unavailable
       #endif
@@ -50,10 +52,10 @@ final class AlytePinnedLlamaRuntimeSession: AlyteLocalModelRuntimeSession, @unch
     }
     guard count >= 0 else {
       switch count {
-      case -2: throw AlyteLocalModelRuntimeError.loadFailed
-      case -3: throw AlyteLocalModelRuntimeError.loadFailed
+      case -2: throw AlyteLocalModelRuntimeError.loadFailed(.unknown)
+      case -3: throw AlyteLocalModelRuntimeError.loadFailed(.unknown)
       case -7: throw AlyteLocalModelRuntimeError.cancelled
-      default: throw AlyteLocalModelRuntimeError.loadFailed
+      default: throw AlyteLocalModelRuntimeError.loadFailed(.unknown)
       }
     }
     return String(decoding: output.prefix(Int(count)).map { UInt8(bitPattern: $0) }, as: UTF8.self)

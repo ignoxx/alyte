@@ -40,24 +40,35 @@ bool alyte_local_model_activate_with_fallback(
     activation->context = NULL;
     activation->batch_tokens = 0;
     activation->backend_mode = ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED;
+    activation->failure_stage = ALYTE_LOCAL_MODEL_ACTIVATION_FAILURE_NONE;
 
     void *model = hooks->load_model(model_path, ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED);
     if (model == NULL) {
         activation->backend_mode = ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY;
         model = hooks->load_model(model_path, ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY);
     }
-    if (model == NULL) return false;
+    if (model == NULL) {
+        activation->failure_stage = ALYTE_LOCAL_MODEL_ACTIVATION_FAILURE_MODEL_LOAD;
+        return false;
+    }
 
     void *context = NULL;
     uint32_t batch_tokens = 0;
     if (!alyte_local_model_create_context(model, hooks, &context, &batch_tokens)) {
         hooks->free_model(model);
-        if (activation->backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY) return false;
+        if (activation->backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY) {
+            activation->failure_stage = ALYTE_LOCAL_MODEL_ACTIVATION_FAILURE_CONTEXT;
+            return false;
+        }
         activation->backend_mode = ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY;
         model = hooks->load_model(model_path, ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY);
-        if (model == NULL) return false;
+        if (model == NULL) {
+            activation->failure_stage = ALYTE_LOCAL_MODEL_ACTIVATION_FAILURE_MODEL_LOAD;
+            return false;
+        }
         if (!alyte_local_model_create_context(model, hooks, &context, &batch_tokens)) {
             hooks->free_model(model);
+            activation->failure_stage = ALYTE_LOCAL_MODEL_ACTIVATION_FAILURE_CONTEXT;
             return false;
         }
     }

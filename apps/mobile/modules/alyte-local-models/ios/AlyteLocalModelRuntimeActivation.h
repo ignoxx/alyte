@@ -11,6 +11,12 @@ typedef enum AlyteLocalModelBackendMode {
     ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY = 1,
 } AlyteLocalModelBackendMode;
 
+typedef enum AlyteLocalModelActivationFailureStage {
+    ALYTE_LOCAL_MODEL_ACTIVATION_FAILURE_NONE = 0,
+    ALYTE_LOCAL_MODEL_ACTIVATION_FAILURE_MODEL_LOAD = 1,
+    ALYTE_LOCAL_MODEL_ACTIVATION_FAILURE_CONTEXT = 2,
+} AlyteLocalModelActivationFailureStage;
+
 typedef struct AlyteLocalModelActivationHooks {
     void *(*load_model)(const char *model_path, AlyteLocalModelBackendMode mode);
     void *(*create_context)(void *model, uint32_t batch_tokens);
@@ -22,6 +28,7 @@ typedef struct AlyteLocalModelActivation {
     void *context;
     uint32_t batch_tokens;
     AlyteLocalModelBackendMode backend_mode;
+    AlyteLocalModelActivationFailureStage failure_stage;
 } AlyteLocalModelActivation;
 
 // Returns an owned model/context pair. On failure, every model acquired by this function is

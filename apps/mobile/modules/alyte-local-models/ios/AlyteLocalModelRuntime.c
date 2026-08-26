@@ -88,6 +88,12 @@ static void alyte_local_model_free_model(void *opaque_model) {
     llama_model_free((struct llama_model *) opaque_model);
 }
 
+static void alyte_local_model_set_failure_stage(
+    int32_t *failure_stage_out,
+    AlyteLocalModelRuntimeFailureStage failure_stage) {
+    if (failure_stage_out != NULL) *failure_stage_out = (int32_t) failure_stage;
+}
+
 static int alyte_local_model_tokenize(
     const struct llama_vocab *vocab,
     const char *text,
@@ -113,7 +119,11 @@ static int alyte_local_model_tokenize(
 void *alyte_local_model_runtime_create(
     const char *model_path,
     const char *grammar,
-    const char *grammar_root) {
+    const char *grammar_root,
+    int32_t *failure_stage_out) {
+    alyte_local_model_set_failure_stage(
+        failure_stage_out,
+        ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_NONE);
     if (model_path == NULL || grammar == NULL || grammar_root == NULL) return NULL;
     llama_log_set(alyte_local_model_discard_log, NULL);
     llama_backend_init();
@@ -123,15 +133,33 @@ void *alyte_local_model_runtime_create(
         .free_model = alyte_local_model_free_model,
     };
     AlyteLocalModelActivation activation;
-    if (!alyte_local_model_activate_with_fallback(model_path, &hooks, &activation)) return NULL;
+    if (!alyte_local_model_activate_with_fallback(model_path, &hooks, &activation)) {
+        alyte_local_model_set_failure_stage(
+            failure_stage_out,
+            activation.failure_stage == ALYTE_LOCAL_MODEL_ACTIVATION_FAILURE_CONTEXT
+                ? ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_CONTEXT
+                : ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_MODEL_LOAD);
+        return NULL;
+    }
     struct llama_model *model = (struct llama_model *) activation.model;
     struct llama_context *context = (struct llama_context *) activation.context;
     uint32_t batch_tokens = activation.batch_tokens;
     const struct llama_vocab *vocab = llama_model_get_vocab(model);
+    if (vocab == NULL) {
+        llama_free(context);
+        llama_model_free(model);
+        alyte_local_model_set_failure_stage(
+            failure_stage_out,
+            ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_GRAMMAR);
+        return NULL;
+    }
     struct llama_sampler *grammar_sampler = llama_sampler_init_grammar(vocab, grammar, grammar_root);
     if (grammar_sampler == NULL) {
         llama_free(context);
         llama_model_free(model);
+        alyte_local_model_set_failure_stage(
+            failure_stage_out,
+            ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_GRAMMAR);
         return NULL;
     }
     struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
@@ -141,15 +169,31 @@ void *alyte_local_model_runtime_create(
         llama_sampler_free(grammar_sampler);
         llama_free(context);
         llama_model_free(model);
+        alyte_local_model_set_failure_stage(
+            failure_stage_out,
+            ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_SAMPLER);
         return NULL;
     }
     llama_sampler_chain_add(sampler_chain, grammar_sampler);
-    llama_sampler_chain_add(sampler_chain, llama_sampler_init_greedy());
+    struct llama_sampler *greedy_sampler = llama_sampler_init_greedy();
+    if (greedy_sampler == NULL) {
+        llama_sampler_free(sampler_chain);
+        llama_free(context);
+        llama_model_free(model);
+        alyte_local_model_set_failure_stage(
+            failure_stage_out,
+            ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_SAMPLER);
+        return NULL;
+    }
+    llama_sampler_chain_add(sampler_chain, greedy_sampler);
     struct AlyteLocalModelRuntime *runtime = (struct AlyteLocalModelRuntime *) calloc(1, sizeof(*runtime));
     if (runtime == NULL) {
         llama_sampler_free(sampler_chain);
         llama_free(context);
         llama_model_free(model);
+        alyte_local_model_set_failure_stage(
+            failure_stage_out,
+            ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_ALLOCATION);
         return NULL;
     }
     runtime->model = model;
@@ -258,10 +302,14 @@ void alyte_local_model_runtime_destroy(void *opaque_runtime) {
 void *alyte_local_model_runtime_create(
     const char *model_path,
     const char *grammar,
-    const char *grammar_root) {
+    const char *grammar_root,
+    int32_t *failure_stage_out) {
     (void) model_path;
     (void) grammar;
     (void) grammar_root;
+    if (failure_stage_out != NULL) {
+        *failure_stage_out = ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_NONE;
+    }
     return NULL;
 }
 
