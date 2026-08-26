@@ -18,7 +18,6 @@ import { colors, screenStyles, spacing } from '../../theme';
 import {
   LabReportExtractionError,
   LabReportImportError,
-  type LabReportPreview,
   type PasswordRequest,
 } from './report-service';
 import {
