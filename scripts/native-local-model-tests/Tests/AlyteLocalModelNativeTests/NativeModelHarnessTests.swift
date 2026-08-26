@@ -98,6 +98,31 @@ final class NativeModelHarnessTests: XCTestCase {
     XCTAssertEqual(core.failure, .rangeRejected)
   }
 
+  func testProductionRedirectAllowlistAcceptsCurrentHuggingFaceCDNsAndRejectsLookalikes() throws {
+    let (core, _, _) = try makeCore()
+    for host in [
+      "us.aws.cdn.hf.co",
+      "us.gcp.cdn.hf.co",
+      "cas-server.xethub.hf.co",
+      "cas-server.xethub-eu.hf.co",
+      "transfer.xethub.hf.co",
+      "transfer.xethub-eu.hf.co",
+    ] {
+      XCTAssertTrue(AlyteLocalModelManifest.isAllowedRedirect(URL(string: "https://\(host)/file")!))
+      XCTAssertThrowsError(try core.acceptRedirect(URL(string: "https://\(host).evil.example/file")!))
+    }
+    for url in [
+      "http://us.aws.cdn.hf.co/file",
+      "https://user:pass@us.aws.cdn.hf.co/file",
+      "https://eu.aws.cdn.hf.co/file",
+      "https://cdn.us.aws.cdn.hf.co/file",
+      "https://example.com/file",
+    ] {
+      XCTAssertFalse(AlyteLocalModelManifest.isAllowedRedirect(URL(string: url)!))
+      XCTAssertThrowsError(try core.acceptRedirect(URL(string: url)!))
+    }
+  }
+
   func testTransportCancellationCannotEraseResponsePolicyFailure() throws {
     let (core, _, _) = try makeCore()
     _ = try core.prepareDownload()

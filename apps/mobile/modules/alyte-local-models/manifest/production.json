@@ -42,7 +42,13 @@
       "cdn-lfs-us-1.hf.co",
       "cdn-lfs-eu-1.hf.co",
       "cdn-lfs.hf.co",
-      "cas-bridge.xethub.hf.co"
+      "cas-bridge.xethub.hf.co",
+      "us.aws.cdn.hf.co",
+      "us.gcp.cdn.hf.co",
+      "cas-server.xethub.hf.co",
+      "cas-server.xethub-eu.hf.co",
+      "transfer.xethub.hf.co",
+      "transfer.xethub-eu.hf.co"
     ],
     "files": ["gemma-4-E2B-it-Q4_0.gguf"]
   }

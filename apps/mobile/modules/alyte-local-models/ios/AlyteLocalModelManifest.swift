@@ -26,7 +26,7 @@ enum AlyteLocalModelManifest {
   static let minimumIOS = "26.0"
   static let minimumFreeBytes: Int64 = 6_000_000_000
   static let minimumMemoryBytes: Int64 = 4_000_000_000
-  static let allowedHosts = ["huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.hf.co", "cdn-lfs-eu-1.hf.co", "cdn-lfs.hf.co", "cas-bridge.xethub.hf.co"]
+  static let allowedHosts = ["huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.hf.co", "cdn-lfs-eu-1.hf.co", "cdn-lfs.hf.co", "cas-bridge.xethub.hf.co", "us.aws.cdn.hf.co", "us.gcp.cdn.hf.co", "cas-server.xethub.hf.co", "cas-server.xethub-eu.hf.co", "transfer.xethub.hf.co", "transfer.xethub-eu.hf.co"]
 
   static var expectedURL: URL { URL(string: artifactURL)! }
 

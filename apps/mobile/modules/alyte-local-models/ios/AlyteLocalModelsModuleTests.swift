@@ -15,10 +15,25 @@ final class AlyteLocalModelsModuleTests: XCTestCase {
     XCTAssertFalse(AlyteLocalModelManifest.artifactURL.contains("/main/"))
   }
 
-  func testRedirectPolicyRejectsUnreviewedHostsAndCredentials() {
-    XCTAssertTrue(AlyteLocalModelManifest.isAllowedRedirect(URL(string: "https://cdn-lfs.huggingface.co/file")!))
-    XCTAssertFalse(AlyteLocalModelManifest.isAllowedRedirect(URL(string: "http://cdn-lfs.huggingface.co/file")!))
-    XCTAssertFalse(AlyteLocalModelManifest.isAllowedRedirect(URL(string: "https://example.com/file")!))
-    XCTAssertFalse(AlyteLocalModelManifest.isAllowedRedirect(URL(string: "https://user:pass@cdn-lfs.huggingface.co/file")!))
+  func testRedirectPolicyAcceptsExactReviewedHuggingFaceHosts() {
+    for host in AlyteLocalModelManifest.allowedHosts {
+      XCTAssertTrue(
+        AlyteLocalModelManifest.isAllowedRedirect(URL(string: "https://\(host)/file")!),
+        host
+      )
+    }
+  }
+
+  func testRedirectPolicyRejectsDowngradeCredentialsLookalikesAndUnlistedHosts() {
+    for url in [
+      "http://us.aws.cdn.hf.co/file",
+      "https://user:pass@us.aws.cdn.hf.co/file",
+      "https://us.aws.cdn.hf.co.evil.example/file",
+      "https://eu.aws.cdn.hf.co/file",
+      "https://cdn.us.aws.cdn.hf.co/file",
+      "https://example.com/file",
+    ] {
+      XCTAssertFalse(AlyteLocalModelManifest.isAllowedRedirect(URL(string: url)!))
+    }
   }
 }

@@ -9,6 +9,26 @@ export const LOCAL_MODEL_OCR_CHUNK = productionLocalModelManifest.compatibility.
 export const LOCAL_MODEL_SCHEMA = productionLocalModelManifest.compatibility.semanticSchema;
 export const LOCAL_MODEL_RUNTIME_REVISION = productionLocalModelManifest.runtime.revision;
 
+/**
+ * Keeps JavaScript-side URL policy aligned with the native download delegate. Redirects are
+ * accepted only for exact, reviewed HTTPS hosts and never for credential-bearing URLs.
+ */
+export function isAllowedLocalModelRedirect(value: string | URL): boolean {
+  try {
+    const url = typeof value === 'string' ? new URL(value) : value;
+    return (
+      url.protocol === 'https:' &&
+      url.username === '' &&
+      url.password === '' &&
+      productionLocalModelManifest.allowlist.hosts.some(
+        (allowedHost) => allowedHost === url.hostname,
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
 function immutableRevision(value: string): boolean {
   return /^[a-f0-9]{40}$/.test(value);
 }
