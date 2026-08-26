@@ -2,6 +2,7 @@ import {
   Component,
   useEffect,
   useLayoutEffect,
+  useState,
   type ErrorInfo,
   type PropsWithChildren,
   type ReactNode,
@@ -12,21 +13,24 @@ import { t } from '../localization';
 import { AppButton, AppText } from './primitives';
 import { colors, spacing, typography } from '../theme';
 import { nativeSnapshotShield } from '../features/app-lock/shield';
+import { createStartupRecoveryHandoff } from '../startup/protected-startup';
 
 type ErrorBoundaryProps = PropsWithChildren;
 type ErrorBoundaryState = { error: Error | null };
 
-function StartupRecoverySurface({ onRetry }: { readonly onRetry: () => void }) {
+export function StartupRecoverySurface({ onRetry }: { readonly onRetry: () => void }) {
+  const [handoff] = useState(() => createStartupRecoveryHandoff(nativeSnapshotShield));
+
   useLayoutEffect(() => {
     // This fallback also acts as the startup gate when service construction throws before the
     // normal AppLockProvider/LockGate tree can mount. Native can safely reveal this surface only
     // after the handoff; it remains opaque and contains no health content.
-    nativeSnapshotShield.markReactGateMounted();
-  }, []);
+    handoff.markMounted();
+  }, [handoff]);
 
   useEffect(() => {
     const clearWhenActive = (status: AppStateStatus = AppState.currentState) => {
-      if (status === 'active') void nativeSnapshotShield.clear().catch(() => undefined);
+      void handoff.clearWhenActive(status);
     };
 
     // A root failure can happen while the system auth sheet or a lifecycle transition is active.
@@ -35,13 +39,13 @@ function StartupRecoverySurface({ onRetry }: { readonly onRetry: () => void }) {
     clearWhenActive();
     const subscription = AppState.addEventListener('change', clearWhenActive);
     return () => subscription.remove();
-  }, []);
+  }, [handoff]);
 
   return (
     <SafeAreaView style={styles.container} accessibilityViewIsModal>
       <AppText variant="title">{t('errors.title')}</AppText>
       <AppText style={styles.body}>{t('errors.body')}</AppText>
-      <AppButton label={t('errors.restart')} onPress={onRetry} />
+      <AppButton label={t('errors.retry')} onPress={onRetry} />
     </SafeAreaView>
   );
 }

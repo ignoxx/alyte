@@ -927,9 +927,9 @@
     "provenanceEstimated": "Estimated"
   },
   "errors": {
-    "title": "Alyte needs a restart",
-    "body": "The local shell could not finish opening. Your local records are not changed.",
-    "restart": "Restart Alyte"
+    "title": "Alyte couldn’t finish opening",
+    "body": "Try again. Your local records are unchanged.",
+    "retry": "Try again"
   },
   "accessibility": {
     "snapAction": "Snap: capture an intake image",

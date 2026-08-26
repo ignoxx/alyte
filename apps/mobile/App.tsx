@@ -15,10 +15,11 @@ import {
 import { createAppLockPreferenceStore } from './src/features/app-lock/preferences';
 import { nativeSnapshotShield } from './src/features/app-lock/shield';
 import { LockGate } from './src/features/app-lock/LockGate';
-import { ErrorBoundary } from './src/ui/ErrorBoundary';
+import { ErrorBoundary, StartupRecoverySurface } from './src/ui/ErrorBoundary';
 import { AppText } from './src/ui/primitives';
 import { colors, spacing } from './src/theme';
 import { t } from './src/localization';
+import { attemptProtectedStartup } from './src/startup/protected-startup';
 
 function NeutralLoadingSurface() {
   return (
@@ -124,18 +125,25 @@ function AppContent({ services }: { readonly services: AlyteServices }) {
   );
 }
 
-function AppRuntime() {
-  // Keep service/controller construction below the root ErrorBoundary. Native modules, storage,
-  // and future startup adapters can fail synchronously; the recovery surface must still mount
-  // and complete the shield handoff in that case.
-  const [services] = useState(() => createServices());
-  const [appLockController] = useState<AppLockController>(() =>
-    createAppLockController({
+type AppRuntimeDependencies = {
+  readonly services: AlyteServices;
+  readonly appLockController: AppLockController;
+};
+
+function constructAppRuntime(): AppRuntimeDependencies {
+  const services = createServices();
+  return {
+    services,
+    appLockController: createAppLockController({
       preferences: createAppLockPreferenceStore(services.intake),
       authentication: createAppLockAuthService(),
       shield: nativeSnapshotShield,
     }),
-  );
+  };
+}
+
+function AppRuntime({ runtime }: { readonly runtime: AppRuntimeDependencies }) {
+  const { services, appLockController } = runtime;
 
   return (
     <ServicesContext.Provider value={services}>
@@ -147,11 +155,25 @@ function AppRuntime() {
   );
 }
 
+function ProtectedStartupRoot() {
+  // Construction is attempted below the root boundary and represented explicitly so a thrown
+  // native/storage adapter cannot prevent the opaque recovery surface from mounting.
+  const [attempt, setAttempt] = useState(() => attemptProtectedStartup(constructAppRuntime));
+  if (attempt.kind === 'recovery') {
+    return (
+      <StartupRecoverySurface
+        onRetry={() => setAttempt(attemptProtectedStartup(constructAppRuntime))}
+      />
+    );
+  }
+  return <AppRuntime runtime={attempt.value} />;
+}
+
 export default function App() {
   return (
     <SafeAreaProvider>
       <ErrorBoundary>
-        <AppRuntime />
+        <ProtectedStartupRoot />
       </ErrorBoundary>
     </SafeAreaProvider>
   );
