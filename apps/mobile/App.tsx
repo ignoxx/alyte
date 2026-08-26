@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, type AppStateStatus, View } from 'react-native';
+import { ActivityIndicator, AppState, StyleSheet, type AppStateStatus, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ServicesContext, createServices, type AlyteServices } from './src/services';
@@ -16,9 +16,19 @@ import { createAppLockPreferenceStore } from './src/features/app-lock/preference
 import { nativeSnapshotShield } from './src/features/app-lock/shield';
 import { LockGate } from './src/features/app-lock/LockGate';
 import { ErrorBoundary } from './src/ui/ErrorBoundary';
+import { AppText } from './src/ui/primitives';
+import { colors, spacing } from './src/theme';
+import { t } from './src/localization';
 
 function NeutralLoadingSurface() {
-  return <View accessibilityElementsHidden style={{ flex: 1 }} />;
+  return (
+    <View accessibilityRole="progressbar" style={styles.loadingSurface}>
+      <ActivityIndicator color={colors.accent as string} />
+      <AppText accessibilityLiveRegion="polite" style={styles.loadingLabel} selectable>
+        {t('app.loading')}
+      </AppText>
+    </View>
+  );
 }
 
 function AppContent({ services }: { readonly services: AlyteServices }) {
@@ -137,3 +147,15 @@ export default function App() {
     </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  loadingSurface: {
+    alignItems: 'center',
+    backgroundColor: colors.canvas,
+    flex: 1,
+    gap: spacing.md,
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
+  loadingLabel: { color: colors.mutedInk, textAlign: 'center' },
+});

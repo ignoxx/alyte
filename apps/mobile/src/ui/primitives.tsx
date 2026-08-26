@@ -18,8 +18,10 @@ import {
   type ColorValue,
   type PressableProps,
   type ScrollViewProps,
+  type StyleProp,
   type TextProps,
   type ViewProps,
+  type ImageStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing, statusColors, typography, type StatusTone } from '../theme';
@@ -229,7 +231,9 @@ export type AppIconName =
   | 'addDocument'
   | 'eye'
   | 'shield'
-  | 'trash';
+  | 'trash'
+  | 'cloud'
+  | 'checkmarkCircle';
 
 const iconSymbols: Record<AppIconName, string> = {
   home: 'house',
@@ -250,6 +254,8 @@ const iconSymbols: Record<AppIconName, string> = {
   eye: 'eye',
   shield: 'shield',
   trash: 'trash',
+  cloud: 'cloud',
+  checkmarkCircle: 'checkmark.circle.fill',
 };
 
 /** Small SF Symbol seam for inline controls; navigation uses native SF Symbols directly. */
@@ -258,17 +264,19 @@ export function AppIcon({
   size = 20,
   color = colors.mutedInk,
   accessibilityLabel,
+  style,
 }: {
   readonly name: AppIconName;
   readonly size?: number;
   readonly color?: ColorValue;
   readonly accessibilityLabel?: string;
+  readonly style?: StyleProp<ImageStyle>;
 }) {
   return (
     <Image
       accessibilityRole="image"
       source={`sf:${iconSymbols[name]}`}
-      style={{ color, height: size, width: size }}
+      style={[{ color, height: size, width: size }, style]}
       {...(accessibilityLabel === undefined
         ? { accessible: false }
         : { accessibilityLabel, accessible: true })}

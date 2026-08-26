@@ -1,34 +1,72 @@
 import { useEffect, useState } from 'react';
-import { Linking, ScrollView, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { AppButton, AppSurface, AppText, GroupedRow, StatusPill } from '../../ui/primitives';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import {
+  AppButton,
+  AppIcon,
+  AppSurface,
+  AppText,
+  GroupedRow,
+  ScreenScrollView,
+  StatusPill,
+} from '../../ui/primitives';
 import { colors, screenStyles, spacing, typography } from '../../theme';
 import { t } from '../../localization';
-import { canCompleteModelOnboarding, type LocalModelSnapshot } from '../local-models/model';
+import {
+  canCompleteModelOnboarding,
+  isModelDownloadActive,
+  type LocalModelSnapshot,
+} from '../local-models/model';
+import { ModelDetailsDisclosure } from '../local-models/ModelDetailsDisclosure';
+import { ModelProgress } from '../local-models/ModelProgress';
+import { modelFailureMessageKey } from '../local-models/model-ui';
 import type { LocalModelService } from '../local-models/native';
-import { formatModelBytes } from '../local-models/manifest';
 
 type OnboardingScreenProps = {
   model: LocalModelService;
   onComplete: () => void;
 };
 
-function modelFailure(failure: LocalModelSnapshot['failure']): string {
-  if (failure === 'offline') return t('onboarding.modelFailureOffline');
-  if (failure === 'insufficient-space') return t('onboarding.modelFailureSpace');
-  if (failure === 'checksum-mismatch' || failure === 'size-mismatch') {
-    return t('onboarding.modelFailureChecksum');
-  }
-  if (failure === 'incompatible') return t('onboarding.modelFailureIncompatible');
-  if (failure === 'interrupted') return t('onboarding.modelFailureInterrupted');
-  if (
-    failure === 'http-failed' ||
-    failure === 'upstream-missing' ||
-    failure === 'redirect-rejected'
-  ) {
-    return t('onboarding.modelFailureNetwork');
-  }
-  return t('onboarding.modelFailureGeneric');
+function modelStatusTone(
+  snapshot: LocalModelSnapshot | null,
+): 'neutral' | 'measured' | 'reviewNeeded' {
+  if (snapshot?.state === 'ready' || snapshot?.state === 'loaded') return 'measured';
+  if (snapshot?.state === 'failed') return 'reviewNeeded';
+  return 'neutral';
+}
+
+function ModelOption({
+  selected,
+  disabled,
+  onPress,
+}: {
+  readonly selected: boolean;
+  readonly disabled: boolean;
+  readonly onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityLabel={`${t('onboarding.modelName')}${selected ? `, ${t('onboarding.modelSelected')}` : ''}`}
+      accessibilityRole="radio"
+      accessibilityState={{ disabled, selected }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.modelOption,
+        selected && styles.modelOptionSelected,
+        pressed && styles.modelOptionPressed,
+      ]}
+    >
+      <AppIcon name="folder" size={24} color={colors.accent} />
+      <View style={styles.modelOptionCopy}>
+        <AppText variant="heading">{t('onboarding.modelName')}</AppText>
+        <AppText style={styles.muted}>{t('onboarding.modelPublisher')}</AppText>
+        <AppText variant="caption" style={styles.muted}>
+          {t('onboarding.modelDownloadSummary')} · {t('onboarding.modelSpaceSummary')}
+        </AppText>
+      </View>
+      {selected ? <AppIcon name="checkmarkCircle" size={23} color={colors.accent} /> : null}
+    </Pressable>
+  );
 }
 
 export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
@@ -62,7 +100,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   }, [model]);
 
   const ready = snapshot !== null && canCompleteModelOnboarding(snapshot);
-  const downloading = snapshot?.state === 'downloading' || snapshot?.state === 'verifying';
+  const downloading = snapshot !== null && isModelDownloadActive(snapshot);
 
   async function startDownload() {
     setSelected(true);
@@ -71,12 +109,29 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
     setBusy(true);
     try {
       const installed = await model.startDownload();
-      // The download is not the onboarding gate by itself. Activation must create a real native
-      // runtime session; simulator acceptance injects this same boundary explicitly.
-      if (canCompleteModelOnboarding(installed)) await model.load();
+      // Promotion and verification happen in the native module. Loading is a separate activation
+      // step so onboarding never completes on a partial or merely downloaded artifact.
+      if (canCompleteModelOnboarding(installed) && installed.state === 'ready') {
+        await model.load();
+      }
     } catch {
-      // The native bridge emits a typed failure state. The action remains retryable and no
-      // onboarding preference is written here.
+      // The native bridge emits a typed failure state. Keep the action retryable and do not write
+      // the onboarding preference here.
+      setBridgeUnavailable(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function enterAlyte() {
+    if (!ready) return;
+    setBusy(true);
+    setBridgeUnavailable(false);
+    try {
+      let current = snapshot;
+      if (current?.state === 'ready') current = await model.load();
+      if (current !== null && canCompleteModelOnboarding(current)) onComplete();
+    } catch {
       setBridgeUnavailable(true);
     } finally {
       setBusy(false);
@@ -95,123 +150,153 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   }
 
   return (
-    <SafeAreaView style={screenStyles.safe}>
-      <ScrollView contentContainerStyle={styles.content}>
+    <View style={screenStyles.safe}>
+      <ScreenScrollView contentContainerStyle={styles.content} style={screenStyles.scroll}>
         <StatusPill>{t('onboarding.eyebrow')}</StatusPill>
-        <AppText variant="display" style={styles.title}>
+        <AppText variant="display" style={styles.title} selectable>
           {t('onboarding.title')}
         </AppText>
-        <AppText style={styles.body}>{t('onboarding.body')}</AppText>
-        <AppSurface style={styles.list}>
-          <GroupedRow>
+        <AppText style={styles.body} selectable>
+          {t('onboarding.body')}
+        </AppText>
+
+        <AppSurface tone="soft" style={styles.promiseCard}>
+          <GroupedRow icon="shield">
             <AppText variant="heading">{t('onboarding.localTitle')}</AppText>
-            <AppText style={styles.cardBody}>{t('onboarding.localBody')}</AppText>
+            <AppText style={styles.muted} selectable>
+              {t('onboarding.localBody')}
+            </AppText>
           </GroupedRow>
-          <GroupedRow>
+          <GroupedRow icon="cloud">
             <AppText variant="heading">{t('onboarding.cloudTitle')}</AppText>
-            <AppText style={styles.cardBody}>{t('onboarding.cloudBody')}</AppText>
+            <AppText style={styles.muted} selectable>
+              {t('onboarding.cloudBody')}
+            </AppText>
           </GroupedRow>
-          <GroupedRow>
+          <GroupedRow icon="labs">
             <AppText variant="heading">{t('onboarding.measuredTitle')}</AppText>
-            <AppText style={styles.cardBody}>{t('onboarding.measuredBody')}</AppText>
+            <AppText style={styles.muted} selectable>
+              {t('onboarding.measuredBody')}
+            </AppText>
           </GroupedRow>
         </AppSurface>
+
         <AppSurface style={styles.modelCard}>
-          <StatusPill tone={ready ? 'measured' : 'neutral'}>
-            {t('onboarding.modelEyebrow')}
-          </StatusPill>
-          <AppText variant="heading">{t('onboarding.modelTitle')}</AppText>
-          <AppText style={styles.cardBody}>{t('onboarding.modelBody')}</AppText>
-          <GroupedRow>
-            <AppText variant="heading">{t('onboarding.modelName')}</AppText>
-            <AppText style={styles.cardBody}>{t('onboarding.modelPublisher')}</AppText>
-            <AppText style={styles.cardBody}>{t('onboarding.modelLicense')}</AppText>
-            <AppText style={styles.cardBody}>{t('onboarding.modelSource')}</AppText>
-            <AppText selectable style={styles.smallDetail}>
-              {t('onboarding.modelPinnedRevision')}
-            </AppText>
-            <AppText selectable style={styles.smallDetail}>
-              {t('onboarding.modelRuntimeRevision')}
-            </AppText>
-            <AppText style={styles.cardBody}>{t('onboarding.modelSize')}</AppText>
-            <AppText style={styles.cardBody}>{t('onboarding.modelSpace')}</AppText>
-            <AppText selectable style={styles.smallDetail}>
-              {formatModelBytes(model.manifest.pack.artifact.bytes)} ·{' '}
-              {model.manifest.pack.artifact.sha256.slice(0, 12)}…
-            </AppText>
-            <AppButton
-              label={t('onboarding.modelSourceAction')}
-              onPress={() => void Linking.openURL(model.manifest.pack.artifact.url)}
-              tone="quiet"
-            />
-          </GroupedRow>
-          {snapshot?.state === 'failed' && (
-            <AppText style={styles.error}>{modelFailure(snapshot.failure)}</AppText>
-          )}
-          {bridgeUnavailable && snapshot?.state !== 'failed' && (
-            <AppText style={styles.error}>{t('onboarding.modelFailureUnavailable')}</AppText>
-          )}
-          {cancelled && (
-            <AppText style={styles.muted}>{t('onboarding.modelCancelDisclosure')}</AppText>
-          )}
-          {downloading && snapshot !== null ? (
-            <>
-              <AppText accessibilityLiveRegion="polite" style={styles.muted}>
-                {snapshot.state === 'verifying'
-                  ? t('onboarding.modelVerifying')
-                  : t('onboarding.modelDownloading').replace(
-                      '{progress}',
-                      String(Math.round(snapshot.progress * 100)),
-                    )}
+          <StatusPill tone={modelStatusTone(snapshot)}>{t('onboarding.modelEyebrow')}</StatusPill>
+          <AppText variant="heading" selectable>
+            {t('onboarding.modelTitle')}
+          </AppText>
+          <AppText style={styles.muted} selectable>
+            {t('onboarding.modelBody')}
+          </AppText>
+          <ModelOption
+            disabled={downloading || busy}
+            onPress={() => {
+              setSelected(true);
+              setCancelled(false);
+            }}
+            selected={selected}
+          />
+          <ModelDetailsDisclosure manifest={model.manifest} />
+
+          {snapshot === null && !bridgeUnavailable ? (
+            <View accessibilityRole="progressbar" style={styles.checking}>
+              <ActivityIndicator color={colors.accent as string} />
+              <AppText style={styles.muted} selectable>
+                {t('onboarding.modelChecking')}
+              </AppText>
+            </View>
+          ) : null}
+          {snapshot?.state === 'failed' ? (
+            <AppSurface tone="soft" style={styles.callout}>
+              <AppText variant="heading" style={styles.error} selectable>
+                {t(modelFailureMessageKey(snapshot.failure))}
               </AppText>
               <AppButton
-                disabled={cancelBusy}
-                label={t('onboarding.modelCancel')}
-                onPress={() => void cancelDownload()}
-                tone="quiet"
+                disabled={busy}
+                label={t('onboarding.modelRetry')}
+                onPress={() => void startDownload()}
+                tone="secondary"
               />
-            </>
+            </AppSurface>
+          ) : null}
+          {bridgeUnavailable && snapshot?.state !== 'failed' ? (
+            <AppSurface tone="soft" style={styles.callout}>
+              <AppText variant="heading" style={styles.error} selectable>
+                {t('onboarding.modelFailureUnavailable')}
+              </AppText>
+              <AppButton
+                disabled={busy}
+                label={t('onboarding.modelRetry')}
+                onPress={() => void startDownload()}
+                tone="secondary"
+              />
+            </AppSurface>
+          ) : null}
+          {cancelled ? (
+            <AppText style={styles.muted} selectable>
+              {t('onboarding.modelCancelDisclosure')}
+            </AppText>
+          ) : null}
+
+          {downloading && snapshot !== null ? <ModelProgress snapshot={snapshot} /> : null}
+          {downloading && snapshot !== null ? (
+            <AppButton
+              disabled={cancelBusy}
+              label={t('onboarding.modelCancel')}
+              onPress={() => void cancelDownload()}
+              tone="quiet"
+            />
           ) : ready && selected ? (
-            <AppButton label={t('onboarding.continue')} onPress={onComplete} />
-          ) : selected && !bridgeUnavailable ? (
+            <AppButton
+              disabled={busy}
+              label={busy ? t('onboarding.modelEntering') : t('onboarding.continue')}
+              onPress={() => void enterAlyte()}
+            />
+          ) : selected && !bridgeUnavailable && snapshot?.state !== 'failed' ? (
             <AppButton
               disabled={busy}
               label={t('onboarding.modelDownload')}
               onPress={() => void startDownload()}
             />
-          ) : (
-            <AppButton label={t('onboarding.modelSelect')} onPress={() => setSelected(true)} />
-          )}
-          {selected && !ready && !downloading && snapshot?.state !== 'failed' && (
+          ) : !selected && snapshot !== null && snapshot.state !== 'failed' ? (
             <AppButton
               disabled={busy}
-              label={t('cancel')}
-              onPress={() => setSelected(false)}
-              tone="quiet"
+              label={t('onboarding.modelSelect')}
+              onPress={() => {
+                setSelected(true);
+                setCancelled(false);
+              }}
             />
-          )}
-          {selected && !ready && (snapshot?.state === 'failed' || bridgeUnavailable) && (
-            <AppButton
-              disabled={busy}
-              label={t('onboarding.modelRetry')}
-              onPress={() => void startDownload()}
-              tone="secondary"
-            />
-          )}
+          ) : null}
         </AppSurface>
-      </ScrollView>
-    </SafeAreaView>
+      </ScreenScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { flexGrow: 1, gap: spacing.md, justifyContent: 'center', padding: spacing.xl },
+  content: { flexGrow: 1, gap: spacing.md, padding: spacing.lg },
   title: { color: colors.ink, maxWidth: 360, marginTop: spacing.md },
   body: { color: colors.mutedInk, ...typography.body, maxWidth: 420 },
-  list: { gap: 0, marginTop: spacing.md, padding: spacing.md },
-  modelCard: { gap: spacing.sm, marginTop: spacing.md, padding: spacing.md },
-  cardBody: { color: colors.mutedInk },
-  smallDetail: { color: colors.mutedInk, fontSize: 12 },
   muted: { color: colors.mutedInk },
+  promiseCard: { gap: 0, marginTop: spacing.md, padding: spacing.md },
+  modelCard: { gap: spacing.md, marginTop: spacing.md, padding: spacing.md },
+  modelOption: {
+    alignItems: 'center',
+    borderColor: colors.border,
+    borderCurve: 'continuous',
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: 76,
+    padding: spacing.md,
+  },
+  modelOptionSelected: { backgroundColor: colors.accentSoft, borderColor: colors.accent },
+  modelOptionPressed: { opacity: 0.72 },
+  modelOptionCopy: { flex: 1, gap: spacing.xs },
+  checking: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, minHeight: 44 },
+  callout: { gap: spacing.sm, padding: spacing.md },
   error: { color: colors.danger },
 });

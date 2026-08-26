@@ -1,37 +1,54 @@
 import { useEffect, useState } from 'react';
-import { Alert, Linking, StyleSheet, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, Alert, StyleSheet, View } from 'react-native';
 import { t } from '../../localization';
-import { AppButton, AppIcon, AppText, AppSurface, ScreenScrollView } from '../../ui/primitives';
-import { colors, screenStyles, spacing } from '../../theme';
+import {
+  AppButton,
+  AppIcon,
+  AppSurface,
+  AppText,
+  ScreenScrollView,
+  StatusPill,
+} from '../../ui/primitives';
+import { colors, screenStyles, spacing, typography } from '../../theme';
 import { useServices } from '../../services';
-import type { LocalModelSnapshot } from '../local-models/model';
-import { formatModelBytes } from '../local-models/manifest';
+import { isModelDownloadActive, type LocalModelSnapshot } from '../local-models/model';
+import { ModelDetailsDisclosure } from '../local-models/ModelDetailsDisclosure';
+import { ModelProgress } from '../local-models/ModelProgress';
+import { modelFailureMessageKey, modelStateLabelKey } from '../local-models/model-ui';
 
-function stateLabel(snapshot: LocalModelSnapshot): string {
-  const keys: Record<LocalModelSnapshot['state'], string> = {
-    'not-installed': 'settings.modelStorageNotInstalled',
-    downloading: 'settings.modelStorageDownloading',
-    verifying: 'settings.modelStorageVerifying',
-    ready: 'settings.modelStorageReady',
-    loaded: 'settings.modelStorageLoaded',
-    failed: 'settings.modelStorageFailed',
-    cancelling: 'settings.modelStorageDownloading',
-    deleting: 'settings.modelStorageDownloading',
-  };
-  const key = keys[snapshot.state];
-  try {
-    return t(key);
-  } catch {
-    return snapshot.state;
+function modelStatusTone(
+  snapshot: LocalModelSnapshot | null,
+): 'neutral' | 'measured' | 'reviewNeeded' {
+  if (snapshot?.state === 'ready' || snapshot?.state === 'loaded') return 'measured';
+  if (snapshot?.state === 'failed') return 'reviewNeeded';
+  return 'neutral';
+}
+
+function ModelStorageState({ snapshot }: { readonly snapshot: LocalModelSnapshot | null }) {
+  if (snapshot === null) {
+    return (
+      <View accessibilityRole="progressbar" style={styles.checking}>
+        <ActivityIndicator color={colors.accent as string} />
+        <AppText style={styles.muted} selectable>
+          {t('onboarding.modelChecking')}
+        </AppText>
+      </View>
+    );
   }
+  return (
+    <StatusPill tone={modelStatusTone(snapshot)}>
+      {t(modelStateLabelKey(snapshot.state))}
+    </StatusPill>
+  );
 }
 
 export function ModelStorageScreen() {
   const { models } = useServices();
   const [snapshot, setSnapshot] = useState<LocalModelSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cancelBusy, setCancelBusy] = useState(false);
   const [error, setError] = useState(false);
+  const [removed, setRemoved] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -41,7 +58,10 @@ export function ModelStorageScreen() {
     void models
       .getState()
       .then((next) => {
-        if (active) setSnapshot(next);
+        if (active) {
+          setSnapshot(next);
+          setError(false);
+        }
       })
       .catch(() => {
         if (active) setError(true);
@@ -52,11 +72,12 @@ export function ModelStorageScreen() {
     };
   }, [models]);
 
-  async function removeModel() {
+  async function startDownload() {
     setBusy(true);
     setError(false);
+    setRemoved(false);
     try {
-      await models.deletePack();
+      await models.startDownload();
     } catch {
       setError(true);
     } finally {
@@ -64,74 +85,136 @@ export function ModelStorageScreen() {
     }
   }
 
-  const state = snapshot === null ? t('settings.modelStorageUnavailable') : stateLabel(snapshot);
+  async function cancelDownload() {
+    setCancelBusy(true);
+    try {
+      await models.cancelDownload();
+    } catch {
+      setError(true);
+    } finally {
+      setCancelBusy(false);
+    }
+  }
+
+  async function removeModel() {
+    setBusy(true);
+    setError(false);
+    setRemoved(false);
+    try {
+      await models.deletePack();
+      setRemoved(true);
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const downloading = snapshot !== null && isModelDownloadActive(snapshot);
+  const state = snapshot?.state;
+  const failed = state === 'failed';
+
   return (
-    <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
+    <View style={screenStyles.safe}>
       <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
-        <View style={styles.header}>
-          <AppIcon name="folder" size={28} color={colors.accent} />
-          <AppText variant="heading">{t('settings.modelStoragePack')}</AppText>
-          <AppText>{state}</AppText>
-          {snapshot !== null &&
-            snapshot.progress > 0 &&
-            snapshot.state !== 'ready' &&
-            snapshot.state !== 'loaded' && (
-              <AppText style={styles.muted}>
-                {t('settings.modelStorageProgress').replace(
-                  '{progress}',
-                  String(Math.round(snapshot.progress * 100)),
-                )}
+        <AppText style={styles.intro} selectable>
+          {t('settings.modelStorageBody')}
+        </AppText>
+
+        <AppSurface style={styles.modelCard}>
+          <View style={styles.modelHeading}>
+            <AppIcon name="folder" size={28} color={colors.accent} />
+            <View style={styles.modelHeadingCopy}>
+              <AppText variant="heading" selectable>
+                {t('settings.modelStoragePack')}
               </AppText>
-            )}
-          {snapshot !== null && (snapshot.state === 'ready' || snapshot.state === 'loaded') && (
-            <AppText style={styles.muted}>
-              {formatModelBytes(snapshot.storageBytes || models.manifest.pack.artifact.bytes)}
+              <ModelStorageState snapshot={snapshot} />
+            </View>
+          </View>
+          {snapshot !== null && snapshot.state === 'ready' ? (
+            <AppText style={styles.muted} selectable>
+              {t('settings.modelStorageSize')}
             </AppText>
+          ) : null}
+          <ModelDetailsDisclosure manifest={models.manifest} />
+
+          {error || failed ? (
+            <AppSurface tone="soft" style={styles.callout}>
+              <AppText variant="heading" style={styles.error} selectable>
+                {failed && snapshot !== null
+                  ? t(modelFailureMessageKey(snapshot.failure))
+                  : t('settings.modelStorageError')}
+              </AppText>
+            </AppSurface>
+          ) : null}
+          {removed ? (
+            <AppText style={styles.muted} selectable>
+              {t('settings.modelStorageRemoved')}
+            </AppText>
+          ) : null}
+
+          {downloading && snapshot !== null ? <ModelProgress snapshot={snapshot} /> : null}
+          {downloading ? (
+            <AppButton
+              disabled={cancelBusy}
+              label={t('settings.modelStorageCancel')}
+              onPress={() => void cancelDownload()}
+              tone="quiet"
+            />
+          ) : failed ? (
+            <AppButton
+              disabled={busy}
+              label={t('settings.modelStorageRetry')}
+              onPress={() => void startDownload()}
+              tone="secondary"
+            />
+          ) : error && snapshot === null ? (
+            <AppButton
+              disabled={busy}
+              label={t('settings.modelStorageRetry')}
+              onPress={() => void startDownload()}
+              tone="secondary"
+            />
+          ) : state === 'not-installed' ? (
+            <AppButton
+              disabled={busy}
+              label={t('settings.modelStorageDownload')}
+              onPress={() => void startDownload()}
+            />
+          ) : (
+            <AppButton
+              disabled={busy || snapshot === null}
+              label={t('settings.modelStorageDelete')}
+              onPress={() =>
+                Alert.alert(
+                  t('settings.modelStoragePack'),
+                  t('settings.modelStorageDeleteConfirm'),
+                  [
+                    { text: t('cancel'), style: 'cancel' },
+                    {
+                      text: t('settings.modelStorageDelete'),
+                      style: 'destructive',
+                      onPress: () => void removeModel(),
+                    },
+                  ],
+                )
+              }
+              tone="secondary"
+            />
           )}
-          {error && <AppText style={styles.error}>{t('settings.modelStorageError')}</AppText>}
-        </View>
-        <AppSurface tone="soft">
-          <AppText>{t('settings.modelStorageBody')}</AppText>
-          <AppText selectable style={styles.muted}>
-            {t('settings.modelStorageSource')}
-          </AppText>
-          <AppText selectable style={styles.muted}>
-            {t('settings.modelStoragePinnedRevision')}
-          </AppText>
-          <AppText selectable style={styles.muted}>
-            {t('settings.modelStorageSize')}
-          </AppText>
-          <AppText selectable style={styles.muted}>
-            {t('settings.modelStorageSpace')}
-          </AppText>
-          <AppButton
-            label={t('settings.modelStorageSourceAction')}
-            onPress={() => void Linking.openURL(models.manifest.pack.artifact.url)}
-            tone="quiet"
-          />
-          <AppButton
-            disabled={busy || snapshot === null || snapshot.state === 'not-installed'}
-            label={t('settings.modelStorageDelete')}
-            onPress={() =>
-              Alert.alert(t('settings.modelStoragePack'), t('settings.modelStorageDeleteConfirm'), [
-                { text: t('cancel'), style: 'cancel' },
-                {
-                  text: t('settings.modelStorageDelete'),
-                  style: 'destructive',
-                  onPress: () => void removeModel(),
-                },
-              ])
-            }
-            tone="secondary"
-          />
         </AppSurface>
       </ScreenScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  header: { gap: spacing.sm, marginBottom: spacing.lg },
+  intro: { color: colors.mutedInk, ...typography.body },
+  modelCard: { gap: spacing.md, marginTop: spacing.md, padding: spacing.md },
+  modelHeading: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
+  modelHeadingCopy: { flex: 1, gap: spacing.sm },
+  checking: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, minHeight: 44 },
   muted: { color: colors.mutedInk },
+  callout: { gap: spacing.sm, padding: spacing.md },
   error: { color: colors.danger },
 });

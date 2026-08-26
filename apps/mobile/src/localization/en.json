@@ -1,7 +1,23 @@
 {
   "app": {
     "name": "Alyte",
-    "tagline": "A calm place for your laboratory history"
+    "tagline": "A calm place for your laboratory history",
+    "loading": "Opening Alyte securely…"
+  },
+  "model": {
+    "details": "Model details",
+    "hideDetails": "Hide model details",
+    "detailsSummary": "Source, license, and verification",
+    "publisher": "Publisher",
+    "license": "License",
+    "sourceRepository": "Source repository",
+    "artifact": "Reviewed artifact",
+    "artifactRevision": "Artifact revision",
+    "checksum": "SHA-256 checksum",
+    "downloadSize": "Download size",
+    "storageRequirement": "Device space",
+    "runtime": "Runtime",
+    "sourceAction": "Open model source"
   },
   "onboarding": {
     "eyebrow": "WELCOME TO ALYTE",
@@ -41,6 +57,13 @@
     "modelRetry": "Try again",
     "modelCancel": "Cancel download",
     "modelCancelDisclosure": "Download cancelled. Choose the model again when you are ready.",
+    "modelChecking": "Checking this iPhone for the verified model…",
+    "modelSelected": "Selected",
+    "modelDownloadSummary": "About 2.8 GB download",
+    "modelSpaceSummary": "Keep 6 GB free",
+    "modelProgressLabel": "Model download progress",
+    "modelPreparing": "Preparing the verified model…",
+    "modelEntering": "Opening Alyte…",
     "continue": "Enter Alyte"
   },
   "navigation": {
@@ -586,11 +609,16 @@
     "modelStorageDownloading": "Downloading",
     "modelStorageVerifying": "Verifying",
     "modelStorageFailed": "Needs attention",
+    "modelStorageWorking": "Working",
     "modelStorageDelete": "Remove model to reclaim storage",
     "modelStorageDeleteConfirm": "Remove the local model? Existing local history remains available, but new automated extraction will ask you to prepare it again.",
     "modelStorageDeleted": "Model storage removed. Existing local history remains available.",
     "modelStorageError": "The model storage action could not finish. Nothing else was changed.",
     "modelStorageProgress": "{progress}% downloaded",
+    "modelStorageDownload": "Download and verify",
+    "modelStorageRetry": "Try again",
+    "modelStorageCancel": "Cancel download",
+    "modelStorageRemoved": "Model removed. Existing local history is unchanged.",
     "supportTitle": "Support & FAQ",
     "supportIntro": "Contact support without attaching health records. Diagnostics are optional and previewed before you share them.",
     "contactSupport": "Contact Support",
