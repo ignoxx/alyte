@@ -65,12 +65,12 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   private var startRegions: [WorkspaceRedaction] = []
   private var labels: [String: String] = [:]
   private var activeGestureID: String?
+  private var gestureLifecycle = AlytePDFWorkspaceGestureLifecycle()
   private var pendingOverlayGestureTarget: PDFWorkspaceGestureTarget?
   private var overlayGestureRole: RedactionOverlayRole?
   private var deferredRegions: [WorkspaceRedaction]?
   private var deferredLabels: [String: String]?
   private var focusRegion: CGRect?
-  private var lastEmittedRegions: [WorkspaceRedaction] = []
   var inspectionMode = false {
     didSet {
       guard oldValue != inspectionMode else { return }
@@ -124,8 +124,9 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     overlayPan.addTarget(self, action: #selector(overlayPanned(_:)))
     overlayPan.delegate = self
     overlayPan.cancelsTouchesInView = false
+    overlayPan.minimumNumberOfTouches = AlytePDFWorkspaceGeometry.editGestureMinimumTouches
+    overlayPan.maximumNumberOfTouches = AlytePDFWorkspaceGeometry.editGestureMaximumTouches
     overlay.addGestureRecognizer(overlayPan)
-    reapplyPDFGestureDependencies()
     NotificationCenter.default.addObserver(
       self, selector: #selector(pdfGeometryChanged), name: .PDFViewScaleChanged, object: pdfView)
     NotificationCenter.default.addObserver(
@@ -136,7 +137,6 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     super.layoutSubviews()
     pdfView.frame = bounds
     overlay.frame = bounds
-    reapplyPDFGestureDependencies()
     layoutRegions()
   }
 
@@ -267,30 +267,9 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     }
     pdfView.go(to: page)
     pdfView.autoScales = true
-    reapplyPDFGestureDependencies()
     layoutRegions()
     focusStoredRegion()
     onPageChange(["pageIndex": pageIndex])
-  }
-
-  /// PDFView's scroll view is private and may be recreated when a document or page is loaded.
-  /// Requiring its pan to fail the stable edit recognizer gives body/handle edits priority only
-  /// for touches that reached the redaction overlay. Blank page touches never hit that overlay,
-  /// so PDFKit's pan and pinch recognizers remain available there.
-  private func reapplyPDFGestureDependencies() {
-    for scrollView in descendantScrollViews(of: pdfView) {
-      scrollView.panGestureRecognizer.require(toFail: overlayPan)
-    }
-  }
-
-  private func descendantScrollViews(of view: UIView) -> [UIScrollView] {
-    view.subviews.flatMap { child in
-      let nested = descendantScrollViews(of: child)
-      if let scrollView = child as? UIScrollView {
-        return [scrollView] + nested
-      }
-      return nested
-    }
   }
 
   private func pageRect(_ normalized: CGRect) -> CGRect? {
@@ -379,44 +358,6 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
       width: size,
       height: size)
   }
-
-  func gestureTargetForTesting(at point: CGPoint) -> AlytePDFWorkspaceGesture? {
-    gestureTarget(at: point).map {
-      AlytePDFWorkspaceGesture(id: $0.id, kind: $0.role.gestureKind)
-    }
-  }
-
-  func overlayElementFrameForTesting(
-    id: String,
-    kind: AlytePDFWorkspaceGestureKind
-  ) -> CGRect? {
-    let role: RedactionOverlayRole = kind == .resize ? .resizeHandle : .redaction
-    return overlay.subviews.first {
-      ($0 as? RedactionOverlayElement)?.role == role
-        && $0.accessibilityIdentifier == id
-    }?.frame
-  }
-
-  func beginOverlayGestureForTesting(at point: CGPoint) -> AlytePDFWorkspaceGesture? {
-    guard let target = gestureTarget(at: point) else { return nil }
-    pendingOverlayGestureTarget = target
-    guard gestureRecognizerShouldBegin(overlayPan) else { return nil }
-    return AlytePDFWorkspaceGesture(id: target.id, kind: target.role.gestureKind)
-  }
-
-  func overlayPannedForTesting(_ gesture: UIPanGestureRecognizer) {
-    overlayPanned(gesture)
-  }
-
-  func redactionsForTesting() -> [(id: String, rect: CGRect)] {
-    regions.map { (id: $0.id, rect: $0.rect) }
-  }
-
-  func lastEmittedRedactionsForTesting() -> [(id: String, rect: CGRect)] {
-    lastEmittedRegions.map { (id: $0.id, rect: $0.rect) }
-  }
-
-  func canUndoForTesting() -> Bool { !history.isEmpty }
 
   private func focusStoredRegion() {
     guard let focusRegion,
@@ -572,6 +513,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
       setSelection(id)
       startRegions = regions
       deferredRegions = nil
+      gestureLifecycle.begin(original: regions[index].rect)
       layoutActiveRegion(id: id)
     }
     guard activeGestureID == id,
@@ -586,16 +528,22 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
       rotation: rotation,
       resize: role == .resizeHandle
     )
+    gestureLifecycle.update(regions[index].rect)
     layoutActiveRegion(id: id)
     if gesture.state == .ended {
-      if regions != startRegions {
+      let result = gestureLifecycle.finish(cancelled: false)
+      if result?.shouldRecordUndo == true {
         history.append(startRegions)
         future.removeAll()
       }
       finishGesture(applyDeferredRegions: false)
       emit()
     } else if gesture.state == .cancelled || gesture.state == .failed {
-      regions = startRegions
+      if let result = gestureLifecycle.finish(cancelled: true) {
+        regions[index].rect = result.rect
+      } else {
+        regions = startRegions
+      }
       finishGesture(applyDeferredRegions: true)
     }
   }
@@ -622,6 +570,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   }
 
   private func finishGesture(applyDeferredRegions: Bool) {
+    if gestureLifecycle.isActive { _ = gestureLifecycle.finish(cancelled: true) }
     activeGestureID = nil
     overlayGestureRole = nil
     overlayPan.name = nil
@@ -657,15 +606,13 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   }
 
   @objc private func pdfGeometryChanged() {
-    // PDFKit can rebuild its internal scroll hierarchy after a document/page/scale change. Keep
-    // this dependency narrow and reapply it to the current hierarchy; blank-space touches still
-    // skip the overlay recognizer and remain fully native.
-    reapplyPDFGestureDependencies()
+    // The overlay is a sibling of PDFView and only reports hit-testing success for an edit target.
+    // This keeps PDFKit's private gesture hierarchy untouched across page/scale rebuilds: body and
+    // handle touches hit the stable edit pan, while blank-space touches go directly to PDFView.
     layoutRegions()
   }
 
   private func emit() {
-    lastEmittedRegions = regions
     onRedactionsChange([
       "pageIndex": pageIndex,
       "redactions": regions.map {

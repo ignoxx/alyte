@@ -30,9 +30,59 @@ public struct AlytePDFWorkspaceOverlayFrame: Equatable {
   }
 }
 
+public struct AlytePDFWorkspaceGestureResult: Equatable {
+  public let rect: CGRect
+  public let shouldRecordUndo: Bool
+  public let cancelled: Bool
+
+  public init(rect: CGRect, shouldRecordUndo: Bool, cancelled: Bool) {
+    self.rect = rect
+    self.shouldRecordUndo = shouldRecordUndo
+    self.cancelled = cancelled
+  }
+}
+
+/// Production gesture lifecycle shared by the UIKit view and native geometry checks. The view
+/// owns the surrounding recipe/history arrays; this primitive owns only the frozen rect and the
+/// terminal decision so cancellation cannot accidentally become an undoable edit.
+public struct AlytePDFWorkspaceGestureLifecycle: Equatable {
+  public private(set) var isActive = false
+  private var original: CGRect?
+  private var current: CGRect?
+
+  public init() {}
+
+  public mutating func begin(original: CGRect) {
+    self.original = original
+    current = original
+    isActive = true
+  }
+
+  public mutating func update(_ rect: CGRect) {
+    guard isActive else { return }
+    current = rect
+  }
+
+  @discardableResult
+  public mutating func finish(cancelled: Bool) -> AlytePDFWorkspaceGestureResult? {
+    guard isActive, let original else { return nil }
+    let current = current ?? original
+    let result = AlytePDFWorkspaceGestureResult(
+      rect: cancelled ? original : current,
+      shouldRecordUndo: !cancelled && current != original,
+      cancelled: cancelled)
+    self.original = nil
+    self.current = nil
+    isActive = false
+    return result
+  }
+}
+
 public enum AlytePDFWorkspaceGeometry {
   public static let minimumViewSize: CGFloat = 24
   public static let minimumHitTarget: CGFloat = 44
+  public static let editGestureMinimumTouches = 1
+  public static let editGestureMaximumTouches = 1
 
   /// Selects resize handles first, then redaction bodies with a minimum touch target. Returning
   /// nil for blank space is intentional: the stable overlay recognizer fails there, allowing the
@@ -135,52 +185,5 @@ public enum AlytePDFWorkspaceGeometry {
     let marginY = max(rect.height * 2, 0.08)
     return rect.insetBy(dx: -marginX, dy: -marginY)
       .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
-  }
-}
-
-/// Testable state machine for the UIKit recognizer lifecycle. Controlled React props are deferred
-/// while UIKit owns an active finger session, then the locally committed value remains authoritative.
-public struct AlytePDFWorkspaceGestureSession {
-  public private(set) var regions: [String: CGRect]
-  public private(set) var activeID: String?
-  public private(set) var commitCount = 0
-  private var original: CGRect?
-  private var deferredControlledRegions: [String: CGRect]?
-
-  public init(regions: [String: CGRect]) { self.regions = regions }
-
-  public mutating func begin(id: String) {
-    guard let rect = regions[id] else { return }
-    activeID = id
-    original = rect
-    deferredControlledRegions = nil
-  }
-
-  public mutating func change(
-    translation: CGPoint, pageFrame: CGRect, rotation: Int = 0, resize: Bool
-  ) {
-    guard let id = activeID, let original else { return }
-    regions[id] = AlytePDFWorkspaceGeometry.manipulated(
-      original: original, translation: translation, pageFrame: pageFrame, rotation: rotation,
-      resize: resize)
-  }
-
-  public mutating func receiveControlled(_ next: [String: CGRect]) {
-    if activeID == nil { regions = next } else { deferredControlledRegions = next }
-  }
-
-  @discardableResult
-  public mutating func end(cancelled: Bool) -> [String: CGRect] {
-    if cancelled, let id = activeID, let original {
-      regions[id] = original
-    } else if let id = activeID, let original, regions[id] != original {
-      commitCount += 1
-    }
-    let result = regions
-    activeID = nil
-    original = nil
-    if cancelled, let deferredControlledRegions { regions = deferredControlledRegions }
-    self.deferredControlledRegions = nil
-    return cancelled ? regions : result
   }
 }

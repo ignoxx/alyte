@@ -40,6 +40,7 @@ import {
   type AlyteImageWorkspaceHandle,
   type NativeImageRedactionChange,
 } from './image';
+import { sanitizedEditorToolbarState, sanitizedPageCounter } from './sanitized-editor-ui-model';
 import type {
   PasswordRequest,
   SanitizationEditorState,
@@ -152,6 +153,14 @@ export function SanitizedReportEditorScreen() {
     () => recipe?.pages.find((page) => page.pageIndex === pageIndex) ?? null,
     [pageIndex, recipe],
   );
+  const toolbarState = useMemo(
+    () => sanitizedEditorToolbarState({ busy, canUndo, canRedo, hasSelection }),
+    [busy, canRedo, canUndo, hasSelection],
+  );
+  const pageCounter = useMemo(
+    () => sanitizedPageCounter(recipe?.pages ?? [], pageIndex, t('labs.sanitizedPages')),
+    [pageIndex, recipe],
+  );
   const displayedPageIndex =
     preview === null
       ? pageIndex
@@ -260,7 +269,7 @@ export function SanitizedReportEditorScreen() {
           ref={imageViewer}
           style={styles.viewer}
           sourcePath={preview?.artifactPath ?? state.sourcePath}
-          redactMode={redactMode && preview === null}
+          redactMode={redactMode && preview === null && !busy}
           redactions={preview === null ? currentPage.redactions : []}
           accessibilityLabels={{
             redaction: t('labs.sanitizedEditorOverlayLabel'),
@@ -289,7 +298,7 @@ export function SanitizedReportEditorScreen() {
           style={styles.viewer}
           sourcePath={preview?.artifactPath ?? state.sourcePath}
           pageIndex={displayedPageIndex}
-          redactMode={redactMode && preview === null}
+          redactMode={redactMode && preview === null && !busy}
           rotation={preview === null ? currentPage.rotation : 0}
           crop={preview === null ? currentPage.crop : null}
           redactions={preview === null ? currentPage.redactions : []}
@@ -322,7 +331,9 @@ export function SanitizedReportEditorScreen() {
       )}
       <View
         style={[styles.toolbar, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}
+        accessibilityLabel={busy ? t('labs.loading') : undefined}
         accessibilityRole="toolbar"
+        accessibilityState={{ busy }}
       >
         {preview === null ? (
           <>
@@ -330,6 +341,7 @@ export function SanitizedReportEditorScreen() {
               <ToolbarAction
                 symbol="rectangle.dashed"
                 label={t('labs.sanitizedRedact')}
+                disabled={toolbarState.redactDisabled}
                 onPress={() => {
                   setRedactMode((value) => !value);
                   void (state.report.sourceType === 'image'
@@ -340,7 +352,7 @@ export function SanitizedReportEditorScreen() {
               />
               <ToolbarAction
                 symbol="arrow.uturn.backward"
-                disabled={!canUndo}
+                disabled={toolbarState.undoDisabled}
                 label={t('labs.sanitizedUndo')}
                 onPress={() =>
                   void (state.report.sourceType === 'image'
@@ -350,7 +362,7 @@ export function SanitizedReportEditorScreen() {
               />
               <ToolbarAction
                 symbol="arrow.uturn.forward"
-                disabled={!canRedo}
+                disabled={toolbarState.redoDisabled}
                 label={t('labs.sanitizedRedo')}
                 onPress={() =>
                   void (state.report.sourceType === 'image'
@@ -360,7 +372,7 @@ export function SanitizedReportEditorScreen() {
               />
               <ToolbarAction
                 symbol="trash"
-                disabled={!hasSelection}
+                disabled={toolbarState.removeDisabled}
                 label={t('labs.sanitizedEditorRemove')}
                 onPress={() =>
                   void (state.report.sourceType === 'image'
@@ -371,11 +383,13 @@ export function SanitizedReportEditorScreen() {
               {state.report.sourceType === 'pdf' && (
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={`${t('labs.sanitizedPages')} ${pageIndex + 1}/${recipe.pages.length}`}
-                  accessibilityState={{ disabled: false }}
+                  accessibilityLabel={pageCounter}
+                  accessibilityState={{ disabled: toolbarState.pagesDisabled }}
+                  disabled={toolbarState.pagesDisabled}
                   onPress={() => setPagesOpen(true)}
                   style={({ pressed }) => [
                     styles.pageControl,
+                    toolbarState.pagesDisabled && styles.pageControlDisabled,
                     pressed && styles.toolbarActionPressed,
                   ]}
                 >
@@ -383,14 +397,14 @@ export function SanitizedReportEditorScreen() {
                     source="sf:square.grid.2x2"
                     style={{ color: colors.mutedInk, height: 18, width: 18 }}
                   />
-                  <AppText maxFontSizeMultiplier={1.35} numberOfLines={1} variant="caption">
-                    {t('labs.sanitizedPages')} {pageIndex + 1}/{recipe.pages.length}
+                  <AppText style={styles.pageCounter} variant="caption">
+                    {pageCounter}
                   </AppText>
                 </Pressable>
               )}
             </View>
             <AppButton
-              disabled={busy}
+              disabled={toolbarState.sanitizeDisabled}
               style={styles.sanitizeButton}
               label={
                 state.current === null ? t('labs.sanitizeReport') : t('labs.sanitizeReportAgain')
@@ -400,6 +414,7 @@ export function SanitizedReportEditorScreen() {
           </>
         ) : (
           <AppButton
+            disabled={busy}
             label={t('labs.editRedactions')}
             onPress={() => setPreview(null)}
             style={styles.sanitizeButton}
@@ -574,6 +589,8 @@ const styles = StyleSheet.create({
     minWidth: 96,
     paddingHorizontal: spacing.xs,
   },
+  pageControlDisabled: { opacity: 0.38 },
+  pageCounter: { flexShrink: 1, textAlign: 'center' },
   toolbarAction: {
     alignItems: 'center',
     borderCurve: 'continuous',
