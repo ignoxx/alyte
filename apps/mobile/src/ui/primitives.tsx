@@ -25,6 +25,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing, statusColors, typography, type StatusTone } from '../theme';
+import { getScreenScrollBottomInset } from './screen-scroll-model';
 
 type AppTextProps = TextProps & {
   variant?: keyof typeof typography;
@@ -78,16 +79,26 @@ type ScreenScrollViewProps = Omit<
   | 'automaticallyAdjustKeyboardInsets'
   | 'automaticallyAdjustsScrollIndicatorInsets'
   | 'contentInsetAdjustmentBehavior'
->;
+> & {
+  /** Reserve the shared native-tab clearance when this scroll surface ends in an action. */
+  readonly tabBarClearance?: 'native';
+};
 
 export const ScreenScrollView = forwardRef<ScrollView, ScreenScrollViewProps>(
-  function ScreenScrollView({ contentInset, scrollIndicatorInsets, ...props }, ref) {
+  function ScreenScrollView(
+    { contentInset, scrollIndicatorInsets, tabBarClearance, ...props },
+    ref,
+  ) {
     const tabBarHeight = useContext(BottomTabBarHeightContext);
     const safeAreaInsets = useSafeAreaInsets();
     // Native bottom tabs render outside the JS tree and currently do not provide the React
-    // Navigation height context. Their propagated bottom safe-area inset is the dynamic fallback;
-    // regular bottom tabs use their authoritative measured height instead.
-    const bottomInset = tabBarHeight ?? safeAreaInsets.bottom;
+    // Navigation height context. The shared clearance keeps an action-ending route above the
+    // translucent bar while regular bottom tabs continue to use their measured height.
+    const bottomInset = getScreenScrollBottomInset(
+      tabBarHeight,
+      safeAreaInsets.bottom,
+      tabBarClearance === 'native' ? spacing.xxl : 0,
+    );
 
     return (
       <ScrollView

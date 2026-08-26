@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useState } from 'react';
+import { useCallback, useLayoutEffect, useState, type PropsWithChildren } from 'react';
 import { ActionSheetIOS, Alert, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -203,10 +203,16 @@ export function LabReportDetailScreen() {
   }
 
   const detailState = getLabReportDetailState(report, loading, error);
-  if (detailState === 'loading') return <AppText>{t('labs.loading')}</AppText>;
+  if (detailState === 'loading') {
+    return (
+      <DetailScrollView centered>
+        <AppText>{t('labs.loading')}</AppText>
+      </DetailScrollView>
+    );
+  }
   if (detailState === 'error') {
     return (
-      <View style={styles.center}>
+      <DetailScrollView centered>
         <AppText selectable>{t('labs.reportLoadError')}</AppText>
         <AppButton label={t('labs.retry')} onPress={() => void load()} tone="secondary" />
         <AppButton
@@ -214,12 +220,12 @@ export function LabReportDetailScreen() {
           onPress={() => navigation.goBack()}
           tone="quiet"
         />
-      </View>
+      </DetailScrollView>
     );
   }
   if (detailState === 'unavailable') {
     return (
-      <View style={styles.center}>
+      <DetailScrollView centered>
         <AppText selectable variant="heading">
           {t('labs.reportUnavailableTitle')}
         </AppText>
@@ -231,7 +237,7 @@ export function LabReportDetailScreen() {
           onPress={() => navigation.goBack()}
           tone="quiet"
         />
-      </View>
+      </DetailScrollView>
     );
   }
 
@@ -246,10 +252,7 @@ export function LabReportDetailScreen() {
       : { action: 'delete' as const, message: 'missing-source' as const };
 
   return (
-    <ScreenScrollView
-      contentContainerStyle={[screenStyles.content, styles.detailContent]}
-      style={screenStyles.scroll}
-    >
+    <DetailScrollView>
       <AppText variant="heading">{report.originalFilename}</AppText>
       <StatusPill>{stateLabel(report, integrity)}</StatusPill>
       <AppSurface style={styles.metaSection}>
@@ -335,6 +338,25 @@ export function LabReportDetailScreen() {
           {t('labs.reportLinkedRecords').replace('{count}', String(report.labRecordIds.length))}
         </AppText>
       )}
+    </DetailScrollView>
+  );
+}
+
+function DetailScrollView({
+  centered = false,
+  children,
+}: PropsWithChildren<{ readonly centered?: boolean }>) {
+  return (
+    <ScreenScrollView
+      contentContainerStyle={[
+        screenStyles.content,
+        styles.detailContent,
+        centered && styles.center,
+      ]}
+      style={screenStyles.scroll}
+      tabBarClearance="native"
+    >
+      {children}
     </ScreenScrollView>
   );
 }
@@ -357,8 +379,8 @@ const styles = StyleSheet.create({
   headerAction: { alignItems: 'center', justifyContent: 'center', minHeight: 44, minWidth: 44 },
   pressed: { opacity: 0.6 },
   metaSection: { gap: 0, marginTop: spacing.md, padding: 0 },
-  // UIKit owns the native tab-bar inset; this ordinary breathing room keeps the final text clear
-  // without competing with a second manually calculated safe-area authority.
+  // Keep an end-cap in addition to the shared native-tab clearance so the final action remains
+  // clear while the translucent bar is at rest and after a long/failure state is scrolled.
   detailContent: { paddingBottom: spacing.xxl },
   detailRow: {
     alignItems: 'center',
