@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import {
   useNavigation,
@@ -17,7 +17,7 @@ import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import { colors, spacing } from '../../theme';
-import { sourceRegionPresentation } from './extraction-ui-model';
+import { extractionSourcePresentation, sourceRegionPresentation } from './extraction-ui-model';
 
 type EditorRoute = RouteProp<RootStackParamList, 'ExtractionMeasurementEditor'>;
 type EditorNavigation = NativeStackNavigationProp<
@@ -59,7 +59,6 @@ export function ExtractionMeasurementEditorScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [allowRemove, setAllowRemove] = useState(false);
-  const previewRequestPending = useRef(false);
   const initialEdit = useMemo(() => (row === null ? null : editFrom(row)), [row]);
   const dirty =
     edit !== null && initialEdit !== null && JSON.stringify(edit) !== JSON.stringify(initialEdit);
@@ -85,10 +84,6 @@ export function ExtractionMeasurementEditorScreen() {
   }, [route.params.draftId, route.params.rowId]);
 
   usePreventRemove(dirty && !allowRemove, ({ data }) => {
-    if (previewRequestPending.current) {
-      navigation.dispatch(data.action);
-      return;
-    }
     Alert.alert(t('labs.extractionDiscardTitle'), t('labs.extractionDiscardBody'), [
       { text: t('labs.cancel'), style: 'cancel' },
       {
@@ -154,27 +149,23 @@ export function ExtractionMeasurementEditorScreen() {
   }
 
   async function viewInReport() {
-    if (previewRequestPending.current) return;
-    previewRequestPending.current = true;
     const saved = dirty ? await save() : row;
-    if (saved === null) {
-      previewRequestPending.current = false;
-      return;
-    }
+    if (saved === null) return;
     const target = sourceRegionPresentation(saved);
-    setAllowRemove(true);
     if (saved.source.artifact?.kind === 'original') {
-      navigation.replace('OriginalSourcePreview', {
+      navigation.push('OriginalSourcePreview', {
         reportId: route.params.reportId,
         pageIndex: target.pageIndex,
       });
       return;
     }
-    navigation.replace('SanitizedSourcePreview', {
-      reportId: route.params.reportId,
-      pageIndex: target.pageIndex,
-      boundingBox: target.boundingBox,
-    });
+    if (saved.source.artifact?.kind === 'sanitized') {
+      navigation.push('SanitizedSourcePreview', {
+        reportId: route.params.reportId,
+        pageIndex: target.pageIndex,
+        boundingBox: target.boundingBox,
+      });
+    }
   }
 
   if (error && row === null) {
@@ -189,6 +180,7 @@ export function ExtractionMeasurementEditorScreen() {
     return <AppText style={styles.loading}>{t('labs.loading')}</AppText>;
 
   const included = row.decision !== 'skip';
+  const sourcePresentation = extractionSourcePresentation(row);
   return (
     <ScrollView
       automaticallyAdjustKeyboardInsets
@@ -204,14 +196,19 @@ export function ExtractionMeasurementEditorScreen() {
       )}
       <AppSurface tone="soft" style={styles.sourceCard}>
         <View style={styles.sourceHeader}>
-          <AppText variant="label">{t('labs.extractionSource')}</AppText>
+          <AppText variant="label">{t(sourcePresentation.labelKey)}</AppText>
           <StatusPill tone="extracted">{t('labs.extracted')}</StatusPill>
         </View>
         <AppText selectable>{row.sourceText}</AppText>
         <AppText selectable style={styles.muted}>
-          {t('labs.extractionPageRegion').replace('{page}', String(row.source.pageIndex + 1))}
+          {t(sourcePresentation.regionKey).replace('{page}', String(row.source.pageIndex + 1))}
         </AppText>
-        <AppButton label={t('labs.extractionViewInReport')} onPress={viewInReport} tone="quiet" />
+        <AppButton
+          disabled={sourcePresentation.artifactKind === 'unavailable'}
+          label={t('labs.extractionViewInReport')}
+          onPress={viewInReport}
+          tone="quiet"
+        />
       </AppSurface>
 
       <View style={styles.recordContext}>

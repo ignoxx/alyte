@@ -90,9 +90,14 @@ test('biomarker history stays a generic push route inside Labs', () => {
   });
 });
 
-test('replacing the root editor with source preview keeps MainTabs underneath for Back', () => {
+test('pushing source preview keeps the measurement editor and its row context underneath', () => {
   const router = StackRouter({ initialRouteName: 'MainTabs' });
-  const routeNames = ['MainTabs', 'ExtractionMeasurementEditor', 'SanitizedSourcePreview'];
+  const routeNames = [
+    'MainTabs',
+    'ExtractionMeasurementEditor',
+    'OriginalSourcePreview',
+    'SanitizedSourcePreview',
+  ];
   const options = {
     routeNames,
     routeParamList: {},
@@ -112,16 +117,22 @@ test('replacing the root editor with source preview keeps MainTabs underneath fo
 
   const withPreview = router.getStateForAction(
     withEditor as StackNavigationState<ParamListBase>,
-    StackActions.replace('SanitizedSourcePreview', {
+    StackActions.push('OriginalSourcePreview', {
       reportId: 'report-synthetic',
       pageIndex: 0,
-      boundingBox: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
     }) as never,
     options,
   );
   assert.deepEqual(
-    withPreview?.routes.map((route) => route.name),
-    ['MainTabs', 'SanitizedSourcePreview'],
+    withPreview?.routes.map((route) => [route.name, route.params]),
+    [
+      ['MainTabs', undefined],
+      [
+        'ExtractionMeasurementEditor',
+        { reportId: 'report-synthetic', draftId: 'draft-synthetic', rowId: 'row-synthetic' },
+      ],
+      ['OriginalSourcePreview', { reportId: 'report-synthetic', pageIndex: 0 }],
+    ],
   );
 
   const afterBack = withPreview
@@ -133,7 +144,34 @@ test('replacing the root editor with source preview keeps MainTabs underneath fo
     : null;
   assert.deepEqual(
     afterBack?.routes.map((route) => route.name),
-    ['MainTabs'],
+    ['MainTabs', 'ExtractionMeasurementEditor'],
+  );
+
+  const withSanitizedPreview = afterBack
+    ? router.getStateForAction(
+        afterBack as StackNavigationState<ParamListBase>,
+        StackActions.push('SanitizedSourcePreview', {
+          reportId: 'report-synthetic',
+          pageIndex: 0,
+          boundingBox: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+        }) as never,
+        options,
+      )
+    : null;
+  assert.deepEqual(
+    withSanitizedPreview?.routes.map((route) => route.name),
+    ['MainTabs', 'ExtractionMeasurementEditor', 'SanitizedSourcePreview'],
+  );
+  const afterSanitizedBack = withSanitizedPreview
+    ? router.getStateForAction(
+        withSanitizedPreview as StackNavigationState<ParamListBase>,
+        StackActions.pop(),
+        options,
+      )
+    : null;
+  assert.deepEqual(
+    afterSanitizedBack?.routes.map((route) => route.name),
+    ['MainTabs', 'ExtractionMeasurementEditor'],
   );
 });
 
@@ -212,6 +250,30 @@ test('Continue report pops to the one existing detail route and leaves a clean L
     : null;
   assert.deepEqual(
     afterBack?.routes.map((route) => route.name),
+    ['LabsRoot'],
+  );
+});
+
+test('multi-record confirmation can pop to Labs without stacking another root', () => {
+  const router = StackRouter({ initialRouteName: 'LabsRoot' });
+  const options = {
+    routeNames: ['LabsRoot', 'ExtractionDraft'],
+    routeParamList: {},
+    routeGetIdList: {},
+  };
+  let state = router.getInitialState(options) as StackNavigationState<ParamListBase>;
+  state = router.getStateForAction(
+    state,
+    StackActions.push('ExtractionDraft', {
+      reportId: 'report-multi',
+      draftId: 'draft-multi',
+    }) as never,
+    options,
+  ) as StackNavigationState<ParamListBase>;
+
+  const afterConfirm = router.getStateForAction(state, StackActions.popToTop(), options);
+  assert.deepEqual(
+    afterConfirm?.routes.map((route) => route.name),
     ['LabsRoot'],
   );
 });

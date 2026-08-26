@@ -18,6 +18,72 @@ export {
 
 export type ExtractionReviewFilter = 'all' | 'needs-review';
 
+export type ExtractionConfirmationDestination =
+  | {
+      readonly kind: 'record';
+      readonly route: 'LabRecordDetail';
+      readonly recordId: string;
+    }
+  | {
+      readonly kind: 'labs';
+      readonly route: 'LabsRoot';
+    };
+
+/**
+ * A single confirmed Lab Record can be opened directly. When one draft creates more than one
+ * record, return to the existing Labs root so every newly created record is visible together.
+ */
+export function extractionConfirmationDestination(
+  records: readonly { readonly id: string }[],
+): ExtractionConfirmationDestination {
+  if (records.length === 1) {
+    return { kind: 'record', route: 'LabRecordDetail', recordId: records[0]!.id };
+  }
+  if (records.length > 1) return { kind: 'labs', route: 'LabsRoot' };
+  throw new Error('No Lab Records were created');
+}
+
+export type ExtractionSourcePresentation = {
+  readonly artifactKind: 'original' | 'sanitized' | 'unavailable';
+  readonly labelKey:
+    | 'labs.extractionOriginalReport'
+    | 'labs.extractionSanitizedReport'
+    | 'labs.extractionSourceUnavailable';
+  readonly regionKey:
+    | 'labs.extractionOriginalRegion'
+    | 'labs.extractionSanitizedPageRegion'
+    | 'labs.extractionSourceUnavailable';
+};
+
+/**
+ * Source copy follows the persisted artifact on the row. A missing artifact stays explicit rather
+ * than being treated as Sanitized Report because the current workflow happens to be local.
+ */
+export function extractionSourcePresentation(
+  row: Pick<ExtractionDraftRow, 'source'>,
+): ExtractionSourcePresentation {
+  switch (row.source.artifact?.kind) {
+    case 'original':
+      return {
+        artifactKind: 'original',
+        labelKey: 'labs.extractionOriginalReport',
+        regionKey: 'labs.extractionOriginalRegion',
+      };
+    case 'sanitized':
+      return {
+        artifactKind: 'sanitized',
+        labelKey: 'labs.extractionSanitizedReport',
+        regionKey: 'labs.extractionSanitizedPageRegion',
+      };
+    default:
+      return {
+        artifactKind: 'unavailable',
+        labelKey: 'labs.extractionSourceUnavailable',
+        regionKey: 'labs.extractionSourceUnavailable',
+      };
+  }
+}
+
 export type ExtractionReviewSection = {
   readonly key: string;
   readonly collectionDateLabel: string | null;

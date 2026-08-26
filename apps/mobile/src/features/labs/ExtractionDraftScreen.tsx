@@ -11,6 +11,7 @@ import { colors, spacing } from '../../theme';
 import {
   buildExtractionReviewSections,
   canConfirmExtraction,
+  extractionConfirmationDestination,
   extractionConfirmationSummary,
   extractionNeedsResolution,
   filterExtractionRows,
@@ -129,9 +130,12 @@ export function ExtractionDraftScreen() {
     setBusy(true);
     try {
       const records = await reports.confirmExtraction(draft.id);
-      const first = records[0];
-      if (first === undefined) throw new Error('No Lab Record created');
-      navigation.replace('LabRecordDetail', { recordId: first.id });
+      const destination = extractionConfirmationDestination(records);
+      if (destination.kind === 'record') {
+        navigation.replace(destination.route, { recordId: destination.recordId });
+      } else {
+        navigation.popToTop();
+      }
     } catch {
       setError(true);
     } finally {

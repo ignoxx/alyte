@@ -1,15 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ExtractionDraftRow } from '@alyte/domain';
+import { t } from '../../localization';
 import {
   buildExtractionReviewSections,
   canConfirmExtraction,
+  extractionConfirmationDestination,
   extractionConfirmationLayout,
   extractionConfirmationPresentation,
   extractionConfirmationSummary,
   extractionDecisionPresentation,
   extractionNeedsResolution,
   extractionReviewCounts,
+  extractionSourcePresentation,
   filterExtractionRows,
   sourceRegionPresentation,
 } from './extraction-ui-model';
@@ -47,6 +50,53 @@ function row(overrides: Partial<ExtractionDraftRow> = {}): ExtractionDraftRow {
     ...overrides,
   };
 }
+
+test('confirmation opens one created Lab Record and returns to Labs for multiple records', () => {
+  assert.deepEqual(extractionConfirmationDestination([{ id: 'record-1' }]), {
+    kind: 'record',
+    route: 'LabRecordDetail',
+    recordId: 'record-1',
+  });
+  assert.deepEqual(extractionConfirmationDestination([{ id: 'record-1' }, { id: 'record-2' }]), {
+    kind: 'labs',
+    route: 'LabsRoot',
+  });
+  assert.throws(() => extractionConfirmationDestination([]), /No Lab Records were created/);
+});
+
+test('source copy follows persisted Original or Sanitized Report provenance', () => {
+  const original = extractionSourcePresentation(
+    row({
+      source: {
+        ...row().source,
+        artifact: { kind: 'original', id: null, hash: 'original-hash' },
+      },
+    }),
+  );
+  const sanitized = extractionSourcePresentation(
+    row({
+      source: {
+        ...row().source,
+        artifact: { kind: 'sanitized', id: 'sanitized-1', hash: 'sanitized-hash' },
+      },
+    }),
+  );
+
+  assert.deepEqual(original, {
+    artifactKind: 'original',
+    labelKey: 'labs.extractionOriginalReport',
+    regionKey: 'labs.extractionOriginalRegion',
+  });
+  assert.deepEqual(sanitized, {
+    artifactKind: 'sanitized',
+    labelKey: 'labs.extractionSanitizedReport',
+    regionKey: 'labs.extractionSanitizedPageRegion',
+  });
+  assert.equal(t(original.labelKey), 'Original Report');
+  assert.equal(t(sanitized.labelKey), 'Sanitized Report');
+  assert.match(t(original.regionKey), /^Original Report/);
+  assert.match(t(sanitized.regionKey), /^Sanitized Report/);
+});
 
 test('Extraction decisions use neutral review presentation instead of provenance tones', () => {
   assert.deepEqual(extractionDecisionPresentation('preserve'), {
