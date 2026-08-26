@@ -35,6 +35,135 @@ struct AlyteLocalModelIdleTimerPolicy {
   }
 }
 
+/// Serializes idle-timer ownership and the UIKit read/write pair on the main thread. State
+/// callbacks can arrive from URLSession's queue, so each request carries a generation. A queued
+/// enable is ignored once a newer background or teardown request has claimed the generation.
+final class AlyteLocalModelIdleTimerCoordinator {
+  typealias Schedule = (@escaping () -> Void) -> Void
+  typealias ValueReader = () -> Bool
+  typealias ValueWriter = (Bool) -> Void
+
+  private let schedule: Schedule
+  private let valueReader: ValueReader
+  private let valueWriter: ValueWriter
+  private let generationLock = NSLock()
+  private var generation: UInt = 0
+  private var teardownRequested = false
+  private var latestState = AlyteLocalModelState.notInstalled
+  private var latestIsForeground = true
+
+  // Policy and ownership are only touched by scheduled coordinator blocks. Inbound callbacks
+  // update latestState and generation under generationLock before scheduling those blocks.
+  private var policy = AlyteLocalModelIdleTimerPolicy()
+  private var priorValue: Bool?
+  private var ownsIdleTimer = false
+  private var isTornDown = false
+
+  init(schedule: @escaping Schedule, valueReader: @escaping ValueReader, valueWriter: @escaping ValueWriter) {
+    self.schedule = schedule
+    self.valueReader = valueReader
+    self.valueWriter = valueWriter
+  }
+
+  func stateChanged(_ state: AlyteLocalModelState) {
+    guard let token = issueStateToken(state) else { return }
+    schedule { [self] in
+      guard isCurrent(token), !isTornDown else { return }
+      _ = policy.setApplicationIsForeground(latestForegroundValue())
+      _ = policy.setState(state)
+      applyDesiredValue()
+    }
+  }
+
+  func setApplicationIsForeground(_ isForeground: Bool) {
+    guard let token = issueForegroundToken(isForeground) else { return }
+    schedule { [self] in
+      guard isCurrent(token), !isTornDown else { return }
+      _ = policy.setApplicationIsForeground(latestForegroundValue())
+      _ = policy.setState(latestStateValue())
+      applyDesiredValue()
+    }
+  }
+
+  func teardown() {
+    guard let token = issueTeardownToken() else { return }
+    // Capture self strongly: Store teardown may release its last reference before an off-main
+    // lifecycle callback reaches the main queue, but ownership must still be restored.
+    schedule { [self] in
+      guard isCurrent(token), !isTornDown else { return }
+      _ = policy.setApplicationIsForeground(false)
+      restorePriorValue()
+      isTornDown = true
+    }
+  }
+
+  private func applyDesiredValue() {
+    if policy.shouldDisableIdleTimer {
+      guard !ownsIdleTimer else { return }
+      let prior = valueReader()
+      priorValue = prior
+      ownsIdleTimer = true
+      if !prior { valueWriter(true) }
+      return
+    }
+
+    restorePriorValue()
+  }
+
+  private func restorePriorValue() {
+    guard ownsIdleTimer else { return }
+    let prior = priorValue ?? false
+    if valueReader() != prior { valueWriter(prior) }
+    priorValue = nil
+    ownsIdleTimer = false
+  }
+
+  private func issueStateToken(_ state: AlyteLocalModelState) -> UInt? {
+    generationLock.lock()
+    defer { generationLock.unlock() }
+    guard !teardownRequested else { return nil }
+    latestState = state
+    generation &+= 1
+    return generation
+  }
+
+  private func issueForegroundToken(_ isForeground: Bool) -> UInt? {
+    generationLock.lock()
+    defer { generationLock.unlock() }
+    guard !teardownRequested else { return nil }
+    latestIsForeground = isForeground
+    generation &+= 1
+    return generation
+  }
+
+  private func latestStateValue() -> AlyteLocalModelState {
+    generationLock.lock()
+    defer { generationLock.unlock() }
+    return latestState
+  }
+
+  private func latestForegroundValue() -> Bool {
+    generationLock.lock()
+    defer { generationLock.unlock() }
+    return latestIsForeground
+  }
+
+  private func issueTeardownToken() -> UInt? {
+    generationLock.lock()
+    defer { generationLock.unlock() }
+    guard !teardownRequested else { return nil }
+    teardownRequested = true
+    generation &+= 1
+    return generation
+  }
+
+  private func isCurrent(_ token: UInt) -> Bool {
+    generationLock.lock()
+    defer { generationLock.unlock() }
+    return generation == token
+  }
+}
+
 struct AlyteLocalModelSnapshot {
   let state: AlyteLocalModelState
   let bytesReceived: Int64

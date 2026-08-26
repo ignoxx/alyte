@@ -24,8 +24,11 @@ test('native store owns resumable verification, protection, promotion, and relea
     'didReceiveMemoryWarningNotification',
     'thermalStateDidChangeNotification',
     'releaseForBackground',
-    'idleTimerPolicy',
-    'idleTimerSetter',
+    'idleTimerCoordinator',
+    'idleTimerScheduler',
+    'idleTimerReader',
+    'idleTimerWriter',
+    'teardown()',
     'isIdleTimerDisabled',
   ]) {
     assert.equal(storeSource.includes(value), true, value);

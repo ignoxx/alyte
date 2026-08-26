@@ -117,6 +117,124 @@ final class NativeModelHarnessTests: XCTestCase {
     XCTAssertFalse(policy.shouldDisableIdleTimer)
   }
 
+  func testStoreIdleTimerCoordinatorDropsPendingEnableAfterBackground() {
+    var pending: [() -> Void] = []
+    var value = false
+    var writes: [Bool] = []
+    let coordinator = AlyteLocalModelIdleTimerCoordinator(
+      schedule: { pending.append($0) },
+      valueReader: { value },
+      valueWriter: { next in
+        value = next
+        writes.append(next)
+      }
+    )
+
+    coordinator.stateChanged(.downloading)
+    coordinator.setApplicationIsForeground(false)
+    XCTAssertEqual(pending.count, 2)
+
+    // Model state delivery is stale once the lifecycle callback has claimed the newer token.
+    pending[1]()
+    pending[0]()
+    XCTAssertEqual(writes, [])
+    XCTAssertFalse(value)
+  }
+
+  func testStoreIdleTimerCoordinatorReappliesLatestDownloadAfterForeground() {
+    var pending: [() -> Void] = []
+    var value = false
+    var writes: [Bool] = []
+    let coordinator = AlyteLocalModelIdleTimerCoordinator(
+      schedule: { pending.append($0) },
+      valueReader: { value },
+      valueWriter: { next in
+        value = next
+        writes.append(next)
+      }
+    )
+
+    coordinator.stateChanged(.downloading)
+    coordinator.setApplicationIsForeground(false)
+    pending[1]()
+    pending[0]()
+    pending.removeAll()
+    XCTAssertEqual(writes, [])
+
+    coordinator.setApplicationIsForeground(true)
+    pending.removeFirst()()
+    XCTAssertEqual(writes, [true])
+    XCTAssertTrue(value)
+  }
+
+  func testStoreIdleTimerCoordinatorDropsPendingEnableAfterTeardown() {
+    var pending: [() -> Void] = []
+    var value = false
+    var writes: [Bool] = []
+    let coordinator = AlyteLocalModelIdleTimerCoordinator(
+      schedule: { pending.append($0) },
+      valueReader: { value },
+      valueWriter: { next in
+        value = next
+        writes.append(next)
+      }
+    )
+
+    coordinator.stateChanged(.downloading)
+    coordinator.teardown()
+    XCTAssertEqual(pending.count, 2)
+
+    pending[1]()
+    pending[0]()
+    XCTAssertEqual(writes, [])
+    XCTAssertFalse(value)
+  }
+
+  func testStoreIdleTimerCoordinatorRestoresPriorValueOnTeardown() {
+    var pending: [() -> Void] = []
+    var value = false
+    var writes: [Bool] = []
+    let coordinator = AlyteLocalModelIdleTimerCoordinator(
+      schedule: { pending.append($0) },
+      valueReader: { value },
+      valueWriter: { next in
+        value = next
+        writes.append(next)
+      }
+    )
+
+    coordinator.stateChanged(.verifying)
+    pending.removeFirst()()
+    XCTAssertEqual(writes, [true])
+    XCTAssertTrue(value)
+
+    coordinator.teardown()
+    pending.removeFirst()()
+    XCTAssertEqual(writes, [true, false])
+    XCTAssertFalse(value)
+  }
+
+  func testStoreIdleTimerCoordinatorDoesNotChangePreexistingDisabledValue() {
+    var pending: [() -> Void] = []
+    var value = true
+    var writes: [Bool] = []
+    let coordinator = AlyteLocalModelIdleTimerCoordinator(
+      schedule: { pending.append($0) },
+      valueReader: { value },
+      valueWriter: { next in
+        value = next
+        writes.append(next)
+      }
+    )
+
+    coordinator.stateChanged(.downloading)
+    pending.removeFirst()()
+    coordinator.teardown()
+    pending.removeFirst()()
+    XCTAssertEqual(writes, [])
+    XCTAssertTrue(value)
+  }
+
   func testCancellationPreservesPartialButNeverReady() throws {
     let (core, _, _) = try makeCore()
     _ = try core.prepareDownload()
