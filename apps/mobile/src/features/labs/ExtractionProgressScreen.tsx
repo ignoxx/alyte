@@ -19,6 +19,7 @@ import {
   type LabReportExtractionProgress,
   type PasswordRequest,
 } from './report-service';
+import { extractionProgressGate } from './extraction-progress-gate';
 import { canStartAutomatedExtraction } from '../local-models/model';
 
 type Route = RouteProp<RootStackParamList, 'ExtractionProgress'>;
@@ -81,8 +82,10 @@ export function ExtractionProgressScreen() {
   const [activeOperation, setActiveOperation] = useState(false);
   const [cancellationRequested, setCancellationRequested] = useState(false);
   const [durableLoaded, setDurableLoaded] = useState(false);
+  const [modelStateLoaded, setModelStateLoaded] = useState(false);
   const started = useRef(false);
   const completed = useRef(false);
+  const modelSetupOpened = useRef(false);
   const mounted = useRef(true);
   const focused = useRef(isFocused);
 
@@ -100,6 +103,19 @@ export function ExtractionProgressScreen() {
     // the operation reaches a terminal state.
   });
 
+  const openModelSetup = useCallback(() => {
+    if (!focused.current || modelSetupOpened.current) return;
+    modelSetupOpened.current = true;
+    setActiveOperation(false);
+    setFailure(null);
+    navigation.navigate('ModelInstall');
+  }, [navigation]);
+
+  const openModelSetupFromAction = useCallback(() => {
+    modelSetupOpened.current = false;
+    openModelSetup();
+  }, [openModelSetup]);
+
   useEffect(() => {
     const unsubscribe = reports.subscribeExtractionProgress((next) => {
       if (next.reportId !== route.params.reportId) return;
@@ -110,8 +126,18 @@ export function ExtractionProgressScreen() {
         next.status === 'cancelled' ||
         next.status === 'interrupted'
       ) {
-        setFailure(next.error ?? 'recognition');
         setActiveOperation(false);
+        if (next.error === 'model-unavailable') {
+          // Model readiness is a setup concern, not a report-preservation failure screen. The
+          // operation has not produced a draft, so keep the report and progress route in place
+          // while the contextual setup route takes over.
+          setModelReady(false);
+          setModelStateLoaded(true);
+          setFailure(null);
+          modelSetupOpened.current = false;
+        } else {
+          setFailure(next.error ?? 'recognition');
+        }
       }
     });
     const current = reports.getExtractionProgress(route.params.reportId);
@@ -128,7 +154,14 @@ export function ExtractionProgressScreen() {
           durable.status === 'cancelled' ||
           durable.status === 'interrupted'
         ) {
-          setFailure(durable.error ?? 'recognition');
+          if (durable.error === 'model-unavailable') {
+            // A previous model gate may have been interrupted. Let the current native model state
+            // decide whether to resume or reopen setup instead of replaying the old dead end.
+            setFailure(null);
+            setActiveOperation(false);
+          } else {
+            setFailure(durable.error ?? 'recognition');
+          }
         }
       })
       .catch(() => {
@@ -143,9 +176,15 @@ export function ExtractionProgressScreen() {
     const refresh = async () => {
       try {
         const snapshot = await models.getState();
-        if (active) setModelReady(canStartAutomatedExtraction(snapshot));
+        if (active) {
+          setModelReady(canStartAutomatedExtraction(snapshot));
+          setModelStateLoaded(true);
+        }
       } catch {
-        if (active) setModelReady(false);
+        if (active) {
+          setModelReady(false);
+          setModelStateLoaded(true);
+        }
       }
     };
     void refresh();
@@ -164,6 +203,8 @@ export function ExtractionProgressScreen() {
       completed.current ||
       !isFocused ||
       !durableLoaded ||
+      !modelStateLoaded ||
+      !modelReady ||
       failure !== null ||
       cancellationRequested
     )
@@ -185,7 +226,17 @@ export function ExtractionProgressScreen() {
         },
       });
     } catch (error) {
-      setFailure(error instanceof LabReportExtractionError ? error.reason : 'recognition');
+      const reason = error instanceof LabReportExtractionError ? error.reason : 'recognition';
+      if (reason === 'model-unavailable') {
+        // A pack can be deleted or fail activation after the preflight. Return to the same
+        // report-keyed setup flow and let the existing report remain available underneath it.
+        setModelReady(false);
+        setModelStateLoaded(true);
+        setFailure(null);
+        modelSetupOpened.current = false;
+      } else {
+        setFailure(reason);
+      }
       started.current = false;
       setActiveOperation(false);
     }
@@ -195,14 +246,36 @@ export function ExtractionProgressScreen() {
     failure,
     isFocused,
     modelReady,
+    modelStateLoaded,
     navigation,
     reports,
     route.params.reportId,
   ]);
 
   useEffect(() => {
-    void start();
-  }, [start]);
+    const decision = extractionProgressGate({
+      focused: isFocused,
+      durableLoaded,
+      modelStateLoaded,
+      modelReady,
+      hasFailure: failure !== null,
+      cancellationRequested,
+      started: started.current,
+      completed: completed.current,
+      modelSetupOpened: modelSetupOpened.current,
+    });
+    if (decision === 'open-model-setup') openModelSetup();
+    if (decision === 'start-extraction') void start();
+  }, [
+    cancellationRequested,
+    durableLoaded,
+    failure,
+    isFocused,
+    modelReady,
+    modelStateLoaded,
+    openModelSetup,
+    start,
+  ]);
 
   const currentStageIndex = useMemo(
     () => Math.max(0, stages.indexOf(progress?.stage ?? 'import')),
@@ -271,12 +344,12 @@ export function ExtractionProgressScreen() {
                 );
               })}
             </AppSurface>
-            {!modelReady && (
+            {modelStateLoaded && !modelReady && (
               <>
                 <AppText style={styles.muted}>{t('labs.extractionProgressModelRequired')}</AppText>
                 <AppButton
                   label={t('labs.extractionModelAction')}
-                  onPress={() => navigation.navigate('ModelInstall')}
+                  onPress={openModelSetupFromAction}
                 />
               </>
             )}
@@ -290,14 +363,7 @@ export function ExtractionProgressScreen() {
         ) : (
           <AppSurface tone="soft" style={styles.failure}>
             <AppText style={styles.body}>{failureMessage(failure)}</AppText>
-            {failure === 'model-unavailable' ? (
-              <AppButton
-                label={t('labs.extractionModelAction')}
-                onPress={() => navigation.navigate('ModelInstall')}
-              />
-            ) : (
-              <AppButton label={t('labs.extractionProgressRetry')} onPress={retry} />
-            )}
+            <AppButton label={t('labs.extractionProgressRetry')} onPress={retry} />
             <AppButton
               label={t('labs.extractionProgressBackToReport')}
               onPress={() => navigation.goBack()}
