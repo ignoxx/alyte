@@ -1,4 +1,5 @@
 #include "AlyteLocalModelRuntime.h"
+#include "AlyteLocalModelRuntimeActivation.h"
 
 #include <stdlib.h>
 #include <stdatomic.h>
@@ -39,11 +40,11 @@ static void alyte_local_model_discard_log(enum ggml_log_level level, const char 
 
 static struct llama_model *alyte_local_model_load(
     const char *model_path,
-    bool cpu_only) {
+    AlyteLocalModelBackendMode backend_mode) {
     struct llama_model_params model_params = llama_model_default_params();
-    model_params.n_gpu_layers = cpu_only ? 0 : -1;
+    model_params.n_gpu_layers = backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY ? 0 : -1;
     model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
-    if (cpu_only) {
+    if (backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY) {
         // A NULL device list means "all available devices" in llama.cpp. That is not a CPU
         // fallback: on a device with an unavailable Metal queue the context can still fail
         // before it reaches the CPU backend. Restrict the retry explicitly to CPU.
@@ -68,6 +69,23 @@ static struct llama_context_params alyte_local_model_context_params(
     context_params.n_outputs_max = 1;
     context_params.no_perf = true;
     return context_params;
+}
+
+static void *alyte_local_model_load_with_mode(
+    const char *model_path,
+    AlyteLocalModelBackendMode backend_mode) {
+    return alyte_local_model_load(model_path, backend_mode);
+}
+
+static void *alyte_local_model_create_context_with_batch(
+    void *opaque_model,
+    uint32_t batch_tokens) {
+    struct llama_context_params context_params = alyte_local_model_context_params(batch_tokens);
+    return llama_init_from_model((struct llama_model *) opaque_model, context_params);
+}
+
+static void alyte_local_model_free_model(void *opaque_model) {
+    llama_model_free((struct llama_model *) opaque_model);
 }
 
 static int alyte_local_model_tokenize(
@@ -99,41 +117,16 @@ void *alyte_local_model_runtime_create(
     if (model_path == NULL || grammar == NULL || grammar_root == NULL) return NULL;
     llama_log_set(alyte_local_model_discard_log, NULL);
     llama_backend_init();
-    struct llama_model *model = alyte_local_model_load(model_path, false);
-    if (model == NULL) {
-        // Model loading can fail before context creation when the GPU cannot accept the verified
-        // pack. Retry with the same mmap'd artifact and an explicit CPU device list; if that also
-        // fails, preserve the typed runtime failure rather than changing the pack state.
-        model = alyte_local_model_load(model_path, true);
-    }
-    if (model == NULL) return NULL;
-
-    // Keep the evaluated configuration first, then retry with a smaller physical batch. The
-    // latter is still semantically equivalent because generation already pre-fills in bounded
-    // chunks, but needs less transient context memory on lower-memory supported iPhones.
-    uint32_t batch_tokens = 256;
-    struct llama_context_params context_params = alyte_local_model_context_params(batch_tokens);
-    struct llama_context *context = llama_init_from_model(model, context_params);
-    if (context == NULL) {
-        batch_tokens = 128;
-        context_params = alyte_local_model_context_params(batch_tokens);
-        context = llama_init_from_model(model, context_params);
-    }
-    if (context == NULL) {
-        llama_model_free(model);
-        // A real device may expose a GPU backend that cannot reserve this model/context pair.
-        // Recreate the verified model with an explicit CPU-only device list before reporting a
-        // runtime failure. This does not alter the artifact or its provenance.
-        model = alyte_local_model_load(model_path, true);
-        if (model == NULL) return NULL;
-        batch_tokens = 128;
-        context_params = alyte_local_model_context_params(batch_tokens);
-        context = llama_init_from_model(model, context_params);
-    }
-    if (context == NULL) {
-        llama_model_free(model);
-        return NULL;
-    }
+    AlyteLocalModelActivationHooks hooks = {
+        .load_model = alyte_local_model_load_with_mode,
+        .create_context = alyte_local_model_create_context_with_batch,
+        .free_model = alyte_local_model_free_model,
+    };
+    AlyteLocalModelActivation activation;
+    if (!alyte_local_model_activate_with_fallback(model_path, &hooks, &activation)) return NULL;
+    struct llama_model *model = (struct llama_model *) activation.model;
+    struct llama_context *context = (struct llama_context *) activation.context;
+    uint32_t batch_tokens = activation.batch_tokens;
     const struct llama_vocab *vocab = llama_model_get_vocab(model);
     struct llama_sampler *grammar_sampler = llama_sampler_init_grammar(vocab, grammar, grammar_root);
     if (grammar_sampler == NULL) {

@@ -157,6 +157,14 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
     }
   }
 
+  async function retryModelPreparation() {
+    if (failureRecoveryAction === 'activate') {
+      await enterAlyte();
+      return;
+    }
+    await startDownload();
+  }
+
   async function cancelDownload() {
     cancellationRequestedRef.current = true;
     setCancelError(false);
@@ -264,9 +272,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               <AppButton
                 disabled={busy}
                 label={t('onboarding.modelRetry')}
-                onPress={() =>
-                  void (failureRecoveryAction === 'activate' ? enterAlyte() : startDownload())
-                }
+                onPress={() => void retryModelPreparation()}
                 tone="secondary"
               />
             </AppSurface>
@@ -279,9 +285,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               <AppButton
                 disabled={busy}
                 label={t('onboarding.modelRetry')}
-                onPress={() =>
-                  void (failureRecoveryAction === 'activate' ? enterAlyte() : startDownload())
-                }
+                onPress={() => void retryModelPreparation()}
                 tone="secondary"
               />
             </AppSurface>
