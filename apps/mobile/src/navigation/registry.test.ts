@@ -146,6 +146,12 @@ test('Home quick actions dispatch to sibling tabs and preserve the Log edit push
 
   dispatchHomeQuickAction(navigation, { kind: 'import-report' });
   dispatchHomeQuickAction(navigation, { kind: 'continue-report', reportId: 'report-42' });
+  dispatchHomeQuickAction(navigation, { kind: 'open-report', reportId: 'report-43' });
+  dispatchHomeQuickAction(navigation, { kind: 'open-record', recordId: 'record-42' });
+  dispatchHomeQuickAction(navigation, {
+    kind: 'open-biomarker-history',
+    biomarkerId: 'biomarker.ldl_c',
+  });
   dispatchHomeQuickAction(navigation, { kind: 'log-intake' });
   dispatchHomeQuickAction(navigation, { kind: 'snap' });
   dispatchHomeQuickAction(navigation, { kind: 'edit-intake', eventId: 'event-42' });
@@ -153,6 +159,9 @@ test('Home quick actions dispatch to sibling tabs and preserve the Log edit push
   assert.deepEqual(calls, [
     ['ReportImport'],
     ['Labs', { screen: 'LabReportDetail', params: { reportId: 'report-42' }, pop: true }],
+    ['Labs', { screen: 'LabReportDetail', params: { reportId: 'report-43' }, pop: true }],
+    ['Labs', { screen: 'LabRecordDetail', params: { recordId: 'record-42' }, pop: true }],
+    ['Labs', { screen: 'BiomarkerHistory', params: { biomarkerId: 'biomarker.ldl_c' }, pop: true }],
     ['Log', { screen: 'IntakeEntry' }],
     ['SnapCapture'],
     ['Log', { screen: 'IntakeEntry', params: { eventId: 'event-42' } }],

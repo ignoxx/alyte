@@ -313,6 +313,27 @@ test('Quiet Home keeps manual records in record history instead of report sectio
   );
 });
 
+test('Home summary rows preserve the source identity needed by their detail destinations', () => {
+  const sourceRecord = labRecord('source', '2026-08-20', []);
+  const manualRecord = {
+    ...labRecord('manual', '2026-08-19', []),
+    labReportId: null,
+    laboratoryName: null,
+  };
+  const sourceReport = report('source-report', sourceRecord.id, '2026-08-20');
+
+  const model = buildHomeLabViewModel([sourceReport], [sourceRecord, manualRecord]);
+
+  assert.deepEqual(
+    model.recentReports.map(({ kind, id }) => ({ kind, id })),
+    [{ kind: 'report', id: 'source-report' }],
+  );
+  assert.deepEqual(
+    model.recentRecords.map(({ kind, id }) => ({ kind, id })),
+    [{ kind: 'record', id: 'manual' }],
+  );
+});
+
 test('Quiet Home compares the latest compatible point with its immediate predecessor', () => {
   const records = [
     labRecord('first', '2026-01-01', [measurement('first-ldl', 'first', 'biomarker.ldl_c', 100)]),

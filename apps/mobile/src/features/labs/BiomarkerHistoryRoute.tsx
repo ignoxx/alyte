@@ -158,6 +158,7 @@ export function BiomarkerHistoryRoute() {
 function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryViewModel }) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [explanationOpen, setExplanationOpen] = useState(false);
+  const [generalGuidanceOpen, setGeneralGuidanceOpen] = useState(false);
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
   const accessibilityLabel = buildHistoryAccessibilityLabel(model, accessibilityCopy());
   const pointItems = model.timeline.filter(
@@ -255,14 +256,40 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
           {t('labs.historyGeneralGuidance')}
         </AppText>
         {model.guidance.kind === 'applicable' ? (
-          <AppSurface tone="soft" style={styles.factsSurface}>
-            <AppText selectable style={styles.secondary}>
-              {t('labs.historyGeneralGuidanceBody')}
-            </AppText>
-            {model.guidance.items.map((guidance) => (
-              <GuidanceDetails guidance={guidance} key={guidance.id} locale={locale} />
-            ))}
-          </AppSurface>
+          <>
+            <AppSurface tone="soft" style={styles.factsSurface}>
+              <AppText selectable style={styles.secondary}>
+                {t('labs.historyGeneralGuidanceBody')}
+              </AppText>
+              <Pressable
+                accessibilityHint={t('labs.historyGuidanceDisclosureHint')}
+                accessibilityLabel={t(
+                  generalGuidanceOpen
+                    ? 'labs.historyHideGuidanceDetails'
+                    : 'labs.historyShowGuidanceDetails',
+                )}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: generalGuidanceOpen }}
+                onPress={() => setGeneralGuidanceOpen((current) => !current)}
+                style={({ pressed }) => [styles.disclosureButton, pressed && styles.pressed]}
+              >
+                <AppText variant="label" style={styles.linkLabel}>
+                  {t(
+                    generalGuidanceOpen
+                      ? 'labs.historyHideGuidanceDetails'
+                      : 'labs.historyShowGuidanceDetails',
+                  )}
+                </AppText>
+              </Pressable>
+            </AppSurface>
+            {generalGuidanceOpen && (
+              <AppSurface style={styles.factsSurface}>
+                {model.guidance.items.map((guidance) => (
+                  <GuidanceDetails guidance={guidance} key={guidance.id} locale={locale} />
+                ))}
+              </AppSurface>
+            )}
+          </>
         ) : (
           <AppSurface tone="soft" style={styles.factsSurface}>
             <AppText selectable style={styles.secondary}>

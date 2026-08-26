@@ -44,22 +44,35 @@ function changeDirection(change: HomeMeasuredChange): string {
   );
 }
 
-function ReportRow({ row, locale }: { readonly row: HomeReportRow; readonly locale: string }) {
+function ReportRow({
+  row,
+  locale,
+  onPress,
+}: {
+  readonly row: HomeReportRow;
+  readonly locale: string;
+  readonly onPress: () => void;
+}) {
   const title = row.title ?? t('home.manualRecord');
+  const isReport = row.kind === 'report';
   return (
-    <View
+    <Pressable
+      accessibilityHint={t(isReport ? 'home.reportRowHint' : 'home.recordRowHint')}
       accessibilityLabel={`${title}, ${reportDetail(row, locale)}`}
-      accessible
-      style={styles.reportRow}
+      accessibilityRole="button"
+      onPress={onPress}
+      pressRetentionOffset={8}
+      style={({ pressed }) => [styles.reportRow, pressed && styles.rowPressed]}
     >
-      <AppIcon name={row.kind === 'report' ? 'doc' : 'labs'} size={22} />
+      <AppIcon name={isReport ? 'doc' : 'labs'} size={22} />
       <View style={styles.rowBody}>
         <AppText numberOfLines={2} variant="heading">
           {title}
         </AppText>
         <AppText style={styles.muted}>{reportDetail(row, locale)}</AppText>
       </View>
-    </View>
+      <AppIcon name="chevronRight" size={16} />
+    </Pressable>
   );
 }
 
@@ -137,11 +150,17 @@ function PopulatedHome({
   locale,
   onImport,
   onContinueReport,
+  onOpenReport,
+  onOpenRecord,
+  onOpenBiomarkerHistory,
 }: {
   readonly model: HomeLabViewModel;
   readonly locale: string;
   readonly onImport: () => void;
   readonly onContinueReport: (reportId: string) => void;
+  readonly onOpenReport: (reportId: string) => void;
+  readonly onOpenRecord: (recordId: string) => void;
+  readonly onOpenBiomarkerHistory: (biomarkerId: string) => void;
 }) {
   const latest = model.latestReport;
   const latestRecord = model.recentRecords[0] ?? null;
@@ -172,11 +191,14 @@ function PopulatedHome({
         <View style={styles.section}>
           <AppText variant="title">{t('home.measuredChanges')}</AppText>
           {model.measuredChanges.map((change) => (
-            <View
+            <Pressable
               accessibilityLabel={`${change.label}, ${measuredValue(change, true, locale)}, ${changeDirection(change)}`}
-              accessible
+              accessibilityHint={t('home.measuredChangeHint')}
+              accessibilityRole="button"
               key={change.biomarkerId}
-              style={styles.changeRow}
+              onPress={() => onOpenBiomarkerHistory(change.biomarkerId)}
+              pressRetentionOffset={8}
+              style={({ pressed }) => [styles.changeRow, pressed && styles.rowPressed]}
             >
               <View style={styles.rowBody}>
                 <AppText variant="heading">{change.label}</AppText>
@@ -188,7 +210,8 @@ function PopulatedHome({
               <AppText selectable style={styles.value}>
                 {measuredValue(change, true, locale)}
               </AppText>
-            </View>
+              <AppIcon name="chevronRight" size={16} />
+            </Pressable>
           ))}
         </View>
       )}
@@ -196,7 +219,12 @@ function PopulatedHome({
         <View style={styles.section}>
           <AppText variant="title">{t('home.recentReports')}</AppText>
           {model.recentReports.map((row) => (
-            <ReportRow key={`${row.kind}-${row.id}`} locale={locale} row={row} />
+            <ReportRow
+              key={`${row.kind}-${row.id}`}
+              locale={locale}
+              onPress={() => onOpenReport(row.id)}
+              row={row}
+            />
           ))}
         </View>
       )}
@@ -204,7 +232,12 @@ function PopulatedHome({
         <View style={styles.section}>
           <AppText variant="title">{t('home.recordHistory')}</AppText>
           {model.recentRecords.map((row) => (
-            <ReportRow key={`${row.kind}-${row.id}`} locale={locale} row={row} />
+            <ReportRow
+              key={`${row.kind}-${row.id}`}
+              locale={locale}
+              onPress={() => onOpenRecord(row.id)}
+              row={row}
+            />
           ))}
         </View>
       )}
@@ -257,6 +290,21 @@ export function HomeScreen() {
     dispatchHomeQuickActionFromStack(navigation, { kind: 'continue-report', reportId });
   }
 
+  function openReport(reportId: string) {
+    dispatchHomeQuickActionFromStack(navigation, { kind: 'open-report', reportId });
+  }
+
+  function openRecord(recordId: string) {
+    dispatchHomeQuickActionFromStack(navigation, { kind: 'open-record', recordId });
+  }
+
+  function openBiomarkerHistory(biomarkerId: string) {
+    dispatchHomeQuickActionFromStack(navigation, {
+      kind: 'open-biomarker-history',
+      biomarkerId,
+    });
+  }
+
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
@@ -272,6 +320,9 @@ export function HomeScreen() {
               locale={locale}
               model={model}
               onContinueReport={continueReport}
+              onOpenBiomarkerHistory={openBiomarkerHistory}
+              onOpenRecord={openRecord}
+              onOpenReport={openReport}
               onImport={openImport}
             />
           ))}
@@ -330,7 +381,7 @@ const styles = StyleSheet.create({
   },
   actionPressed: { backgroundColor: colors.accentSoft },
   changeRow: {
-    alignItems: 'flex-end',
+    alignItems: 'center',
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
@@ -346,6 +397,7 @@ const styles = StyleSheet.create({
     minHeight: 64,
     paddingVertical: spacing.sm,
   },
+  rowPressed: { backgroundColor: colors.accentSoft },
   rowBody: { flex: 1, gap: spacing.xs },
   value: { fontVariant: ['tabular-nums'], textAlign: 'right' },
   muted: { color: colors.mutedInk },
