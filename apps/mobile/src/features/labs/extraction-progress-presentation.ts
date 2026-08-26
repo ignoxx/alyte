@@ -1,0 +1,36 @@
+import type { LabReportExtractionError } from './report-service';
+
+export type ExtractionFailurePresentation = {
+  readonly titleKey: 'labs.extractionProgressNoValuesTitle' | 'labs.extractionProgressFailureTitle';
+  readonly messageKey:
+    | 'labs.extractionProgressPasswordError'
+    | 'labs.extractionProgressSourceError'
+    | 'labs.extractionNoMeasurementsError'
+    | 'labs.extractionProgressCancelled'
+    | 'labs.extractionProgressInterrupted'
+    | 'labs.extractionRecognitionError';
+};
+
+export function extractionFailurePresentation(
+  reason: Exclude<LabReportExtractionError['reason'], 'model-unavailable'>,
+): ExtractionFailurePresentation {
+  const titleKey =
+    reason === 'no-reviewable-measurements'
+      ? 'labs.extractionProgressNoValuesTitle'
+      : 'labs.extractionProgressFailureTitle';
+
+  const messageKey =
+    reason === 'wrong-password'
+      ? 'labs.extractionProgressPasswordError'
+      : reason === 'original-source'
+        ? 'labs.extractionProgressSourceError'
+        : reason === 'no-reviewable-measurements'
+          ? 'labs.extractionNoMeasurementsError'
+          : reason === 'cancelled'
+            ? 'labs.extractionProgressCancelled'
+            : reason === 'interrupted'
+              ? 'labs.extractionProgressInterrupted'
+              : 'labs.extractionRecognitionError';
+
+  return { titleKey, messageKey };
+}

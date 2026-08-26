@@ -20,6 +20,7 @@ import {
   type PasswordRequest,
 } from './report-service';
 import { ExtractionProgressController } from './extraction-progress-controller';
+import { extractionFailurePresentation } from './extraction-progress-presentation';
 import { canStartAutomatedExtraction } from '../local-models/model';
 
 type Route = RouteProp<RootStackParamList, 'ExtractionProgress'>;
@@ -45,16 +46,6 @@ function passwordRequest(): PasswordRequest {
         { onDismiss: () => resolve(null) },
       );
     });
-}
-
-function failureMessage(reason: LabReportExtractionError['reason']): string {
-  if (reason === 'model-unavailable') return t('labs.extractionProgressModelRequired');
-  if (reason === 'wrong-password') return t('labs.extractionProgressPasswordError');
-  if (reason === 'original-source') return t('labs.extractionProgressSourceError');
-  if (reason === 'no-reviewable-measurements') return t('labs.extractionNoMeasurementsError');
-  if (reason === 'cancelled') return t('labs.extractionProgressCancelled');
-  if (reason === 'interrupted') return t('labs.extractionProgressInterrupted');
-  return t('labs.extractionRecognitionError');
 }
 
 function stageLabel(stage: LabReportExtractionProgress['stage']): string {
@@ -226,6 +217,10 @@ export function ExtractionProgressScreen() {
     () => Math.max(0, stages.indexOf(progress?.stage ?? 'import')),
     [progress?.stage],
   );
+  const failurePresentation =
+    failure === null || failure === 'model-unavailable'
+      ? null
+      : extractionFailurePresentation(failure);
   async function cancel() {
     await reports.cancelExtraction(route.params.reportId);
     setCancellationRequested(true);
@@ -241,52 +236,48 @@ export function ExtractionProgressScreen() {
     <SafeAreaView style={styles.safe} edges={['top', 'bottom', 'left', 'right']}>
       <View style={styles.content}>
         <AppText variant="heading" accessibilityRole="header" style={styles.title}>
-          {failure === null
-            ? t('labs.extractionProgressTitle')
-            : t('labs.extractionProgressFailedTitle')}
+          {t('labs.extractionProgressTitle')}
         </AppText>
-        {failure === null ? (
+        <AppText style={styles.body}>{t('labs.extractionProgressBody')}</AppText>
+        <AppSurface
+          tone="soft"
+          accessibilityLabel={t('labs.extractionProgressJourneyLabel')}
+          style={styles.journey}
+        >
+          {stages.map((stage, index) => {
+            const stageProgress = progress?.stage === stage ? progress : null;
+            const done =
+              progress !== null &&
+              (index < currentStageIndex ||
+                (progress.status === 'complete' && index === currentStageIndex));
+            const isCurrent = progress?.stage === stage && progress.status === 'active';
+            return (
+              <View key={stage} accessibilityLabel={stageLabel(stage)} style={styles.stage}>
+                <View style={[styles.dot, done && styles.doneDot, isCurrent && styles.currentDot]}>
+                  {isCurrent && (
+                    <ActivityIndicator color={colors.onAccent as string} size="small" />
+                  )}
+                </View>
+                <View style={styles.stageText}>
+                  <AppText variant="label">{stageLabel(stage)}</AppText>
+                  {isCurrent && stageProgress !== null && stageProgress.total > 0 && (
+                    <AppText variant="caption" style={styles.muted}>
+                      {stage === 'ocr'
+                        ? t('labs.extractionProgressPage')
+                            .replace('{current}', String(stageProgress.completed))
+                            .replace('{total}', String(stageProgress.total))
+                        : t('labs.extractionProgressSection')
+                            .replace('{current}', String(stageProgress.completed))
+                            .replace('{total}', String(stageProgress.total))}
+                    </AppText>
+                  )}
+                </View>
+              </View>
+            );
+          })}
+        </AppSurface>
+        {failurePresentation === null ? (
           <>
-            <AppText style={styles.body}>{t('labs.extractionProgressBody')}</AppText>
-            <AppSurface
-              tone="soft"
-              accessibilityLabel={t('labs.extractionProgressJourneyLabel')}
-              style={styles.journey}
-            >
-              {stages.map((stage, index) => {
-                const stageProgress = progress?.stage === stage ? progress : null;
-                const done =
-                  progress !== null &&
-                  (index < currentStageIndex ||
-                    (progress.status === 'complete' && index === currentStageIndex));
-                const isCurrent = progress?.stage === stage && progress.status === 'active';
-                return (
-                  <View key={stage} accessibilityLabel={stageLabel(stage)} style={styles.stage}>
-                    <View
-                      style={[styles.dot, done && styles.doneDot, isCurrent && styles.currentDot]}
-                    >
-                      {isCurrent && (
-                        <ActivityIndicator color={colors.onAccent as string} size="small" />
-                      )}
-                    </View>
-                    <View style={styles.stageText}>
-                      <AppText variant="label">{stageLabel(stage)}</AppText>
-                      {isCurrent && stageProgress !== null && stageProgress.total > 0 && (
-                        <AppText variant="caption" style={styles.muted}>
-                          {stage === 'ocr'
-                            ? t('labs.extractionProgressPage')
-                                .replace('{current}', String(stageProgress.completed))
-                                .replace('{total}', String(stageProgress.total))
-                            : t('labs.extractionProgressSection')
-                                .replace('{current}', String(stageProgress.completed))
-                                .replace('{total}', String(stageProgress.total))}
-                        </AppText>
-                      )}
-                    </View>
-                  </View>
-                );
-              })}
-            </AppSurface>
             {modelStateLoaded && !modelReady && (
               <>
                 <AppText style={styles.muted}>{t('labs.extractionProgressModelRequired')}</AppText>
@@ -305,7 +296,8 @@ export function ExtractionProgressScreen() {
           </>
         ) : (
           <AppSurface tone="soft" style={styles.failure}>
-            <AppText style={styles.body}>{failureMessage(failure)}</AppText>
+            <AppText variant="label">{t(failurePresentation.titleKey)}</AppText>
+            <AppText style={styles.muted}>{t(failurePresentation.messageKey)}</AppText>
             <AppButton label={t('labs.extractionProgressRetry')} onPress={retry} />
             <AppButton
               label={t('labs.extractionProgressBackToReport')}
