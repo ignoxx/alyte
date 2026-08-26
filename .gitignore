@@ -17,7 +17,7 @@ ios/
 !apps/mobile/modules/alyte-vision/ios/**
 !apps/mobile/modules/alyte-local-models/ios/
 !apps/mobile/modules/alyte-local-models/ios/**
-apps/mobile/modules/alyte-local-models/ios/.alyte-local-model-runtime/
+apps/mobile/modules/alyte-local-models/ios/Vendor/
 android/
 .env
 .env.*

@@ -15,7 +15,7 @@ Pod::Spec.new do |s|
   s.dependency 'ExpoModulesCore'
   repository_root = File.expand_path('../../../../..', __dir__)
   pod_root = File.expand_path(__dir__)
-  staged_runtime_root = File.join(pod_root, '.alyte-local-model-runtime')
+  staged_runtime_root = File.join(pod_root, 'Vendor')
   require File.join(pod_root, 'stage-runtime.rb')
   runtime_xcframework = ENV['ALYTE_LOCAL_MODEL_RUNTIME_XCFRAMEWORK'] || ENV['ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK']
   runtime_manifest = runtime_xcframework && "#{runtime_xcframework}.alyte-eval.json"

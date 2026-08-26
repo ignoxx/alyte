@@ -11,7 +11,7 @@ const podspec = join(root, 'apps/mobile/modules/alyte-local-models/ios/AlyteLoca
 const stagingHelper = join(root, 'apps/mobile/modules/alyte-local-models/ios/stage-runtime.rb');
 const stagedRuntime = join(
   root,
-  'apps/mobile/modules/alyte-local-models/ios/.alyte-local-model-runtime',
+  'apps/mobile/modules/alyte-local-models/ios/Vendor',
 );
 const revision = 'bb4caa7540188872173c44d161602d9271386413';
 
@@ -115,8 +115,9 @@ test('podspec exposes a relative staged framework and keeps external provenance 
     const spec = JSON.parse(result.stdout);
     assert.equal(spec.source.path, '.');
     assert.equal(spec.license.type, 'Proprietary');
-    assert.equal(spec.vendored_frameworks, '.alyte-local-model-runtime/llama.framework');
+    assert.equal(spec.vendored_frameworks, 'Vendor/llama.framework');
     assert.equal(isAbsolute(spec.vendored_frameworks), false);
+    assert.equal(spec.vendored_frameworks.split('/').some((part) => part.startsWith('.')), false);
     assert.match(spec.pod_target_xcconfig.HEADER_SEARCH_PATHS, /PODS_TARGET_SRCROOT/);
     assert.equal(spec.script_phases.name, 'Verify pinned Alyte llama.cpp runtime');
     assert.match(spec.script_phases.script, /check-local-model-runtime\.mjs/);

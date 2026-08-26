@@ -2,7 +2,8 @@
 
 # CocoaPods resolves vendored_frameworks relative to the pod root. The selected runtime remains
 # external and is validated there; this helper copies only the device framework into an ignored,
-# deterministic staging directory so CocoaPods never receives an absolute vendored path.
+# deterministic, visible staging directory so CocoaPods never receives an absolute vendored path
+# or drops the framework from its local pod file glob.
 
 require 'digest'
 require 'fileutils'
