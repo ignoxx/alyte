@@ -69,6 +69,32 @@ test('routes missing packs before Vision/model inference', async () => {
   });
 });
 
+test('translates only typed native unavailability during inference', async () => {
+  const unavailable = Object.assign(new Error('synthetic model removed'), {
+    failureCategory: 'unavailable' as const,
+  });
+  const unavailableMapper = createLocalSemanticMapper({
+    models: models(async () => Promise.reject(unavailable)),
+    aliases,
+  });
+  await assert.rejects(
+    unavailableMapper.map({ pageIndex: 0, rows: [candidateRow] }),
+    SemanticModelUnavailableError,
+  );
+
+  const runtimeFailure = Object.assign(new Error('synthetic runtime failure'), {
+    failureCategory: 'runtime-failed' as const,
+  });
+  const runtimeMapper = createLocalSemanticMapper({
+    models: models(async () => Promise.reject(runtimeFailure)),
+    aliases,
+  });
+  await assert.rejects(
+    runtimeMapper.map({ pageIndex: 0, rows: [candidateRow] }),
+    (error: unknown) => error === runtimeFailure,
+  );
+});
+
 test('accepts only validated source selections and preserves versioned provenance', async () => {
   const mapper = createLocalSemanticMapper({
     models: models(async () =>

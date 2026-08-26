@@ -326,6 +326,14 @@ function isPdfPasswordFailure(error: unknown): boolean {
   return message.includes('password') || message.includes('unlock') || message.includes('locked');
 }
 
+function isSemanticModelUnavailable(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { readonly code?: unknown }).code === 'semantic-model-unavailable'
+  );
+}
+
 function viewerPageCount(value: number): number {
   if (!Number.isInteger(value) || value < 1) throw new Error('The PDF has no pages');
   return value;
@@ -1907,7 +1915,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         proposals.push(...validateSemanticProposals(mapped, chunk.rows, extractionAliases));
       } catch (error) {
         if (error instanceof LabReportExtractionError && error.reason === 'cancelled') throw error;
-        // Inference, timeout, unload, and malformed output all preserve the deterministic rows.
+        if (isSemanticModelUnavailable(error)) {
+          throw new LabReportExtractionError(
+            'model-unavailable',
+            'The verified on-device model pack became unavailable during extraction',
+            { cause: error },
+          );
+        }
+        // Timeouts, runtime failures, and malformed output all preserve the deterministic rows.
         // A later chunk is still allowed to complete independently; explicit cancellation aborts
         // the operation before any draft can be written.
       }

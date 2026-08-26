@@ -24,6 +24,16 @@ export class SemanticModelUnavailableError extends Error {
   readonly code = 'semantic-model-unavailable' as const;
 }
 
+function localModelFailureCategory(error: unknown): unknown {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const candidate = error as {
+    readonly failure?: unknown;
+    readonly failureCategory?: unknown;
+    readonly userInfo?: { readonly failureCategory?: unknown };
+  };
+  return candidate.failure ?? candidate.failureCategory ?? candidate.userInfo?.failureCategory;
+}
+
 type SupportedLanguage = (typeof productionLocalModelManifest.compatibility.languages)[number];
 
 function languageCode(value: string | null): SupportedLanguage | null {
@@ -97,11 +107,23 @@ export function createLocalSemanticMapper(
       if (new TextEncoder().encode(prompt).byteLength > SEMANTIC_MAPPER_LIMITS.maxInputBytes) {
         throw new Error('semantic-inference-input-too-large');
       }
-      const raw = await withTimeout(
-        options.models.infer(prompt),
-        timeoutMs,
-        options.models.cancelInference,
-      );
+      let raw: string;
+      try {
+        raw = await withTimeout(
+          options.models.infer(prompt),
+          timeoutMs,
+          options.models.cancelInference,
+        );
+      } catch (error) {
+        // Only the native typed missing/unloaded contract returns to model setup. Timeouts,
+        // malformed output, and runtime failures remain ordinary per-chunk deterministic fallback.
+        if (localModelFailureCategory(error) === 'unavailable') {
+          throw new SemanticModelUnavailableError(
+            'The verified Gemma model pack became unavailable during extraction',
+          );
+        }
+        throw error;
+      }
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw) as unknown;

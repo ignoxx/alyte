@@ -1599,6 +1599,77 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(recognitionCalls, 0);
   });
 
+  test('routes typed mid-operation model loss while runtime failure keeps deterministic rows', async () => {
+    const ocr: VisionOCR = {
+      async recognize() {
+        return {
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'mid-operation-source',
+              text: 'LDL-C 3,8 mmol/L',
+              alternatives: [],
+              pageIndex: 0,
+              orientation: 0,
+              boundingBox: { x: 0.1, y: 0.2, width: 0.6, height: 0.04 },
+              recognition: { level: 'accurate' as const, language: 'de', internalConfidence: null },
+            },
+          ],
+        };
+      },
+    };
+    const mapper = (error: Error): ExtractionSemanticMapper => ({
+      adapterVersion: 'mid-operation.mapper.v1',
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      supports: () => true,
+      prepare: async () => undefined,
+      async map() {
+        throw error;
+      },
+    });
+
+    const unavailableRepository = createRepository();
+    const unavailableService = createService(
+      unavailableRepository,
+      new FakeFiles(),
+      new FakePdf(),
+      ocr,
+      mapper(
+        Object.assign(new Error('synthetic model removed'), {
+          code: 'semantic-model-unavailable' as const,
+        }),
+      ),
+    );
+    const unavailableReport = (await unavailableService.importPdf(
+      source('mid-operation-unavailable'),
+    ))!.report;
+    await assert.rejects(
+      unavailableService.startExtraction(unavailableReport.id),
+      (error: unknown) =>
+        error instanceof LabReportExtractionError && error.reason === 'model-unavailable',
+    );
+    assert.equal(await unavailableService.countOpenExtractionDrafts(), 0);
+
+    const runtimeRepository = createRepository();
+    const runtimeService = createService(
+      runtimeRepository,
+      new FakeFiles(),
+      new FakePdf(),
+      ocr,
+      mapper(
+        Object.assign(new Error('synthetic runtime failure'), {
+          failureCategory: 'runtime-failed' as const,
+        }),
+      ),
+    );
+    const runtimeReport = (await runtimeService.importPdf(source('mid-operation-runtime')))!.report;
+    const runtimeDraft = await runtimeService.startExtraction(runtimeReport.id);
+    assert.equal(runtimeDraft.rows.length, 1);
+    assert.equal(runtimeDraft.rows[0]?.source.semantic, null);
+  });
+
   test('keeps deterministic extraction when the semantic mapper does not support the language', async () => {
     const repository = createRepository();
     const files = new FakeFiles();

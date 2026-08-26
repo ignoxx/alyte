@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, View } from 'react-native';
 import {
   useIsFocused,
@@ -19,7 +19,7 @@ import {
   type LabReportExtractionProgress,
   type PasswordRequest,
 } from './report-service';
-import { extractionProgressGate } from './extraction-progress-gate';
+import { ExtractionProgressController } from './extraction-progress-controller';
 import { canStartAutomatedExtraction } from '../local-models/model';
 
 type Route = RouteProp<RootStackParamList, 'ExtractionProgress'>;
@@ -83,41 +83,45 @@ export function ExtractionProgressScreen() {
   const [cancellationRequested, setCancellationRequested] = useState(false);
   const [durableLoaded, setDurableLoaded] = useState(false);
   const [modelStateLoaded, setModelStateLoaded] = useState(false);
-  const started = useRef(false);
-  const completed = useRef(false);
-  const modelSetupOpened = useRef(false);
-  const mounted = useRef(true);
-  const focused = useRef(isFocused);
+  const controller = useMemo(
+    () =>
+      new ExtractionProgressController({
+        reportId: route.params.reportId,
+        startExtraction: (reportId) => reports.startExtraction(reportId, passwordRequest()),
+        classifyFailure: (error) =>
+          error instanceof LabReportExtractionError ? error.reason : 'recognition',
+        openModelSetup: () => navigation.navigate('ModelInstall'),
+        openDraft: (reportId, draftId) =>
+          navigation.navigate('MainTabs', {
+            screen: 'Labs',
+            params: {
+              screen: 'ExtractionDraft',
+              params: { reportId, draftId },
+            },
+          }),
+        setActiveOperation,
+        setFailure,
+        setModelUnavailable: () => {
+          setModelReady(false);
+          setModelStateLoaded(true);
+          setFailure(null);
+        },
+      }),
+    [navigation, reports, route.params.reportId],
+  );
 
   useEffect(() => {
-    focused.current = isFocused;
-  }, [isFocused]);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
+    return () => controller.dispose();
+  }, [controller]);
   usePreventRemove(activeOperation && failure === null, () => {
     // Extraction is an in-flight local write. Explicit Cancel is the only dismissal path until
     // the operation reaches a terminal state.
   });
 
-  const openModelSetup = useCallback(() => {
-    if (!focused.current || modelSetupOpened.current) return;
-    modelSetupOpened.current = true;
-    setActiveOperation(false);
-    setFailure(null);
-    navigation.navigate('ModelInstall');
-  }, [navigation]);
-
-  const openModelSetupFromAction = useCallback(() => {
-    modelSetupOpened.current = false;
-    openModelSetup();
-  }, [openModelSetup]);
-
   useEffect(() => {
+    let active = true;
     const unsubscribe = reports.subscribeExtractionProgress((next) => {
+      if (!active) return;
       if (next.reportId !== route.params.reportId) return;
       setProgress(next);
       if (next.status === 'active') setActiveOperation(true);
@@ -131,10 +135,7 @@ export function ExtractionProgressScreen() {
           // Model readiness is a setup concern, not a report-preservation failure screen. The
           // operation has not produced a draft, so keep the report and progress route in place
           // while the contextual setup route takes over.
-          setModelReady(false);
-          setModelStateLoaded(true);
-          setFailure(null);
-          modelSetupOpened.current = false;
+          controller.modelBecameUnavailable();
         } else {
           setFailure(next.error ?? 'recognition');
         }
@@ -145,8 +146,9 @@ export function ExtractionProgressScreen() {
     void reports
       .loadExtractionProgress(route.params.reportId)
       .then((durable) => {
+        if (!active) return;
         setDurableLoaded(true);
-        if (!mounted.current || durable === null) return;
+        if (durable === null) return;
         setProgress(durable);
         if (durable.status === 'active') setActiveOperation(true);
         if (
@@ -165,11 +167,15 @@ export function ExtractionProgressScreen() {
         }
       })
       .catch(() => {
+        if (!active) return;
         setDurableLoaded(true);
         // The in-memory subscription remains the live source while durable state is unavailable.
       });
-    return unsubscribe;
-  }, [reports, route.params.reportId]);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [controller, reports, route.params.reportId]);
 
   useEffect(() => {
     let active = true;
@@ -197,84 +203,23 @@ export function ExtractionProgressScreen() {
     };
   }, [models]);
 
-  const start = useCallback(async () => {
-    if (
-      started.current ||
-      completed.current ||
-      !isFocused ||
-      !durableLoaded ||
-      !modelStateLoaded ||
-      !modelReady ||
-      failure !== null ||
-      cancellationRequested
-    )
-      return;
-    started.current = true;
-    setActiveOperation(true);
-    setCancellationRequested(false);
-    setFailure(null);
-    try {
-      const draft = await reports.startExtraction(route.params.reportId, passwordRequest());
-      completed.current = true;
-      setActiveOperation(false);
-      if (!mounted.current || !focused.current) return;
-      navigation.navigate('MainTabs', {
-        screen: 'Labs',
-        params: {
-          screen: 'ExtractionDraft',
-          params: { reportId: route.params.reportId, draftId: draft.id },
-        },
-      });
-    } catch (error) {
-      const reason = error instanceof LabReportExtractionError ? error.reason : 'recognition';
-      if (reason === 'model-unavailable') {
-        // A pack can be deleted or fail activation after the preflight. Return to the same
-        // report-keyed setup flow and let the existing report remain available underneath it.
-        setModelReady(false);
-        setModelStateLoaded(true);
-        setFailure(null);
-        modelSetupOpened.current = false;
-      } else {
-        setFailure(reason);
-      }
-      started.current = false;
-      setActiveOperation(false);
-    }
-  }, [
-    cancellationRequested,
-    durableLoaded,
-    failure,
-    isFocused,
-    modelReady,
-    modelStateLoaded,
-    navigation,
-    reports,
-    route.params.reportId,
-  ]);
-
   useEffect(() => {
-    const decision = extractionProgressGate({
+    controller.evaluate({
       focused: isFocused,
       durableLoaded,
       modelStateLoaded,
       modelReady,
       hasFailure: failure !== null,
       cancellationRequested,
-      started: started.current,
-      completed: completed.current,
-      modelSetupOpened: modelSetupOpened.current,
     });
-    if (decision === 'open-model-setup') openModelSetup();
-    if (decision === 'start-extraction') void start();
   }, [
     cancellationRequested,
+    controller,
     durableLoaded,
     failure,
     isFocused,
     modelReady,
     modelStateLoaded,
-    openModelSetup,
-    start,
   ]);
 
   const currentStageIndex = useMemo(
@@ -287,11 +232,9 @@ export function ExtractionProgressScreen() {
   }
 
   function retry() {
-    completed.current = false;
-    started.current = false;
+    controller.retry();
     setFailure(null);
     setCancellationRequested(false);
-    void start();
   }
 
   return (
@@ -349,7 +292,7 @@ export function ExtractionProgressScreen() {
                 <AppText style={styles.muted}>{t('labs.extractionProgressModelRequired')}</AppText>
                 <AppButton
                   label={t('labs.extractionModelAction')}
-                  onPress={openModelSetupFromAction}
+                  onPress={() => controller.requestModelSetup(isFocused)}
                 />
               </>
             )}
