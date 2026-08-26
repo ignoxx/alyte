@@ -34,6 +34,10 @@ for (const [variant, bundleIdentifier] of Object.entries(expected)) {
   assert.equal(config.ios.bundleIdentifier, bundleIdentifier);
   assert.equal(config.ios.deploymentTarget, '26.0');
   assert.equal(config.ios.entitlements['com.apple.developer.kernel.increased-memory-limit'], true);
+  assert.equal(
+    config.ios.entitlements['com.apple.developer.kernel.extended-virtual-addressing'],
+    true,
+  );
   assert.equal(config.extra.variant, variant);
   assert.equal(config.extra.apiEnvironment, variant === 'production' ? 'production' : 'none');
   assert.equal(config.extra.showcaseAllowed, variant !== 'production');
@@ -48,6 +52,12 @@ assert.equal(configWithUpstreamEntitlement.ios.entitlements[upstreamEntitlement]
 assert.equal(
   configWithUpstreamEntitlement.ios.entitlements[
     'com.apple.developer.kernel.increased-memory-limit'
+  ],
+  true,
+);
+assert.equal(
+  configWithUpstreamEntitlement.ios.entitlements[
+    'com.apple.developer.kernel.extended-virtual-addressing'
   ],
   true,
 );

@@ -1,10 +1,10 @@
 # Issue 85 — increased-memory entitlement
 
 `apps/mobile/app.config.js` declares Apple's supported
-`com.apple.developer.kernel.increased-memory-limit` entitlement for every iOS variant. The
-existing `ios.entitlements` object is merged first, so upstream/config entitlements remain intact.
-The configuration intentionally does not declare Extended Virtual Addressing or Increased
-Debugging Memory Limit.
+`com.apple.developer.kernel.increased-memory-limit` entitlement for every iOS variant. Issue #89
+adds the related `com.apple.developer.kernel.extended-virtual-addressing` entitlement through the
+same additive merge, so upstream/config entitlements remain intact. The configuration intentionally
+does not declare Increased Debugging Memory Limit.
 
 The focused config check invokes the installed Expo CLI's `config --type introspect --json` pipeline
 for the development, preview, and production variants and asserts the entitlement in each emitted
