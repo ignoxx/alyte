@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import {
   AppButton,
@@ -18,21 +18,17 @@ import {
 } from '../local-models/model';
 import { ModelDetailsDisclosure } from '../local-models/ModelDetailsDisclosure';
 import { ModelProgress } from '../local-models/ModelProgress';
-import { modelFailureMessageKey } from '../local-models/model-ui';
+import {
+  isExpectedDownloadCancellation,
+  modelFailureMessageKey,
+  modelStatusTone,
+} from '../local-models/model-ui';
 import type { LocalModelService } from '../local-models/native';
 
 type OnboardingScreenProps = {
   model: LocalModelService;
   onComplete: () => void;
 };
-
-function modelStatusTone(
-  snapshot: LocalModelSnapshot | null,
-): 'neutral' | 'measured' | 'reviewNeeded' {
-  if (snapshot?.state === 'ready' || snapshot?.state === 'loaded') return 'measured';
-  if (snapshot?.state === 'failed') return 'reviewNeeded';
-  return 'neutral';
-}
 
 function ModelOption({
   selected,
@@ -60,6 +56,9 @@ function ModelOption({
       <View style={styles.modelOptionCopy}>
         <AppText variant="heading">{t('onboarding.modelName')}</AppText>
         <AppText style={styles.muted}>{t('onboarding.modelPublisher')}</AppText>
+        <AppText variant="caption" style={styles.muted} selectable>
+          {t('onboarding.modelFree')}
+        </AppText>
         <AppText variant="caption" style={styles.muted}>
           {t('onboarding.modelDownloadSummary')} · {t('onboarding.modelSpaceSummary')}
         </AppText>
@@ -75,7 +74,9 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   const [busy, setBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelled, setCancelled] = useState(false);
+  const [cancelError, setCancelError] = useState(false);
   const [bridgeUnavailable, setBridgeUnavailable] = useState(false);
+  const cancellationRequestedRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -103,8 +104,10 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   const downloading = snapshot !== null && isModelDownloadActive(snapshot);
 
   async function startDownload() {
+    cancellationRequestedRef.current = false;
     setSelected(true);
     setCancelled(false);
+    setCancelError(false);
     setBridgeUnavailable(false);
     setBusy(true);
     try {
@@ -114,11 +117,21 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
       if (canCompleteModelOnboarding(installed) && installed.state === 'ready') {
         await model.load();
       }
-    } catch {
-      // The native bridge emits a typed failure state. Keep the action retryable and do not write
-      // the onboarding preference here.
-      setBridgeUnavailable(true);
+    } catch (error) {
+      if (isExpectedDownloadCancellation(error, cancellationRequestedRef.current)) {
+        // Native cancellation resolves cancelDownload, then rejects its pending download with a
+        // typed cancellation. The completed cancellation already owns the calm outcome below.
+        setSelected(false);
+        setCancelled(true);
+        setCancelError(false);
+        setBridgeUnavailable(false);
+      } else {
+        // The native bridge emits a typed failure state. Keep the action retryable and do not write
+        // the onboarding preference here.
+        setBridgeUnavailable(true);
+      }
     } finally {
+      cancellationRequestedRef.current = false;
       setBusy(false);
     }
   }
@@ -139,11 +152,20 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   }
 
   async function cancelDownload() {
+    cancellationRequestedRef.current = true;
+    setCancelError(false);
     setCancelBusy(true);
     try {
       await model.cancelDownload();
       setSelected(false);
       setCancelled(true);
+      setBridgeUnavailable(false);
+    } catch {
+      // A failed cancellation is distinct from the expected rejection of startDownload after a
+      // successful cancel. Leave the operation retryable and explain the next action.
+      cancellationRequestedRef.current = false;
+      setCancelled(false);
+      setCancelError(true);
     } finally {
       setCancelBusy(false);
     }
@@ -194,6 +216,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
             onPress={() => {
               setSelected(true);
               setCancelled(false);
+              setCancelError(false);
             }}
             selected={selected}
           />
@@ -233,14 +256,31 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               />
             </AppSurface>
           ) : null}
+          {cancelError ? (
+            <AppSurface tone="soft" style={styles.callout}>
+              <AppText variant="heading" style={styles.error} selectable>
+                {t('onboarding.modelCancelFailure')}
+              </AppText>
+              <AppButton
+                disabled={cancelBusy}
+                label={t('onboarding.modelRetryCancel')}
+                onPress={() => void cancelDownload()}
+                tone="secondary"
+              />
+            </AppSurface>
+          ) : null}
           {cancelled ? (
             <AppText style={styles.muted} selectable>
               {t('onboarding.modelCancelDisclosure')}
             </AppText>
           ) : null}
 
-          {downloading && snapshot !== null ? <ModelProgress snapshot={snapshot} /> : null}
-          {downloading && snapshot !== null ? (
+          {!cancelled && downloading && snapshot !== null ? (
+            <ModelProgress snapshot={snapshot} />
+          ) : null}
+          {!cancelled && downloading && snapshot?.state === 'cancelling' ? (
+            <AppButton disabled label={t('onboarding.modelCancelling')} tone="quiet" />
+          ) : !cancelled && !cancelError && downloading && snapshot !== null ? (
             <AppButton
               disabled={cancelBusy}
               label={t('onboarding.modelCancel')}
@@ -266,6 +306,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               onPress={() => {
                 setSelected(true);
                 setCancelled(false);
+                setCancelError(false);
               }}
             />
           ) : null}

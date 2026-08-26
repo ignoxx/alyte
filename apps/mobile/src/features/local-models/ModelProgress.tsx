@@ -17,7 +17,11 @@ export function ModelProgress({ snapshot }: { readonly snapshot: LocalModelSnaps
   return (
     <View style={styles.progressGroup}>
       <View style={styles.progressCopy}>
-        <AppText accessibilityLiveRegion="polite" style={styles.muted} selectable>
+        <AppText
+          accessibilityLiveRegion="polite"
+          style={[styles.progressLabel, styles.muted]}
+          selectable
+        >
           {progressLabel(snapshot)}
         </AppText>
         <AppText style={styles.progressPercent} selectable>
@@ -38,8 +42,19 @@ export function ModelProgress({ snapshot }: { readonly snapshot: LocalModelSnaps
 
 const styles = StyleSheet.create({
   progressGroup: { gap: spacing.sm },
-  progressCopy: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
-  progressPercent: { color: colors.ink, fontVariant: ['tabular-nums'] },
+  progressCopy: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  progressLabel: { flexGrow: 1, flexShrink: 1, minWidth: 0 },
+  progressPercent: {
+    color: colors.ink,
+    flexShrink: 0,
+    fontVariant: ['tabular-nums'],
+    marginLeft: spacing.sm,
+  },
   progressTrack: {
     backgroundColor: colors.disabledFill,
     borderRadius: 99,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, View } from 'react-native';
 import { t } from '../../localization';
 import {
@@ -14,15 +14,13 @@ import { useServices } from '../../services';
 import { isModelDownloadActive, type LocalModelSnapshot } from '../local-models/model';
 import { ModelDetailsDisclosure } from '../local-models/ModelDetailsDisclosure';
 import { ModelProgress } from '../local-models/ModelProgress';
-import { modelFailureMessageKey, modelStateLabelKey } from '../local-models/model-ui';
-
-function modelStatusTone(
-  snapshot: LocalModelSnapshot | null,
-): 'neutral' | 'measured' | 'reviewNeeded' {
-  if (snapshot?.state === 'ready' || snapshot?.state === 'loaded') return 'measured';
-  if (snapshot?.state === 'failed') return 'reviewNeeded';
-  return 'neutral';
-}
+import {
+  isExpectedDownloadCancellation,
+  modelFailureMessageKey,
+  modelOperation,
+  modelStateLabelKey,
+  modelStatusTone,
+} from '../local-models/model-ui';
 
 function ModelStorageState({ snapshot }: { readonly snapshot: LocalModelSnapshot | null }) {
   if (snapshot === null) {
@@ -48,7 +46,10 @@ export function ModelStorageScreen() {
   const [busy, setBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [error, setError] = useState(false);
+  const [cancelError, setCancelError] = useState(false);
+  const [cancelled, setCancelled] = useState(false);
   const [removed, setRemoved] = useState(false);
+  const cancellationRequestedRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -73,24 +74,42 @@ export function ModelStorageScreen() {
   }, [models]);
 
   async function startDownload() {
+    cancellationRequestedRef.current = false;
     setBusy(true);
     setError(false);
+    setCancelError(false);
+    setCancelled(false);
     setRemoved(false);
     try {
       await models.startDownload();
-    } catch {
-      setError(true);
+    } catch (downloadError) {
+      if (isExpectedDownloadCancellation(downloadError, cancellationRequestedRef.current)) {
+        setCancelled(true);
+        setError(false);
+        setCancelError(false);
+      } else {
+        setError(true);
+      }
     } finally {
+      cancellationRequestedRef.current = false;
       setBusy(false);
     }
   }
 
   async function cancelDownload() {
+    cancellationRequestedRef.current = true;
+    setCancelError(false);
     setCancelBusy(true);
     try {
       await models.cancelDownload();
+      setCancelled(true);
+      setError(false);
     } catch {
-      setError(true);
+      // A cancellation request can fail independently of the pending download. Keep it distinct
+      // from bridge/download failures and offer a retry while the native operation remains active.
+      cancellationRequestedRef.current = false;
+      setCancelled(false);
+      setCancelError(true);
     } finally {
       setCancelBusy(false);
     }
@@ -99,6 +118,8 @@ export function ModelStorageScreen() {
   async function removeModel() {
     setBusy(true);
     setError(false);
+    setCancelError(false);
+    setCancelled(false);
     setRemoved(false);
     try {
       await models.deletePack();
@@ -113,6 +134,7 @@ export function ModelStorageScreen() {
   const downloading = snapshot !== null && isModelDownloadActive(snapshot);
   const state = snapshot?.state;
   const failed = state === 'failed';
+  const operation = modelOperation(state ?? null);
 
   return (
     <View style={screenStyles.safe}>
@@ -147,41 +169,65 @@ export function ModelStorageScreen() {
               </AppText>
             </AppSurface>
           ) : null}
+          {cancelError ? (
+            <AppSurface tone="soft" style={styles.callout}>
+              <AppText variant="heading" style={styles.error} selectable>
+                {t('settings.modelStorageCancelError')}
+              </AppText>
+              <AppButton
+                disabled={cancelBusy}
+                label={t('settings.modelStorageRetryCancel')}
+                onPress={() => void cancelDownload()}
+                tone="secondary"
+              />
+            </AppSurface>
+          ) : null}
           {removed ? (
             <AppText style={styles.muted} selectable>
               {t('settings.modelStorageRemoved')}
             </AppText>
           ) : null}
 
-          {downloading && snapshot !== null ? <ModelProgress snapshot={snapshot} /> : null}
-          {downloading ? (
+          {!cancelled && downloading && snapshot !== null ? (
+            <ModelProgress snapshot={snapshot} />
+          ) : null}
+          {cancelled ? (
+            <AppText style={styles.muted} selectable>
+              {t('settings.modelStorageCancelled')}
+            </AppText>
+          ) : null}
+          {!cancelled && !cancelError && operation === 'cancel' ? (
             <AppButton
               disabled={cancelBusy}
               label={t('settings.modelStorageCancel')}
               onPress={() => void cancelDownload()}
               tone="quiet"
             />
-          ) : failed ? (
+          ) : !cancelled && operation === 'cancelling' ? (
+            <AppButton disabled label={t('settings.modelStorageCancelling')} tone="quiet" />
+          ) : operation === 'retry' ? (
             <AppButton
               disabled={busy}
               label={t('settings.modelStorageRetry')}
               onPress={() => void startDownload()}
               tone="secondary"
             />
-          ) : error && snapshot === null ? (
+          ) : operation === 'checking' && error ? (
             <AppButton
               disabled={busy}
               label={t('settings.modelStorageRetry')}
               onPress={() => void startDownload()}
               tone="secondary"
             />
-          ) : state === 'not-installed' ? (
+          ) : operation === 'download' ? (
             <AppButton
               disabled={busy}
               label={t('settings.modelStorageDownload')}
               onPress={() => void startDownload()}
             />
-          ) : (
+          ) : operation === 'deleting' ? (
+            <AppButton disabled label={t('settings.modelStorageDeleting')} tone="quiet" />
+          ) : operation === 'remove' ? (
             <AppButton
               disabled={busy || snapshot === null}
               label={t('settings.modelStorageDelete')}
@@ -201,7 +247,7 @@ export function ModelStorageScreen() {
               }
               tone="secondary"
             />
-          )}
+          ) : null}
         </AppSurface>
       </ScreenScrollView>
     </View>
