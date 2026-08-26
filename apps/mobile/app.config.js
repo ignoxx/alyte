@@ -36,6 +36,11 @@ module.exports = ({ config }) => {
       bundleIdentifier: selected.bundleIdentifier,
       deploymentTarget: '26.0',
       supportsTablet: false,
+      // This native entitlement changes the fingerprint; release builds must be rebuilt and signed.
+      entitlements: {
+        ...config.ios?.entitlements,
+        'com.apple.developer.kernel.increased-memory-limit': true,
+      },
       infoPlist: {
         ...config.ios?.infoPlist,
         NSCameraUsageDescription:

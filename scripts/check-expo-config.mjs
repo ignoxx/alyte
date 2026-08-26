@@ -12,10 +12,24 @@ for (const [variant, bundleIdentifier] of Object.entries(expected)) {
   const config = appConfig({ config: {} });
   assert.equal(config.ios.bundleIdentifier, bundleIdentifier);
   assert.equal(config.ios.deploymentTarget, '26.0');
+  assert.equal(config.ios.entitlements['com.apple.developer.kernel.increased-memory-limit'], true);
   assert.equal(config.extra.variant, variant);
   assert.equal(config.extra.apiEnvironment, variant === 'production' ? 'production' : 'none');
   assert.equal(config.extra.showcaseAllowed, variant !== 'production');
 }
+
+process.env.APP_VARIANT = 'production';
+const upstreamEntitlement = 'com.apple.developer.in-app-payments';
+const configWithUpstreamEntitlement = appConfig({
+  config: { ios: { entitlements: { [upstreamEntitlement]: true } } },
+});
+assert.equal(configWithUpstreamEntitlement.ios.entitlements[upstreamEntitlement], true);
+assert.equal(
+  configWithUpstreamEntitlement.ios.entitlements[
+    'com.apple.developer.kernel.increased-memory-limit'
+  ],
+  true,
+);
 
 assert.notEqual(expected.development, expected.preview);
 assert.notEqual(expected.preview, expected.production);
