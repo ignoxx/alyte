@@ -88,9 +88,15 @@ export function LabsScreen() {
   }, [isFocused, loadRecords]);
 
   const hasData = records.length > 0 || reports.length > 0;
+  const isEmptyState = !loading && !error && !hasData;
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+      <ScreenScrollView
+        contentContainerStyle={screenStyles.content}
+        scrollEnabled={!isEmptyState}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         {loading && <AppText style={styles.muted}>{t('labs.loading')}</AppText>}
         {error && (
           <View style={styles.errorState}>
@@ -240,7 +246,6 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: spacing.md,
     justifyContent: 'center',
-    minHeight: 440,
     paddingHorizontal: spacing.lg,
   },
   emptyBody: { color: colors.mutedInk, textAlign: 'center' },

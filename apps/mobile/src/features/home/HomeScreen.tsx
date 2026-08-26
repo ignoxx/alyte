@@ -305,9 +305,21 @@ export function HomeScreen() {
     });
   }
 
+  const isEmptyState =
+    !loading &&
+    !error &&
+    model !== null &&
+    model.latestReport === null &&
+    model.recentRecords.length === 0;
+
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+      <ScreenScrollView
+        contentContainerStyle={screenStyles.content}
+        scrollEnabled={!isEmptyState}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         {loading && <AppText style={styles.muted}>{t('home.loading')}</AppText>}
         {error && <AppText style={styles.error}>{t('home.error')}</AppText>}
         {!loading &&
@@ -344,7 +356,6 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: spacing.md,
     justifyContent: 'center',
-    minHeight: 440,
     paddingHorizontal: spacing.lg,
   },
   heroSymbol: {
