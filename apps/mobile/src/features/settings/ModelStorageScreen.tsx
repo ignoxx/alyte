@@ -138,7 +138,13 @@ export function ModelStorageScreen() {
 
   return (
     <View style={screenStyles.safe}>
-      <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+      <ScreenScrollView
+        contentContainerStyle={screenStyles.content}
+        // NativeTabs are translucent and do not expose a React Navigation height context. Keep a
+        // generous content inset so the final action remains above the glass in every card state.
+        contentInset={{ bottom: 120 }}
+        style={screenStyles.scroll}
+      >
         <AppText style={styles.intro} selectable>
           {t('settings.modelStorageBody')}
         </AppText>
