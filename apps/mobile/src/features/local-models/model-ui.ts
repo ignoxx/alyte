@@ -22,6 +22,8 @@ export function modelProgressPercent(snapshot: LocalModelSnapshot): number {
 
 export type ModelDownloadAction = 'download' | 'continue' | 'retry' | 'none';
 export type ModelFailureRecoveryAction = 'activate' | 'download';
+export type ModelSetupPrimaryAction =
+  'checking' | 'download' | 'continue' | 'retry' | 'open' | 'cancel' | 'cancelling' | 'none';
 
 /**
  * A verified final pack recovers by activating its runtime. Only an absent, partial, or failed
@@ -37,6 +39,28 @@ export function modelFailureRecoveryAction(
 export function modelDownloadAction(snapshot: LocalModelSnapshot | null): ModelDownloadAction {
   if (snapshot === null) return 'none';
   if (hasResumableModelDownload(snapshot)) return 'continue';
+  if (snapshot.state === 'failed') return 'retry';
+  if (snapshot.state === 'not-installed') return 'download';
+  return 'none';
+}
+
+/**
+ * Chooses the one primary action shown by the required-model setup task. The action is derived
+ * from native lifecycle state plus a transient bridge/load failure; the screen never needs to
+ * expose a second selection step for the single production pack.
+ */
+export function modelSetupPrimaryAction(
+  snapshot: LocalModelSnapshot | null,
+  failure: LocalModelFailure | null = null,
+): ModelSetupPrimaryAction {
+  if (snapshot === null) return failure === null ? 'checking' : 'retry';
+  if (snapshot.state === 'cancelling') return 'cancelling';
+  if (snapshot.state === 'downloading' || snapshot.state === 'verifying') return 'cancel';
+  if (hasResumableModelDownload(snapshot)) return 'continue';
+  // A transient load failure still presents "Try again". The handler can use the separate
+  // recovery decision to retry activation without redownloading a verified pack.
+  if (failure !== null) return 'retry';
+  if (canCompleteModelOnboarding(snapshot)) return 'open';
   if (snapshot.state === 'failed') return 'retry';
   if (snapshot.state === 'not-installed') return 'download';
   return 'none';

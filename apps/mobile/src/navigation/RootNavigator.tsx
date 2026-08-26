@@ -239,7 +239,14 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
         <RootStack.Screen
           name="ModelInstall"
           component={LocalModelInstallScreen}
-          options={{ presentation: 'fullScreenModal', headerShown: false }}
+          options={{
+            presentation: 'fullScreenModal',
+            headerShown: true,
+            title: t('onboarding.contextualNavigationTitle'),
+            headerBackButtonDisplayMode: 'minimal',
+            headerShadowVisible: false,
+            headerTintColor: colors.accent as string,
+          }}
         />
         <RootStack.Screen
           name={reportImportDestination.route}

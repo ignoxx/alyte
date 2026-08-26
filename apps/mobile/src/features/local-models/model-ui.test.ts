@@ -8,6 +8,7 @@ import {
   modelFailureMessageKey,
   modelFailureRecoveryAction,
   modelDownloadAction,
+  modelSetupPrimaryAction,
   modelOperation,
   modelProgressPercent,
   modelStateLabelKey,
@@ -163,6 +164,39 @@ test('a verified pack retries activation and never selects the download path', (
     }),
     'download',
   );
+});
+
+test('required-model setup exposes one action for every lifecycle state', () => {
+  const initial = notInstalledSnapshot(productionLocalModelManifest);
+  const partial = {
+    ...initial,
+    state: 'failed' as const,
+    bytesReceived: 100,
+    progress: 100 / initial.expectedBytes,
+    failure: 'interrupted' as const,
+  };
+
+  assert.equal(modelSetupPrimaryAction(null), 'checking');
+  assert.equal(modelSetupPrimaryAction(null, 'unavailable'), 'retry');
+  assert.equal(modelSetupPrimaryAction(initial), 'download');
+  assert.equal(modelSetupPrimaryAction(partial), 'continue');
+  assert.equal(
+    modelSetupPrimaryAction({ ...initial, state: 'failed', failure: 'offline' }),
+    'retry',
+  );
+  assert.equal(modelSetupPrimaryAction({ ...initial, state: 'downloading' }), 'cancel');
+  assert.equal(modelSetupPrimaryAction({ ...initial, state: 'verifying' }), 'cancel');
+  assert.equal(modelSetupPrimaryAction({ ...initial, state: 'cancelling' }), 'cancelling');
+
+  const ready = {
+    ...initial,
+    state: 'ready' as const,
+    bytesReceived: initial.expectedBytes,
+    progress: 1,
+  };
+  assert.equal(modelSetupPrimaryAction(ready), 'open');
+  assert.equal(modelSetupPrimaryAction(ready, 'runtime-failed'), 'retry');
+  assert.equal(modelSetupPrimaryAction({ ...initial, state: 'deleting' }), 'none');
 });
 
 test('download size formatting follows the device locale and localized unit keys', () => {
