@@ -1,3 +1,21 @@
+import type { LabReport } from '@alyte/domain';
+
+export type LabReportDetailState = 'loading' | 'error' | 'unavailable' | 'ready';
+
+/**
+ * Keep an absent report distinct from a failed read. A report can disappear after Home has
+ * queued navigation (for example, because it was deleted), and that state needs a way back.
+ */
+export function getLabReportDetailState(
+  report: LabReport | null,
+  loading: boolean,
+  error: boolean,
+): LabReportDetailState {
+  if (loading) return 'loading';
+  if (error) return 'error';
+  return report === null ? 'unavailable' : 'ready';
+}
+
 export function formatReportPageCount(
   label: string,
   pageCount: number | null,

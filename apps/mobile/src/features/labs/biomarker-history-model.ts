@@ -221,6 +221,10 @@ export function buildBiomarkerHistoryViewModel(
     .flatMap((record) => record.measurements)
     .find((measurement) => measurement.biomarkerId === biomarkerId);
 
+  // A stale Home action must not open a screen that exposes only an opaque ID and empty history.
+  // Keep a real source measurement visible even when the catalogue has not caught up yet.
+  if (entry === undefined && fallbackMeasurement === undefined) return null;
+
   const trend = buildMeasuredTrend(
     records,
     canonicalId(biomarkerId),

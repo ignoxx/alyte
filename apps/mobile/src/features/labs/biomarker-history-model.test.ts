@@ -285,6 +285,10 @@ test('unsupported canonical measurements stay visible as non-points', () => {
   }
 });
 
+test('unknown history without a source measurement is unavailable', () => {
+  assert.equal(buildBiomarkerHistoryViewModel([], 'biomarker.missing'), null);
+});
+
 test('non-lipid history keeps every representative non-point state and source range visible', () => {
   const model = buildBiomarkerHistoryViewModel(
     [

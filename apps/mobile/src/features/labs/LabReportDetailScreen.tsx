@@ -18,9 +18,14 @@ import { colors, screenStyles, spacing } from '../../theme';
 import {
   LabReportExtractionError,
   LabReportImportError,
+  type LabReportPreview,
   type PasswordRequest,
 } from './report-service';
-import { formatReportFileSize, formatReportPageCount } from './report-detail-model';
+import {
+  formatReportFileSize,
+  formatReportPageCount,
+  getLabReportDetailState,
+} from './report-detail-model';
 import { canStartAutomatedExtraction, type LocalModelSnapshot } from '../local-models/model';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
@@ -246,15 +251,42 @@ export function LabReportDetailScreen() {
     }
   }
 
-  if (loading) return <AppText>{t('labs.loading')}</AppText>;
-  if (error || report === null) {
+  const detailState = getLabReportDetailState(report, loading, error);
+  if (detailState === 'loading') return <AppText>{t('labs.loading')}</AppText>;
+  if (detailState === 'error') {
     return (
       <View style={styles.center}>
-        <AppText>{t('labs.reportLoadError')}</AppText>
+        <AppText selectable>{t('labs.reportLoadError')}</AppText>
         <AppButton label={t('labs.retry')} onPress={() => void load()} tone="secondary" />
+        <AppButton
+          label={t('accessibility.back')}
+          onPress={() => navigation.goBack()}
+          tone="quiet"
+        />
       </View>
     );
   }
+  if (detailState === 'unavailable') {
+    return (
+      <View style={styles.center}>
+        <AppText selectable variant="heading">
+          {t('labs.reportUnavailableTitle')}
+        </AppText>
+        <AppText selectable style={styles.body}>
+          {t('labs.reportUnavailableBody')}
+        </AppText>
+        <AppButton
+          label={t('accessibility.back')}
+          onPress={() => navigation.goBack()}
+          tone="quiet"
+        />
+      </View>
+    );
+  }
+
+  // `ready` is only possible with a loaded report; the guard keeps this invariant explicit for
+  // TypeScript and protects the detail renderer if the state model changes later.
+  if (report === null) return null;
 
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
 

@@ -1,6 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatReportFileSize, formatReportPageCount } from './report-detail-model';
+import {
+  formatReportFileSize,
+  formatReportPageCount,
+  getLabReportDetailState,
+} from './report-detail-model';
+
+test('report detail separates unavailable records from transient load errors', () => {
+  assert.equal(getLabReportDetailState(null, false, false), 'unavailable');
+  assert.equal(getLabReportDetailState(null, false, true), 'error');
+  assert.equal(getLabReportDetailState(null, true, false), 'loading');
+});
 
 test('report page count interpolation produces one localized label', () => {
   assert.equal(formatReportPageCount('Pages: {count}', 4, 'Unknown'), 'Pages: 4');

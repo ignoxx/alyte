@@ -362,6 +362,8 @@
     "reportDelete": "Delete Original Report",
     "reportDeleteConfirm": "Delete this Original Report? Any linked Lab Records remain, with their source marked as user-deleted.",
     "reportLoadError": "The Lab Report could not be loaded.",
+    "reportUnavailableTitle": "Lab Report unavailable",
+    "reportUnavailableBody": "This Lab Report is no longer available in local history. Return to continue reviewing your records.",
     "manualAction": "Add a Lab Record manually",
     "loading": "Opening your protected local history…",
     "errorTitle": "Labs could not open",
