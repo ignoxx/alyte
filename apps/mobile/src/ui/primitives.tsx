@@ -238,6 +238,7 @@ export type AppIconName =
   | 'doc'
   | 'clock'
   | 'library'
+  | 'chart'
   | 'phone'
   | 'folder'
   | 'photos'
@@ -261,6 +262,7 @@ const iconSymbols: Record<AppIconName, string> = {
   doc: 'doc.text',
   clock: 'clock',
   library: 'books.vertical',
+  chart: 'chart.xyaxis.line',
   phone: 'iphone',
   folder: 'folder',
   photos: 'photo.on.rectangle',

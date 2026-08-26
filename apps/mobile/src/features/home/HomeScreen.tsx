@@ -64,9 +64,9 @@ function ReportRow({
       pressRetentionOffset={8}
       style={({ pressed }) => [styles.reportRow, pressed && styles.rowPressed]}
     >
-      <AppIcon name={isReport ? 'doc' : 'labs'} size={22} />
+      <AppIcon color={colors.accent} name={isReport ? 'doc' : 'labs'} size={22} />
       <View style={styles.rowBody}>
-        <AppText numberOfLines={2} variant="heading">
+        <AppText numberOfLines={2} selectable variant="heading">
           {title}
         </AppText>
         <AppText style={styles.muted}>{reportDetail(row, locale)}</AppText>
@@ -79,13 +79,15 @@ function ReportRow({
 function EmptyHome({ onImport }: { readonly onImport: () => void }) {
   return (
     <View style={styles.emptyState}>
-      <View style={styles.heroSymbol}>
-        <AppIcon name="doc" size={30} />
+      <View accessibilityElementsHidden style={styles.heroSymbol}>
+        <AppIcon color={colors.accent} name="doc" size={30} />
       </View>
-      <AppText style={styles.emptyTitle} variant="title">
-        {t('home.emptyTitle')}
-      </AppText>
-      <AppText style={styles.emptyBody}>{t('home.emptyBody')}</AppText>
+      <View style={styles.emptyCopy}>
+        <AppText style={styles.emptyTitle} variant="title">
+          {t('home.emptyTitle')}
+        </AppText>
+        <AppText style={styles.emptyBody}>{t('home.emptyBody')}</AppText>
+      </View>
       <AppButton label={t('home.importAction')} onPress={onImport} style={styles.importButton}>
         <AppIcon color={colors.onAccent} name="plus" size={17} />
       </AppButton>
@@ -133,10 +135,10 @@ function ContinueReport({
       onPress={onPress}
       style={({ pressed }) => [styles.continueAction, pressed && styles.actionPressed]}
     >
-      <AppIcon name="doc" size={22} />
+      <AppIcon color={colors.accent} name="doc" size={22} />
       <View style={styles.rowBody}>
         <AppText variant="heading">{t('home.continueReport')}</AppText>
-        <AppText numberOfLines={2} style={styles.muted}>
+        <AppText numberOfLines={2} selectable style={styles.muted}>
           {report.originalFilename}
         </AppText>
       </View>
@@ -163,22 +165,39 @@ function PopulatedHome({
   readonly onOpenBiomarkerHistory: (biomarkerId: string) => void;
 }) {
   const latest = model.latestReport;
-  const latestRecord = model.recentRecords[0] ?? null;
-  const latestItem = latest ?? latestRecord;
+  const latestRecord = model.latestRecord;
+  // A confirmed Lab Record is the person's measured history anchor. Fall back to the source report
+  // only while an import has not produced a record yet, keeping extracted/source state honest.
+  const latestItem = latestRecord ?? latest;
   if (latestItem === null) return <EmptyHome onImport={onImport} />;
   const title = latestItem.title ?? t('home.manualRecord');
+  const latestIsRecord = latestItem.kind === 'record';
   return (
     <View style={styles.sections}>
       <AppText style={styles.eyebrow} variant="caption">
-        {t(latest === null ? 'home.latestRecord' : 'home.latestReport')}
+        {t(latestIsRecord ? 'home.latestRecord' : 'home.latestReport')}
       </AppText>
-      <AppText style={styles.heroDate} variant="display">
-        {dateLabel(latestItem.date, locale)}
-      </AppText>
-      <AppText style={styles.muted} numberOfLines={2}>
-        {title} ·{' '}
-        {t('home.measurementsCount').replace('{count}', String(latestItem.measurementCount))}
-      </AppText>
+      <Pressable
+        accessibilityHint={t(latestIsRecord ? 'home.recordRowHint' : 'home.reportRowHint')}
+        accessibilityLabel={`${title}, ${reportDetail(latestItem, locale)}`}
+        accessibilityRole="button"
+        onPress={() => (latestIsRecord ? onOpenRecord(latestItem.id) : onOpenReport(latestItem.id))}
+        pressRetentionOffset={8}
+        style={({ pressed }) => [styles.latestRow, pressed && styles.rowPressed]}
+      >
+        <View style={styles.latestCopy}>
+          <AppText numberOfLines={2} selectable style={styles.heroDate} variant="display">
+            {dateLabel(latestItem.date, locale)}
+          </AppText>
+          <AppText numberOfLines={2} selectable variant="heading">
+            {title}
+          </AppText>
+          <AppText selectable style={styles.muted}>
+            {t('home.measurementsCount').replace('{count}', String(latestItem.measurementCount))}
+          </AppText>
+        </View>
+        <AppIcon name="chevronRight" size={18} />
+      </Pressable>
       <View style={styles.rule} />
       {model.unfinishedReports[0] !== undefined && (
         <ContinueReport
@@ -189,7 +208,7 @@ function PopulatedHome({
       <PendingWork model={model} />
       {model.measuredChanges.length > 0 && (
         <View style={styles.section}>
-          <AppText variant="title">{t('home.measuredChanges')}</AppText>
+          <AppText variant="heading">{t('home.measuredChanges')}</AppText>
           {model.measuredChanges.map((change) => (
             <Pressable
               accessibilityLabel={`${change.label}, ${measuredValue(change, true, locale)}, ${changeDirection(change)}`}
@@ -217,7 +236,7 @@ function PopulatedHome({
       )}
       {model.recentReports.length > 0 && (
         <View style={styles.section}>
-          <AppText variant="title">{t('home.recentReports')}</AppText>
+          <AppText variant="heading">{t('home.recentReports')}</AppText>
           {model.recentReports.map((row) => (
             <ReportRow
               key={`${row.kind}-${row.id}`}
@@ -230,7 +249,7 @@ function PopulatedHome({
       )}
       {model.recentRecords.length > 0 && (
         <View style={styles.section}>
-          <AppText variant="title">{t('home.recordHistory')}</AppText>
+          <AppText variant="heading">{t('home.recordHistory')}</AppText>
           {model.recentRecords.map((row) => (
             <ReportRow
               key={`${row.kind}-${row.id}`}
@@ -245,8 +264,9 @@ function PopulatedHome({
         label={t('home.importAnotherAction')}
         onPress={onImport}
         style={styles.importButton}
+        tone="secondary"
       >
-        <AppIcon color={colors.onAccent} name="plus" size={17} />
+        <AppIcon color={colors.accent} name="plus" size={17} />
       </AppButton>
     </View>
   );
@@ -310,6 +330,7 @@ export function HomeScreen() {
     !error &&
     model !== null &&
     model.latestReport === null &&
+    model.latestRecord === null &&
     model.recentRecords.length === 0;
 
   return (
@@ -357,17 +378,20 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: spacing.md,
     justifyContent: 'center',
+    maxWidth: 440,
     paddingHorizontal: spacing.lg,
+    width: '100%',
   },
   heroSymbol: {
     alignItems: 'center',
     backgroundColor: colors.disabledFill,
     borderCurve: 'continuous',
-    borderRadius: 16,
-    height: 64,
+    borderRadius: 20,
+    height: 72,
     justifyContent: 'center',
-    width: 64,
+    width: 72,
   },
+  emptyCopy: { alignItems: 'center', gap: spacing.xs, maxWidth: 340 },
   emptyTitle: { textAlign: 'center' },
   emptyBody: { color: colors.mutedInk, textAlign: 'center' },
   importButton: { alignSelf: 'stretch' },
@@ -379,18 +403,36 @@ const styles = StyleSheet.create({
   },
   heroDate: { color: colors.ink },
   rule: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth },
-  pendingWork: { gap: spacing.xs },
+  pendingWork: {
+    backgroundColor: colors.accentSoft,
+    borderColor: colors.border,
+    borderCurve: 'continuous',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    gap: spacing.xs,
+    padding: spacing.md,
+  },
   continueAction: {
     alignItems: 'center',
-    borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accent,
+    borderCurve: 'continuous',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: spacing.sm,
-    minHeight: 72,
+    minHeight: 68,
+    paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
+  latestRow: {
+    alignItems: 'center',
+    borderCurve: 'continuous',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: 100,
+    paddingVertical: spacing.sm,
+  },
+  latestCopy: { flex: 1, gap: spacing.xs },
   actionPressed: { backgroundColor: colors.accentSoft },
   changeRow: {
     alignItems: 'center',

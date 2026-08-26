@@ -48,6 +48,8 @@ export type HomeMeasuredChange = {
 
 export type HomeLabViewModel = {
   readonly latestReport: HomeReportRow | null;
+  /** The newest confirmed Lab Record, including records linked to an Original Report. */
+  readonly latestRecord: HomeReportRow | null;
   readonly recentReports: readonly HomeReportRow[];
   readonly recentRecords: readonly HomeReportRow[];
   /** Source reports whose local import/review journey has not reached a confirmed Lab Record. */
@@ -133,13 +135,16 @@ export function buildHomeLabViewModel(
     .filter((report) => report.importState !== 'deleted')
     .map((report) => reportRow(report, records))
     .sort(compareHomeRows);
+  const latestRecord = records.map(recordRow).sort(compareHomeRows)[0] ?? null;
   const sourceRecordIds = new Set(
     reports
       .filter((report) => report.importState !== 'deleted')
       .flatMap((report) => report.labRecordIds),
   );
   const recentRecords = records
-    .filter((record) => record.labReportId === null && !sourceRecordIds.has(record.id))
+    // A source record is normally represented by its active Lab Report. If that source is deleted,
+    // keep the surviving Lab Record discoverable rather than making Home look empty.
+    .filter((record) => record.labReportId === null || !sourceRecordIds.has(record.id))
     .map(recordRow)
     .sort(compareHomeRows)
     .slice(0, 3);
@@ -179,6 +184,7 @@ export function buildHomeLabViewModel(
 
   return {
     latestReport,
+    latestRecord,
     recentReports,
     recentRecords,
     unfinishedReports,

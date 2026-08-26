@@ -112,9 +112,15 @@ export function LabsScreen() {
         )}
         {isEmptyState && (
           <View style={styles.emptyState}>
-            <AppIcon name="addDocument" size={32} />
-            <AppText variant="title">{t('labs.emptyTitle')}</AppText>
-            <AppText style={styles.emptyBody}>{t('labs.emptyBody')}</AppText>
+            <View accessibilityElementsHidden style={styles.emptySymbol}>
+              <AppIcon color={colors.accent} name="addDocument" size={30} />
+            </View>
+            <View style={styles.emptyCopy}>
+              <AppText style={styles.emptyTitle} variant="title">
+                {t('labs.emptyTitle')}
+              </AppText>
+              <AppText style={styles.emptyBody}>{t('labs.emptyBody')}</AppText>
+            </View>
             <AppButton
               label={t('labs.action')}
               onPress={() => openReportImportFromStack(navigation)}
@@ -140,18 +146,19 @@ export function LabsScreen() {
                 </AppText>
                 {reports.map((report) => (
                   <Pressable
+                    accessibilityHint={t('labs.reportRowHint')}
                     accessibilityLabel={`${t('labs.reportTitle')}: ${report.originalFilename}`}
                     accessibilityRole="button"
                     key={report.id}
                     onPress={() => navigation.navigate('LabReportDetail', { reportId: report.id })}
                     style={({ pressed }) => [styles.listRow, pressed && styles.rowPressed]}
                   >
-                    <AppIcon name="doc" size={22} />
+                    <AppIcon color={colors.accent} name="doc" size={22} />
                     <View style={styles.rowBody}>
-                      <AppText numberOfLines={2} variant="heading">
+                      <AppText numberOfLines={2} selectable variant="heading">
                         {report.originalFilename}
                       </AppText>
-                      <AppText numberOfLines={2} style={styles.muted}>
+                      <AppText numberOfLines={2} selectable style={styles.muted}>
                         {`${reportDetail(report, records, locale)} · ${reportStateLabel(report)}`}
                       </AppText>
                     </View>
@@ -172,6 +179,7 @@ export function LabsScreen() {
                       : t('labs.recordDateMissing');
                   return (
                     <Pressable
+                      accessibilityHint={t('labs.recordRowHint')}
                       accessibilityLabel={`${t('labs.recordTitle')}: ${date}`}
                       accessibilityRole="button"
                       key={record.id}
@@ -180,10 +188,12 @@ export function LabsScreen() {
                       }
                       style={({ pressed }) => [styles.listRow, pressed && styles.rowPressed]}
                     >
-                      <AppIcon name="labs" size={22} />
+                      <AppIcon color={colors.accent} name="labs" size={22} />
                       <View style={styles.rowBody}>
-                        <AppText variant="heading">{date}</AppText>
-                        <AppText style={styles.muted}>
+                        <AppText selectable variant="heading">
+                          {date}
+                        </AppText>
+                        <AppText selectable style={styles.muted}>
                           {`${record.laboratoryName ?? t('labs.recordTitle')} · ${specimenLabel(record.specimenType)} · ${t('labs.recordMeasurements').replace('{count}', String(record.measurements.length))}`}
                         </AppText>
                       </View>
@@ -200,6 +210,7 @@ export function LabsScreen() {
                 </AppText>
                 {historyEntries.map((entry) => (
                   <Pressable
+                    accessibilityHint={t('labs.historyRowHint')}
                     accessibilityLabel={`${entry.canonicalLabel}, ${t('labs.historyEntrySubtitle').replace('{count}', String(entry.measurementCount))}`}
                     accessibilityRole="button"
                     key={entry.biomarkerId}
@@ -208,12 +219,12 @@ export function LabsScreen() {
                     }
                     style={({ pressed }) => [styles.listRow, pressed && styles.rowPressed]}
                   >
-                    <AppIcon name="labs" size={22} />
+                    <AppIcon color={colors.accent} name="chart" size={22} />
                     <View style={styles.rowBody}>
-                      <AppText numberOfLines={2} variant="heading">
+                      <AppText numberOfLines={2} selectable variant="heading">
                         {entry.canonicalLabel}
                       </AppText>
-                      <AppText style={styles.muted}>
+                      <AppText selectable style={styles.muted}>
                         {t('labs.historyEntrySubtitle').replace(
                           '{count}',
                           String(entry.measurementCount),
@@ -247,8 +258,21 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: spacing.md,
     justifyContent: 'center',
+    maxWidth: 440,
     paddingHorizontal: spacing.lg,
+    width: '100%',
   },
+  emptySymbol: {
+    alignItems: 'center',
+    backgroundColor: colors.disabledFill,
+    borderCurve: 'continuous',
+    borderRadius: 20,
+    height: 72,
+    justifyContent: 'center',
+    width: 72,
+  },
+  emptyCopy: { alignItems: 'center', gap: spacing.xs, maxWidth: 340 },
+  emptyTitle: { textAlign: 'center' },
   emptyBody: { color: colors.mutedInk, textAlign: 'center' },
   importButton: { alignSelf: 'stretch' },
   manualAction: { alignSelf: 'flex-start' },
@@ -258,8 +282,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: spacing.sm,
-    minHeight: 64,
-    paddingVertical: spacing.sm,
+    minHeight: 68,
+    paddingVertical: spacing.md,
   },
   rowBody: { flex: 1, gap: spacing.xs },
   rowPressed: { backgroundColor: colors.accentSoft },

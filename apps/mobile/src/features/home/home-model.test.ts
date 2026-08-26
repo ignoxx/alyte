@@ -193,6 +193,7 @@ test('Quiet Home prioritizes the latest local report and caps measured changes a
   );
 
   assert.equal(model.latestReport?.id, 'latest-report');
+  assert.equal(model.latestRecord?.id, 'latest');
   assert.deepEqual(
     model.recentReports.map((row) => row.id),
     ['latest-report', 'first-report'],
@@ -262,6 +263,22 @@ test('Home does not classify an imported source linked to a confirmed Lab Record
 
   assert.equal(isUnfinishedLabReport(confirmed), false);
   assert.deepEqual(model.unfinishedReports, []);
+});
+
+test('Home keeps a Lab Record discoverable after its Original Report is deleted', () => {
+  const record = labRecord('surviving-record', '2026-08-18', []);
+  const deletedReport = {
+    ...report('deleted-report', record.id, '2026-08-18'),
+    importState: 'deleted' as const,
+  };
+  const model = buildHomeLabViewModel([deletedReport], [record]);
+
+  assert.equal(model.latestReport, null);
+  assert.equal(model.latestRecord?.id, record.id);
+  assert.deepEqual(
+    model.recentRecords.map((item) => item.id),
+    [record.id],
+  );
 });
 
 test('Home keeps failed and interrupted sources actionable without treating them as measured', () => {
