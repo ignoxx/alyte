@@ -1,5 +1,5 @@
 import { useLayoutEffect } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { LabsStackParamList } from '../../navigation/types';
@@ -9,6 +9,7 @@ import { AppText } from '../../ui/primitives';
 import type { ExtractionConfirmationProps } from './ExtractionConfirmation.shared';
 import {
   confirmationAccessibilityLabel,
+  extractionConfirmationLayout,
   extractionConfirmationPresentation,
 } from './ExtractionConfirmation.shared';
 
@@ -70,6 +71,8 @@ function ReviewAccessory({
   blockedReason,
   onConfirm,
 }: ExtractionConfirmationProps) {
+  const { fontScale, width } = useWindowDimensions();
+  const layout = extractionConfirmationLayout(fontScale, width);
   const presentation = extractionConfirmationPresentation(
     {
       included,
@@ -80,26 +83,19 @@ function ReviewAccessory({
     },
     { busy, failure },
   );
-  const statusLabel =
-    presentation.state === 'busy'
-      ? t('labs.extractionConfirmationBusy')
-      : presentation.state === 'failure'
-        ? t('labs.extractionConfirmationFailure')
-        : presentation.state === 'blocked'
-          ? blockedReason === 'no-included-rows'
-            ? t('labs.extractionConfirmationNoIncluded')
-            : t('labs.extractionConfirmationBlocked').replace('{count}', String(remainingBlockers))
-          : t('labs.extractionConfirmationReady');
   const disabled = presentation.disabled;
 
   return (
-    <View style={styles.accessory}>
-      <View accessibilityRole="text" style={styles.summary}>
+    <View style={[styles.accessory, layout === 'stacked' && styles.accessoryStacked]}>
+      <View
+        accessibilityRole="text"
+        style={[styles.summary, layout === 'stacked' && styles.summaryStacked]}
+      >
         <AppText
           selectable
           style={styles.progress}
           // Keep the compact native slot readable while VoiceOver receives the full label below.
-          numberOfLines={2}
+          numberOfLines={layout === 'stacked' ? undefined : 2}
         >
           {t('labs.extractionConfirmationProgress')
             .replace('{included}', String(included))
@@ -107,10 +103,10 @@ function ReviewAccessory({
         </AppText>
         <AppText
           selectable
-          numberOfLines={2}
+          numberOfLines={layout === 'stacked' ? undefined : 2}
           style={presentation.state === 'blocked' ? styles.blocked : styles.status}
         >
-          {statusLabel}
+          {presentation.statusLabel}
         </AppText>
       </View>
       <Pressable
@@ -126,6 +122,7 @@ function ReviewAccessory({
         onPress={onConfirm}
         style={({ pressed }) => [
           styles.action,
+          layout === 'stacked' && styles.actionStacked,
           pressed && !disabled && styles.actionPressed,
           disabled && styles.actionDisabled,
         ]}
@@ -148,7 +145,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },
+  accessoryStacked: { flexDirection: 'column' },
   summary: { flex: 1, gap: spacing.xs, justifyContent: 'center', minWidth: 0 },
+  summaryStacked: { flex: 0, width: '100%' },
   progress: { color: colors.mutedInk, fontVariant: ['tabular-nums'] },
   status: { color: colors.mutedInk },
   blocked: { color: colors.danger },
@@ -162,6 +161,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },
+  actionStacked: { alignSelf: 'flex-end' },
   actionPressed: { backgroundColor: colors.accentSoft },
   actionDisabled: { opacity: 0.45 },
   actionLabel: { color: colors.accent, textAlign: 'center' },

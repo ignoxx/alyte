@@ -45,9 +45,43 @@ export function extractionConfirmationSummary(
 }
 
 export type ExtractionConfirmationPresentation = ExtractionConfirmationSummary & {
-  readonly state: 'blocked' | 'ready' | 'busy' | 'failure';
+  readonly state: ExtractionConfirmationState;
+  readonly statusLabel: string;
   readonly disabled: boolean;
 };
+
+export type ExtractionConfirmationState = 'blocked' | 'ready' | 'busy' | 'failure';
+
+export type ExtractionConfirmationLayout = 'inline' | 'stacked';
+
+/** Stack before Dynamic Type can squeeze either visible count out of the accessory. */
+export function extractionConfirmationLayout(
+  fontScale: number,
+  width: number,
+): ExtractionConfirmationLayout {
+  return fontScale > 1 || width < 360 ? 'stacked' : 'inline';
+}
+
+function confirmationStatusLabel(
+  state: ExtractionConfirmationState,
+  summary: ExtractionConfirmationSummary,
+): string {
+  switch (state) {
+    case 'busy':
+      return t('labs.extractionConfirmationBusy');
+    case 'failure':
+      return t('labs.extractionConfirmationFailure');
+    case 'ready':
+      return t('labs.extractionConfirmationReady');
+    case 'blocked':
+      return summary.blockedReason === 'no-included-rows'
+        ? t('labs.extractionConfirmationNoIncluded')
+        : t('labs.extractionConfirmationBlocked').replace(
+            '{count}',
+            String(summary.remainingBlockers),
+          );
+  }
+}
 
 /** Resolve stable accessory states without making a spinner the only busy/failure feedback. */
 export function extractionConfirmationPresentation(
@@ -61,7 +95,12 @@ export function extractionConfirmationPresentation(
       : summary.canConfirm
         ? 'ready'
         : 'blocked';
-  return { ...summary, state, disabled: input.busy || !summary.canConfirm };
+  return {
+    ...summary,
+    state,
+    statusLabel: confirmationStatusLabel(state, summary),
+    disabled: input.busy || !summary.canConfirm,
+  };
 }
 
 export type ExtractionConfirmationProps = {

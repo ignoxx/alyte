@@ -1,10 +1,11 @@
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import { t } from '../../localization';
 import { colors, spacing } from '../../theme';
 import { AppButton, AppText } from '../../ui/primitives';
 import type { ExtractionConfirmationProps } from './ExtractionConfirmation.shared';
 import {
   confirmationAccessibilityLabel,
+  extractionConfirmationLayout,
   extractionConfirmationPresentation,
 } from './ExtractionConfirmation.shared';
 
@@ -19,6 +20,8 @@ export function ExtractionConfirmation({
   blockedReason,
   onConfirm,
 }: ExtractionConfirmationProps) {
+  const { fontScale, width } = useWindowDimensions();
+  const layout = extractionConfirmationLayout(fontScale, width);
   const presentation = extractionConfirmationPresentation(
     {
       included,
@@ -29,20 +32,13 @@ export function ExtractionConfirmation({
     },
     { busy, failure },
   );
-  const statusLabel =
-    presentation.state === 'busy'
-      ? t('labs.extractionConfirmationBusy')
-      : presentation.state === 'failure'
-        ? t('labs.extractionConfirmationFailure')
-        : presentation.state === 'blocked'
-          ? blockedReason === 'no-included-rows'
-            ? t('labs.extractionConfirmationNoIncluded')
-            : t('labs.extractionConfirmationBlocked').replace('{count}', String(remainingBlockers))
-          : t('labs.extractionConfirmationReady');
 
   return (
-    <View style={styles.footer}>
-      <View accessibilityRole="text" style={styles.summary}>
+    <View style={[styles.footer, layout === 'stacked' && styles.footerStacked]}>
+      <View
+        accessibilityRole="text"
+        style={[styles.summary, layout === 'stacked' && styles.summaryStacked]}
+      >
         <AppText selectable style={styles.progress}>
           {t('labs.extractionConfirmationProgress')
             .replace('{included}', String(included))
@@ -52,7 +48,7 @@ export function ExtractionConfirmation({
           selectable
           style={presentation.state === 'blocked' ? styles.blocked : styles.status}
         >
-          {statusLabel}
+          {presentation.statusLabel}
         </AppText>
       </View>
       <AppButton
@@ -70,7 +66,7 @@ export function ExtractionConfirmation({
             : t('labs.extractionConfirm')
         }
         onPress={onConfirm}
-        style={styles.confirm}
+        style={[styles.confirm, layout === 'stacked' && styles.confirmStacked]}
       />
     </View>
   );
@@ -89,9 +85,12 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
     paddingBottom: spacing.lg,
   },
+  footerStacked: { flexDirection: 'column' },
   summary: { flex: 1, gap: spacing.xs, justifyContent: 'center', minWidth: 0 },
+  summaryStacked: { flex: 0, width: '100%' },
   progress: { color: colors.mutedInk, fontVariant: ['tabular-nums'] },
   status: { color: colors.mutedInk },
   blocked: { color: colors.danger },
   confirm: { flexShrink: 0, minWidth: 164 },
+  confirmStacked: { alignSelf: 'flex-end' },
 });

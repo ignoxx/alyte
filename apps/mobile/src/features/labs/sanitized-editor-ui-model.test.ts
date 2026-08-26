@@ -59,14 +59,95 @@ test('page counter remains a plain readable string at any text size', () => {
 
 test('sanitizer failures stay compact when the source document remains available', () => {
   const error = 'A long verification explanation remains available to VoiceOver.';
-  assert.deepEqual(sanitizedEditorErrorPresentation({ error, documentAvailable: true }), {
-    mode: 'compact',
-    maxVisibleLines: 2,
-    accessibilityText: error,
-  });
-  assert.deepEqual(sanitizedEditorErrorPresentation({ error, documentAvailable: false }), {
-    mode: 'blocking',
-    maxVisibleLines: null,
-    accessibilityText: error,
-  });
+  assert.deepEqual(
+    sanitizedEditorErrorPresentation({
+      kind: 'sanitization-verification',
+      message: error,
+      recovery: 'sanitize',
+    }),
+    {
+      kind: 'sanitization-verification',
+      title: 'Sanitized Report needs attention',
+      body: 'Verification failed. Retry or cancel to keep the Original Report unchanged.',
+      recovery: 'sanitize',
+      mode: 'compact',
+      maxVisibleLines: 2,
+      accessibilityText:
+        'Sanitized Report needs attention. Verification failed. Retry or cancel to keep the Original Report unchanged. A long verification explanation remains available to VoiceOver.',
+    },
+  );
+  assert.deepEqual(
+    sanitizedEditorErrorPresentation({
+      kind: 'document-load',
+      message: 'The Sanitized Report editor could not open.',
+      recovery: 'load',
+    }),
+    {
+      kind: 'document-load',
+      title: 'The Sanitized Report editor could not open.',
+      body: 'The Sanitized Report editor could not open.',
+      recovery: 'load',
+      mode: 'blocking',
+      maxVisibleLines: null,
+      accessibilityText:
+        'The Sanitized Report editor could not open. The Sanitized Report editor could not open.',
+    },
+  );
+  assert.deepEqual(
+    sanitizedEditorErrorPresentation({
+      kind: 'viewer-load',
+      message: 'The document view could not be refreshed. Continue editing or cancel.',
+      recovery: null,
+    }),
+    {
+      kind: 'viewer-load',
+      title: 'Document preview needs attention',
+      body: 'The document view could not be refreshed. Continue editing or cancel.',
+      recovery: null,
+      mode: 'compact',
+      maxVisibleLines: 2,
+      accessibilityText:
+        'Document preview needs attention. The document view could not be refreshed. Continue editing or cancel.',
+    },
+  );
+});
+
+test('edit-operation failures stay actionable without offering an unsafe replay', () => {
+  assert.deepEqual(
+    sanitizedEditorErrorPresentation({
+      kind: 'edit-operation',
+      message: 'That redaction edit could not be applied.',
+      recovery: null,
+    }),
+    {
+      kind: 'edit-operation',
+      title: 'Edit could not be applied',
+      body: 'Your last edit was not applied. Continue editing or cancel.',
+      recovery: null,
+      mode: 'compact',
+      maxVisibleLines: 2,
+      accessibilityText:
+        'Edit could not be applied. Your last edit was not applied. Continue editing or cancel. That redaction edit could not be applied.',
+    },
+  );
+});
+
+/* Keep the initial loading error blocking while loaded-document errors preserve the workspace. */
+test('document-load errors remain retryable only before the workspace is available', () => {
+  assert.equal(
+    sanitizedEditorErrorPresentation({
+      kind: 'document-load',
+      message: 'The Sanitized Report editor could not open.',
+      recovery: 'load',
+    }).recovery,
+    'load',
+  );
+  assert.equal(
+    sanitizedEditorErrorPresentation({
+      kind: 'viewer-load',
+      message: 'The document view could not be refreshed. Continue editing or cancel.',
+      recovery: null,
+    }).recovery,
+    null,
+  );
 });

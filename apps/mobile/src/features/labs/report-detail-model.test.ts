@@ -8,12 +8,16 @@ test('report page count interpolation produces one localized label', () => {
 });
 
 test('report file sizes use honest B, KB, and MB boundaries', () => {
-  assert.equal(formatReportFileSize(0), '0 B');
-  assert.equal(formatReportFileSize(1023), '1,023 B');
-  assert.equal(formatReportFileSize(1024), '1.0 KB');
-  assert.equal(formatReportFileSize(1024 * 1024 - 1), '1,024.0 KB');
-  assert.equal(formatReportFileSize(1024 * 1024), '1.0 MB');
-  assert.equal(formatReportFileSize(null, { unknownLabel: 'Not recorded' }), 'Not recorded');
+  const enUS = { locale: 'en-US' };
+  assert.equal(formatReportFileSize(0, enUS), '0 B');
+  assert.equal(formatReportFileSize(1023, enUS), '1,023 B');
+  assert.equal(formatReportFileSize(1024, enUS), '1.0 KB');
+  assert.equal(formatReportFileSize(1024 * 1024 - 1, enUS), '1,024.0 KB');
+  assert.equal(formatReportFileSize(1024 * 1024, enUS), '1.0 MB');
+  assert.equal(
+    formatReportFileSize(null, { ...enUS, unknownLabel: 'Not recorded' }),
+    'Not recorded',
+  );
 });
 
 test('report file sizes follow the requested locale', () => {

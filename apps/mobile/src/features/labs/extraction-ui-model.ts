@@ -6,10 +6,13 @@ import {
 import { extractionConfirmationSummary } from './ExtractionConfirmation.shared';
 
 export {
+  extractionConfirmationLayout,
   extractionConfirmationPresentation,
   extractionConfirmationSummary,
   type ExtractionConfirmationBlockReason,
+  type ExtractionConfirmationLayout,
   type ExtractionConfirmationPresentation,
+  type ExtractionConfirmationState,
   type ExtractionConfirmationSummary,
 } from './ExtractionConfirmation.shared';
 

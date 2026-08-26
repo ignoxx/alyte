@@ -44,6 +44,7 @@ import {
   sanitizedEditorErrorPresentation,
   sanitizedEditorToolbarState,
   sanitizedPageCounter,
+  type SanitizedEditorError,
 } from './sanitized-editor-ui-model';
 import type {
   PasswordRequest,
@@ -87,7 +88,7 @@ export function SanitizedReportEditorScreen() {
   const [pagesOpen, setPagesOpen] = useState(false);
   const [preview, setPreview] = useState<SanitizedReportPreview | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<SanitizedEditorError | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -97,7 +98,11 @@ export function SanitizedReportEditorScreen() {
       setRecipe(next.recipe);
       setBaseline(JSON.stringify(next.recipe));
     } catch {
-      setError(t('labs.sanitizedEditorLoadError'));
+      setError({
+        kind: 'document-load',
+        message: t('labs.sanitizedEditorLoadError'),
+        recovery: 'load',
+      });
     }
   }, [reports, route.params.reportId]);
   useEffect(() => {
@@ -174,10 +179,7 @@ export function SanitizedReportEditorScreen() {
             .filter((page) => page.selected)
             .findIndex((page) => page.pageIndex === pageIndex),
         );
-  const errorPresentation =
-    error === null
-      ? null
-      : sanitizedEditorErrorPresentation({ error, documentAvailable: state !== null });
+  const errorPresentation = error === null ? null : sanitizedEditorErrorPresentation(error);
 
   function applyNativeRedactions(change: NativeRedactionChange) {
     if (recipe === null) return;
@@ -214,7 +216,11 @@ export function SanitizedReportEditorScreen() {
       setRecipe(updateSanitizationPage(recipe, target, update));
       setPreview(null);
     } catch {
-      setError(t('labs.sanitizedEditorEditError'));
+      setError({
+        kind: 'edit-operation',
+        message: t('labs.sanitizedEditorEditError'),
+        recovery: null,
+      });
     }
   }
   function move(target: number, direction: -1 | 1) {
@@ -252,7 +258,11 @@ export function SanitizedReportEditorScreen() {
       setBaseline(JSON.stringify(recipe));
       setRedactMode(false);
     } catch {
-      setError(t('labs.sanitizedEditorVerificationError'));
+      setError({
+        kind: 'sanitization-verification',
+        message: t('labs.sanitizedEditorVerificationError'),
+        recovery: 'sanitize',
+      });
     } finally {
       setBusy(false);
     }
@@ -260,8 +270,10 @@ export function SanitizedReportEditorScreen() {
   if (state === null || recipe === null || currentPage === null)
     return (
       <View style={styles.center}>
-        <AppText>{error ?? t('labs.loading')}</AppText>
-        {error !== null && <AppButton label={t('labs.retry')} onPress={() => void load()} />}
+        <AppText selectable>{error?.message ?? t('labs.loading')}</AppText>
+        {error?.recovery === 'load' && (
+          <AppButton label={t('labs.retry')} onPress={() => void load()} />
+        )}
       </View>
     );
   return (
@@ -270,24 +282,26 @@ export function SanitizedReportEditorScreen() {
         <View accessibilityRole="alert" style={styles.error}>
           <View style={styles.errorCopy}>
             <AppText selectable variant="label" style={styles.errorTitle}>
-              {t('labs.sanitizedEditorFailureTitle')}
+              {errorPresentation.title}
             </AppText>
             <AppText
               selectable
-              accessibilityLabel={`${t('labs.sanitizedEditorFailureBody')} ${errorPresentation.accessibilityText}`}
+              accessibilityLabel={errorPresentation.accessibilityText}
               numberOfLines={errorPresentation.maxVisibleLines ?? undefined}
               style={styles.errorText}
             >
-              {t('labs.sanitizedEditorFailureBody')}
+              {errorPresentation.body}
             </AppText>
           </View>
-          <AppButton
-            disabled={busy}
-            label={t('labs.retry')}
-            onPress={() => void sanitize()}
-            style={styles.errorRetry}
-            tone="quiet"
-          />
+          {errorPresentation.recovery === 'sanitize' && (
+            <AppButton
+              disabled={busy}
+              label={t('labs.retry')}
+              onPress={() => void sanitize()}
+              style={styles.errorRetry}
+              tone="quiet"
+            />
+          )}
         </View>
       )}
       {state.report.sourceType === 'image' ? (
@@ -313,7 +327,13 @@ export function SanitizedReportEditorScreen() {
           }}
           onRedactionsChange={(event) => applyImageRedactions(event.nativeEvent)}
           onSelectionChange={(event) => setHasSelection(event.nativeEvent.selected)}
-          onFailure={() => setError(t('labs.sanitizedEditorLoadError'))}
+          onFailure={() =>
+            setError({
+              kind: 'viewer-load',
+              message: t('labs.sanitizedEditorViewerFailureBody'),
+              recovery: null,
+            })
+          }
           accessibilityLabel={
             preview === null ? t('labs.sanitizedOriginalCanvas') : t('labs.sanitizedExactCanvas')
           }
@@ -344,7 +364,13 @@ export function SanitizedReportEditorScreen() {
           }}
           onRedactionsChange={(event) => applyNativeRedactions(event.nativeEvent)}
           onSelectionChange={(event) => setHasSelection(event.nativeEvent.selected)}
-          onFailure={() => setError(t('labs.sanitizedEditorLoadError'))}
+          onFailure={() =>
+            setError({
+              kind: 'viewer-load',
+              message: t('labs.sanitizedEditorViewerFailureBody'),
+              recovery: null,
+            })
+          }
           accessibilityLabel={
             preview === null ? t('labs.sanitizedOriginalCanvas') : t('labs.sanitizedExactCanvas')
           }
