@@ -4,6 +4,8 @@ import type { ExtractionDraftRow } from '@alyte/domain';
 import {
   buildExtractionReviewSections,
   canConfirmExtraction,
+  extractionConfirmationPresentation,
+  extractionConfirmationSummary,
   extractionDecisionPresentation,
   extractionNeedsResolution,
   extractionReviewCounts,
@@ -128,6 +130,74 @@ test('Extraction confirmation includes valid rows by default and gates only true
     ),
     true,
   );
+});
+
+test('Extraction confirmation separates review attention from exact included-row blockers', () => {
+  const ready = row({ id: 'ready', decision: 'resolve' });
+  const skippedNeedsReview = row({
+    id: 'skipped',
+    decision: 'skip',
+    reviewReasons: ['unsupported-layout'],
+    reviewState: 'needs-review',
+  });
+  const includedNeedsReview = row({
+    id: 'blocking',
+    decision: 'unresolved',
+    reviewReasons: ['unsupported-layout'],
+    reviewState: 'needs-review',
+  });
+
+  assert.deepEqual(extractionConfirmationSummary([]), {
+    included: 0,
+    needsReview: 0,
+    remainingBlockers: 0,
+    canConfirm: false,
+    blockedReason: 'no-included-rows',
+  });
+  assert.deepEqual(extractionConfirmationSummary([ready]), {
+    included: 1,
+    needsReview: 0,
+    remainingBlockers: 0,
+    canConfirm: true,
+    blockedReason: null,
+  });
+  assert.deepEqual(extractionConfirmationSummary([ready, row({ id: 'ready-2' })]), {
+    included: 2,
+    needsReview: 0,
+    remainingBlockers: 0,
+    canConfirm: true,
+    blockedReason: null,
+  });
+  assert.deepEqual(extractionConfirmationSummary([ready, skippedNeedsReview]), {
+    included: 1,
+    needsReview: 1,
+    remainingBlockers: 0,
+    canConfirm: true,
+    blockedReason: null,
+  });
+  assert.deepEqual(extractionConfirmationSummary([ready, includedNeedsReview]), {
+    included: 2,
+    needsReview: 1,
+    remainingBlockers: 1,
+    canConfirm: false,
+    blockedReason: 'rows-need-resolution',
+  });
+});
+
+test('Extraction confirmation presentation keeps ready, busy, failure, and blocked states stable', () => {
+  const summary = extractionConfirmationSummary([row()]);
+  assert.equal(extractionConfirmationPresentation(summary, { busy: false }).state, 'ready');
+  assert.equal(extractionConfirmationPresentation(summary, { busy: true }).state, 'busy');
+  assert.equal(
+    extractionConfirmationPresentation(summary, { busy: false, failure: true }).state,
+    'failure',
+  );
+  assert.equal(extractionConfirmationPresentation(summary, { busy: true }).disabled, true);
+  const blocked = extractionConfirmationSummary([
+    row({ reviewReasons: ['unsupported-layout'], reviewState: 'needs-review' }),
+  ]);
+  assert.equal(extractionConfirmationPresentation(blocked, { busy: false }).state, 'blocked');
+  assert.equal(extractionConfirmationPresentation(blocked, { busy: false }).disabled, true);
 });
 
 test('groups compact rows by Lab Record and panel while keeping date and specimen in headers', () => {

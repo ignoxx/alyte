@@ -17,14 +17,7 @@ import type { LabReport } from '@alyte/domain';
 import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import {
-  AppButton,
-  AppIcon,
-  AppSurface,
-  AppText,
-  ScreenScrollView,
-  StatusPill,
-} from '../../ui/primitives';
+import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import {
   LabReportExtractionError,
@@ -32,7 +25,7 @@ import {
   type PasswordRequest,
 } from './report-service';
 import type { LabReportPreview } from './report-service';
-import { formatReportPageCount } from './report-detail-model';
+import { formatReportFileSize, formatReportPageCount } from './report-detail-model';
 import { canStartAutomatedExtraction, type LocalModelSnapshot } from '../local-models/model';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
@@ -54,12 +47,6 @@ function stateLabel(state: LabReport['importState']): string {
 
 function sourceLabel(report: LabReport): string {
   return report.sourceType === 'pdf' ? t('labs.reportPdf') : t('labs.reportImage');
-}
-
-function formatBytes(value: number | null): string {
-  if (value === null) return t('labs.reportSizeUnknown');
-  if (value < 1024) return `${value} B`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export function LabReportDetailScreen() {
@@ -281,8 +268,16 @@ export function LabReportDetailScreen() {
     );
   }
 
+  const locale = Intl.DateTimeFormat().resolvedOptions().locale;
+
   return (
-    <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+    <ScrollView
+      automaticallyAdjustContentInsets
+      automaticallyAdjustsScrollIndicatorInsets
+      contentContainerStyle={[screenStyles.content, styles.detailContent]}
+      contentInsetAdjustmentBehavior="automatic"
+      style={screenStyles.scroll}
+    >
       <AppText variant="heading">{report.originalFilename}</AppText>
       <StatusPill>{stateLabel(report.importState)}</StatusPill>
       <AppSurface style={styles.metaSection}>
@@ -295,7 +290,13 @@ export function LabReportDetailScreen() {
           )}
           value=""
         />
-        <DetailRow label={t('labs.reportSize')} value={formatBytes(report.byteSize)} />
+        <DetailRow
+          label={t('labs.reportSize')}
+          value={formatReportFileSize(report.byteSize, {
+            locale,
+            unknownLabel: t('labs.reportSizeUnknown'),
+          })}
+        />
         <DetailRow
           label={t('labs.reportIntegrity')}
           value={t(`labs.reportIntegrity${integrity[0]?.toUpperCase() ?? ''}${integrity.slice(1)}`)}
@@ -428,7 +429,7 @@ export function LabReportDetailScreen() {
           </ScrollView>
         </SafeAreaView>
       </Modal>
-    </ScreenScrollView>
+    </ScrollView>
   );
 }
 
@@ -450,6 +451,9 @@ const styles = StyleSheet.create({
   headerAction: { alignItems: 'center', justifyContent: 'center', minHeight: 44, minWidth: 44 },
   pressed: { opacity: 0.6 },
   metaSection: { gap: 0, marginTop: spacing.md, padding: 0 },
+  // UIKit owns the native tab-bar inset; this ordinary breathing room keeps the final text clear
+  // without competing with a second manually calculated safe-area authority.
+  detailContent: { paddingBottom: spacing.xxl },
   detailRow: {
     alignItems: 'center',
     borderBottomColor: colors.border,

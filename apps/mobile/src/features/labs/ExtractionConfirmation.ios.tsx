@@ -1,5 +1,5 @@
 import { useLayoutEffect } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { LabsStackParamList } from '../../navigation/types';
@@ -7,7 +7,10 @@ import { t } from '../../localization';
 import { colors, spacing } from '../../theme';
 import { AppText } from '../../ui/primitives';
 import type { ExtractionConfirmationProps } from './ExtractionConfirmation.shared';
-import { confirmationAccessibilityLabel } from './ExtractionConfirmation.shared';
+import {
+  confirmationAccessibilityLabel,
+  extractionConfirmationPresentation,
+} from './ExtractionConfirmation.shared';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
 
@@ -15,8 +18,11 @@ type Navigation = NativeStackNavigationProp<LabsStackParamList>;
 export function ExtractionConfirmation({
   busy,
   canConfirm,
+  failure = false,
   included,
   needsReview,
+  remainingBlockers,
+  blockedReason,
   onConfirm,
 }: ExtractionConfirmationProps) {
   const navigation = useNavigation<Navigation>();
@@ -29,14 +35,27 @@ export function ExtractionConfirmation({
         <ReviewAccessory
           busy={busy}
           canConfirm={canConfirm}
+          failure={failure}
           included={included}
           needsReview={needsReview}
+          remainingBlockers={remainingBlockers}
+          blockedReason={blockedReason}
           onConfirm={onConfirm}
         />
       ),
     });
     return () => tabNavigation.setOptions({ bottomAccessory: undefined });
-  }, [busy, canConfirm, included, navigation, needsReview, onConfirm]);
+  }, [
+    blockedReason,
+    busy,
+    canConfirm,
+    failure,
+    included,
+    navigation,
+    needsReview,
+    onConfirm,
+    remainingBlockers,
+  ]);
 
   return null;
 }
@@ -44,16 +63,63 @@ export function ExtractionConfirmation({
 function ReviewAccessory({
   busy,
   canConfirm,
+  failure = false,
   included,
   needsReview,
+  remainingBlockers,
+  blockedReason,
   onConfirm,
 }: ExtractionConfirmationProps) {
-  const disabled = busy || !canConfirm;
+  const presentation = extractionConfirmationPresentation(
+    {
+      included,
+      needsReview,
+      remainingBlockers,
+      canConfirm,
+      blockedReason,
+    },
+    { busy, failure },
+  );
+  const statusLabel =
+    presentation.state === 'busy'
+      ? t('labs.extractionConfirmationBusy')
+      : presentation.state === 'failure'
+        ? t('labs.extractionConfirmationFailure')
+        : presentation.state === 'blocked'
+          ? blockedReason === 'no-included-rows'
+            ? t('labs.extractionConfirmationNoIncluded')
+            : t('labs.extractionConfirmationBlocked').replace('{count}', String(remainingBlockers))
+          : t('labs.extractionConfirmationReady');
+  const disabled = presentation.disabled;
 
   return (
     <View style={styles.accessory}>
+      <View accessibilityRole="text" style={styles.summary}>
+        <AppText
+          selectable
+          style={styles.progress}
+          // Keep the compact native slot readable while VoiceOver receives the full label below.
+          numberOfLines={2}
+        >
+          {t('labs.extractionConfirmationProgress')
+            .replace('{included}', String(included))
+            .replace('{review}', String(needsReview))}
+        </AppText>
+        <AppText
+          selectable
+          numberOfLines={2}
+          style={presentation.state === 'blocked' ? styles.blocked : styles.status}
+        >
+          {statusLabel}
+        </AppText>
+      </View>
       <Pressable
-        accessibilityLabel={confirmationAccessibilityLabel(included, needsReview)}
+        accessibilityLabel={confirmationAccessibilityLabel(
+          included,
+          needsReview,
+          remainingBlockers,
+          blockedReason,
+        )}
         accessibilityRole="button"
         accessibilityState={{ busy, disabled }}
         disabled={disabled}
@@ -64,13 +130,9 @@ function ReviewAccessory({
           disabled && styles.actionDisabled,
         ]}
       >
-        {busy ? (
-          <ActivityIndicator color={colors.accent} />
-        ) : (
-          <AppText variant="label" style={styles.actionLabel}>
-            {t('labs.extractionConfirmShort')}
-          </AppText>
-        )}
+        <AppText variant="label" style={styles.actionLabel}>
+          {busy ? t('labs.extractionConfirmationBusyAction') : t('labs.extractionConfirmShort')}
+        </AppText>
       </Pressable>
     </View>
   );
@@ -78,20 +140,25 @@ function ReviewAccessory({
 
 const styles = StyleSheet.create({
   accessory: {
-    alignItems: 'center',
+    alignItems: 'stretch',
     flex: 1,
     flexDirection: 'row',
-    justifyContent: 'flex-end',
-    minHeight: 44,
+    gap: spacing.sm,
+    minHeight: 56,
     paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
   },
+  summary: { flex: 1, gap: spacing.xs, justifyContent: 'center', minWidth: 0 },
+  progress: { color: colors.mutedInk, fontVariant: ['tabular-nums'] },
+  status: { color: colors.mutedInk },
+  blocked: { color: colors.danger },
   action: {
     alignItems: 'center',
     borderCurve: 'continuous',
     borderRadius: 999,
     justifyContent: 'center',
     minHeight: 44,
-    minWidth: 96,
+    minWidth: 104,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },

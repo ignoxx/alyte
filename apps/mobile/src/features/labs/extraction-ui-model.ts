@@ -1,9 +1,17 @@
 import {
-  extractionReviewBlocksConfirmation,
   extractionReviewRequiresAttention,
   type ExtractionDraftRow,
   type ExtractionRowDecision,
 } from '@alyte/domain';
+import { extractionConfirmationSummary } from './ExtractionConfirmation.shared';
+
+export {
+  extractionConfirmationPresentation,
+  extractionConfirmationSummary,
+  type ExtractionConfirmationBlockReason,
+  type ExtractionConfirmationPresentation,
+  type ExtractionConfirmationSummary,
+} from './ExtractionConfirmation.shared';
 
 export type ExtractionReviewFilter = 'all' | 'needs-review';
 
@@ -45,19 +53,14 @@ export function extractionDecisionPresentation(
 export function canConfirmExtraction(
   rows: readonly Pick<ExtractionDraftRow, 'decision' | 'reviewReasons'>[],
 ): boolean {
-  return (
-    rows.some((row) => row.decision !== 'skip') &&
-    rows.every((row) => !extractionReviewBlocksConfirmation(row))
-  );
+  return extractionConfirmationSummary(rows).canConfirm;
 }
 
 export function extractionReviewCounts(
   rows: readonly Pick<ExtractionDraftRow, 'decision' | 'reviewReasons'>[],
 ): { readonly included: number; readonly needsReview: number } {
-  return {
-    included: rows.filter((row) => row.decision !== 'skip').length,
-    needsReview: rows.filter(extractionNeedsResolution).length,
-  };
+  const summary = extractionConfirmationSummary(rows);
+  return { included: summary.included, needsReview: summary.needsReview };
 }
 
 export function filterExtractionRows(

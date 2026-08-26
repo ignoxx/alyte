@@ -9,6 +9,29 @@ export type SanitizedEditorToolbarState = {
   readonly sanitizeDisabled: boolean;
 };
 
+export type SanitizedEditorErrorPresentation = {
+  /** Loaded documents keep their editor and header actions available after a failure. */
+  readonly mode: 'compact' | 'blocking';
+  /** The compact banner may ellipsize visually, while accessibilityText remains complete. */
+  readonly maxVisibleLines: 2 | null;
+  readonly accessibilityText: string;
+};
+
+/**
+ * Keep a long verification failure from taking over the document workspace at XL text sizes.
+ * Initial loading failures remain blocking because there is no document to preserve yet.
+ */
+export function sanitizedEditorErrorPresentation(input: {
+  readonly error: string;
+  readonly documentAvailable: boolean;
+}): SanitizedEditorErrorPresentation {
+  return {
+    mode: input.documentAvailable ? 'compact' : 'blocking',
+    maxVisibleLines: input.documentAvailable ? 2 : null,
+    accessibilityText: input.error,
+  };
+}
+
 /**
  * A sanitization render is a snapshot. While it is being produced, every control that could
  * change the recipe is disabled so the bytes being verified cannot diverge from the editor state.

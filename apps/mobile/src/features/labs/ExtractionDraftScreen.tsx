@@ -11,8 +11,8 @@ import { colors, spacing } from '../../theme';
 import {
   buildExtractionReviewSections,
   canConfirmExtraction,
+  extractionConfirmationSummary,
   extractionNeedsResolution,
-  extractionReviewCounts,
   filterExtractionRows,
   type ExtractionReviewFilter,
 } from './extraction-ui-model';
@@ -119,10 +119,10 @@ export function ExtractionDraftScreen() {
     [draft?.rows, filter, search],
   );
   const sections = useMemo(() => flattenSections(visibleRows), [visibleRows]);
-  const counts = extractionReviewCounts(draft?.rows ?? []);
-  const needsReview = counts.needsReview;
-  const included = counts.included;
-  const canConfirm = draft !== null && canConfirmExtraction(draft.rows);
+  const confirmation = extractionConfirmationSummary(draft?.rows ?? []);
+  const needsReview = confirmation.needsReview;
+  const included = confirmation.included;
+  const canConfirm = draft !== null && confirmation.canConfirm;
 
   const confirm = useCallback(async () => {
     if (draft === null || !canConfirmExtraction(draft.rows)) return;
@@ -278,8 +278,11 @@ export function ExtractionDraftScreen() {
       <ExtractionConfirmation
         busy={busy}
         canConfirm={canConfirm}
+        failure={error}
         included={included}
         needsReview={needsReview}
+        remainingBlockers={confirmation.remainingBlockers}
+        blockedReason={confirmation.blockedReason}
         onConfirm={confirm}
       />
     </View>

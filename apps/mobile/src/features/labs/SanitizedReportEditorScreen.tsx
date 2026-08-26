@@ -40,7 +40,11 @@ import {
   type AlyteImageWorkspaceHandle,
   type NativeImageRedactionChange,
 } from './image';
-import { sanitizedEditorToolbarState, sanitizedPageCounter } from './sanitized-editor-ui-model';
+import {
+  sanitizedEditorErrorPresentation,
+  sanitizedEditorToolbarState,
+  sanitizedPageCounter,
+} from './sanitized-editor-ui-model';
 import type {
   PasswordRequest,
   SanitizationEditorState,
@@ -170,6 +174,10 @@ export function SanitizedReportEditorScreen() {
             .filter((page) => page.selected)
             .findIndex((page) => page.pageIndex === pageIndex),
         );
+  const errorPresentation =
+    error === null
+      ? null
+      : sanitizedEditorErrorPresentation({ error, documentAvailable: state !== null });
 
   function applyNativeRedactions(change: NativeRedactionChange) {
     if (recipe === null) return;
@@ -258,10 +266,28 @@ export function SanitizedReportEditorScreen() {
     );
   return (
     <View style={styles.root}>
-      {error !== null && (
-        <View style={styles.error}>
-          <AppText style={styles.errorText}>{error}</AppText>
-          <AppButton label={t('labs.retry')} onPress={() => void sanitize()} tone="quiet" />
+      {errorPresentation?.mode === 'compact' && (
+        <View accessibilityRole="alert" style={styles.error}>
+          <View style={styles.errorCopy}>
+            <AppText selectable variant="label" style={styles.errorTitle}>
+              {t('labs.sanitizedEditorFailureTitle')}
+            </AppText>
+            <AppText
+              selectable
+              accessibilityLabel={`${t('labs.sanitizedEditorFailureBody')} ${errorPresentation.accessibilityText}`}
+              numberOfLines={errorPresentation.maxVisibleLines ?? undefined}
+              style={styles.errorText}
+            >
+              {t('labs.sanitizedEditorFailureBody')}
+            </AppText>
+          </View>
+          <AppButton
+            disabled={busy}
+            label={t('labs.retry')}
+            onPress={() => void sanitize()}
+            style={styles.errorRetry}
+            tone="quiet"
+          />
         </View>
       )}
       {state.report.sourceType === 'image' ? (
@@ -536,12 +562,18 @@ const styles = StyleSheet.create({
   error: {
     alignItems: 'center',
     backgroundColor: colors.surface,
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },
-  errorText: { color: colors.danger, flex: 1 },
+  errorCopy: { flex: 1, gap: 2, minWidth: 0 },
+  errorTitle: { color: colors.danger },
+  errorText: { color: colors.danger, flexShrink: 1 },
+  errorRetry: { flexShrink: 0 },
   manager: { backgroundColor: colors.canvas, flex: 1, padding: spacing.lg },
   managerHeader: {
     alignItems: 'center',

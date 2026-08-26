@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   orderedPagePosition,
+  sanitizedEditorErrorPresentation,
   sanitizedEditorToolbarState,
   sanitizedPageCounter,
 } from './sanitized-editor-ui-model';
@@ -54,4 +55,18 @@ test('page counter follows ordered recipe pages after reordering', () => {
 test('page counter remains a plain readable string at any text size', () => {
   assert.equal(sanitizedPageCounter(pages, 1, 'Pages'), 'Pages 2/3');
   assert.equal(sanitizedPageCounter(pages, 1, 'Страницы'), 'Страницы 2/3');
+});
+
+test('sanitizer failures stay compact when the source document remains available', () => {
+  const error = 'A long verification explanation remains available to VoiceOver.';
+  assert.deepEqual(sanitizedEditorErrorPresentation({ error, documentAvailable: true }), {
+    mode: 'compact',
+    maxVisibleLines: 2,
+    accessibilityText: error,
+  });
+  assert.deepEqual(sanitizedEditorErrorPresentation({ error, documentAvailable: false }), {
+    mode: 'blocking',
+    maxVisibleLines: null,
+    accessibilityText: error,
+  });
 });
