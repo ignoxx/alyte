@@ -1,29 +1,35 @@
-export type ExportMediaStatus = 'loading' | 'ready' | 'unavailable';
+export type ExportMediaSummaryStatus = 'loading' | 'ready' | 'failed';
+
+export type ExportMediaOptionAvailability = 'unknown' | 'available' | 'empty';
 
 export type ExportMediaOptionState = {
   readonly disabled: boolean;
   readonly selected: boolean;
-  /** True only when the media query completed and found no files in this category. */
-  readonly unavailable: boolean;
+  /** Distinguishes a failed summary query from a successfully known empty category. */
+  readonly availability: ExportMediaOptionAvailability;
 };
 
 /**
- * Keep the visible toggle and the export request bound to the same known availability state.
- * A failed or in-flight count query is not treated as an empty category, but it is not selectable
- * until the query succeeds. A completed zero count is explicitly unavailable and always clears a
- * stale selection.
+ * Keep the visible toggle and the export request bound to the same summary state. A failed or
+ * in-flight count query is unknown, not empty, and is not selectable until the query succeeds. A
+ * completed zero count is explicitly empty and always clears a stale selection.
  */
 export function exportMediaOptionState(
-  status: ExportMediaStatus,
+  status: ExportMediaSummaryStatus,
   count: number,
   selected: boolean,
 ): ExportMediaOptionState {
-  const hasKnownAvailability = status === 'ready';
-  const available = hasKnownAvailability && count > 0;
+  if (status !== 'ready') {
+    return { disabled: true, selected: false, availability: 'unknown' };
+  }
+
+  if (count <= 0) {
+    return { disabled: true, selected: false, availability: 'empty' };
+  }
 
   return {
-    disabled: !available,
-    selected: available && selected,
-    unavailable: hasKnownAvailability && count <= 0,
+    disabled: false,
+    selected,
+    availability: 'available',
   };
 }

@@ -10,7 +10,7 @@ import { colors, screenStyles, spacing } from '../../theme';
 import type { ExportSelection } from '../export/export-contract';
 import type { LocalExportOperation, LocalExportProgress } from '../export/service';
 import type { ExportMediaSummary } from '../local-controls/model';
-import { exportMediaOptionState, type ExportMediaStatus } from './export-ui-model';
+import { exportMediaOptionState, type ExportMediaSummaryStatus } from './export-ui-model';
 
 type ExportStage = 'selection' | 'preview' | 'working' | 'result';
 type ResultKind = 'success' | 'cancelled' | 'failed' | 'unavailable';
@@ -22,9 +22,9 @@ function shareResultForError(error: unknown): Extract<ResultKind, 'failed' | 'un
     : 'failed';
 }
 
-function availableLabel(count: number, status: ExportMediaStatus): string {
+function availableLabel(count: number, status: ExportMediaSummaryStatus): string {
   if (status === 'loading') return t('settings.exportMediaChecking');
-  if (status === 'unavailable') return t('settings.exportMediaUnavailableCount');
+  if (status === 'failed') return t('settings.exportMediaUnavailableCount');
   const countLabel = t('settings.exportCount').replace('{count}', count.toLocaleString());
   return count > 0 ? countLabel : `${countLabel} · ${t('settings.exportUnavailable')}`;
 }
@@ -62,22 +62,37 @@ function ExportToggle({
 }: {
   readonly title: string;
   readonly count: number;
-  readonly status: ExportMediaStatus;
+  readonly status: ExportMediaSummaryStatus;
   readonly value: boolean;
   readonly onValueChange: (next: boolean) => void;
 }) {
   const option = exportMediaOptionState(status, count, value);
   const countLabel = availableLabel(count, status);
+  const accessibilityLabel = `${title}, ${countLabel}`;
 
   return (
-    <View style={styles.toggleRow}>
-      <View style={[styles.toggleCopy, option.unavailable && styles.unavailableCopy]}>
+    <View
+      accessible
+      accessibilityRole="switch"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ checked: option.selected, disabled: option.disabled }}
+      onAccessibilityTap={() => {
+        if (!option.disabled) onValueChange(!option.selected);
+      }}
+      style={styles.toggleRow}
+    >
+      <View style={[styles.toggleCopy, option.availability === 'empty' && styles.unavailableCopy]}>
         <AppText>{title}</AppText>
         <AppText variant="caption" style={styles.muted}>
           {countLabel}
         </AppText>
       </View>
-      <View style={styles.switchSlot} accessible={false}>
+      <View
+        style={styles.switchSlot}
+        accessible={false}
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+      >
         <Host matchContents>
           <Switch
             value={option.selected}
@@ -85,7 +100,6 @@ function ExportToggle({
             onValueChange={(next) => {
               if (!option.disabled) onValueChange(next);
             }}
-            label={`${title}, ${countLabel}`}
           />
         </Host>
       </View>
@@ -97,7 +111,7 @@ export function FullExportScreen() {
   const services = useServices();
   const navigation = useNavigation<any>();
   const [media, setMedia] = useState<ExportMediaSummary | null>(null);
-  const [mediaStatus, setMediaStatus] = useState<'loading' | 'ready' | 'unavailable'>('loading');
+  const [mediaStatus, setMediaStatus] = useState<ExportMediaSummaryStatus>('loading');
   const [mediaRetry, setMediaRetry] = useState(0);
   const [stage, setStage] = useState<ExportStage>('selection');
   const [includeOriginal, setIncludeOriginal] = useState(false);
@@ -123,7 +137,7 @@ export function FullExportScreen() {
       .catch(() => {
         if (active) {
           setMedia(null);
-          setMediaStatus('unavailable');
+          setMediaStatus('failed');
         }
       });
     return () => {
@@ -301,7 +315,7 @@ export function FullExportScreen() {
                 onValueChange={setIncludeIntake}
               />
             </View>
-            {mediaStatus === 'unavailable' && (
+            {mediaStatus === 'failed' && (
               <AppSurface tone="soft" style={styles.unavailableSurface}>
                 <AppText variant="label">{t('settings.exportMediaUnavailable')}</AppText>
                 <AppText style={styles.muted}>{t('settings.exportMediaUnavailableBody')}</AppText>
