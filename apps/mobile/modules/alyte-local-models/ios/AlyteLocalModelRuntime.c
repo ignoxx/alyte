@@ -11,6 +11,7 @@
 #include <limits.h>
 #include <stdint.h>
 #include <string.h>
+#include <os/log.h>
 
 enum {
     ALYTE_LOCAL_MODEL_STATUS_INVALID_ARGUMENT = -1,
@@ -36,6 +37,74 @@ static void alyte_local_model_discard_log(enum ggml_log_level level, const char 
     (void) level;
     (void) text;
     (void) user_data;
+}
+
+static const char *alyte_local_model_backend_label(AlyteLocalModelBackendMode backend_mode) {
+    switch (backend_mode) {
+        case ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED:
+            return "gpu-preferred";
+        case ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY:
+            return "cpu-only";
+        default:
+            return NULL;
+    }
+}
+
+static const char *alyte_local_model_attempt_stage_label(
+    AlyteLocalModelActivationAttemptStage stage) {
+    switch (stage) {
+        case ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_MODEL_LOAD:
+            return "model-load";
+        case ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_CONTEXT:
+            return "context";
+        default:
+            return NULL;
+    }
+}
+
+static const char *alyte_local_model_batch_label(uint32_t batch_tokens) {
+    switch (batch_tokens) {
+        case ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_NONE:
+            return "none";
+        case ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_FULL:
+            return "256";
+        case ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_REDUCED:
+            return "128";
+        case ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_LOW:
+            return "64";
+        case ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_MINIMUM:
+            return "32";
+        default:
+            return NULL;
+    }
+}
+
+static void alyte_local_model_record_activation_attempt(
+    AlyteLocalModelActivationAttemptStage stage,
+    AlyteLocalModelBackendMode backend_mode,
+    uint32_t batch_tokens) {
+    const char *stage_label = alyte_local_model_attempt_stage_label(stage);
+    const char *backend_label = alyte_local_model_backend_label(backend_mode);
+    const char *batch_label = alyte_local_model_batch_label(batch_tokens);
+    if (stage_label == NULL || backend_label == NULL || batch_label == NULL) return;
+    if (stage == ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_MODEL_LOAD &&
+        batch_tokens != ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_NONE) return;
+    if (stage == ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_CONTEXT &&
+        batch_tokens == ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_NONE) return;
+    if (stage != ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_MODEL_LOAD &&
+        stage != ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_CONTEXT) return;
+
+    static os_log_t activation_log;
+    if (activation_log == NULL) {
+        activation_log = os_log_create("com.alyte.local-models", "activation");
+    }
+    if (activation_log == NULL) return;
+    os_log_error(
+        activation_log,
+        "Local model activation attempt stage=%{public}s backend=%{public}s batch=%{public}s",
+        stage_label,
+        backend_label,
+        batch_label);
 }
 
 static struct llama_model *alyte_local_model_load(
@@ -131,6 +200,7 @@ void *alyte_local_model_runtime_create(
         .load_model = alyte_local_model_load_with_mode,
         .create_context = alyte_local_model_create_context_with_batch,
         .free_model = alyte_local_model_free_model,
+        .record_attempt = alyte_local_model_record_activation_attempt,
     };
     AlyteLocalModelActivation activation;
     if (!alyte_local_model_activate_with_fallback(model_path, &hooks, &activation)) {

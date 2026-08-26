@@ -13,14 +13,22 @@ typedef struct SyntheticContext {
     uint32_t batch_tokens;
 } SyntheticContext;
 
+typedef struct SyntheticAttempt {
+    AlyteLocalModelActivationAttemptStage stage;
+    AlyteLocalModelBackendMode backend_mode;
+    uint32_t batch_tokens;
+} SyntheticAttempt;
+
 static SyntheticModel gpu_model = { ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED };
 static SyntheticModel cpu_model = { ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY };
 static SyntheticContext cpu_context = { 32 };
 static AlyteLocalModelBackendMode load_modes[2];
 static uint32_t context_batches[8];
+static SyntheticAttempt activation_attempts[10];
 static void *freed_models[2];
 static size_t load_count;
 static size_t context_count;
+static size_t attempt_count;
 static size_t free_count;
 
 static void *load_model(const char *model_path, AlyteLocalModelBackendMode mode) {
@@ -37,10 +45,22 @@ static void *create_context(void *model, uint32_t batch_tokens) {
 
 static void free_model(void *model) { freed_models[free_count++] = model; }
 
+static void record_attempt(
+    AlyteLocalModelActivationAttemptStage stage,
+    AlyteLocalModelBackendMode backend_mode,
+    uint32_t batch_tokens) {
+    activation_attempts[attempt_count++] = (SyntheticAttempt) {
+        stage,
+        backend_mode,
+        batch_tokens,
+    };
+}
+
 static const AlyteLocalModelActivationHooks hooks = {
     .load_model = load_model,
     .create_context = create_context,
     .free_model = free_model,
+    .record_attempt = record_attempt,
 };
 
 int main(void) {
@@ -61,6 +81,37 @@ int main(void) {
     assert(context_batches[5] == 128);
     assert(context_batches[6] == 64);
     assert(context_batches[7] == 32);
+    assert(attempt_count == 10);
+    assert(activation_attempts[0].stage == ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_MODEL_LOAD);
+    assert(activation_attempts[0].backend_mode == ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED);
+    assert(activation_attempts[0].batch_tokens == ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_NONE);
+    assert(activation_attempts[1].stage == ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_CONTEXT);
+    assert(activation_attempts[1].backend_mode == ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED);
+    assert(activation_attempts[1].batch_tokens == ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_FULL);
+    assert(activation_attempts[2].stage == ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_CONTEXT);
+    assert(activation_attempts[2].backend_mode == ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED);
+    assert(activation_attempts[2].batch_tokens == ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_REDUCED);
+    assert(activation_attempts[3].stage == ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_CONTEXT);
+    assert(activation_attempts[3].backend_mode == ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED);
+    assert(activation_attempts[3].batch_tokens == ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_LOW);
+    assert(activation_attempts[4].stage == ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_CONTEXT);
+    assert(activation_attempts[4].backend_mode == ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED);
+    assert(activation_attempts[4].batch_tokens == ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_MINIMUM);
+    assert(activation_attempts[5].stage == ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_MODEL_LOAD);
+    assert(activation_attempts[5].backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY);
+    assert(activation_attempts[5].batch_tokens == ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_NONE);
+    assert(activation_attempts[6].stage == ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_CONTEXT);
+    assert(activation_attempts[6].backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY);
+    assert(activation_attempts[6].batch_tokens == ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_FULL);
+    assert(activation_attempts[7].stage == ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_CONTEXT);
+    assert(activation_attempts[7].backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY);
+    assert(activation_attempts[7].batch_tokens == ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_REDUCED);
+    assert(activation_attempts[8].stage == ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_CONTEXT);
+    assert(activation_attempts[8].backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY);
+    assert(activation_attempts[8].batch_tokens == ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_LOW);
+    assert(activation_attempts[9].stage == ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_CONTEXT);
+    assert(activation_attempts[9].backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY);
+    assert(activation_attempts[9].batch_tokens == ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_MINIMUM);
     assert(free_count == 1);
     assert(freed_models[0] == &gpu_model);
 
