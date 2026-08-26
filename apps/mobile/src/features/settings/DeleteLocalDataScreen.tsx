@@ -190,7 +190,9 @@ export function DeleteLocalDataScreen() {
                     {t(copy.subtitle)}
                   </AppText>
                 </View>
-                {selectedScope && <AppIcon name="eye" size={18} color={colors.accent} />}
+                {selectedScope && (
+                  <AppIcon name="checkmarkCircle" size={20} color={colors.accent} />
+                )}
               </Pressable>
             );
           })}

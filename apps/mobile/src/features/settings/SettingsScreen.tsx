@@ -16,7 +16,7 @@ function SettingsRow({
   subtitle,
   onPress,
 }: {
-  readonly icon: 'shield' | 'folder' | 'settings' | 'doc';
+  readonly icon: 'lockShield' | 'shield' | 'folder' | 'settings' | 'doc';
   readonly title: string;
   readonly subtitle: string;
   readonly onPress: () => void;
@@ -52,12 +52,9 @@ export function SettingsScreen(_props: SettingsScreenProps) {
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
-        <AppText variant="caption" style={styles.intro}>
-          {t('settings.privacySubtitle')}
-        </AppText>
         <View style={styles.group}>
           <SettingsRow
-            icon="settings"
+            icon="lockShield"
             title={t('settings.appLockTitle')}
             subtitle={`${t('settings.appLockSubtitle')} · ${appLockStatus}`}
             onPress={() => navigation.navigate('AppLock')}
@@ -87,7 +84,6 @@ export function SettingsScreen(_props: SettingsScreenProps) {
 }
 
 const styles = StyleSheet.create({
-  intro: { color: colors.mutedInk, marginBottom: spacing.sm },
   group: {
     backgroundColor: colors.surface,
     borderColor: colors.border,

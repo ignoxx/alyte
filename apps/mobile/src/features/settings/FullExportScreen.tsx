@@ -10,6 +10,7 @@ import { colors, screenStyles, spacing } from '../../theme';
 import type { ExportSelection } from '../export/export-contract';
 import type { LocalExportOperation, LocalExportProgress } from '../export/service';
 import type { ExportMediaSummary } from '../local-controls/model';
+import { exportMediaOptionState, type ExportMediaStatus } from './export-ui-model';
 
 type ExportStage = 'selection' | 'preview' | 'working' | 'result';
 type ResultKind = 'success' | 'cancelled' | 'failed' | 'unavailable';
@@ -21,8 +22,11 @@ function shareResultForError(error: unknown): Extract<ResultKind, 'failed' | 'un
     : 'failed';
 }
 
-function availableLabel(count: number): string {
-  return t('settings.exportCount').replace('{count}', count.toLocaleString());
+function availableLabel(count: number, status: ExportMediaStatus): string {
+  if (status === 'loading') return t('settings.exportMediaChecking');
+  if (status === 'unavailable') return t('settings.exportMediaUnavailableCount');
+  const countLabel = t('settings.exportCount').replace('{count}', count.toLocaleString());
+  return count > 0 ? countLabel : `${countLabel} · ${t('settings.exportUnavailable')}`;
 }
 
 function selectedLabel(selected: number, available: number): string {
@@ -52,29 +56,39 @@ function progressLabel(progress: LocalExportProgress | null): string {
 function ExportToggle({
   title,
   count,
+  status,
   value,
   onValueChange,
 }: {
   readonly title: string;
   readonly count: number;
+  readonly status: ExportMediaStatus;
   readonly value: boolean;
   readonly onValueChange: (next: boolean) => void;
 }) {
+  const option = exportMediaOptionState(status, count, value);
+  const countLabel = availableLabel(count, status);
+
   return (
     <View style={styles.toggleRow}>
-      <View style={styles.toggleCopy}>
+      <View style={[styles.toggleCopy, option.unavailable && styles.unavailableCopy]}>
         <AppText>{title}</AppText>
         <AppText variant="caption" style={styles.muted}>
-          {availableLabel(count)}
+          {countLabel}
         </AppText>
       </View>
-      <Host matchContents>
-        <Switch
-          value={value}
-          onValueChange={onValueChange}
-          label={`${title}, ${availableLabel(count)}`}
-        />
-      </Host>
+      <View style={styles.switchSlot} accessible={false}>
+        <Host matchContents>
+          <Switch
+            value={option.selected}
+            disabled={option.disabled}
+            onValueChange={(next) => {
+              if (!option.disabled) onValueChange(next);
+            }}
+            label={`${title}, ${countLabel}`}
+          />
+        </Host>
+      </View>
     </View>
   );
 }
@@ -142,12 +156,23 @@ export function FullExportScreen() {
 
   function selection(): ExportSelection {
     if (media === null) return {};
+    const original = exportMediaOptionState(
+      mediaStatus,
+      media.counts.originalReports,
+      includeOriginal,
+    );
+    const sanitized = exportMediaOptionState(
+      mediaStatus,
+      media.counts.sanitizedReports,
+      includeSanitized,
+    );
+    const intake = exportMediaOptionState(mediaStatus, media.counts.intakeImages, includeIntake);
     return {
-      originalReportIds: includeOriginal ? (media.selection.originalReportIds ?? []) : [],
-      sanitizedReportDerivativeIds: includeSanitized
+      originalReportIds: original.selected ? (media.selection.originalReportIds ?? []) : [],
+      sanitizedReportDerivativeIds: sanitized.selected
         ? (media.selection.sanitizedReportDerivativeIds ?? [])
         : [],
-      intakeImageEventIds: includeIntake ? (media.selection.intakeImageEventIds ?? []) : [],
+      intakeImageEventIds: intake.selected ? (media.selection.intakeImageEventIds ?? []) : [],
     };
   }
 
@@ -214,9 +239,29 @@ export function FullExportScreen() {
     void cancelWorkingExport();
   });
 
+  useEffect(() => {
+    if (mediaStatus !== 'ready' || media === null) return;
+    setIncludeOriginal(
+      (selected) =>
+        exportMediaOptionState(mediaStatus, media.counts.originalReports, selected).selected,
+    );
+    setIncludeSanitized(
+      (selected) =>
+        exportMediaOptionState(mediaStatus, media.counts.sanitizedReports, selected).selected,
+    );
+    setIncludeIntake(
+      (selected) =>
+        exportMediaOptionState(mediaStatus, media.counts.intakeImages, selected).selected,
+    );
+  }, [media, mediaStatus]);
+
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+      <ScreenScrollView
+        contentContainerStyle={screenStyles.content}
+        contentInset={{ bottom: spacing.xxl }}
+        style={screenStyles.scroll}
+      >
         {stage === 'selection' && (
           <>
             <AppText variant="heading" style={styles.title}>
@@ -237,18 +282,21 @@ export function FullExportScreen() {
               <ExportToggle
                 title={t('settings.exportOriginalReports')}
                 count={media?.counts.originalReports ?? 0}
+                status={mediaStatus}
                 value={includeOriginal}
                 onValueChange={setIncludeOriginal}
               />
               <ExportToggle
                 title={t('settings.exportSanitizedReports')}
                 count={media?.counts.sanitizedReports ?? 0}
+                status={mediaStatus}
                 value={includeSanitized}
                 onValueChange={setIncludeSanitized}
               />
               <ExportToggle
                 title={t('settings.exportIntakeImages')}
                 count={media?.counts.intakeImages ?? 0}
+                status={mediaStatus}
                 value={includeIntake}
                 onValueChange={setIncludeIntake}
               />
@@ -384,7 +432,14 @@ const styles = StyleSheet.create({
     minHeight: 65,
     paddingHorizontal: spacing.lg,
   },
-  toggleCopy: { flex: 1, gap: spacing.xs },
+  toggleCopy: { flex: 1, flexShrink: 1, gap: spacing.xs, minWidth: 0 },
+  unavailableCopy: { opacity: 0.7 },
+  switchSlot: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
+    minHeight: 44,
+    width: 52,
+  },
   warningSurface: { gap: spacing.md, marginBottom: spacing.lg },
   unavailableSurface: { gap: spacing.sm, marginBottom: spacing.lg },
   warningText: { color: colors.danger },

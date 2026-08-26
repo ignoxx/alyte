@@ -242,6 +242,7 @@ export type AppIconName =
   | 'folder'
   | 'photos'
   | 'addDocument'
+  | 'lockShield'
   | 'eye'
   | 'shield'
   | 'trash'
@@ -264,6 +265,7 @@ const iconSymbols: Record<AppIconName, string> = {
   folder: 'folder',
   photos: 'photo.on.rectangle',
   addDocument: 'doc.badge.plus',
+  lockShield: 'lock.shield',
   eye: 'eye',
   shield: 'shield',
   trash: 'trash',
