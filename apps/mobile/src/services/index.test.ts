@@ -124,6 +124,7 @@ function controllerFor(services: AlyteServices) {
       },
     },
     shield: {
+      markReactGateMounted() {},
       async clear() {},
       async isInstalled() {
         return true;

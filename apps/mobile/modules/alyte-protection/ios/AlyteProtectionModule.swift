@@ -11,6 +11,10 @@ public final class AlyteProtectionModule: Module {
       AlyteSnapshotShield.shared.clear()
     }
 
+    Function("markReactGateMounted") {
+      AlyteSnapshotShield.shared.markReactGateMounted()
+    }
+
     Function("isSnapshotShieldInstalled") {
       AlyteSnapshotShield.shared.isInstalled()
     }

@@ -7,9 +7,32 @@ final class AlyteProtectionSnapshotShieldTests: XCTestCase {
     let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
     let shield = AlyteSnapshotShield(windowProvider: { [window] })
 
-    shield.clear()
-    shield.clear()
+    XCTAssertFalse(shield.clear())
+    XCTAssertFalse(shield.clear())
 
+    XCTAssertFalse(shield.isInstalled())
+    XCTAssertEqual(Self.shieldedViews(in: window).count, 0)
+  }
+
+  func testClearBeforeReactGateMountKeepsOpaqueShieldInstalled() {
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
+    let shield = AlyteSnapshotShield(windowProvider: { [window] })
+
+    shield.install()
+
+    XCTAssertFalse(shield.clear())
+    XCTAssertTrue(shield.isInstalled())
+    XCTAssertEqual(Self.shieldedViews(in: window).count, 1)
+  }
+
+  func testMountedReactGateAllowsExplicitClear() {
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
+    let shield = AlyteSnapshotShield(windowProvider: { [window] })
+
+    shield.markReactGateMounted()
+    shield.install()
+
+    XCTAssertTrue(shield.clear())
     XCTAssertFalse(shield.isInstalled())
     XCTAssertEqual(Self.shieldedViews(in: window).count, 0)
   }
@@ -51,6 +74,7 @@ final class AlyteProtectionSnapshotShieldTests: XCTestCase {
     let shield = AlyteSnapshotShield(windowProvider: { [window] })
 
     shield.install()
+    shield.markReactGateMounted()
     shield.setApplicationActive(false)
     shield.clear()
 
@@ -69,6 +93,7 @@ final class AlyteProtectionSnapshotShieldTests: XCTestCase {
   func testConcurrentInstallAndClearLeavesDeterministicClearResult() {
     let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
     let shield = AlyteSnapshotShield(windowProvider: { [window] })
+    shield.markReactGateMounted()
     let finished = expectation(description: "concurrent lifecycle work finished")
 
     // Keep the test thread's main run loop available for the shield's synchronous UIKit work.

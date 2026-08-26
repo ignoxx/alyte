@@ -1,12 +1,50 @@
-import { Component, type ErrorInfo, type PropsWithChildren, type ReactNode } from 'react';
-import { StyleSheet } from 'react-native';
+import {
+  Component,
+  useEffect,
+  useLayoutEffect,
+  type ErrorInfo,
+  type PropsWithChildren,
+  type ReactNode,
+} from 'react';
+import { AppState, StyleSheet, type AppStateStatus } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../localization';
 import { AppButton, AppText } from './primitives';
 import { colors, spacing, typography } from '../theme';
+import { nativeSnapshotShield } from '../features/app-lock/shield';
 
 type ErrorBoundaryProps = PropsWithChildren;
 type ErrorBoundaryState = { error: Error | null };
+
+function StartupRecoverySurface({ onRetry }: { readonly onRetry: () => void }) {
+  useLayoutEffect(() => {
+    // This fallback also acts as the startup gate when service construction throws before the
+    // normal AppLockProvider/LockGate tree can mount. Native can safely reveal this surface only
+    // after the handoff; it remains opaque and contains no health content.
+    nativeSnapshotShield.markReactGateMounted();
+  }, []);
+
+  useEffect(() => {
+    const clearWhenActive = (status: AppStateStatus = AppState.currentState) => {
+      if (status === 'active') void nativeSnapshotShield.clear().catch(() => undefined);
+    };
+
+    // A root failure can happen while the system auth sheet or a lifecycle transition is active.
+    // Retry the explicit clear on the next active callback so the recovery surface cannot remain
+    // behind the opaque native shield indefinitely.
+    clearWhenActive();
+    const subscription = AppState.addEventListener('change', clearWhenActive);
+    return () => subscription.remove();
+  }, []);
+
+  return (
+    <SafeAreaView style={styles.container} accessibilityViewIsModal>
+      <AppText variant="title">{t('errors.title')}</AppText>
+      <AppText style={styles.body}>{t('errors.body')}</AppText>
+      <AppButton label={t('errors.restart')} onPress={onRetry} />
+    </SafeAreaView>
+  );
+}
 
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   override state: ErrorBoundaryState = { error: null };
@@ -27,13 +65,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       return this.props.children;
     }
 
-    return (
-      <SafeAreaView style={styles.container} accessibilityViewIsModal>
-        <AppText variant="title">{t('errors.title')}</AppText>
-        <AppText style={styles.body}>{t('errors.body')}</AppText>
-        <AppButton label={t('errors.restart')} onPress={this.reset} />
-      </SafeAreaView>
-    );
+    return <StartupRecoverySurface onRetry={this.reset} />;
   }
 }
 

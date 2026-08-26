@@ -31,6 +31,7 @@ function fixture(initial: { enabled: boolean; grace: 'immediate' | 'oneMinute' |
     }),
     authentication: createAppLockAuthService(authProvider),
     shield: {
+      markReactGateMounted() {},
       async clear() {
         clearCount += 1;
       },
@@ -263,7 +264,7 @@ test('disabled lock stays opaque until the native shield clear completes', async
       async setLocalPreference() {},
     }),
     authentication: createAppLockAuthService(providerForSuccess()),
-    shield: { clear: () => clear, isInstalled: async () => true },
+    shield: { markReactGateMounted() {}, clear: () => clear, isInstalled: async () => true },
   });
 
   const bootstrap = controller.bootstrap();
@@ -288,6 +289,7 @@ test('background during a deferred clear keeps the gate locked and retries after
     }),
     authentication: createAppLockAuthService(providerForSuccess()),
     shield: {
+      markReactGateMounted() {},
       async clear() {
         clearStarted.resolve();
         await releaseClear.promise;
@@ -327,7 +329,11 @@ test('preference read failure is a neutral retry state and disabling requires au
       },
     }),
     authentication: createAppLockAuthService(providerForSuccess()),
-    shield: { clear: async () => undefined, isInstalled: async () => true },
+    shield: {
+      markReactGateMounted() {},
+      clear: async () => undefined,
+      isInstalled: async () => true,
+    },
   });
   await controller.bootstrap();
   assert.equal(controller.getSnapshot().phase, 'retry');
@@ -381,6 +387,7 @@ function settingsFixture(initial: {
       },
     }),
     shield: {
+      markReactGateMounted() {},
       async clear() {
         clearCount += 1;
       },
@@ -436,6 +443,7 @@ function settingsAuthSheetFixture(initial: {
       },
     }),
     shield: {
+      markReactGateMounted() {},
       async clear() {
         clearCount += 1;
       },

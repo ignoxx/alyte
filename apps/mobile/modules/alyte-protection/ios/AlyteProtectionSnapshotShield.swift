@@ -32,6 +32,10 @@ final class AlyteSnapshotShield: @unchecked Sendable {
   // The lifecycle subscriber changes this before installing on resignation. A JS clear that
   // arrives after that boundary must be a no-op; otherwise it could remove the fresh shield.
   private var applicationActive = true
+  // React must explicitly acknowledge that its opaque startup/lock surface is mounted before a
+  // JS clear can remove the native shield. This prevents a bootstrap failure from leaving an
+  // opaque native view above an invisible or missing React error surface.
+  private var reactGateMounted = false
   private var lifecycleObserversInstalled = false
 
   init(
@@ -56,11 +60,24 @@ final class AlyteSnapshotShield: @unchecked Sendable {
     }
   }
 
-  func clear() {
+  @discardableResult
+  func clear() -> Bool {
+    var cleared = false
     performOnMainSync { [self] in
       guard isApplicationActive() else {
         setInstalled(true)
         applyToAllWindows()
+        return
+      }
+      // A clear request can arrive before the React root has committed. If the native lifecycle
+      // has not installed a shield yet, preserve that state; otherwise restore the opaque shield.
+      // This keeps the bridge idempotent in tests and in environments without a lifecycle event
+      // while still failing closed whenever an installed shield is asked to clear too early.
+      guard isReactGateMounted() else {
+        if isInstalled() {
+          setInstalled(true)
+          applyToAllWindows()
+        }
         return
       }
       setInstalled(false)
@@ -69,13 +86,25 @@ final class AlyteSnapshotShield: @unchecked Sendable {
           .compactMap { $0 as? AlyteSnapshotShieldView }
           .forEach { $0.removeFromSuperview() }
       }
+      cleared = true
     }
+    return cleared
   }
 
   func isInstalled() -> Bool {
     stateLock.lock()
     defer { stateLock.unlock() }
     return installed
+  }
+
+  /// Called by the React root after its opaque startup/lock surface has committed. This is a
+  /// one-way readiness acknowledgement for the lifetime of the process.
+  func markReactGateMounted() {
+    performOnMainSync { [self] in
+      stateLock.lock()
+      reactGateMounted = true
+      stateLock.unlock()
+    }
   }
 
   /// Called only by the native app-delegate subscriber. JS intentionally has no install or
@@ -110,6 +139,12 @@ final class AlyteSnapshotShield: @unchecked Sendable {
     stateLock.lock()
     defer { stateLock.unlock() }
     return applicationActive
+  }
+
+  private func isReactGateMounted() -> Bool {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return reactGateMounted
   }
 
   private func installLifecycleObserversIfNeeded() {

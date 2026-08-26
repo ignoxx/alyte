@@ -1,10 +1,11 @@
-import { type ReactNode } from 'react';
+import { useLayoutEffect, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { AppButton, AppIcon, AppText } from '../../ui/primitives';
 import { colors, screenStyles, spacing, typography } from '../../theme';
 import { useAppLock } from './AppLockProvider';
+import { nativeSnapshotShield } from './shield';
 
 function messageForReason(reason: ReturnType<typeof useAppLock>['state']['reason']): string {
   switch (reason) {
@@ -30,6 +31,12 @@ export function LockGate({ children }: { readonly children: ReactNode }) {
   const { controller, state } = useAppLock();
   const locked = state.phase !== 'unlocked';
   const loading = state.phase === 'loading' || state.phase === 'authenticating';
+
+  useLayoutEffect(() => {
+    // The native shield is allowed to clear only after this opaque gate has committed. Keeping
+    // this synchronous avoids a race with the controller's first passive bootstrap effect.
+    nativeSnapshotShield.markReactGateMounted();
+  }, []);
 
   return (
     <View style={styles.root}>

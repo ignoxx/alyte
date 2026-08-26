@@ -101,32 +101,33 @@ function AppContent({ services }: { readonly services: AlyteServices }) {
 
   return (
     <LockGate>
-      <ErrorBoundary>
-        {onboardingComplete === null ? (
-          <NeutralLoadingSurface />
-        ) : onboardingComplete ? (
-          <RootNavigator services={services} />
-        ) : (
-          <ModelSetupScreen
-            model={services.models}
-            onComplete={() => {
-              void services.intake
-                .setLocalPreference(ONBOARDING_COMPLETED_PREFERENCE, 'true')
-                .catch(() => {
-                  // Continue into local mode even when the preference write is unavailable. A
-                  // later launch safely shows onboarding again rather than risking a false
-                  // preference.
-                });
-              setOnboardingComplete(true);
-            }}
-          />
-        )}
-      </ErrorBoundary>
+      {onboardingComplete === null ? (
+        <NeutralLoadingSurface />
+      ) : onboardingComplete ? (
+        <RootNavigator services={services} />
+      ) : (
+        <ModelSetupScreen
+          model={services.models}
+          onComplete={() => {
+            void services.intake
+              .setLocalPreference(ONBOARDING_COMPLETED_PREFERENCE, 'true')
+              .catch(() => {
+                // Continue into local mode even when the preference write is unavailable. A
+                // later launch safely shows onboarding again rather than risking a false
+                // preference.
+              });
+            setOnboardingComplete(true);
+          }}
+        />
+      )}
     </LockGate>
   );
 }
 
-export default function App() {
+function AppRuntime() {
+  // Keep service/controller construction below the root ErrorBoundary. Native modules, storage,
+  // and future startup adapters can fail synchronously; the recovery surface must still mount
+  // and complete the shield handoff in that case.
   const [services] = useState(() => createServices());
   const [appLockController] = useState<AppLockController>(() =>
     createAppLockController({
@@ -137,13 +138,21 @@ export default function App() {
   );
 
   return (
+    <ServicesContext.Provider value={services}>
+      <AppLockProvider controller={appLockController}>
+        <StatusBar style="auto" />
+        <AppContent services={services} />
+      </AppLockProvider>
+    </ServicesContext.Provider>
+  );
+}
+
+export default function App() {
+  return (
     <SafeAreaProvider>
-      <ServicesContext.Provider value={services}>
-        <AppLockProvider controller={appLockController}>
-          <StatusBar style="auto" />
-          <AppContent services={services} />
-        </AppLockProvider>
-      </ServicesContext.Provider>
+      <ErrorBoundary>
+        <AppRuntime />
+      </ErrorBoundary>
     </SafeAreaProvider>
   );
 }
