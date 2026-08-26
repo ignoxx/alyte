@@ -131,6 +131,9 @@ function DetailScrollView({
   centered = false,
   children,
 }: PropsWithChildren<{ readonly centered?: boolean }>) {
+  // Native iOS 26 tabs sit outside this stack: the shared native clearance reserves their
+  // dynamic inset, while the detail end-cap leaves breathing room after the last Retry/Back
+  // action has scrolled clear of the translucent bar.
   return (
     <ScreenScrollView
       contentContainerStyle={[
