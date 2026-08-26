@@ -4,7 +4,6 @@ import { resolve } from 'node:path';
 import { test } from 'node:test';
 import {
   assertLocalModelManifest,
-  isAllowedLocalModelRedirect,
   LOCAL_MODEL_PACK_ID,
   productionLocalModelManifest,
 } from './manifest';
@@ -44,7 +43,7 @@ test('production model manifest pins one public Gemma artifact and runtime', () 
   assert.deepEqual(productionLocalModelManifest.allowlist.files, ['gemma-4-E2B-it-Q4_0.gguf']);
 });
 
-test('redirect policy accepts exact reviewed Hugging Face HTTPS hosts only', () => {
+test('generated manifest retains the exact reviewed Hugging Face download host list', () => {
   assert.deepEqual(productionLocalModelManifest.allowlist.hosts, [
     'huggingface.co',
     'cdn-lfs.huggingface.co',
@@ -59,24 +58,6 @@ test('redirect policy accepts exact reviewed Hugging Face HTTPS hosts only', () 
     'transfer.xethub.hf.co',
     'transfer.xethub-eu.hf.co',
   ]);
-
-  for (const host of productionLocalModelManifest.allowlist.hosts) {
-    assert.equal(isAllowedLocalModelRedirect(`https://${host}/artifact`), true, host);
-  }
-});
-
-test('redirect policy rejects transport downgrade, credentials, lookalikes, and unlisted hosts', () => {
-  for (const url of [
-    'http://us.aws.cdn.hf.co/artifact',
-    'https://user:pass@us.aws.cdn.hf.co/artifact',
-    'https://us.aws.cdn.hf.co.evil.example/artifact',
-    'https://eu.aws.cdn.hf.co/artifact',
-    'https://cdn.us.aws.cdn.hf.co/artifact',
-    'https://evil.example/artifact',
-    'not a URL',
-  ]) {
-    assert.equal(isAllowedLocalModelRedirect(url), false, url);
-  }
 });
 
 test('manifest rejects moving revisions, arbitrary hosts, and unlisted files', () => {

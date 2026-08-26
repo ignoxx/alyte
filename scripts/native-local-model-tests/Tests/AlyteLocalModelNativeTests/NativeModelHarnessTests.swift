@@ -26,6 +26,7 @@ final class NativeModelHarnessTests: XCTestCase {
   }
 
   private func makeCore(
+    allowedHosts: Set<String> = ["huggingface.co", "cdn-lfs.huggingface.co"],
     protect: @escaping AlyteLocalModelCore.ProtectFile = { _ in }
   ) throws -> (AlyteLocalModelCore, URL, () -> SyntheticRuntime?) {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("alyte-local-model-native-\(UUID().uuidString)")
@@ -35,7 +36,7 @@ final class NativeModelHarnessTests: XCTestCase {
       expectedBytes: 5,
       expectedDigest: "valid",
       filename: "model.ready",
-      allowedHosts: ["huggingface.co", "cdn-lfs.huggingface.co"],
+      allowedHosts: allowedHosts,
       hashFile: { url in String(data: try Data(contentsOf: url), encoding: .utf8) ?? "" },
       protectFile: protect,
       runtimeFactory: { _ in
@@ -99,7 +100,7 @@ final class NativeModelHarnessTests: XCTestCase {
   }
 
   func testProductionRedirectAllowlistAcceptsCurrentHuggingFaceCDNsAndRejectsLookalikes() throws {
-    let (core, _, _) = try makeCore()
+    let productionHosts = Set(AlyteLocalModelManifest.allowedHosts)
     for host in [
       "us.aws.cdn.hf.co",
       "us.gcp.cdn.hf.co",
@@ -108,8 +109,12 @@ final class NativeModelHarnessTests: XCTestCase {
       "transfer.xethub.hf.co",
       "transfer.xethub-eu.hf.co",
     ] {
-      XCTAssertTrue(AlyteLocalModelManifest.isAllowedRedirect(URL(string: "https://\(host)/file")!))
-      XCTAssertThrowsError(try core.acceptRedirect(URL(string: "https://\(host).evil.example/file")!))
+      let (core, _, _) = try makeCore(allowedHosts: productionHosts)
+      _ = try core.prepareDownload()
+      let url = URL(string: "https://\(host)/file")!
+      XCTAssertTrue(AlyteLocalModelManifest.isAllowedRedirect(url), host)
+      XCTAssertNoThrow(try core.acceptRedirect(url), host)
+      XCTAssertNoThrow(try core.acceptResponse(status: 200, contentRange: nil, url: url), host)
     }
     for url in [
       "http://us.aws.cdn.hf.co/file",
@@ -118,8 +123,12 @@ final class NativeModelHarnessTests: XCTestCase {
       "https://cdn.us.aws.cdn.hf.co/file",
       "https://example.com/file",
     ] {
-      XCTAssertFalse(AlyteLocalModelManifest.isAllowedRedirect(URL(string: url)!))
-      XCTAssertThrowsError(try core.acceptRedirect(URL(string: url)!))
+      let (core, _, _) = try makeCore(allowedHosts: productionHosts)
+      _ = try core.prepareDownload()
+      let redirectURL = URL(string: url)!
+      XCTAssertFalse(AlyteLocalModelManifest.isAllowedRedirect(redirectURL), url)
+      XCTAssertThrowsError(try core.acceptRedirect(redirectURL), url)
+      XCTAssertThrowsError(try core.acceptResponse(status: 200, contentRange: nil, url: redirectURL), url)
     }
   }
 
