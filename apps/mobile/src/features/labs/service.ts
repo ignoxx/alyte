@@ -57,7 +57,13 @@ export function createLabsService(options: LabsServiceOptions = {}): LabsService
 
   async function rawRepository(): Promise<LabRepository> {
     repositoryPromise ??= repositoryFactory();
-    return repositoryPromise;
+    const pending = repositoryPromise;
+    try {
+      return await pending;
+    } catch (error) {
+      if (repositoryPromise === pending) repositoryPromise = null;
+      throw error;
+    }
   }
 
   async function reconcile(repo: LabRepository, preserveAvailability: boolean): Promise<void> {

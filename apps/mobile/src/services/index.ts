@@ -12,9 +12,9 @@ import {
   createLabReportsService,
   type LabReportsService,
 } from '../features/labs/report-service';
-import { openProtectedLabDatabase, type LabRepository } from '../features/labs/persistence';
+import { openProtectedLabDatabase } from '../features/labs/persistence';
 import { createIntakeService, type IntakeService } from '../features/intake/service';
-import { openProtectedIntakeDatabase, type IntakeRepository } from '../features/intake/persistence';
+import { openProtectedIntakeDatabase } from '../features/intake/persistence';
 import { createProtectedIntakeMediaStore } from '../features/intake/media-store';
 import {
   createDefaultLocalExportService,
@@ -35,6 +35,7 @@ import {
   seedShowcaseLabRecords,
   showcaseIntakeInputs,
 } from './showcase-seed';
+import { createSharedDatabaseRepositoryFactories } from './shared-database';
 
 export interface AlyteServices {
   readonly runtime: AlyteRuntime;
@@ -57,16 +58,10 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
   const requestedShowcase = process.env.EXPO_PUBLIC_SHOWCASE_MODE === 'true';
   const showcase = loadShowcaseSnapshot(variant, requestedShowcase && variant !== 'production');
 
-  let repositoryPromise: Promise<LabRepository> | null = null;
-  const repositoryFactory = () => {
-    repositoryPromise ??= openProtectedLabDatabase();
-    return repositoryPromise;
-  };
-  let intakeRepositoryPromise: Promise<IntakeRepository> | null = null;
-  const intakeRepositoryFactory = () => {
-    intakeRepositoryPromise ??= openProtectedIntakeDatabase();
-    return intakeRepositoryPromise;
-  };
+  const { repositoryFactory, intakeRepositoryFactory } = createSharedDatabaseRepositoryFactories(
+    openProtectedLabDatabase,
+    openProtectedIntakeDatabase,
+  );
 
   const clock = { now: () => new Date() };
 

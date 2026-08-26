@@ -73,7 +73,14 @@ export function createIntakeService(options: IntakeServiceOptions = {}): IntakeS
 
   async function repository(): Promise<IntakeRepository> {
     repositoryPromise ??= repositoryFactory();
-    const repo = await repositoryPromise;
+    const pending = repositoryPromise;
+    let repo: IntakeRepository;
+    try {
+      repo = await pending;
+    } catch (error) {
+      if (repositoryPromise === pending) repositoryPromise = null;
+      throw error;
+    }
     if (!recoveryReconciled) {
       const mediaStore = options.mediaStore;
       if (mediaStore?.portablePath !== undefined) {
