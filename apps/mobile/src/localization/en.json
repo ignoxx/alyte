@@ -83,7 +83,7 @@
     "modelCancelling": "Cancelling download…",
     "modelCancelFailure": "The download could not be cancelled. Try again while it is still running.",
     "modelRetryCancel": "Try cancelling again",
-    "modelCancelDisclosure": "Download cancelled. Start again whenever you are ready.",
+    "modelCancelDisclosure": "Download cancelled. Choose the model again when you are ready.",
     "modelSetupCancelDisclosure": "Download cancelled. Start again whenever you are ready.",
     "modelChecking": "Checking this iPhone for the verified model…",
     "modelProgressLabel": "Model download progress",
