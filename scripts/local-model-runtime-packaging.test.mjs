@@ -118,6 +118,11 @@ test('podspec exposes a relative staged framework and keeps external provenance 
     assert.equal(spec.vendored_frameworks, 'Vendor/llama.framework');
     assert.equal(isAbsolute(spec.vendored_frameworks), false);
     assert.equal(spec.vendored_frameworks.split('/').some((part) => part.startsWith('.')), false);
+    assert.equal(
+      (spec.exclude_files ?? []).some((pattern) => pattern.includes('Vendor')),
+      false,
+      'source selection must not exclude the visible vendored framework',
+    );
     assert.match(spec.pod_target_xcconfig.HEADER_SEARCH_PATHS, /PODS_TARGET_SRCROOT/);
     assert.equal(spec.script_phases.name, 'Verify pinned Alyte llama.cpp runtime');
     assert.match(spec.script_phases.script, /check-local-model-runtime\.mjs/);

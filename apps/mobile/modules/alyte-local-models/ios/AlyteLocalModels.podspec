@@ -77,10 +77,18 @@ SCRIPT
   else
     raise 'AlyteLocalModels requires ALYTE_LOCAL_MODEL_RUNTIME_XCFRAMEWORK built from the exact pinned llama.cpp revision; simulator-only fake builds must set ALYTE_LOCAL_MODEL_ALLOW_SIMULATOR_FAKE=1 and ALYTE_LOCAL_MODEL_SIMULATOR=1'
   end
-  s.source_files = '**/*.{h,m,mm,c,swift,hpp,cpp}'
-  s.exclude_files = [
-    '**/*Tests.swift',
-    "#{File.basename(staged_runtime_root)}/**/*",
+  s.source_files = [
+    'AlyteLocalModelCore.swift',
+    'AlyteLocalModelManifest.swift',
+    'AlyteLocalModelRuntime.c',
+    'AlyteLocalModelRuntime.h',
+    'AlyteLocalModelRuntime.swift',
+    'AlyteLocalModelRuntimeActivation.c',
+    'AlyteLocalModelRuntimeActivation.h',
+    'AlyteLocalModelStore.swift',
+    'AlyteLocalModelTypes.swift',
+    'AlyteLocalModelsModule.swift',
+    'AlyteSemanticMapperGrammar.generated.swift',
   ]
   s.test_spec 'Tests' do |test_spec|
     test_spec.source_files = '*Tests.swift'
