@@ -279,7 +279,9 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               <AppButton
                 disabled={busy}
                 label={t('onboarding.modelRetry')}
-                onPress={() => void startDownload()}
+                onPress={() =>
+                  void (failureRecoveryAction === 'activate' ? enterAlyte() : startDownload())
+                }
                 tone="secondary"
               />
             </AppSurface>

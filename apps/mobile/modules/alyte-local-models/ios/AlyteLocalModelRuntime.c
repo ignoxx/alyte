@@ -37,6 +37,39 @@ static void alyte_local_model_discard_log(enum ggml_log_level level, const char 
     (void) user_data;
 }
 
+static struct llama_model *alyte_local_model_load(
+    const char *model_path,
+    bool cpu_only) {
+    struct llama_model_params model_params = llama_model_default_params();
+    model_params.n_gpu_layers = cpu_only ? 0 : -1;
+    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
+    if (cpu_only) {
+        // A NULL device list means "all available devices" in llama.cpp. That is not a CPU
+        // fallback: on a device with an unavailable Metal queue the context can still fail
+        // before it reaches the CPU backend. Restrict the retry explicitly to CPU.
+        ggml_backend_dev_t cpu_device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        if (cpu_device == NULL) return NULL;
+        ggml_backend_dev_t cpu_devices[] = { cpu_device, NULL };
+        model_params.devices = cpu_devices;
+        return llama_model_load_from_file(model_path, model_params);
+    }
+    return llama_model_load_from_file(model_path, model_params);
+}
+
+static struct llama_context_params alyte_local_model_context_params(
+    uint32_t batch_tokens) {
+    struct llama_context_params context_params = llama_context_default_params();
+    context_params.n_ctx = 2048;
+    context_params.n_batch = batch_tokens;
+    context_params.n_ubatch = batch_tokens;
+    context_params.n_seq_max = 1;
+    context_params.n_threads = 4;
+    context_params.n_threads_batch = 4;
+    context_params.n_outputs_max = 1;
+    context_params.no_perf = true;
+    return context_params;
+}
+
 static int alyte_local_model_tokenize(
     const struct llama_vocab *vocab,
     const char *text,
@@ -66,21 +99,37 @@ void *alyte_local_model_runtime_create(
     if (model_path == NULL || grammar == NULL || grammar_root == NULL) return NULL;
     llama_log_set(alyte_local_model_discard_log, NULL);
     llama_backend_init();
-    struct llama_model_params model_params = llama_model_default_params();
-    model_params.n_gpu_layers = -1;
-    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
-    struct llama_model *model = llama_model_load_from_file(model_path, model_params);
+    struct llama_model *model = alyte_local_model_load(model_path, false);
+    if (model == NULL) {
+        // Model loading can fail before context creation when the GPU cannot accept the verified
+        // pack. Retry with the same mmap'd artifact and an explicit CPU device list; if that also
+        // fails, preserve the typed runtime failure rather than changing the pack state.
+        model = alyte_local_model_load(model_path, true);
+    }
     if (model == NULL) return NULL;
-    struct llama_context_params context_params = llama_context_default_params();
-    context_params.n_ctx = 2_048;
-    context_params.n_batch = 256;
-    context_params.n_ubatch = 256;
-    context_params.n_seq_max = 1;
-    context_params.n_threads = 4;
-    context_params.n_threads_batch = 4;
-    context_params.n_outputs_max = 1;
-    context_params.no_perf = true;
+
+    // Keep the evaluated configuration first, then retry with a smaller physical batch. The
+    // latter is still semantically equivalent because generation already pre-fills in bounded
+    // chunks, but needs less transient context memory on lower-memory supported iPhones.
+    uint32_t batch_tokens = 256;
+    struct llama_context_params context_params = alyte_local_model_context_params(batch_tokens);
     struct llama_context *context = llama_init_from_model(model, context_params);
+    if (context == NULL) {
+        batch_tokens = 128;
+        context_params = alyte_local_model_context_params(batch_tokens);
+        context = llama_init_from_model(model, context_params);
+    }
+    if (context == NULL) {
+        llama_model_free(model);
+        // A real device may expose a GPU backend that cannot reserve this model/context pair.
+        // Recreate the verified model with an explicit CPU-only device list before reporting a
+        // runtime failure. This does not alter the artifact or its provenance.
+        model = alyte_local_model_load(model_path, true);
+        if (model == NULL) return NULL;
+        batch_tokens = 128;
+        context_params = alyte_local_model_context_params(batch_tokens);
+        context = llama_init_from_model(model, context_params);
+    }
     if (context == NULL) {
         llama_model_free(model);
         return NULL;
@@ -114,8 +163,8 @@ void *alyte_local_model_runtime_create(
     runtime->context = context;
     runtime->vocab = vocab;
     runtime->sampler_chain = sampler_chain;
-    runtime->context_tokens = 2_048;
-    runtime->batch_tokens = 256;
+    runtime->context_tokens = 2048;
+    runtime->batch_tokens = (int) batch_tokens;
     atomic_init(&runtime->cancel_requested, false);
     return runtime;
 }
