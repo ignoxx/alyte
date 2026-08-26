@@ -274,20 +274,36 @@ function verificationForSanitizedReport(
   };
 }
 
+type StructuralVerificationFacts = Pick<
+  PdfSanitizedVerification,
+  | 'selectableText'
+  | 'annotations'
+  | 'attachments'
+  | 'metadata'
+  | 'removableRedactions'
+  | 'reloadChecked'
+>;
+
+function structuralFactsPassed(verification: StructuralVerificationFacts): boolean {
+  return (
+    verification.selectableText === false &&
+    verification.annotations === false &&
+    verification.attachments === false &&
+    verification.metadata === false &&
+    verification.removableRedactions === false &&
+    verification.reloadChecked === true
+  );
+}
+
 function verificationPassed(
   verification: PdfSanitizedVerification | ImageSanitizedVerification,
   sourceType: LabReport['sourceType'],
 ): boolean {
   return (
-    verification.verified &&
-    !verification.selectableText &&
-    !verification.annotations &&
-    !verification.attachments &&
-    !verification.metadata &&
-    !verification.removableRedactions &&
-    verification.reloadChecked &&
-    verification.sourceAwareChecked &&
-    verification.sourceContentRemoved &&
+    verification.verified === true &&
+    structuralFactsPassed(verification) &&
+    verification.sourceAwareChecked === true &&
+    verification.sourceContentRemoved === true &&
     verification.verificationVersion ===
       (sourceType === 'image' ? 'image-source-aware-v2' : 'source-aware-v1') &&
     verification.failureReasons.length === 0
@@ -301,13 +317,8 @@ function verificationPassed(
  */
 function structuralVerificationPassed(verification: PdfSanitizedVerification): boolean {
   return (
-    verification.verified &&
-    !verification.selectableText &&
-    !verification.annotations &&
-    !verification.attachments &&
-    !verification.metadata &&
-    !verification.removableRedactions &&
-    verification.reloadChecked &&
+    verification.verified === true &&
+    structuralFactsPassed(verification) &&
     verification.failureReasons.length === 0
   );
 }
@@ -318,14 +329,9 @@ function persistedVerificationPassed(
 ): boolean {
   return (
     verification !== null &&
-    !verification.selectableText &&
-    !verification.annotations &&
-    !verification.attachments &&
-    !verification.metadata &&
-    !verification.removableRedactions &&
-    verification.reloadChecked &&
-    verification.sourceAwareChecked &&
-    verification.sourceContentRemoved &&
+    structuralFactsPassed(verification) &&
+    verification.sourceAwareChecked === true &&
+    verification.sourceContentRemoved === true &&
     verification.verificationVersion ===
       (sourceType === 'image' ? 'image-source-aware-v2' : 'source-aware-v1')
   );
