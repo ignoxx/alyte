@@ -17,6 +17,27 @@ final class AlyteImageModuleTests: XCTestCase {
     XCTAssertNil(AlyteImageViewerSessionStore.shared.image(for: sessionId))
   }
 
+  func testAbandonedViewerSessionsExpireEvictAndReleaseIdempotently() throws {
+    var clock = Date(timeIntervalSince1970: 1_000)
+    let store = AlyteImageViewerSessionStore(maxEntries: 2, ttl: 60, now: { clock })
+    let image = try XCTUnwrap(UIImage(color: .white, size: CGSize(width: 100, height: 100)))
+    let first = store.insert(image)
+    let second = store.insert(image)
+    _ = store.image(for: first)
+    let third = store.insert(image)
+
+    XCTAssertNil(store.image(for: second))
+    XCTAssertNotNil(store.image(for: first))
+    XCTAssertNotNil(store.image(for: third))
+
+    clock.addTimeInterval(61)
+    XCTAssertNil(store.image(for: first))
+    XCTAssertNil(store.image(for: third))
+    store.remove(first)
+    store.remove(first)
+    store.removeAll()
+  }
+
   func testSanitizationNormalizesOrientationAndRemovesMetadata() throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("alyte-image-\(UUID().uuidString)", isDirectory: true)

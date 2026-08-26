@@ -15,10 +15,15 @@ export type PdfInspection = {
 
 /** A native PDFKit document held by an opaque, short-lived capability. */
 export interface PdfViewerSession {
-  readonly inspection: PdfInspection;
+  readonly pageCount: number;
   readonly sessionId: string;
   close(): Promise<void>;
 }
+
+/** Lightweight result from opening a PDF viewer; full page inspection stays on import paths. */
+export type PdfViewerOpenResult =
+  | { readonly locked: true; readonly pageCount: number; readonly session: null }
+  | { readonly locked: false; readonly pageCount: number; readonly session: PdfViewerSession };
 
 export interface PdfInspectionSession {
   readonly inspection: PdfInspection;
@@ -54,7 +59,7 @@ export interface PdfInspector {
   unlock(path: string, password: string): Promise<PdfInspectionSession>;
   renderPreview(path: string): Promise<readonly string[]>;
   /** Native-only lazy viewer operations remain optional for non-iOS test adapters. */
-  openViewer?(path: string): Promise<PdfViewerSession>;
+  openViewer?(path: string): Promise<PdfViewerOpenResult>;
   unlockViewer?(path: string, password: string): Promise<PdfViewerSession>;
   /** Native-only operations remain optional so pure import tests do not require an iOS runtime. */
   sanitize?(
@@ -69,11 +74,15 @@ export interface PdfInspector {
 type NativePdfModule = {
   inspect(path: string): Promise<PdfInspection>;
   unlock(path: string, password: string): Promise<PdfInspection & { readonly sessionId: string }>;
-  openViewer(path: string): Promise<PdfInspection & { readonly sessionId: string }>;
+  openViewer(path: string): Promise<{
+    readonly locked: boolean;
+    readonly pageCount: number;
+    readonly sessionId?: string;
+  }>;
   unlockViewer(
     path: string,
     password: string,
-  ): Promise<PdfInspection & { readonly sessionId: string }>;
+  ): Promise<{ readonly pageCount: number; readonly sessionId: string }>;
   renderPreview(path: string): Promise<readonly string[]>;
   renderPreviewSession(sessionId: string): Promise<readonly string[]>;
   exportUnlockedSession(sessionId: string, destinationPath: string): Promise<void>;
@@ -129,10 +138,19 @@ export const nativePdfInspector: PdfInspector = {
     const native = requireOptionalNativeModule<NativePdfModule>('AlytePDF');
     if (native === null) throw new Error('AlytePDF is unavailable for local PDF viewing');
     const result = await native.openViewer(path);
+    if (result.locked) return { locked: true, pageCount: result.pageCount, session: null };
+    if (result.sessionId === undefined) {
+      throw new Error('AlytePDF did not return a viewer capability');
+    }
+    const sessionId = result.sessionId;
     return {
-      inspection: result,
-      sessionId: result.sessionId,
-      close: () => native.close(result.sessionId),
+      locked: false,
+      pageCount: result.pageCount,
+      session: {
+        pageCount: result.pageCount,
+        sessionId,
+        close: () => native.close(sessionId),
+      },
     };
   },
   async unlockViewer(path, password) {
@@ -141,7 +159,7 @@ export const nativePdfInspector: PdfInspector = {
     if (native === null) throw new Error('AlytePDF is unavailable for local PDF viewing');
     const result = await native.unlockViewer(path, password);
     return {
-      inspection: result,
+      pageCount: result.pageCount,
       sessionId: result.sessionId,
       close: () => native.close(result.sessionId),
     };

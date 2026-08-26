@@ -15,6 +15,27 @@ final class ImageWorkspaceTests: XCTestCase {
     XCTAssertNil(AlyteImageViewerSessionStore.shared.image(for: sessionId))
   }
 
+  func testAbandonedViewerSessionsExpireEvictAndReleaseIdempotently() {
+    var clock = Date(timeIntervalSince1970: 1_000)
+    let store = AlyteImageViewerSessionStore(maxEntries: 2, ttl: 60, now: { clock })
+    let image = UIImage.workspaceTestImage(size: CGSize(width: 100, height: 100))
+    let first = store.insert(image)
+    let second = store.insert(image)
+    _ = store.image(for: first)
+    let third = store.insert(image)
+
+    XCTAssertNil(store.image(for: second))
+    XCTAssertNotNil(store.image(for: first))
+    XCTAssertNotNil(store.image(for: third))
+
+    clock.addTimeInterval(61)
+    XCTAssertNil(store.image(for: first))
+    XCTAssertNil(store.image(for: third))
+    store.remove(first)
+    store.remove(first)
+    store.removeAll()
+  }
+
   func testWorkspaceCentersAspectFitImageAndArbitratesMoveResizeTargets() throws {
     let workspace = AlyteImageWorkspaceView(appContext: nil)
     workspace.frame = CGRect(x: 0, y: 0, width: 390, height: 720)

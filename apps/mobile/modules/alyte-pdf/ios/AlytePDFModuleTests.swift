@@ -75,4 +75,39 @@ final class AlytePDFModuleTests: XCTestCase {
     AlytePDFSessionStore.shared.remove(sessionId)
     XCTAssertNil(AlytePDFSessionStore.shared.document(for: sessionId))
   }
+
+  func testViewerSummaryDoesNotExposePageInspectionForLargeDocuments() throws {
+    let document = PDFDocument()
+    for index in 0..<4096 {
+      document.insert(PDFPage(), at: index)
+    }
+
+    let result = try viewerSummary(document, sessionId: "synthetic-viewer")
+
+    XCTAssertEqual(result["locked"] as? Bool, false)
+    XCTAssertEqual(result["pageCount"] as? Int, 4096)
+    XCTAssertEqual(result["sessionId"] as? String, "synthetic-viewer")
+    XCTAssertNil(result["metadata"])
+    XCTAssertNil(result["pages"])
+  }
+
+  func testAbandonedViewerSessionsExpireEvictAndReleaseIdempotently() {
+    var clock = Date(timeIntervalSince1970: 1_000)
+    let store = AlytePDFSessionStore(maxEntries: 2, ttl: 60, now: { clock })
+    let first = store.insert(PDFDocument())
+    let second = store.insert(PDFDocument())
+    _ = store.document(for: first)
+    let third = store.insert(PDFDocument())
+
+    XCTAssertNil(store.document(for: second))
+    XCTAssertNotNil(store.document(for: first))
+    XCTAssertNotNil(store.document(for: third))
+
+    clock.addTimeInterval(61)
+    XCTAssertNil(store.document(for: first))
+    XCTAssertNil(store.document(for: third))
+    store.remove(first)
+    store.remove(first)
+    store.removeAll()
+  }
 }

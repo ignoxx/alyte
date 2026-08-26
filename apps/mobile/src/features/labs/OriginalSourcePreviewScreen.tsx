@@ -37,6 +37,7 @@ export function OriginalSourcePreviewScreen() {
   const sessionRef = useRef<OriginalReportViewerSession | null>(null);
   const interruptedRef = useRef(false);
   const passwordPromptRef = useRef(false);
+  const mountedRef = useRef(false);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -52,6 +53,7 @@ export function OriginalSourcePreviewScreen() {
 
   useEffect(() => {
     let active = true;
+    mountedRef.current = true;
     interruptedRef.current = false;
     setViewer(null);
     setFailure(null);
@@ -82,11 +84,22 @@ export function OriginalSourcePreviewScreen() {
 
     return () => {
       active = false;
+      mountedRef.current = false;
       const session = sessionRef.current;
       sessionRef.current = null;
       void session?.close();
     };
   }, [attempt, reports, route.params.reportId]);
+
+  function handleNativeViewerFailure() {
+    interruptedRef.current = true;
+    const session = sessionRef.current;
+    sessionRef.current = null;
+    void session?.close();
+    if (!mountedRef.current) return;
+    setViewer(null);
+    setFailure('failed');
+  }
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -166,6 +179,7 @@ export function OriginalSourcePreviewScreen() {
             accessibilityLabel={t('labs.reportPreviewImageLabel')}
             accessibilityLabels={{}}
             inspectionMode
+            onFailure={handleNativeViewerFailure}
             redactMode={false}
             redactions={[]}
             style={styles.workspace}
@@ -185,12 +199,13 @@ export function OriginalSourcePreviewScreen() {
             onPageChange={({ nativeEvent }) => {
               setPageIndex(clampPage(nativeEvent.pageIndex, viewer.pageCount));
             }}
+            onFailure={handleNativeViewerFailure}
             style={styles.workspace}
             viewerSessionId={viewer.sessionId}
           />
         )}
       </View>
-      <View accessibilityRole="adjustable" style={styles.controls}>
+      <View style={styles.controls}>
         <AppButton
           accessibilityLabel={t('labs.reportViewerPreviousPage')}
           disabled={previousDisabled}
@@ -202,6 +217,7 @@ export function OriginalSourcePreviewScreen() {
           accessibilityLabel={t('labs.reportViewerPageCounter')
             .replace('{current}', String(currentPage + 1))
             .replace('{total}', String(viewer.pageCount))}
+          selectable
           style={styles.pageCounter}
         >
           {`${currentPage + 1} / ${viewer.pageCount}`}

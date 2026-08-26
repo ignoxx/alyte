@@ -257,6 +257,11 @@ function isPdfPasswordFailure(error: unknown): boolean {
   return message.includes('password') || message.includes('unlock') || message.includes('locked');
 }
 
+function viewerPageCount(value: number): number {
+  if (!Number.isInteger(value) || value < 1) throw new Error('The PDF has no pages');
+  return value;
+}
+
 function pageInputs(inspection: PdfInspection) {
   return inspection.pages.map((page) => ({
     pageIndex: page.pageIndex,
@@ -887,14 +892,12 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       };
     }
 
-    const initial = await pdfInspector.inspect(path);
+    if (pdfInspector.openViewer === undefined) {
+      throw new Error('AlytePDF is unavailable for local PDF viewing');
+    }
+    const opened = await pdfInspector.openViewer(path);
     let session: PdfViewerSession;
-    if (!initial.locked) {
-      if (pdfInspector.openViewer === undefined) {
-        throw new Error('AlytePDF is unavailable for local PDF viewing');
-      }
-      session = await pdfInspector.openViewer(path);
-    } else {
+    if (opened.locked) {
       const request = passwordRequest ?? options.passwordRequest;
       if (request === undefined) {
         throw new LabReportImportError(
@@ -924,11 +927,28 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       } finally {
         password = '';
       }
+    } else {
+      if (opened.session === null) {
+        throw new Error('AlytePDF did not return a viewer capability');
+      }
+      session = opened.session;
+    }
+
+    let pageCount: number;
+    try {
+      pageCount = viewerPageCount(session.pageCount);
+    } catch (error) {
+      try {
+        await session.close();
+      } catch {
+        // Preserve the corrupt-source state even if native cleanup is already unavailable.
+      }
+      throw error;
     }
 
     return {
       sourceType: 'pdf',
-      pageCount: session.inspection.pageCount,
+      pageCount,
       sessionId: session.sessionId,
       close: () => session.close(),
     };

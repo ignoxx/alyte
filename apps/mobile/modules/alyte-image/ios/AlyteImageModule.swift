@@ -178,27 +178,72 @@ private func loadImage(path: String) throws -> UIImage {
 final class AlyteImageViewerSessionStore {
   static let shared = AlyteImageViewerSessionStore()
 
+  private struct Entry {
+    let image: UIImage
+    var lastAccess: Date
+    var accessOrder: UInt64
+  }
+
   private let lock = NSLock()
-  private var images: [String: UIImage] = [:]
+  private let maxEntries: Int
+  private let ttl: TimeInterval
+  private let now: () -> Date
+  private var images: [String: Entry] = [:]
+  private var nextAccessOrder: UInt64 = 0
+
+  init(maxEntries: Int = 8, ttl: TimeInterval = 300, now: @escaping () -> Date = Date.init) {
+    self.maxEntries = max(1, maxEntries)
+    self.ttl = max(0, ttl)
+    self.now = now
+  }
+
+  private func evictExpiredLocked(at date: Date) {
+    images = images.filter { date.timeIntervalSince($0.value.lastAccess) < ttl }
+  }
+
+  private func evictOldestLocked() {
+    guard let oldest = images.min(by: { $0.value.accessOrder < $1.value.accessOrder })?.key else {
+      return
+    }
+    images.removeValue(forKey: oldest)
+  }
 
   @discardableResult
   func insert(_ image: UIImage) -> String {
     let sessionId = UUID().uuidString
+    let date = now()
     lock.lock()
-    images[sessionId] = image
+    evictExpiredLocked(at: date)
+    while images.count >= maxEntries { evictOldestLocked() }
+    nextAccessOrder &+= 1
+    images[sessionId] = Entry(image: image, lastAccess: date, accessOrder: nextAccessOrder)
     lock.unlock()
     return sessionId
   }
 
   func image(for sessionId: String) -> UIImage? {
+    let date = now()
     lock.lock()
     defer { lock.unlock() }
-    return images[sessionId]
+    evictExpiredLocked(at: date)
+    guard var entry = images[sessionId] else { return nil }
+    entry.lastAccess = date
+    nextAccessOrder &+= 1
+    entry.accessOrder = nextAccessOrder
+    images[sessionId] = entry
+    return entry.image
   }
 
   func remove(_ sessionId: String) {
     lock.lock()
     images.removeValue(forKey: sessionId)
+    lock.unlock()
+  }
+
+  func removeAll() {
+    lock.lock()
+    images.removeAll()
+    nextAccessOrder = 0
     lock.unlock()
   }
 }
@@ -498,6 +543,10 @@ private func sanitizeImage(sourcePath: String, destinationPath: String, recipe: 
 public final class AlyteImageModule: Module {
   public func definition() -> ModuleDefinition {
     Name("AlyteImage")
+
+    OnDestroy {
+      AlyteImageViewerSessionStore.shared.removeAll()
+    }
 
     View(AlyteImageWorkspaceView.self) {
       Prop("viewerSessionId") { (view: AlyteImageWorkspaceView, sessionId: String?) in

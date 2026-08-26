@@ -75,6 +75,7 @@ private func bridgeBoolean(_ value: Any?) -> Bool? {
 private enum AlytePDFError: LocalizedError {
   case unreadable
   case locked
+  case empty
   case malformedRecipe
   case noSelectedPages
   case renderFailed
@@ -84,6 +85,7 @@ private enum AlytePDFError: LocalizedError {
     switch self {
     case .unreadable: return "The PDF could not be opened"
     case .locked: return "The PDF is locked"
+    case .empty: return "The PDF has no pages"
     case .malformedRecipe: return "The sanitization recipe is invalid"
     case .noSelectedPages: return "The sanitization recipe selects no pages"
     case .renderFailed: return "A sanitized page could not be rendered"
@@ -229,22 +231,61 @@ private func loadDocument(_ path: String) throws -> PDFDocument {
 final class AlytePDFSessionStore {
   static let shared = AlytePDFSessionStore()
 
+  private struct Entry {
+    let document: PDFDocument
+    var lastAccess: Date
+    var accessOrder: UInt64
+  }
+
   private let lock = NSLock()
-  private var documents: [String: PDFDocument] = [:]
+  private let maxEntries: Int
+  private let ttl: TimeInterval
+  private let now: () -> Date
+  private var documents: [String: Entry] = [:]
+  private var nextAccessOrder: UInt64 = 0
+
+  init(maxEntries: Int = 8, ttl: TimeInterval = 300, now: @escaping () -> Date = Date.init) {
+    self.maxEntries = max(1, maxEntries)
+    self.ttl = max(0, ttl)
+    self.now = now
+  }
+
+  private func evictExpiredLocked(at date: Date) {
+    documents = documents.filter { date.timeIntervalSince($0.value.lastAccess) < ttl }
+  }
+
+  private func evictOldestLocked() {
+    guard let oldest = documents.min(by: { $0.value.accessOrder < $1.value.accessOrder })?.key else {
+      return
+    }
+    documents.removeValue(forKey: oldest)
+  }
 
   @discardableResult
   func insert(_ document: PDFDocument) -> String {
     let sessionId = UUID().uuidString
+    let date = now()
     lock.lock()
-    documents[sessionId] = document
+    evictExpiredLocked(at: date)
+    while documents.count >= maxEntries { evictOldestLocked() }
+    nextAccessOrder &+= 1
+    documents[sessionId] = Entry(
+      document: document, lastAccess: date, accessOrder: nextAccessOrder)
     lock.unlock()
     return sessionId
   }
 
   func document(for sessionId: String) -> PDFDocument? {
+    let date = now()
     lock.lock()
     defer { lock.unlock() }
-    return documents[sessionId]
+    evictExpiredLocked(at: date)
+    guard var entry = documents[sessionId] else { return nil }
+    entry.lastAccess = date
+    nextAccessOrder &+= 1
+    entry.accessOrder = nextAccessOrder
+    documents[sessionId] = entry
+    return entry.document
   }
 
   func remove(_ sessionId: String) {
@@ -252,6 +293,31 @@ final class AlytePDFSessionStore {
     documents.removeValue(forKey: sessionId)
     lock.unlock()
   }
+
+  func removeAll() {
+    lock.lock()
+    documents.removeAll()
+    nextAccessOrder = 0
+    lock.unlock()
+  }
+}
+
+private func viewerPageCount(_ document: PDFDocument) throws -> Int {
+  let pageCount = document.pageCount
+  guard pageCount > 0 else { throw AlytePDFError.empty }
+  return pageCount
+}
+
+func viewerSummary(
+  _ document: PDFDocument, sessionId: String? = nil
+) throws -> [String: Any] {
+  let pageCount = document.isLocked ? document.pageCount : try viewerPageCount(document)
+  var result: [String: Any] = [
+    "locked": document.isLocked,
+    "pageCount": pageCount,
+  ]
+  if let sessionId { result["sessionId"] = sessionId }
+  return result
 }
 
 private func renderImage(
@@ -526,6 +592,10 @@ public final class AlytePDFModule: Module {
   public func definition() -> ModuleDefinition {
     Name("AlytePDF")
 
+    OnDestroy {
+      AlytePDFSessionStore.shared.removeAll()
+    }
+
     View(AlytePDFWorkspaceView.self) {
       Prop("viewerSessionId") { (view: AlytePDFWorkspaceView, sessionId: String?) in
         view.viewerSessionId = sessionId
@@ -586,11 +656,17 @@ public final class AlytePDFModule: Module {
     }
 
     AsyncFunction("openViewer") { (path: String) throws -> [String: Any] in
-      let document = try loadDocument(path)
+      guard let document = PDFDocument(url: URL(fileURLWithPath: alytePDFFilePath(path))) else {
+        throw AlytePDFError.unreadable
+      }
+      if document.isLocked { return try viewerSummary(document) }
       let sessionId = AlytePDFSessionStore.shared.insert(document)
-      var result = inspection(document)
-      result["sessionId"] = sessionId
-      return result
+      do {
+        return try viewerSummary(document, sessionId: sessionId)
+      } catch {
+        AlytePDFSessionStore.shared.remove(sessionId)
+        throw error
+      }
     }
 
     AsyncFunction("unlockViewer") { (path: String, password: String) throws -> [String: Any] in
@@ -598,10 +674,9 @@ public final class AlytePDFModule: Module {
         throw AlytePDFError.unreadable
       }
       guard document.unlock(withPassword: password) else { throw AlytePDFError.locked }
+      let pageCount = try viewerPageCount(document)
       let sessionId = AlytePDFSessionStore.shared.insert(document)
-      var result = inspection(document)
-      result["sessionId"] = sessionId
-      return result
+      return ["pageCount": pageCount, "sessionId": sessionId]
     }
 
     AsyncFunction("renderPreview") { (path: String) throws -> [String] in

@@ -38,7 +38,13 @@ import {
   type LabReportsServiceOptions,
   type LabReportsService,
 } from './report-service';
-import type { PdfInspection, PdfInspectionSession, PdfInspector, PdfViewerSession } from './pdf';
+import type {
+  PdfInspection,
+  PdfInspectionSession,
+  PdfInspector,
+  PdfViewerOpenResult,
+  PdfViewerSession,
+} from './pdf';
 import type { PdfSanitizedVerification } from './pdf';
 import type { ImageInspection, ImageSanitizedVerification, ImageSanitizationResult } from './image';
 import type { VisionOCR } from './vision';
@@ -269,8 +275,10 @@ class FakePdf implements PdfInspector {
   locked = false;
   passwordAttempts: string[] = [];
   inspectedPaths: string[] = [];
+  inspectCalls = 0;
   previewCalls = 0;
   async inspect(path: string): Promise<PdfInspection> {
+    this.inspectCalls += 1;
     this.inspectedPaths.push(path);
     return this.locked
       ? { ...pdfInspection, encrypted: true, locked: true, pageCount: 0, pages: [] }
@@ -297,13 +305,20 @@ class ViewerPdf extends FakePdf {
   viewerUnlockCalls = 0;
   viewerCloseCalls = 0;
 
-  async openViewer(_path: string): Promise<PdfViewerSession> {
+  viewerPageCount = 2;
+
+  async openViewer(_path: string): Promise<PdfViewerOpenResult> {
     this.viewerOpenCalls += 1;
+    if (this.locked) return { locked: true, pageCount: 0, session: null };
     return {
-      inspection: pdfInspection,
-      sessionId: 'synthetic-pdf-session',
-      close: async () => {
-        this.viewerCloseCalls += 1;
+      locked: false,
+      pageCount: this.viewerPageCount,
+      session: {
+        pageCount: this.viewerPageCount,
+        sessionId: 'synthetic-pdf-session',
+        close: async () => {
+          this.viewerCloseCalls += 1;
+        },
       },
     };
   }
@@ -312,7 +327,7 @@ class ViewerPdf extends FakePdf {
     this.viewerUnlockCalls += 1;
     await this.unlock(_path, password);
     return {
-      inspection: { ...pdfInspection, encrypted: true },
+      pageCount: this.viewerPageCount,
       sessionId: 'synthetic-locked-pdf-session',
       close: async () => {
         this.viewerCloseCalls += 1;
@@ -324,6 +339,23 @@ class ViewerPdf extends FakePdf {
 class CorruptViewerPdf extends ViewerPdf {
   override async unlockViewer(_path: string, _password: string): Promise<PdfViewerSession> {
     throw new Error('The PDF could not be opened');
+  }
+}
+
+class EmptyViewerPdf extends ViewerPdf {
+  override async openViewer(_path: string): Promise<PdfViewerOpenResult> {
+    this.viewerOpenCalls += 1;
+    return {
+      locked: false,
+      pageCount: 0,
+      session: {
+        pageCount: 0,
+        sessionId: 'synthetic-empty-pdf-session',
+        close: async () => {
+          this.viewerCloseCalls += 1;
+        },
+      },
+    };
   }
 }
 
@@ -1743,16 +1775,19 @@ describe('protected Lab Report import lifecycle', () => {
     const repository = createRepository();
     const files = new FakeFiles();
     const pdf = new ViewerPdf();
+    pdf.viewerPageCount = 4096;
     const service = createService(repository, files, pdf);
     const imported = (await service.importPdf(source('lazy-viewer')))!.report;
+    const inspectCallsBeforeViewer = pdf.inspectCalls;
 
     const viewer = await service.openOriginalViewer(imported.id);
 
     assert.deepEqual(
       { sourceType: viewer.sourceType, pageCount: viewer.pageCount, sessionId: viewer.sessionId },
-      { sourceType: 'pdf', pageCount: 2, sessionId: 'synthetic-pdf-session' },
+      { sourceType: 'pdf', pageCount: 4096, sessionId: 'synthetic-pdf-session' },
     );
     assert.equal(pdf.viewerOpenCalls, 1);
+    assert.equal(pdf.inspectCalls, inspectCallsBeforeViewer);
     assert.equal(pdf.previewCalls, 0);
     await viewer.close();
     assert.equal(pdf.viewerCloseCalls, 1);
@@ -1789,6 +1824,20 @@ describe('protected Lab Report import lifecycle', () => {
       service.openOriginalViewer(imported.id, async () => 'correct horse'),
       (error: unknown) => !(error instanceof LabReportImportError),
     );
+  });
+
+  test('rejects a zero-page PDF viewer session and releases its capability', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new EmptyViewerPdf();
+    const service = createService(repository, files, pdf);
+    const imported = (await service.importPdf(source('empty-viewer')))!.report;
+
+    await assert.rejects(
+      service.openOriginalViewer(imported.id),
+      (error: unknown) => error instanceof Error && error.message === 'The PDF has no pages',
+    );
+    assert.equal(pdf.viewerCloseCalls, 1);
   });
 
   test('opens and closes an image viewer capability without exposing its path', async () => {
