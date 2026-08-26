@@ -252,6 +252,29 @@ class FailingPromotionFiles extends FakeFiles {
   }
 }
 
+class RetainedPromotionCleanupFiles extends FailingPromotionFiles {
+  failOriginalRemoval = true;
+
+  override async remove(path: string): Promise<void> {
+    if (this.failOriginalRemoval && path.includes('/originals/')) {
+      throw new Error('synthetic promoted-source cleanup failure');
+    }
+    await super.remove(path);
+  }
+}
+
+class FlakyOriginalOrphanCleanupFiles extends FakeFiles {
+  failuresRemaining = 1;
+
+  override async removeOwnedFile(path: string): Promise<void> {
+    if (path.startsWith('protected://original-reports/') && this.failuresRemaining > 0) {
+      this.failuresRemaining -= 1;
+      throw new Error('synthetic orphan cleanup interruption');
+    }
+    await super.removeOwnedFile(path);
+  }
+}
+
 class RelocatingFiles extends FakeFiles {
   readonly legacyPath =
     'file:///Users/test/Containers/Data/Application/22222222-2222-4222-8222-222222222222/Documents/alyte-protected/original-reports/relocated.pdf';
@@ -506,23 +529,44 @@ function source(uri: string, sourceType: 'pdf' | 'image' = 'pdf'): LabSourceSele
   };
 }
 
+type CreateServiceOverrides = {
+  readonly pdf?: PdfInspector;
+  readonly visionOCR?: VisionOCR;
+  readonly semanticMapper?: ExtractionSemanticMapper;
+  readonly imageInspector?: LabReportsServiceOptions['imageInspector'];
+  readonly picker?: LabSourcePicker;
+};
+
+function isCreateServiceOverrides(value: unknown): value is CreateServiceOverrides {
+  if (value === null || typeof value !== 'object') return false;
+  return ['pdf', 'visionOCR', 'semanticMapper', 'imageInspector', 'picker'].some((key) =>
+    Object.prototype.hasOwnProperty.call(value, key),
+  );
+}
+
 function createService(
   repository: LabRepository,
   files: FakeFiles,
-  pdf: PdfInspector = new FakePdf(),
+  pdfOrOverrides?: PdfInspector | CreateServiceOverrides,
   visionOCR?: VisionOCR,
   semanticMapper?: ExtractionSemanticMapper,
   imageInspector?: LabReportsServiceOptions['imageInspector'],
   picker?: LabSourcePicker,
 ): LabReportsService {
+  const overrides =
+    pdfOrOverrides === undefined
+      ? { visionOCR, semanticMapper, imageInspector, picker }
+      : isCreateServiceOverrides(pdfOrOverrides)
+        ? pdfOrOverrides
+        : { pdf: pdfOrOverrides, visionOCR, semanticMapper, imageInspector, picker };
   return createLabReportsService({
     repositoryFactory: async () => repository,
     fileService: files,
-    pdfInspector: pdf,
-    ...(visionOCR === undefined ? {} : { visionOCR }),
-    ...(semanticMapper === undefined ? {} : { semanticMapper }),
-    ...(imageInspector === undefined ? {} : { imageInspector }),
-    ...(picker === undefined ? {} : { picker }),
+    pdfInspector: overrides.pdf ?? new FakePdf(),
+    ...(overrides.visionOCR === undefined ? {} : { visionOCR: overrides.visionOCR }),
+    ...(overrides.semanticMapper === undefined ? {} : { semanticMapper: overrides.semanticMapper }),
+    ...(overrides.imageInspector === undefined ? {} : { imageInspector: overrides.imageInspector }),
+    ...(overrides.picker === undefined ? {} : { picker: overrides.picker }),
     idGenerator: (() => {
       let count = 0;
       return (prefix: string) => `${prefix}-fixed-${++count}`;
@@ -1777,15 +1821,7 @@ describe('protected Lab Report import lifecycle', () => {
       pickPdf: async () => null,
       pickImages: async () => null,
     };
-    const service = createService(
-      repository,
-      files,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      picker,
-    );
+    const service = createService(repository, files, { picker });
 
     assert.equal(await service.importImages(), null);
     assert.deepEqual(await service.listReports(), []);
@@ -1799,15 +1835,7 @@ describe('protected Lab Report import lifecycle', () => {
       pickPdf: async () => null,
       pickImages: async () => source('picker-one', 'image'),
     };
-    const service = createService(
-      repository,
-      files,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      picker,
-    );
+    const service = createService(repository, files, { picker });
 
     const result = await service.importImages();
     assert.ok(result);
@@ -1824,15 +1852,7 @@ describe('protected Lab Report import lifecycle', () => {
       pickPdf: async () => null,
       pickImages: async () => [source('picker-first', 'image'), source('picker-second', 'image')],
     } as unknown as LabSourcePicker;
-    const service = createService(
-      repository,
-      files,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      picker,
-    );
+    const service = createService(repository, files, { picker });
 
     await assert.rejects(service.importImages(), (error: unknown) => {
       assert.ok(error instanceof LabReportSelectionError);
@@ -1887,6 +1907,67 @@ describe('protected Lab Report import lifecycle', () => {
         .length,
       1,
     );
+  });
+
+  test('retains a promoted source when cleanup fails so relaunch can still discover it', async () => {
+    const repository = createRepository();
+    const files = new RetainedPromotionCleanupFiles();
+    const service = createService(repository, files);
+
+    const failedReports: LabReportImportError['report'][] = [];
+    await assert.rejects(
+      service.importImages(source('retained-after-cleanup-failure', 'image')),
+      (error: unknown) => {
+        assert.ok(error instanceof LabReportImportError);
+        failedReports.push(error.report);
+        return true;
+      },
+    );
+    const failedReport = failedReports[0];
+    if (failedReport === undefined) throw new Error('Expected a failed import report');
+    assert.equal(failedReport.originalPath !== null, true);
+    assert.equal(failedReport.sourceHash !== null, true);
+    assert.equal(
+      (await service.listReports()).filter((report) => report.importState !== 'deleted').length,
+      1,
+    );
+    assert.equal(files.transient.size, 0);
+
+    const reopened = createService(repository, files);
+    const retained = (await reopened.listReports())[0];
+    assert.equal(retained?.originalPath, failedReport.originalPath);
+    assert.equal(await reopened.verifySource(retained?.id ?? ''), 'verified');
+
+    files.failOriginalRemoval = false;
+    await reopened.deleteReport(retained?.id ?? '');
+    await reopened.listReports();
+    assert.equal(await files.exists(failedReport.originalPath!), false);
+  });
+
+  test('retries unreferenced Original cleanup after relaunch without hiding the failed row', async () => {
+    const repository = createRepository();
+    const files = new FlakyOriginalOrphanCleanupFiles();
+    const orphanPath = 'protected://original-reports/orphan-report-orphan.jpg';
+    files.files.set(orphanPath, { hash: 'hash-orphan', size: 42 });
+    await repository.createReport({
+      id: 'orphan-report',
+      sourceType: 'image',
+      originalFilename: 'orphan.jpg',
+      mimeType: 'image/jpeg',
+      importState: 'failed',
+      failureReason: 'promotion-interrupted',
+    });
+
+    const firstLaunch = createService(repository, files);
+    const failed = (await firstLaunch.listReports())[0];
+    assert.equal(failed?.originalPath, null);
+    assert.equal(await files.exists(orphanPath), true);
+
+    const relaunched = createService(repository, files);
+    const reports = await relaunched.listReports();
+    assert.equal(reports.length, 1);
+    assert.equal(reports[0]?.originalPath, null);
+    assert.equal(await files.exists(orphanPath), false);
   });
 
   test('keeps one immutable source for duplicate hashes and cleans the transient copy', async () => {
@@ -2015,7 +2096,7 @@ describe('protected Lab Report import lifecycle', () => {
     const repository = createRepository();
     const files = new FakeFiles();
     const image = new ViewerImage(files);
-    const service = createService(repository, files, new FakePdf(), undefined, undefined, image);
+    const service = createService(repository, files, { pdf: new FakePdf(), imageInspector: image });
     const imported = (await service.importImages(source('image-viewer', 'image')))!.report;
 
     const viewer = await service.openOriginalViewer(imported.id);
@@ -2473,7 +2554,7 @@ describe('protected Lab Report import lifecycle', () => {
     const repository = createRepository();
     const files = new FakeFiles();
     const image = new SanitizingImage(files);
-    const service = createService(repository, files, new FakePdf(), undefined, undefined, image);
+    const service = createService(repository, files, { pdf: new FakePdf(), imageInspector: image });
     const imported = (await service.importImages(source('sanitize-image', 'image')))!.report;
     const editor = await service.openSanitizationEditor(imported.id);
     const recipe = addRedaction(editor.recipe, 0, {
@@ -2537,7 +2618,11 @@ describe('protected Lab Report import lifecycle', () => {
         });
       },
     };
-    const service = createService(repository, files, new FakePdf(), ocr, undefined, image);
+    const service = createService(repository, files, {
+      pdf: new FakePdf(),
+      visionOCR: ocr,
+      imageInspector: image,
+    });
     const imported = (await service.importImages(source('extract-image', 'image')))!.report;
     const editor = await service.openSanitizationEditor(imported.id);
     const saved = await service.saveSanitizedReport(imported.id, editor.recipe);
@@ -2630,7 +2715,11 @@ describe('protected Lab Report import lifecycle', () => {
         });
       },
     };
-    const service = createService(repository, files, new FakePdf(), ocr, undefined, image);
+    const service = createService(repository, files, {
+      pdf: new FakePdf(),
+      visionOCR: ocr,
+      imageInspector: image,
+    });
     const imported = (await service.importImages(source('draft-invalidation', 'image')))!.report;
     const first = await service.saveSanitizedReport(
       imported.id,
@@ -3253,7 +3342,7 @@ describe('protected Lab Report import lifecycle', () => {
     const repository = createRepository();
     const files = new FakeFiles();
     const image = new SanitizingImage(files);
-    const service = createService(repository, files, new FakePdf(), undefined, undefined, image);
+    const service = createService(repository, files, { pdf: new FakePdf(), imageInspector: image });
     const report = (await service.importImages(source('sanitized-draft', 'image')))!.report;
     const sanitized = await service.saveSanitizedReport(
       report.id,

@@ -540,6 +540,37 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     return fileService.resolvePath === undefined ? path : fileService.resolvePath(path);
   }
 
+  async function reconcileOriginalOrphans(repo: LabRepository): Promise<void> {
+    if (fileService.listOwnedFiles === undefined || fileService.removeOwnedFile === undefined) {
+      return;
+    }
+    const referencedOriginals = new Set<string>();
+    for (const report of await repo.listReports()) {
+      if (report.originalPath === null) continue;
+      try {
+        referencedOriginals.add(persistedPath(report.originalPath));
+      } catch {
+        // An unowned legacy path cannot authorize touching any protected file.
+      }
+    }
+    for (const path of await fileService.listOwnedFiles()) {
+      let portable: string;
+      try {
+        portable = persistedPath(path);
+      } catch {
+        continue;
+      }
+      if (!portable.startsWith('protected://original-reports/')) continue;
+      if (referencedOriginals.has(portable)) continue;
+      try {
+        await fileService.removeOwnedFile(path);
+      } catch {
+        // Keep the orphan for the next launch. It remains within the protected owner boundary and
+        // is retried here instead of becoming an undiscoverable permanent artifact.
+      }
+    }
+  }
+
   async function repository(): Promise<LabRepository> {
     repositoryPromise ??= repositoryFactory();
     const pending = repositoryPromise;
@@ -628,6 +659,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         }
       }
       await repo.reconcileInterruptedReports();
+      await reconcileOriginalOrphans(repo);
       for (const candidate of await repo.listDeletionCandidates()) {
         if (candidate.deletionState === 'requested') {
           try {
@@ -798,22 +830,37 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   async function cleanupUncommittedImport(
     reportId: string,
     source: LabSourceSelection,
-  ): Promise<void> {
+  ): Promise<ProtectedCopy | null> {
     // A native copy can fail after creating its destination but before returning its ProtectedCopy.
     // Ask the protected-file owner to reconcile that deterministic destination, then clear any
-    // transient source. Both operations are scoped to Alyte-owned paths and are best effort so the
-    // original import failure remains the actionable result.
+    // transient source. If removal is interrupted, return the verified copy so the durable report
+    // retains a discoverable source and can be retried or deleted instead of hiding the orphan.
+    let retained: ProtectedCopy | null = null;
     try {
       const recovered = await fileService.recoverPromoted(reportId, source);
-      if (recovered !== null) await fileService.remove(recovered.path);
+      if (recovered !== null) {
+        try {
+          await fileService.remove(recovered.path);
+        } catch {
+          // A failed remove may still have completed before throwing. Preserve the source only
+          // when the protected owner confirms that the path remains (or cannot verify it).
+          try {
+            if (await fileService.exists(recovered.path)) retained = recovered;
+          } catch {
+            retained = recovered;
+          }
+        }
+      }
     } catch {
-      // Relaunch reconciliation can surface a retained source if cleanup itself was interrupted.
+      // Original-orphan reconciliation on the next launch handles a destination whose recovery
+      // itself was interrupted and could not be verified here.
     }
     try {
       await fileService.cleanupTransientImports();
     } catch {
       // Keep the durable failed report; the next service initialization retries transient cleanup.
     }
+    return retained;
   }
 
   async function importOne(
@@ -892,9 +939,15 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       return { report, duplicate: false };
     } catch (error) {
       const reason = classifyFailure(error);
-      if (promoted === null) await cleanupUncommittedImport(reportId, source);
-      const preservedPath = promoted === null ? null : persistedPath(promoted.path);
-      const preservedHash = promoted?.sourceHash ?? staged?.sourceHash ?? null;
+      const retained = promoted === null ? await cleanupUncommittedImport(reportId, source) : null;
+      const preservedPath =
+        promoted === null
+          ? retained === null
+            ? null
+            : persistedPath(retained.path)
+          : persistedPath(promoted.path);
+      const preservedHash =
+        promoted?.sourceHash ?? retained?.sourceHash ?? staged?.sourceHash ?? null;
       report = await repo.updateReport(reportId, {
         sourceHash: preservedHash,
         originalPath: preservedPath,

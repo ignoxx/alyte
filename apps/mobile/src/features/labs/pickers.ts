@@ -23,6 +23,43 @@ export type LabSourcePickerOptions = {
   readonly imagePicker?: typeof ImagePickerTypes;
 };
 
+const SUPPORTED_STILL_IMAGE_MIME_TYPES = new Set([
+  'image/heic',
+  'image/heif',
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+]);
+const SUPPORTED_STILL_IMAGE_EXTENSIONS = new Set([
+  '.heic',
+  '.heif',
+  '.jpeg',
+  '.jpg',
+  '.png',
+  '.webp',
+]);
+
+function isSupportedStillImageAsset(value: unknown): value is ImagePickerTypes.ImagePickerAsset {
+  if (value === null || typeof value !== 'object') return false;
+  const asset = value as Partial<ImagePickerTypes.ImagePickerAsset>;
+  if (typeof asset.uri !== 'string' || asset.uri.length === 0) return false;
+  if (asset.type !== undefined && asset.type !== null && asset.type !== 'image') return false;
+  // A live photo has an image-shaped primary asset but also carries a paired video. It is not a
+  // still source and must not be persisted as one by assuming the URI is an image.
+  if (asset.pairedVideoAsset !== undefined && asset.pairedVideoAsset !== null) return false;
+
+  const mimeType =
+    typeof asset.mimeType === 'string'
+      ? (asset.mimeType.toLowerCase().split(';', 1)[0] ?? null)
+      : null;
+  if (mimeType !== null && !SUPPORTED_STILL_IMAGE_MIME_TYPES.has(mimeType)) return false;
+  const fileName = typeof asset.fileName === 'string' ? asset.fileName.toLowerCase() : '';
+  const extension = fileName.match(/\.[a-z0-9]{1,8}$/)?.[0] ?? null;
+  if (extension !== null && !SUPPORTED_STILL_IMAGE_EXTENSIONS.has(extension)) return false;
+  return mimeType !== null || extension !== null || asset.type === 'image';
+}
+
 export function createSystemLabSourcePicker(options: LabSourcePickerOptions = {}): LabSourcePicker {
   let documentPickerPromise: Promise<typeof DocumentPickerTypes> | null = options.documentPicker
     ? Promise.resolve(options.documentPicker)
@@ -68,7 +105,9 @@ export function createSystemLabSourcePicker(options: LabSourcePickerOptions = {}
       );
     }
     const asset = result.assets[0];
-    if (asset === undefined) return null;
+    if (!isSupportedStillImageAsset(asset)) {
+      throw new LabSourceSelectionError('invalid-image', 'The selected item is not a report image');
+    }
     return {
       uri: asset.uri,
       name: asset.fileName ?? 'lab-report-image.jpg',

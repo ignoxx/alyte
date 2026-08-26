@@ -2,6 +2,11 @@ import type { LabReport } from '@alyte/domain';
 
 export type LabReportDetailState = 'loading' | 'error' | 'unavailable' | 'ready';
 
+export type LabReportFailureRecovery = {
+  readonly action: 'retry' | 'delete';
+  readonly message: 'retained-source' | 'missing-source';
+};
+
 /**
  * Keep an absent report distinct from a failed read. A report can disappear after Home has
  * queued navigation (for example, because it was deleted), and that state needs a way back.
@@ -14,6 +19,20 @@ export function getLabReportDetailState(
   if (loading) return 'loading';
   if (error) return 'error';
   return report === null ? 'unavailable' : 'ready';
+}
+
+/**
+ * A failed import can offer local inspection retry only while both protected source facts remain.
+ * Pathless rows are deletion-only so the UI never promises a retry against a source that cannot be
+ * opened, nor claims that a source remains available.
+ */
+export function getLabReportFailureRecovery(
+  report: Pick<LabReport, 'originalPath' | 'sourceHash'>,
+): LabReportFailureRecovery {
+  const canRetry = report.originalPath !== null && report.sourceHash !== null;
+  return canRetry
+    ? { action: 'retry', message: 'retained-source' }
+    : { action: 'delete', message: 'missing-source' };
 }
 
 export function formatReportPageCount(

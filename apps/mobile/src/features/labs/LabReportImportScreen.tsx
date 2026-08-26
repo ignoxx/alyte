@@ -38,6 +38,9 @@ function errorMessage(error: unknown): string {
       : t('labs.reportImportInvalidImage');
   }
   if (!(error instanceof LabReportImportError)) return t('labs.reportImportError');
+  if (error.report.originalPath === null || error.report.sourceHash === null) {
+    return t('labs.reportImportNoSourceError');
+  }
   if (error.reason === 'cancelled') return t('labs.reportImportCancelled');
   if (error.reason === 'wrong-password') return t('labs.reportWrongPassword');
   if (error.reason === 'malformed') return t('labs.reportMalformed');

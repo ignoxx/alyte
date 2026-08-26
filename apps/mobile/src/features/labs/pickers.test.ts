@@ -71,3 +71,32 @@ test('Photos picker rejects an adapter response containing multiple assets', asy
     return true;
   });
 });
+
+test('Photos picker rejects hostile non-still assets', async () => {
+  const hostileAssets = [
+    { uri: 'file:///synthetic/video.mov', type: 'video', mimeType: 'video/quicktime' },
+    {
+      uri: 'file:///synthetic/live-photo.jpg',
+      type: 'livePhoto',
+      mimeType: 'image/jpeg',
+      pairedVideoAsset: { uri: 'file:///synthetic/live-photo.mov', type: 'pairedVideo' },
+    },
+    { uri: 'file:///synthetic/report.pdf', type: null, mimeType: 'application/pdf' },
+    { uri: 'file:///synthetic/report.docx', type: 'image', mimeType: 'application/pdf' },
+  ];
+
+  for (const asset of hostileAssets) {
+    const picker = createSystemLabSourcePicker({
+      imagePicker: {
+        launchImageLibraryAsync: async () =>
+          ({ canceled: false, assets: [asset] }) as unknown as ImagePickerTypes.ImagePickerResult,
+      } as unknown as typeof ImagePickerTypes,
+    });
+
+    await assert.rejects(picker.pickImages(), (error: unknown) => {
+      assert.ok(error instanceof LabSourceSelectionError);
+      assert.equal(error.reason, 'invalid-image');
+      return true;
+    });
+  }
+});

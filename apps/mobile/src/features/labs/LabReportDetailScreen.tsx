@@ -19,21 +19,33 @@ import { LabReportImportError, type PasswordRequest } from './report-service';
 import {
   formatReportFileSize,
   formatReportPageCount,
+  getLabReportFailureRecovery,
   getLabReportDetailState,
 } from './report-detail-model';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
 type DetailRoute = RouteProp<LabsStackParamList, 'LabReportDetail'>;
 
-function stateLabel(state: LabReport['importState']): string {
+function stateLabel(
+  report: LabReport,
+  integrity: 'verified' | 'missing' | 'mismatch' | 'not-verifiable',
+): string {
+  const recovery =
+    integrity === 'verified'
+      ? getLabReportFailureRecovery(report)
+      : { action: 'delete' as const, message: 'missing-source' as const };
+  if (recovery.message === 'missing-source') {
+    if (report.importState === 'failed') return t('labs.reportStateFailedNoSource');
+    if (report.importState === 'interrupted') return t('labs.reportStateInterruptedNoSource');
+  }
   return t(
-    state === 'imported'
+    report.importState === 'imported'
       ? 'labs.reportStateImported'
-      : state === 'interrupted'
+      : report.importState === 'interrupted'
         ? 'labs.reportStateInterrupted'
-        : state === 'failed'
+        : report.importState === 'failed'
           ? 'labs.reportStateFailed'
-          : state === 'deleted'
+          : report.importState === 'deleted'
             ? 'labs.reportStateDeleted'
             : 'labs.reportStateImporting',
   );
@@ -228,6 +240,10 @@ export function LabReportDetailScreen() {
   if (report === null) return null;
 
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
+  const failureRecovery =
+    integrity === 'verified'
+      ? getLabReportFailureRecovery(report)
+      : { action: 'delete' as const, message: 'missing-source' as const };
 
   return (
     <ScreenScrollView
@@ -235,7 +251,7 @@ export function LabReportDetailScreen() {
       style={screenStyles.scroll}
     >
       <AppText variant="heading">{report.originalFilename}</AppText>
-      <StatusPill>{stateLabel(report.importState)}</StatusPill>
+      <StatusPill>{stateLabel(report, integrity)}</StatusPill>
       <AppSurface style={styles.metaSection}>
         <DetailRow label={t('labs.reportSourceType')} value={sourceLabel(report)} />
         <DetailRow
@@ -295,8 +311,23 @@ export function LabReportDetailScreen() {
       )}
       {(report.importState === 'failed' || report.importState === 'interrupted') && (
         <AppSurface tone="soft" style={styles.error}>
-          <AppText>{t('labs.reportRetryBody')}</AppText>
-          <AppButton disabled={busy} label={t('labs.reportRetry')} onPress={() => void retry()} />
+          <AppText>
+            {t(
+              failureRecovery.message === 'retained-source'
+                ? 'labs.reportRetryBody'
+                : 'labs.reportNoSourceRetryBody',
+            )}
+          </AppText>
+          {failureRecovery.action === 'retry' ? (
+            <AppButton disabled={busy} label={t('labs.reportRetry')} onPress={() => void retry()} />
+          ) : (
+            <AppButton
+              disabled={busy}
+              label={t('labs.reportDelete')}
+              onPress={confirmDelete}
+              tone="secondary"
+            />
+          )}
         </AppSurface>
       )}
       {report.labRecordIds.length > 0 && (

@@ -11,6 +11,7 @@ import { AppButton, AppIcon, AppText, ScreenScrollView } from '../../ui/primitiv
 import { colors, screenStyles, spacing } from '../../theme';
 import { listHistoryEntries } from './biomarker-history-model';
 import { summarizeLabReport } from './lab-read-model';
+import { getLabReportFailureRecovery } from './report-detail-model';
 import { openReportImportFromStack } from '../../navigation/parent-tab';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
@@ -26,6 +27,11 @@ function reportSourceLabel(report: LabReport): string {
 }
 
 function reportStateLabel(report: LabReport): string {
+  const recovery = getLabReportFailureRecovery(report);
+  if (recovery.message === 'missing-source') {
+    if (report.importState === 'failed') return t('labs.reportStateFailedNoSource');
+    if (report.importState === 'interrupted') return t('labs.reportStateInterruptedNoSource');
+  }
   return t(
     report.importState === 'imported'
       ? 'labs.reportStateImported'
