@@ -34,11 +34,11 @@ import {
   createLabReportsService,
   createDefaultExtractionAliases,
   LabReportExtractionError,
+  LabReportImportError,
   type LabReportsServiceOptions,
   type LabReportsService,
 } from './report-service';
-import type { LabReportImportError } from './report-service';
-import type { PdfInspection, PdfInspectionSession, PdfInspector } from './pdf';
+import type { PdfInspection, PdfInspectionSession, PdfInspector, PdfViewerSession } from './pdf';
 import type { PdfSanitizedVerification } from './pdf';
 import type { ImageInspection, ImageSanitizedVerification, ImageSanitizationResult } from './image';
 import type { VisionOCR } from './vision';
@@ -292,6 +292,41 @@ class FakePdf implements PdfInspector {
   }
 }
 
+class ViewerPdf extends FakePdf {
+  viewerOpenCalls = 0;
+  viewerUnlockCalls = 0;
+  viewerCloseCalls = 0;
+
+  async openViewer(_path: string): Promise<PdfViewerSession> {
+    this.viewerOpenCalls += 1;
+    return {
+      inspection: pdfInspection,
+      sessionId: 'synthetic-pdf-session',
+      close: async () => {
+        this.viewerCloseCalls += 1;
+      },
+    };
+  }
+
+  async unlockViewer(_path: string, password: string): Promise<PdfViewerSession> {
+    this.viewerUnlockCalls += 1;
+    await this.unlock(_path, password);
+    return {
+      inspection: { ...pdfInspection, encrypted: true },
+      sessionId: 'synthetic-locked-pdf-session',
+      close: async () => {
+        this.viewerCloseCalls += 1;
+      },
+    };
+  }
+}
+
+class CorruptViewerPdf extends ViewerPdf {
+  override async unlockViewer(_path: string, _password: string): Promise<PdfViewerSession> {
+    throw new Error('The PDF could not be opened');
+  }
+}
+
 const verifiedSanitized: PdfSanitizedVerification = {
   verified: true,
   selectableText: false,
@@ -378,6 +413,20 @@ class SanitizingImage {
     _recipe: Parameters<NonNullable<LabReportsServiceOptions['imageInspector']>['sanitize']>[2],
   ): Promise<ImageSanitizedVerification> {
     return verifiedImage;
+  }
+}
+
+class ViewerImage extends SanitizingImage {
+  viewerOpenCalls = 0;
+  viewerCloseCalls = 0;
+
+  async openViewer(_path: string) {
+    this.viewerOpenCalls += 1;
+    return { sessionId: 'synthetic-image-session', width: 1200, height: 900 };
+  }
+
+  async closeViewer(_sessionId: string) {
+    this.viewerCloseCalls += 1;
   }
 }
 
@@ -1688,6 +1737,76 @@ describe('protected Lab Report import lifecycle', () => {
       uris: ['data:image/png;base64,synthetic-preview'],
     });
     assert.equal(pdf.previewCalls, 1);
+  });
+
+  test('opens a lazy PDF viewer session without eager page rasterization and closes it', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new ViewerPdf();
+    const service = createService(repository, files, pdf);
+    const imported = (await service.importPdf(source('lazy-viewer')))!.report;
+
+    const viewer = await service.openOriginalViewer(imported.id);
+
+    assert.deepEqual(
+      { sourceType: viewer.sourceType, pageCount: viewer.pageCount, sessionId: viewer.sessionId },
+      { sourceType: 'pdf', pageCount: 2, sessionId: 'synthetic-pdf-session' },
+    );
+    assert.equal(pdf.viewerOpenCalls, 1);
+    assert.equal(pdf.previewCalls, 0);
+    await viewer.close();
+    assert.equal(pdf.viewerCloseCalls, 1);
+  });
+
+  test('uses an ephemeral password unlock for a protected PDF viewer', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new ViewerPdf();
+    pdf.locked = true;
+    const service = createService(repository, files, pdf);
+    const imported = (await service.importPdf(
+      source('lazy-locked-viewer'),
+      async () => 'correct horse',
+    ))!.report;
+
+    const viewer = await service.openOriginalViewer(imported.id, async () => 'correct horse');
+
+    assert.equal(viewer.sessionId, 'synthetic-locked-pdf-session');
+    assert.equal(pdf.viewerUnlockCalls, 1);
+    await viewer.close();
+    assert.equal(pdf.viewerCloseCalls, 1);
+  });
+
+  test('keeps an unreadable protected PDF separate from a wrong password', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new CorruptViewerPdf();
+    const service = createService(repository, files, pdf);
+    const imported = (await service.importPdf(source('corrupt-locked-viewer')))!.report;
+    pdf.locked = true;
+
+    await assert.rejects(
+      service.openOriginalViewer(imported.id, async () => 'correct horse'),
+      (error: unknown) => !(error instanceof LabReportImportError),
+    );
+  });
+
+  test('opens and closes an image viewer capability without exposing its path', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const image = new ViewerImage(files);
+    const service = createService(repository, files, new FakePdf(), undefined, undefined, image);
+    const imported = (await service.importImages([source('image-viewer', 'image')]))[0]!.report;
+
+    const viewer = await service.openOriginalViewer(imported.id);
+
+    assert.deepEqual(
+      { sourceType: viewer.sourceType, pageCount: viewer.pageCount, sessionId: viewer.sessionId },
+      { sourceType: 'image', pageCount: 1, sessionId: 'synthetic-image-session' },
+    );
+    assert.equal(image.viewerOpenCalls, 1);
+    await viewer.close();
+    assert.equal(image.viewerCloseCalls, 1);
   });
 
   test('rebases a legacy absolute report path before preview, hash verification, and deletion', async () => {

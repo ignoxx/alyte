@@ -2,8 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import {
   ActionSheetIOS,
   Alert,
-  Image,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -11,7 +9,6 @@ import {
   View,
 } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { LabReport } from '@alyte/domain';
 import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
@@ -24,7 +21,6 @@ import {
   LabReportImportError,
   type PasswordRequest,
 } from './report-service';
-import type { LabReportPreview } from './report-service';
 import { formatReportFileSize, formatReportPageCount } from './report-detail-model';
 import { canStartAutomatedExtraction, type LocalModelSnapshot } from '../local-models/model';
 
@@ -63,8 +59,6 @@ export function LabReportDetailScreen() {
   const [extractionError, setExtractionError] = useState<LabReportExtractionError['reason'] | null>(
     null,
   );
-  const [preview, setPreview] = useState<LabReportPreview | null>(null);
-  const [previewError, setPreviewError] = useState(false);
   const [extractionReady, setExtractionReady] = useState(false);
   const [modelSnapshot, setModelSnapshot] = useState<LocalModelSnapshot | null>(null);
 
@@ -163,17 +157,12 @@ export function LabReportDetailScreen() {
     }
   }
 
-  async function openPreview() {
+  function openPreview() {
     if (report === null) return;
-    setBusy(true);
-    setPreviewError(false);
-    try {
-      setPreview(await reports.previewOriginal(report.id, promptPassword()));
-    } catch {
-      setPreviewError(true);
-    } finally {
-      setBusy(false);
-    }
+    navigation
+      .getParent<NativeStackNavigationProp<RootStackParamList>>()
+      ?.getParent<NativeStackNavigationProp<RootStackParamList>>()
+      ?.navigate('OriginalSourcePreview', { reportId: report.id });
   }
 
   async function extractLocally() {
@@ -310,7 +299,7 @@ export function LabReportDetailScreen() {
           <Pressable
             accessibilityRole="button"
             disabled={busy}
-            onPress={() => void openPreview()}
+            onPress={openPreview}
             style={({ pressed }) => [styles.actionRow, pressed && styles.actionPressed]}
           >
             <AppIcon name="eye" size={20} />
@@ -320,9 +309,6 @@ export function LabReportDetailScreen() {
             </View>
             <AppIcon name="chevronRight" size={16} />
           </Pressable>
-          {previewError && (
-            <AppText style={styles.errorText}>{t('labs.reportPreviewError')}</AppText>
-          )}
           {(report.sourceType === 'pdf' || report.sourceType === 'image') && (
             <Pressable
               accessibilityRole="button"
@@ -396,39 +382,6 @@ export function LabReportDetailScreen() {
           {t('labs.reportLinkedRecords').replace('{count}', String(report.labRecordIds.length))}
         </AppText>
       )}
-      <Modal
-        accessibilityViewIsModal
-        animationType="slide"
-        onRequestClose={() => setPreview(null)}
-        presentationStyle="pageSheet"
-        visible={preview !== null}
-      >
-        <SafeAreaView edges={['top', 'bottom']} style={styles.previewModal}>
-          <View style={styles.previewHeader}>
-            <AppText variant="heading">{t('labs.reportPreviewTitle')}</AppText>
-            <AppButton
-              label={t('labs.reportPreviewClose')}
-              onPress={() => setPreview(null)}
-              tone="quiet"
-            />
-          </View>
-          <ScrollView contentContainerStyle={styles.previewPages}>
-            {preview?.uris.map((uri, index) => (
-              <Image
-                accessibilityLabel={`${t('labs.reportPreviewImageLabel')} ${index + 1}`}
-                key={`${uri}-${index}`}
-                onError={() => {
-                  setPreview(null);
-                  setPreviewError(true);
-                }}
-                resizeMode="contain"
-                source={{ uri }}
-                style={styles.previewImage}
-              />
-            ))}
-          </ScrollView>
-        </SafeAreaView>
-      </Modal>
     </ScrollView>
   );
 }
@@ -488,8 +441,4 @@ const styles = StyleSheet.create({
   extractButton: { alignSelf: 'stretch' },
   actionStatus: { color: colors.mutedInk, padding: spacing.md },
   errorText: { color: colors.danger },
-  previewModal: { backgroundColor: colors.canvas, flex: 1, padding: spacing.lg },
-  previewHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
-  previewPages: { flexGrow: 1, gap: spacing.md, paddingVertical: spacing.md },
-  previewImage: { height: 520, width: '100%' },
 });

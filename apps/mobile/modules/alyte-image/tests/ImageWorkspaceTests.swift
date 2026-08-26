@@ -4,6 +4,17 @@ import UIKit
 @testable import AlyteImagePrivacy
 
 final class ImageWorkspaceTests: XCTestCase {
+  func testViewerSessionIsOpaqueAndReleasesDecodedImageOnClose() {
+    let image = UIImage.workspaceTestImage(size: CGSize(width: 1200, height: 900))
+    let sessionId = AlyteImageViewerSessionStore.shared.insert(image)
+
+    XCTAssertEqual(
+      AlyteImageViewerSessionStore.shared.image(for: sessionId)?.size,
+      CGSize(width: 1200, height: 900))
+    AlyteImageViewerSessionStore.shared.remove(sessionId)
+    XCTAssertNil(AlyteImageViewerSessionStore.shared.image(for: sessionId))
+  }
+
   func testWorkspaceCentersAspectFitImageAndArbitratesMoveResizeTargets() throws {
     let workspace = AlyteImageWorkspaceView(appContext: nil)
     workspace.frame = CGRect(x: 0, y: 0, width: 390, height: 720)

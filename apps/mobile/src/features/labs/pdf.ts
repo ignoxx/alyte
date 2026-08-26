@@ -13,6 +13,13 @@ export type PdfInspection = {
   readonly pages: readonly PdfPageInspection[];
 };
 
+/** A native PDFKit document held by an opaque, short-lived capability. */
+export interface PdfViewerSession {
+  readonly inspection: PdfInspection;
+  readonly sessionId: string;
+  close(): Promise<void>;
+}
+
 export interface PdfInspectionSession {
   readonly inspection: PdfInspection;
   renderPreview(): Promise<readonly string[]>;
@@ -46,6 +53,9 @@ export interface PdfInspector {
   inspect(path: string): Promise<PdfInspection>;
   unlock(path: string, password: string): Promise<PdfInspectionSession>;
   renderPreview(path: string): Promise<readonly string[]>;
+  /** Native-only lazy viewer operations remain optional for non-iOS test adapters. */
+  openViewer?(path: string): Promise<PdfViewerSession>;
+  unlockViewer?(path: string, password: string): Promise<PdfViewerSession>;
   /** Native-only operations remain optional so pure import tests do not require an iOS runtime. */
   sanitize?(
     sourcePath: string,
@@ -59,6 +69,11 @@ export interface PdfInspector {
 type NativePdfModule = {
   inspect(path: string): Promise<PdfInspection>;
   unlock(path: string, password: string): Promise<PdfInspection & { readonly sessionId: string }>;
+  openViewer(path: string): Promise<PdfInspection & { readonly sessionId: string }>;
+  unlockViewer(
+    path: string,
+    password: string,
+  ): Promise<PdfInspection & { readonly sessionId: string }>;
   renderPreview(path: string): Promise<readonly string[]>;
   renderPreviewSession(sessionId: string): Promise<readonly string[]>;
   exportUnlockedSession(sessionId: string, destinationPath: string): Promise<void>;
@@ -108,6 +123,28 @@ export const nativePdfInspector: PdfInspector = {
     const native = requireOptionalNativeModule<NativePdfModule>('AlytePDF');
     if (native === null) throw new Error('AlytePDF is unavailable for local PDF preview');
     return native.renderPreview(path);
+  },
+  async openViewer(path) {
+    const { requireOptionalNativeModule } = await import('expo-modules-core');
+    const native = requireOptionalNativeModule<NativePdfModule>('AlytePDF');
+    if (native === null) throw new Error('AlytePDF is unavailable for local PDF viewing');
+    const result = await native.openViewer(path);
+    return {
+      inspection: result,
+      sessionId: result.sessionId,
+      close: () => native.close(result.sessionId),
+    };
+  },
+  async unlockViewer(path, password) {
+    const { requireOptionalNativeModule } = await import('expo-modules-core');
+    const native = requireOptionalNativeModule<NativePdfModule>('AlytePDF');
+    if (native === null) throw new Error('AlytePDF is unavailable for local PDF viewing');
+    const result = await native.unlockViewer(path, password);
+    return {
+      inspection: result,
+      sessionId: result.sessionId,
+      close: () => native.close(result.sessionId),
+    };
   },
   async sanitize(sourcePath, destinationPath, recipe) {
     const { requireOptionalNativeModule } = await import('expo-modules-core');

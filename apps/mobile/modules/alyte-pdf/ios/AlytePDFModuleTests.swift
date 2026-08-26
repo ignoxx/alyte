@@ -1,5 +1,6 @@
 import Foundation
 import PDFKit
+import UIKit
 import XCTest
 
 final class AlytePDFModuleTests: XCTestCase {
@@ -48,5 +49,30 @@ final class AlytePDFModuleTests: XCTestCase {
     try Data("synthetic-not-pdf".utf8).write(to: url)
 
     XCTAssertNil(PDFDocument(url: url))
+  }
+
+  func testViewerSessionRetainsMixedPageGeometryUntilExplicitClose() throws {
+    let document = PDFDocument()
+    for size in [
+      CGSize(width: 612, height: 792),
+      CGSize(width: 792, height: 612),
+      CGSize(width: 612, height: 792),
+      CGSize(width: 792, height: 612),
+    ] {
+      let image = UIGraphicsImageRenderer(size: size).image { context in
+        UIColor.white.setFill()
+        context.fill(CGRect(origin: .zero, size: size))
+      }
+      document.insert(try XCTUnwrap(PDFPage(image: image)), at: document.pageCount)
+    }
+
+    let sessionId = AlytePDFSessionStore.shared.insert(document)
+    let session = try XCTUnwrap(AlytePDFSessionStore.shared.document(for: sessionId))
+    XCTAssertEqual(session.pageCount, 4)
+    XCTAssertEqual(session.page(at: 0)?.bounds(for: .mediaBox).size, CGSize(width: 612, height: 792))
+    XCTAssertEqual(session.page(at: 1)?.bounds(for: .mediaBox).size, CGSize(width: 792, height: 612))
+
+    AlytePDFSessionStore.shared.remove(sessionId)
+    XCTAssertNil(AlytePDFSessionStore.shared.document(for: sessionId))
   }
 }

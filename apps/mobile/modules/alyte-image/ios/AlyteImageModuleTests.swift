@@ -6,6 +6,17 @@ import XCTest
 @testable import AlyteImage
 
 final class AlyteImageModuleTests: XCTestCase {
+  func testViewerSessionIsOpaqueAndReleasesDecodedImageOnClose() throws {
+    let image = try XCTUnwrap(UIImage(color: .white, size: CGSize(width: 1200, height: 900)))
+    let sessionId = AlyteImageViewerSessionStore.shared.insert(image)
+
+    XCTAssertEqual(
+      AlyteImageViewerSessionStore.shared.image(for: sessionId)?.size,
+      CGSize(width: 1200, height: 900))
+    AlyteImageViewerSessionStore.shared.remove(sessionId)
+    XCTAssertNil(AlyteImageViewerSessionStore.shared.image(for: sessionId))
+  }
+
   func testSanitizationNormalizesOrientationAndRemovesMetadata() throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("alyte-image-\(UUID().uuidString)", isDirectory: true)

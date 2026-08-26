@@ -92,7 +92,10 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
     static let resizeKnobSize: CGFloat = 16
   }
 
-  var sourcePath = "" { didSet { if oldValue != sourcePath { load() } } }
+  /// Read-only Original Report sessions are resolved in the native store. The source path remains
+  /// available for the editable privacy workspace and is never required by the viewer route.
+  var viewerSessionId: String? { didSet { if oldValue != viewerSessionId { load() } } }
+  var sourcePath = "" { didSet { if oldValue != sourcePath, viewerSessionId == nil { load() } } }
   var inspectionMode: Bool {
     get { interactionState.inspectionMode }
     set {
@@ -258,10 +261,17 @@ final class AlyteImageWorkspaceView: ExpoView, UIScrollViewDelegate, UIGestureRe
   }
 
   private func load() {
-    guard !sourcePath.isEmpty,
-      let data = try? Data(contentsOf: URL(fileURLWithPath: sourcePath)),
-      let loaded = UIImage(data: data)
-    else {
+    let loaded: UIImage?
+    if let viewerSessionId {
+      loaded = AlyteImageViewerSessionStore.shared.image(for: viewerSessionId)
+    } else if !sourcePath.isEmpty,
+      let data = try? Data(contentsOf: URL(fileURLWithPath: sourcePath))
+    {
+      loaded = UIImage(data: data)
+    } else {
+      loaded = nil
+    }
+    guard let loaded else {
       onFailure(["message": "The image could not be opened in the privacy workspace"])
       return
     }

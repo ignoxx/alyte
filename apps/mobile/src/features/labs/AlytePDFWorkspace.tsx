@@ -11,7 +11,10 @@ export type NativeRedactionChange = {
 };
 
 type Props = ViewProps & {
-  readonly sourcePath: string;
+  /** Source paths are used only by the editable privacy workspace. */
+  readonly sourcePath?: string;
+  /** Opaque native capability used by the read-only Original Report viewer. */
+  readonly viewerSessionId?: string;
   readonly pageIndex: number;
   readonly redactMode: boolean;
   readonly rotation: number;
@@ -20,6 +23,8 @@ type Props = ViewProps & {
   readonly accessibilityLabels: Readonly<Record<string, string>>;
   readonly focusRegion?: RedactionRegion['rect'] | null;
   readonly inspectionMode?: boolean;
+  /** Keep the native PDFPage unchanged while viewing an Original Report. */
+  readonly readOnlyViewer?: boolean;
   readonly onRedactionsChange?: (event: { nativeEvent: NativeRedactionChange }) => void;
   readonly onPageChange?: (event: { nativeEvent: { readonly pageIndex: number } }) => void;
   readonly onReady?: (event: { nativeEvent: { readonly pageCount: number } }) => void;

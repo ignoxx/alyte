@@ -224,6 +224,36 @@ private func loadDocument(_ path: String) throws -> PDFDocument {
   return document
 }
 
+/// Short-lived, opaque PDF capabilities shared by the module and PDFKit view. Keeping the
+/// document here lets PDFKit render one page at a time without handing protected paths to React.
+final class AlytePDFSessionStore {
+  static let shared = AlytePDFSessionStore()
+
+  private let lock = NSLock()
+  private var documents: [String: PDFDocument] = [:]
+
+  @discardableResult
+  func insert(_ document: PDFDocument) -> String {
+    let sessionId = UUID().uuidString
+    lock.lock()
+    documents[sessionId] = document
+    lock.unlock()
+    return sessionId
+  }
+
+  func document(for sessionId: String) -> PDFDocument? {
+    lock.lock()
+    defer { lock.unlock() }
+    return documents[sessionId]
+  }
+
+  func remove(_ sessionId: String) {
+    lock.lock()
+    documents.removeValue(forKey: sessionId)
+    lock.unlock()
+  }
+}
+
 private func renderImage(
   page: PDFPage, crop: AlyteNormalizedRect?, rotation: Int, redactions: [[String: Any]]
 ) throws -> UIImage {
@@ -493,13 +523,13 @@ private func sanitizePDF(document: PDFDocument, destinationPath: String, recipe:
 }
 
 public final class AlytePDFModule: Module {
-  private var sessions: [String: PDFDocument] = [:]
-  private let sessionLock = NSLock()
-
   public func definition() -> ModuleDefinition {
     Name("AlytePDF")
 
     View(AlytePDFWorkspaceView.self) {
+      Prop("viewerSessionId") { (view: AlytePDFWorkspaceView, sessionId: String?) in
+        view.viewerSessionId = sessionId
+      }
       Prop("sourcePath") { (view: AlytePDFWorkspaceView, path: String) in
         view.sourcePath = alytePDFFilePath(path)
       }
@@ -527,6 +557,9 @@ public final class AlytePDFModule: Module {
       Prop("inspectionMode") { (view: AlytePDFWorkspaceView, enabled: Bool) in
         view.inspectionMode = enabled
       }
+      Prop("readOnlyViewer") { (view: AlytePDFWorkspaceView, enabled: Bool) in
+        view.readOnlyViewer = enabled
+      }
       Events("onRedactionsChange", "onPageChange", "onReady", "onFailure", "onSelectionChange")
       AsyncFunction("undo") { (view: AlytePDFWorkspaceView) in view.undoEdit() }
       AsyncFunction("redo") { (view: AlytePDFWorkspaceView) in view.redoEdit() }
@@ -542,15 +575,30 @@ public final class AlytePDFModule: Module {
     }
 
     AsyncFunction("unlock") { (path: String, password: String) throws -> [String: Any] in
-      guard let document = PDFDocument(url: URL(fileURLWithPath: alytePDFFilePath(path))),
-        document.unlock(withPassword: password)
-      else {
-        throw AlytePDFError.locked
+      guard let document = PDFDocument(url: URL(fileURLWithPath: alytePDFFilePath(path))) else {
+        throw AlytePDFError.unreadable
       }
-      let sessionId = UUID().uuidString
-      self.sessionLock.lock()
-      self.sessions[sessionId] = document
-      self.sessionLock.unlock()
+      guard document.unlock(withPassword: password) else { throw AlytePDFError.locked }
+      let sessionId = AlytePDFSessionStore.shared.insert(document)
+      var result = inspection(document)
+      result["sessionId"] = sessionId
+      return result
+    }
+
+    AsyncFunction("openViewer") { (path: String) throws -> [String: Any] in
+      let document = try loadDocument(path)
+      let sessionId = AlytePDFSessionStore.shared.insert(document)
+      var result = inspection(document)
+      result["sessionId"] = sessionId
+      return result
+    }
+
+    AsyncFunction("unlockViewer") { (path: String, password: String) throws -> [String: Any] in
+      guard let document = PDFDocument(url: URL(fileURLWithPath: alytePDFFilePath(path))) else {
+        throw AlytePDFError.unreadable
+      }
+      guard document.unlock(withPassword: password) else { throw AlytePDFError.locked }
+      let sessionId = AlytePDFSessionStore.shared.insert(document)
       var result = inspection(document)
       result["sessionId"] = sessionId
       return result
@@ -562,17 +610,13 @@ public final class AlytePDFModule: Module {
     }
 
     AsyncFunction("renderPreviewSession") { (sessionId: String) throws -> [String] in
-      self.sessionLock.lock()
-      let document = self.sessions[sessionId]
-      self.sessionLock.unlock()
+      let document = AlytePDFSessionStore.shared.document(for: sessionId)
       guard let document else { throw AlytePDFError.unreadable }
       return try self.renderPreview(document)
     }
 
     AsyncFunction("exportUnlockedSession") { (sessionId: String, destinationPath: String) throws in
-      self.sessionLock.lock()
-      let document = self.sessions[sessionId]
-      self.sessionLock.unlock()
+      let document = AlytePDFSessionStore.shared.document(for: sessionId)
       guard let document,
         document.write(to: URL(fileURLWithPath: alytePDFFilePath(destinationPath)))
       else {
@@ -581,9 +625,7 @@ public final class AlytePDFModule: Module {
     }
 
     AsyncFunction("close") { (sessionId: String) in
-      self.sessionLock.lock()
-      self.sessions.removeValue(forKey: sessionId)
-      self.sessionLock.unlock()
+      AlytePDFSessionStore.shared.remove(sessionId)
     }
 
     AsyncFunction("sanitize") {
@@ -600,18 +642,14 @@ public final class AlytePDFModule: Module {
 
     AsyncFunction("sanitizeSession") {
       (sessionId: String, destinationPath: String, recipe: [String: Any]) throws -> [String: Any] in
-      self.sessionLock.lock()
-      let document = self.sessions[sessionId]
-      self.sessionLock.unlock()
+      let document = AlytePDFSessionStore.shared.document(for: sessionId)
       guard let document else { throw AlytePDFError.unreadable }
       return try self.sanitize(document: document, destinationPath: destinationPath, recipe: recipe)
     }
 
     AsyncFunction("suggestSensitiveRegionsSession") {
       (sessionId: String) throws -> [[String: Any]] in
-      self.sessionLock.lock()
-      let document = self.sessions[sessionId]
-      self.sessionLock.unlock()
+      let document = AlytePDFSessionStore.shared.document(for: sessionId)
       guard let document else { throw AlytePDFError.unreadable }
       return try sensitiveVisionRegions(document)
     }

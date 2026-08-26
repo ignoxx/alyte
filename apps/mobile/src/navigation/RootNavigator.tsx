@@ -18,6 +18,7 @@ import { extractionEditorDestination } from './registry-model';
 import { MeasurementCorrectionScreen } from '../features/labs/MeasurementCorrectionScreen';
 import { LabDeletionScreen } from '../features/labs/LabDeletionScreen';
 import { RecordSourcePreviewScreen } from '../features/labs/RecordSourcePreviewScreen';
+import { OriginalSourcePreviewScreen } from '../features/labs/OriginalSourcePreviewScreen';
 import { FullExportScreen } from '../features/settings/FullExportScreen';
 import { LocalModelInstallScreen } from '../features/onboarding/LocalModelInstallScreen';
 
@@ -207,6 +208,15 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
           name="PrivacyWorkspace"
           component={SanitizedReportEditorRoute}
           options={{ presentation: 'fullScreenModal', headerShown: true }}
+        />
+        <RootStack.Screen
+          name="OriginalSourcePreview"
+          component={OriginalSourcePreviewScreen}
+          options={{
+            presentation: 'fullScreenModal',
+            headerShown: true,
+            title: t('labs.reportPreviewTitle'),
+          }}
         />
         <RootStack.Screen
           name={extractionEditorDestination.route}

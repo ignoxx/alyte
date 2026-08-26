@@ -81,7 +81,15 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     }
   }
 
-  var sourcePath: String = "" { didSet { if oldValue != sourcePath { load() } } }
+  /// Original Report viewing resolves this opaque capability in the native session store. The
+  /// source path remains available only for the editable privacy workspace.
+  var viewerSessionId: String? { didSet { if oldValue != viewerSessionId { load() } } }
+  var sourcePath: String = "" {
+    didSet { if oldValue != sourcePath, viewerSessionId == nil { load() } }
+  }
+  var readOnlyViewer = false {
+    didSet { if oldValue != readOnlyViewer { showPage() } }
+  }
   var pageIndex: Int = 0 {
     didSet {
       if oldValue != pageIndex {
@@ -136,7 +144,11 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     NotificationCenter.default.addObserver(
       self, selector: #selector(pdfGeometryChanged), name: .PDFViewScaleChanged, object: pdfView)
     NotificationCenter.default.addObserver(
-      self, selector: #selector(pdfGeometryChanged), name: .PDFViewPageChanged, object: pdfView)
+      self, selector: #selector(pdfPageChanged), name: .PDFViewPageChanged, object: pdfView)
+  }
+
+  deinit {
+    NotificationCenter.default.removeObserver(self)
   }
 
   override func layoutSubviews() {
@@ -243,9 +255,15 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   }
 
   private func load() {
-    guard !sourcePath.isEmpty, let loaded = PDFDocument(url: URL(fileURLWithPath: sourcePath)),
-      !loaded.isLocked
-    else {
+    let loaded: PDFDocument?
+    if let viewerSessionId {
+      loaded = AlytePDFSessionStore.shared.document(for: viewerSessionId)
+    } else if !sourcePath.isEmpty {
+      loaded = PDFDocument(url: URL(fileURLWithPath: sourcePath))
+    } else {
+      loaded = nil
+    }
+    guard let loaded, !loaded.isLocked else {
       onFailure(["message": "The PDF could not be opened in the privacy workspace"])
       return
     }
@@ -260,16 +278,20 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
       let page = document.page(at: pageIndex)
     else { return }
     let media = page.bounds(for: .mediaBox)
-    page.rotation = rotation
-    if let crop {
-      page.setBounds(
-        CGRect(
-          x: media.minX + crop.minX * media.width,
-          y: media.maxY - crop.maxY * media.height,
-          width: crop.width * media.width,
-          height: crop.height * media.height), for: .cropBox)
-    } else {
-      page.setBounds(media, for: .cropBox)
+    // PDFKit can render the original page's rotation and crop directly. Avoid changing page
+    // objects in read-only mode so the session remains a faithful, non-mutating source view.
+    if viewerSessionId == nil && !readOnlyViewer {
+      page.rotation = rotation
+      if let crop {
+        page.setBounds(
+          CGRect(
+            x: media.minX + crop.minX * media.width,
+            y: media.maxY - crop.maxY * media.height,
+            width: crop.width * media.width,
+            height: crop.height * media.height), for: .cropBox)
+      } else {
+        page.setBounds(media, for: .cropBox)
+      }
     }
     pdfView.go(to: page)
     pdfView.autoScales = true
@@ -616,6 +638,16 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     // This keeps PDFKit's private gesture hierarchy untouched across page/scale rebuilds: body and
     // handle touches hit the stable edit pan, while blank-space touches go directly to PDFView.
     layoutRegions()
+  }
+
+  @objc private func pdfPageChanged() {
+    guard let currentPage = pdfView.currentPage,
+      let currentIndex = document?.index(for: currentPage), currentIndex >= 0
+    else { return }
+    if currentIndex != pageIndex {
+      onPageChange(["pageIndex": currentIndex])
+    }
+    pdfGeometryChanged()
   }
 
   private func emit() {

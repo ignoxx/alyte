@@ -173,6 +173,36 @@ private func loadImage(path: String) throws -> UIImage {
   try normalizedImage(from: Data(contentsOf: URL(fileURLWithPath: alyteImageFilePath(path))))
 }
 
+/// Short-lived, opaque image capabilities shared by the native module and its Expo view. React
+/// receives only the token, so a protected source path is never retained in viewer props.
+final class AlyteImageViewerSessionStore {
+  static let shared = AlyteImageViewerSessionStore()
+
+  private let lock = NSLock()
+  private var images: [String: UIImage] = [:]
+
+  @discardableResult
+  func insert(_ image: UIImage) -> String {
+    let sessionId = UUID().uuidString
+    lock.lock()
+    images[sessionId] = image
+    lock.unlock()
+    return sessionId
+  }
+
+  func image(for sessionId: String) -> UIImage? {
+    lock.lock()
+    defer { lock.unlock() }
+    return images[sessionId]
+  }
+
+  func remove(_ sessionId: String) {
+    lock.lock()
+    images.removeValue(forKey: sessionId)
+    lock.unlock()
+  }
+}
+
 private func cropImage(_ image: UIImage, crop: AlyteImageRect) throws -> UIImage {
   guard let cgImage = image.cgImage else { throw AlyteImageError.renderFailed }
   let width = CGFloat(cgImage.width)
@@ -470,6 +500,9 @@ public final class AlyteImageModule: Module {
     Name("AlyteImage")
 
     View(AlyteImageWorkspaceView.self) {
+      Prop("viewerSessionId") { (view: AlyteImageWorkspaceView, sessionId: String?) in
+        view.viewerSessionId = sessionId
+      }
       Prop("sourcePath") { (view: AlyteImageWorkspaceView, path: String) in
         view.sourcePath = alyteImageFilePath(path)
       }
@@ -507,6 +540,20 @@ public final class AlyteImageModule: Module {
         "pixelHeight": cgImage.height,
         "hasMetadata": hasUserMetadata(data),
       ]
+    }
+
+    AsyncFunction("openViewer") { (path: String) throws -> [String: Any] in
+      let image = try loadImage(path: path)
+      let sessionId = AlyteImageViewerSessionStore.shared.insert(image)
+      return [
+        "sessionId": sessionId,
+        "width": image.size.width,
+        "height": image.size.height,
+      ]
+    }
+
+    AsyncFunction("closeViewer") { (sessionId: String) in
+      AlyteImageViewerSessionStore.shared.remove(sessionId)
     }
 
     AsyncFunction("sanitize") {

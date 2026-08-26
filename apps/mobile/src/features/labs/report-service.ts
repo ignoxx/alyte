@@ -45,9 +45,11 @@ import {
   type PdfInspector,
   type PdfSanitizationResult,
   type PdfSanitizedVerification,
+  type PdfViewerSession,
 } from './pdf';
 import {
   nativeImageInspector,
+  type ImageInspector,
   type ImageSanitizationResult,
   type ImageSanitizedVerification,
 } from './image';
@@ -67,6 +69,17 @@ export type LabReportPreview = {
   readonly sourceType: LabReport['sourceType'];
   /** A protected file URI for images or short-lived local data URIs for rendered PDF pages. */
   readonly uris: readonly string[];
+};
+
+/**
+ * A read-only native viewer capability. The protected path never crosses into the screen; the
+ * native PDFKit/UIKit view resolves this opaque session lazily and releases it on close.
+ */
+export type OriginalReportViewerSession = {
+  readonly sourceType: LabReport['sourceType'];
+  readonly pageCount: number;
+  readonly sessionId: string;
+  close(): Promise<void>;
 };
 
 export type SanitizedReportPreview = {
@@ -149,6 +162,10 @@ export type LabReportsService = {
   verifySource(id: string): Promise<LabReportSourceIntegrity>;
   openOriginal(id: string): Promise<string>;
   previewOriginal(id: string, passwordRequest?: PasswordRequest): Promise<LabReportPreview>;
+  openOriginalViewer(
+    id: string,
+    passwordRequest?: PasswordRequest,
+  ): Promise<OriginalReportViewerSession>;
   openSanitizationEditor(
     id: string,
     passwordRequest?: PasswordRequest,
@@ -178,7 +195,7 @@ export type LabReportsServiceOptions = {
   readonly idGenerator?: (prefix: string) => string;
   readonly passwordRequest?: PasswordRequest;
   readonly visionOCR?: VisionOCR;
-  readonly imageInspector?: typeof nativeImageInspector;
+  readonly imageInspector?: ImageInspector;
   readonly extractionAliases?: readonly ExtractionAliasEntry[];
   readonly semanticMapper?: ExtractionSemanticMapper;
 };
@@ -232,6 +249,12 @@ function classifyFailure(error: unknown): LabReportImportError['reason'] {
   }
   if (message.includes('protect') || message.includes('storage')) return 'protection';
   return 'failed';
+}
+
+function isPdfPasswordFailure(error: unknown): boolean {
+  const message =
+    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return message.includes('password') || message.includes('unlock') || message.includes('locked');
 }
 
 function pageInputs(inspection: PdfInspection) {
@@ -835,6 +858,80 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       password = '';
       if (session !== null) await session.close();
     }
+  }
+
+  async function openOriginalViewer(
+    id: string,
+    passwordRequest?: PasswordRequest,
+  ): Promise<OriginalReportViewerSession> {
+    const report = await getReport(id);
+    if (report === null) throw new Error('Lab Report was not found');
+    // This is the only service boundary that resolves the protected source. The returned value
+    // is an opaque native capability; the screen never receives this path.
+    const path = await openOriginal(id);
+
+    if (report.sourceType === 'image') {
+      const openViewer = imageInspector.openViewer;
+      const closeViewer = imageInspector.closeViewer;
+      if (openViewer === undefined || closeViewer === undefined) {
+        throw new Error('AlyteImage is unavailable for local image viewing');
+      }
+      const session = await openViewer.call(imageInspector, path);
+      return {
+        sourceType: 'image',
+        pageCount: 1,
+        sessionId: session.sessionId,
+        close: async () => {
+          await closeViewer.call(imageInspector, session.sessionId);
+        },
+      };
+    }
+
+    const initial = await pdfInspector.inspect(path);
+    let session: PdfViewerSession;
+    if (!initial.locked) {
+      if (pdfInspector.openViewer === undefined) {
+        throw new Error('AlytePDF is unavailable for local PDF viewing');
+      }
+      session = await pdfInspector.openViewer(path);
+    } else {
+      const request = passwordRequest ?? options.passwordRequest;
+      if (request === undefined) {
+        throw new LabReportImportError(
+          report,
+          'wrong-password',
+          'A password is required to view this PDF',
+        );
+      }
+      const entered = await request({ report, attempt: 1 });
+      if (entered === null || entered.length === 0) {
+        throw new LabReportImportError(report, 'cancelled', 'Password entry was cancelled');
+      }
+      let password = entered;
+      try {
+        if (pdfInspector.unlockViewer === undefined) {
+          throw new Error('AlytePDF is unavailable for local PDF viewing');
+        }
+        session = await pdfInspector.unlockViewer(path, password);
+      } catch (error) {
+        if (!isPdfPasswordFailure(error)) throw error;
+        throw new LabReportImportError(
+          report,
+          'wrong-password',
+          'The PDF password was not accepted',
+          { cause: error },
+        );
+      } finally {
+        password = '';
+      }
+    }
+
+    return {
+      sourceType: 'pdf',
+      pageCount: session.inspection.pageCount,
+      sessionId: session.sessionId,
+      close: () => session.close(),
+    };
   }
 
   async function openSanitizationEditor(
@@ -1697,6 +1794,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     verifySource,
     openOriginal,
     previewOriginal,
+    openOriginalViewer,
     openSanitizationEditor,
     closeSanitizationEditor,
     saveSanitizationDraft,

@@ -32,7 +32,13 @@ export type ImageSanitizationResult = {
   readonly verification: ImageSanitizedVerification;
 };
 
-type NativeImageModule = {
+export type ImageViewerSession = {
+  readonly sessionId: string;
+  readonly width: number;
+  readonly height: number;
+};
+
+export interface ImageInspector {
   inspect(path: string): Promise<ImageInspection>;
   sanitize(
     sourcePath: string,
@@ -44,9 +50,17 @@ type NativeImageModule = {
     sourcePath: string,
     recipe: SanitizationRecipe,
   ): Promise<ImageSanitizedVerification>;
+  /** Opens a verified native image session without exposing its protected path to React. */
+  openViewer?(path: string): Promise<ImageViewerSession>;
+  closeViewer?(sessionId: string): Promise<void>;
+}
+
+type NativeImageModule = ImageInspector & {
+  openViewer(path: string): Promise<ImageViewerSession>;
+  closeViewer(sessionId: string): Promise<void>;
 };
 
-export const nativeImageInspector = {
+export const nativeImageInspector: ImageInspector = {
   async inspect(path: string): Promise<ImageInspection> {
     const { requireOptionalNativeModule } = await import('expo-modules-core');
     const native = requireOptionalNativeModule<NativeImageModule>('AlyteImage');
@@ -75,6 +89,18 @@ export const nativeImageInspector = {
     }
     return native.verifySanitized(path, sourcePath, recipe);
   },
+  async openViewer(path: string): Promise<ImageViewerSession> {
+    const { requireOptionalNativeModule } = await import('expo-modules-core');
+    const native = requireOptionalNativeModule<NativeImageModule>('AlyteImage');
+    if (native === null) throw new Error('AlyteImage is unavailable for local image viewing');
+    return native.openViewer(path);
+  },
+  async closeViewer(sessionId: string): Promise<void> {
+    const { requireOptionalNativeModule } = await import('expo-modules-core');
+    const native = requireOptionalNativeModule<NativeImageModule>('AlyteImage');
+    if (native === null) return;
+    await native.closeViewer(sessionId);
+  },
 };
 
 export type NativeImageRedactionChange = {
@@ -85,7 +111,10 @@ export type NativeImageRedactionChange = {
 };
 
 type ImageWorkspaceProps = ViewProps & {
-  readonly sourcePath: string;
+  /** Source paths are retained for the editable privacy workspace only. */
+  readonly sourcePath?: string;
+  /** Opaque native capability used by the read-only Original Report viewer. */
+  readonly viewerSessionId?: string;
   readonly redactMode: boolean;
   /** Read-only source navigation mode: show the stored region without editable redaction chrome. */
   readonly inspectionMode?: boolean;
