@@ -169,6 +169,9 @@ export const EXPORT_SCHEMA_DECISIONS: readonly ExportTableDecision[] = [
     'created_at',
     'updated_at',
     'confirmed_at',
+    'source_artifact_kind',
+    'source_artifact_id',
+    'source_artifact_hash',
   ]),
   includedTable('extraction_draft_rows', [
     'id',

@@ -47,9 +47,10 @@ source of truth rather than repeating the same rule here.
    does not decide that it caused or probably contributed to that trend.
 4. **Clinical decisions stay clinical.** The product does not diagnose, recommend treatment, alter
    medication, calculate doses, or label a person deficient or diseased.
-5. **Local mode is a complete product.** Lab import, privacy review, focused extraction review,
-   history, explanations, trends, export, and deletion do not require an account. Cloud and intake
-   breadth may enhance it only after this journey is complete.
+5. **Local mode is a complete product.** Lab import, Original-source review, focused extraction
+   review, history, explanations, trends, export, and deletion do not require an account. The
+   Sanitized Report path remains intact for a future explicit cloud upload and is not part of the
+   account-free extraction journey.
 6. **Cloud exposure is explicit and minimal.** Show the exact artifact and purpose before first
    upload. Send only what the selected operation requires and keep no durable cloud health record.
 7. **The user controls the record.** Corrections preserve source provenance. Inclusion is reversible.
@@ -103,6 +104,8 @@ agreement.
 
 - Preserve the Original Report and its original label, value string, unit, range, flag, page, and
   bounding-box provenance.
+- Local extracted Measurements retain provenance to the protected Original Report, including its
+  immutable hash; any future sanitized cloud draft remains a separate artifact.
 - Store parsed/normalized values beside, never over, source fields.
 - Corrections form explicit provenance instead of mutating the extraction record beyond recovery.
 - Derived charts and insights remain reproducible from source IDs plus parser/catalogue versions.

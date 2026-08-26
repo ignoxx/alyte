@@ -47,6 +47,7 @@ export type RootStackParamList = {
   SnapCapture: undefined;
   PrivacyWorkspace: { readonly reportId: string };
   OriginalSourcePreview: { readonly reportId: string };
+  ExtractionProgress: { readonly reportId: string };
   ExtractionMeasurementEditor: {
     readonly reportId: string;
     readonly draftId: string;

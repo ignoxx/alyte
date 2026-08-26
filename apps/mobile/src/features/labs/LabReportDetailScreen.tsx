@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import { useCallback, useLayoutEffect, useState } from 'react';
 import { ActionSheetIOS, Alert, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -15,17 +15,12 @@ import {
   StatusPill,
 } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
-import {
-  LabReportExtractionError,
-  LabReportImportError,
-  type PasswordRequest,
-} from './report-service';
+import { LabReportImportError, type PasswordRequest } from './report-service';
 import {
   formatReportFileSize,
   formatReportPageCount,
   getLabReportDetailState,
 } from './report-detail-model';
-import { canStartAutomatedExtraction, type LocalModelSnapshot } from '../local-models/model';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
 type DetailRoute = RouteProp<LabsStackParamList, 'LabReportDetail'>;
@@ -51,7 +46,7 @@ function sourceLabel(report: LabReport): string {
 export function LabReportDetailScreen() {
   const navigation = useNavigation<Navigation>();
   const route = useRoute<DetailRoute>();
-  const { reports, models } = useServices();
+  const { reports } = useServices();
   const [report, setReport] = useState<LabReport | null>(null);
   const [integrity, setIntegrity] = useState<
     'verified' | 'missing' | 'mismatch' | 'not-verifiable'
@@ -59,11 +54,6 @@ export function LabReportDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
-  const [extractionError, setExtractionError] = useState<LabReportExtractionError['reason'] | null>(
-    null,
-  );
-  const [extractionReady, setExtractionReady] = useState(false);
-  const [modelSnapshot, setModelSnapshot] = useState<LocalModelSnapshot | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -72,14 +62,8 @@ export function LabReportDetailScreen() {
       setReport(next);
       if (next === null) {
         setIntegrity('missing');
-        setExtractionReady(false);
       } else {
         setIntegrity(await reports.verifySource(next.id));
-        setExtractionReady(
-          next.importState === 'imported' && next.labRecordIds.length === 0
-            ? (await reports.getExtractionReadiness(next.id)).ready
-            : false,
-        );
       }
       setError(false);
     } catch {
@@ -94,23 +78,6 @@ export function LabReportDetailScreen() {
       void load();
     }, [load]),
   );
-
-  useEffect(() => {
-    let active = true;
-    const unsubscribe = models.subscribe((next) => {
-      if (active) setModelSnapshot(next);
-    });
-    void models
-      .getState()
-      .then((next) => {
-        if (active) setModelSnapshot(next);
-      })
-      .catch(() => undefined);
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, [models]);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -170,29 +137,10 @@ export function LabReportDetailScreen() {
 
   async function extractLocally() {
     if (report === null) return;
-    if (modelSnapshot === null || !canStartAutomatedExtraction(modelSnapshot)) {
-      navigation
-        .getParent<NativeStackNavigationProp<RootStackParamList>>()
-        ?.getParent<NativeStackNavigationProp<RootStackParamList>>()
-        ?.navigate('ModelInstall');
-      return;
-    }
-    setBusy(true);
-    setError(false);
-    setExtractionError(null);
-    try {
-      // The report service owns the authoritative pre-Vision pack gate and reports runtime
-      // failures separately so deterministic progress can remain recoverable.
-      const draft = await reports.startExtraction(report.id, promptPassword());
-      navigation.navigate('ExtractionDraft', { reportId: report.id, draftId: draft.id });
-    } catch (caught) {
-      setExtractionError(
-        caught instanceof LabReportExtractionError ? caught.reason : 'recognition',
-      );
-      setExtractionReady((await reports.getExtractionReadiness(report.id)).ready);
-    } finally {
-      setBusy(false);
-    }
+    navigation
+      .getParent<NativeStackNavigationProp<RootStackParamList>>()
+      ?.getParent<NativeStackNavigationProp<RootStackParamList>>()
+      ?.navigate('ExtractionProgress', { reportId: report.id });
   }
 
   function openMoreMenu() {
@@ -215,14 +163,6 @@ export function LabReportDetailScreen() {
       { text: t('labs.reportDelete'), onPress: showDelete, style: 'destructive' },
       { text: t('intake.cancel'), style: 'cancel' },
     ]);
-  }
-
-  function extractionErrorKey(reason: LabReportExtractionError['reason']) {
-    if (reason === 'sanitized-source') return 'labs.extractionSourceError' as const;
-    if (reason === 'no-reviewable-measurements')
-      return 'labs.extractionNoMeasurementsError' as const;
-    if (reason === 'model-unavailable') return 'labs.extractionModelRequired' as const;
-    return 'labs.extractionRecognitionError' as const;
   }
 
   function confirmDelete() {
@@ -336,61 +276,16 @@ export function LabReportDetailScreen() {
             </View>
             <AppIcon name="chevronRight" size={16} />
           </Pressable>
-          {(report.sourceType === 'pdf' || report.sourceType === 'image') && (
-            <Pressable
-              accessibilityRole="button"
-              disabled={busy}
-              onPress={() =>
-                navigation
-                  .getParent<NativeStackNavigationProp<RootStackParamList>>()
-                  ?.getParent<NativeStackNavigationProp<RootStackParamList>>()
-                  ?.navigate('PrivacyWorkspace', { reportId: report.id })
-              }
-              style={({ pressed }) => [styles.actionRow, pressed && styles.actionPressed]}
-            >
-              <AppIcon name="shield" size={20} />
-              <View style={styles.actionBody}>
-                <AppText variant="heading">{t('labs.sanitizedEditorOpen')}</AppText>
-                <AppText style={styles.body}>{t('labs.sanitizedEditorBody')}</AppText>
-              </View>
-              <AppIcon name="chevronRight" size={16} />
-            </Pressable>
-          )}
           {report.importState === 'imported' && report.labRecordIds.length === 0 && (
             <View style={styles.extractAction}>
-              {extractionReady ? (
-                <>
-                  <AppText variant="heading">{t('labs.extractionStart')}</AppText>
-                  <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
-                  {(modelSnapshot === null || !canStartAutomatedExtraction(modelSnapshot)) && (
-                    <AppText style={styles.body}>{t('labs.extractionModelRequired')}</AppText>
-                  )}
-                  <AppButton
-                    disabled={busy}
-                    label={
-                      modelSnapshot === null || !canStartAutomatedExtraction(modelSnapshot)
-                        ? t('labs.extractionModelAction')
-                        : t('labs.extractionStart')
-                    }
-                    onPress={() => void extractLocally()}
-                    style={styles.extractButton}
-                  />
-                  {extractionError !== null && (
-                    <AppText style={styles.errorText}>
-                      {t(extractionErrorKey(extractionError))}
-                    </AppText>
-                  )}
-                </>
-              ) : (
-                <>
-                  <AppText style={styles.body}>{t('labs.extractionPrivacyRequired')}</AppText>
-                  {extractionError !== null && (
-                    <AppText style={styles.errorText}>
-                      {t(extractionErrorKey(extractionError))}
-                    </AppText>
-                  )}
-                </>
-              )}
+              <AppText variant="heading">{t('labs.extractionStart')}</AppText>
+              <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
+              <AppButton
+                disabled={busy}
+                label={t('labs.extractionStart')}
+                onPress={() => void extractLocally()}
+                style={styles.extractButton}
+              />
             </View>
           )}
           {report.importState === 'imported' && report.labRecordIds.length > 0 && (

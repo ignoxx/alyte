@@ -23,6 +23,14 @@ export type MeasurementSnapshot = {
 export type MeasurementProvenance = 'user-entered' | 'extracted' | 'user-corrected';
 export type MeasurementReviewState = 'confirmed' | 'needs-review';
 
+/** Identifies the protected artifact from which an extracted value was read. */
+export type LabSourceArtifact = {
+  readonly kind: 'original' | 'sanitized';
+  /** Sanitized derivatives have a stable id; the protected Original has no derivative id. */
+  readonly id: string | null;
+  readonly hash: string | null;
+};
+
 export type MeasurementSourceLocation = {
   readonly pageIndex: number;
   readonly boundingBox: {
@@ -32,6 +40,7 @@ export type MeasurementSourceLocation = {
     readonly height: number;
   };
   readonly orientation: number;
+  readonly artifact?: LabSourceArtifact | null;
   /** OCR observations contributing to this source region, when extracted. */
   readonly observationIds?: readonly string[];
   readonly observations?: readonly {

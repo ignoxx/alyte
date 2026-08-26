@@ -19,6 +19,7 @@ import { MeasurementCorrectionScreen } from '../features/labs/MeasurementCorrect
 import { LabDeletionScreen } from '../features/labs/LabDeletionScreen';
 import { RecordSourcePreviewScreen } from '../features/labs/RecordSourcePreviewScreen';
 import { OriginalSourcePreviewScreen } from '../features/labs/OriginalSourcePreviewScreen';
+import { ExtractionProgressScreen } from '../features/labs/ExtractionProgressScreen';
 import { FullExportScreen } from '../features/settings/FullExportScreen';
 import { LocalModelInstallScreen } from '../features/onboarding/LocalModelInstallScreen';
 
@@ -217,6 +218,11 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
             headerShown: true,
             title: t('labs.reportPreviewTitle'),
           }}
+        />
+        <RootStack.Screen
+          name="ExtractionProgress"
+          component={ExtractionProgressScreen}
+          options={{ presentation: 'fullScreenModal', headerShown: false }}
         />
         <RootStack.Screen
           name={extractionEditorDestination.route}

@@ -134,7 +134,8 @@ Build narrow, typed modules rather than one general native bridge.
 `AlyteVision`:
 
 - accepts protected local image paths and orientation metadata;
-- uses iOS 26 Vision document recognition over rendered Sanitized Report pages;
+- uses iOS 26 Vision document recognition over protected Original Report pages for local
+  extraction; Sanitized Report pages are reserved for a future explicit cloud operation;
 - returns document regions, tables, rows, cells, text, normalized bounding boxes, candidate
   alternatives, and internal recognition confidence;
 - supports explicit recognition-language hints while allowing automatic detection; and
@@ -260,10 +261,10 @@ media, transient imports, and exports. Store paths and hashes in SQLite, not fil
 file service owns creation, protection, backup exclusion, reference counting, and deletion so
 database and filesystem state cannot drift silently.
 
-The Original Report is immutable. Crop, rotation, and redaction remain reversible editing recipes
-until the person finishes the privacy workspace. The Sanitized Report is a newly rendered
-derivative, never overwrites the original, and becomes the working document for extraction, exact
-preview, export, and any later cloud upload.
+The Original Report is immutable and is the local OCR source. Crop, rotation, and redaction remain
+reversible editing recipes until the person explicitly prepares a future cloud upload. The
+Sanitized Report is a newly rendered derivative, never overwrites the original, and is used only
+for that future cloud operation and its exact preview.
 
 ## Local import pipeline
 
@@ -271,9 +272,8 @@ preview, export, and any later cloud upload.
 Files/Photos selection
   → copy into protected app storage
   → inspect PDF / ask for password when required
-  → full-screen privacy workspace and page transforms
-  → render and verify Sanitized Report
-  → Vision document/table recognition over sanitized pages
+  → verify Original hash immediately before each Vision call
+  → Vision document/table recognition over Original pages
   → measurement-candidate filtering
   → optional schema-constrained local semantic mapping through the active verified model pack
   → locale-aware alias and unit mapper
@@ -288,7 +288,7 @@ needs review and why; they do not see a medical-looking confidence percentage.
 
 Parsing occurs in layers:
 
-1. Vision returns immutable source observations with page geometry from the Sanitized Report;
+1. Vision returns immutable source observations with page geometry from the protected Original;
 2. Vision document structure and deterministic layout logic identify tables, rows, panels, and
    other measurement-shaped candidates;
 3. locale parsers recognize dates, decimals, comparators, intervals, and units;
@@ -320,7 +320,7 @@ block launch or existing local history, but it prevents a new automated extracti
 pack is ready. Once an extraction has started, runtime or inference failure falls back to Vision
 structure, locale parsing, aliases, deterministic validation, and focused user review.
 
-Cloud report extraction is a fallback for selected, sanitized pages. It produces another editable
+Cloud report extraction is a future fallback for selected, sanitized pages. It produces another editable
 Extraction Draft and never bypasses review.
 
 ## Intake pipeline

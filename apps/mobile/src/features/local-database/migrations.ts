@@ -19,7 +19,7 @@ type CallbackMigration = {
 
 export type Migration = SqlMigration | CallbackMigration;
 
-export const CURRENT_SCHEMA_VERSION = 11;
+export const CURRENT_SCHEMA_VERSION = 12;
 
 const INTAKE_CAPTURE_RECOVERY_DDL = `
   CREATE TABLE IF NOT EXISTS intake_capture_recovery (
@@ -56,6 +56,9 @@ const EXTRACTION_DRAFT_DDL = `
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     confirmed_at TEXT,
+    source_artifact_kind TEXT CHECK (source_artifact_kind IN ('original', 'sanitized')),
+    source_artifact_id TEXT,
+    source_artifact_hash TEXT,
     UNIQUE(report_id)
   );
 
@@ -435,5 +438,22 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS local_deletion_operations_scope_idx
         ON local_deletion_operations(scope, updated_at DESC);
     `,
+  },
+  {
+    version: 12,
+    apply: async (database) => {
+      const columns = await database.getAllAsync<{ name: string }>(
+        'PRAGMA table_info(extraction_drafts);',
+      );
+      const existing = new Set(columns.map((column) => column.name));
+      for (const [name, type] of [
+        ['source_artifact_kind', "TEXT CHECK (source_artifact_kind IN ('original', 'sanitized'))"],
+        ['source_artifact_id', 'TEXT'],
+        ['source_artifact_hash', 'TEXT'],
+      ] as const) {
+        if (!existing.has(name))
+          await database.execAsync(`ALTER TABLE extraction_drafts ADD COLUMN ${name} ${type};`);
+      }
+    },
   },
 ];

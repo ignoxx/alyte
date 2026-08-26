@@ -236,6 +236,80 @@ describe('protected manual Lab Record persistence', () => {
     await relaunched.repository.close();
   });
 
+  test('fails closed when stored extraction artifact provenance is malformed or inconsistent', async () => {
+    const { repository, database } = createRepository();
+    await repository.createReport({
+      id: 'report-artifact-provenance',
+      sourceType: 'image',
+      originalFilename: 'synthetic-provenance.png',
+      mimeType: 'image/png',
+      importState: 'imported',
+      originalPath: 'protected://original/synthetic-provenance.png',
+      sourceHash: 'original-artifact-hash',
+      pageCount: 1,
+    });
+    const artifact = { kind: 'original' as const, id: null, hash: 'original-artifact-hash' };
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'provenance-row',
+          text: 'LDL-C 3.8 mmol/L',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+      ],
+      { aliases: [], artifact },
+    );
+    assert.ok(row);
+    const draft = await repository.createExtractionDraft({
+      id: 'provenance-draft',
+      reportId: 'report-artifact-provenance',
+      collectionDate: { kind: 'missing' },
+      rows: [row],
+      sourceArtifact: artifact,
+    });
+
+    await database.runAsync(
+      `UPDATE extraction_drafts
+       SET source_artifact_id = 'must-be-null-for-original'
+       WHERE id = ?;`,
+      draft.id,
+    );
+    await assert.rejects(
+      repository.getExtractionDraft(draft.id),
+      /Invalid Original source artifact provenance/,
+    );
+
+    await database.runAsync(
+      `UPDATE extraction_drafts
+       SET source_artifact_id = NULL
+       WHERE id = ?;`,
+      draft.id,
+    );
+    const stored = (
+      await database.getAllAsync<{ source_bbox_json: string }>(
+        'SELECT source_bbox_json FROM extraction_draft_rows WHERE draft_id = ?;',
+        draft.id,
+      )
+    )[0];
+    assert.ok(stored);
+    const sourceBox = JSON.parse(stored.source_bbox_json) as Record<string, unknown>;
+    sourceBox.artifact = { kind: 'sanitized', id: 'derivative-id', hash: 'derivative-hash' };
+    await database.runAsync(
+      'UPDATE extraction_draft_rows SET source_bbox_json = ? WHERE draft_id = ?;',
+      JSON.stringify(sourceBox),
+      draft.id,
+    );
+    await assert.rejects(
+      repository.getExtractionDraft(draft.id),
+      /source artifact provenance does not match/,
+    );
+    await repository.close();
+  });
+
   test('revalidates open drafts created by the previous parser policy before confirmation', async () => {
     const { repository, database } = createRepository();
     await repository.createReport({

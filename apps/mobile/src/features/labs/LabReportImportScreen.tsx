@@ -55,13 +55,13 @@ export function LabReportImportScreen() {
     });
   }, [busy, navigation]);
 
-  function showImportedReport(report: LabReport, openPrivacyWorkspace: boolean) {
+  function showImportedReport(report: LabReport, openProgress: boolean) {
     navigation.navigate('MainTabs', {
       screen: 'Labs',
       params: { screen: 'LabReportDetail', params: { reportId: report.id } },
     });
-    if (openPrivacyWorkspace) {
-      navigation.navigate('PrivacyWorkspace', { reportId: report.id });
+    if (openProgress) {
+      navigation.navigate('ExtractionProgress', { reportId: report.id });
     }
   }
 
@@ -90,8 +90,6 @@ export function LabReportImportScreen() {
       const first = results[0];
       if (first !== undefined) {
         setLastReport(first.report);
-        // Image sources now enter the local privacy workspace immediately. Extraction remains
-        // deliberately hidden until the semantic image extraction slice is integrated.
         showImportedReport(first.report, true);
       }
     } catch (caught) {

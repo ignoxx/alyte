@@ -210,8 +210,8 @@ Biomarker is not currently included in the person's comparable laboratory trends
 - A user can create a laboratory record and its Measurements manually without attaching a Lab
   Report.
 - A user can correct every extracted date, name, value, unit, and reference interval before saving.
-- Vision document recognition reads the rendered Sanitized Report and preserves text plus page
-  geometry. Raw text observations remain
+- Vision document recognition reads the protected Original Report on-device and preserves text plus
+  page geometry. Raw text observations remain
   internal provenance; only table rows or other measurement-shaped candidates enter an Extraction
   Draft. Headers, addresses, licences, footers, and unrelated prose do not become user review work.
 - Recognition of a specific Biomarker depends on the supported alias catalogue and semantic
@@ -240,9 +240,10 @@ Biomarker is not currently included in the person's comparable laboratory trends
   Measurements are included by default; genuine ambiguities are highlighted individually. The
   person reviews a compact grouped table, can inspect or edit any candidate, and resolves only the
   exceptions before confirmation. Nothing becomes confirmed history until that review completes.
-- When local extraction is incomplete or unusable, the person can retry selected pages, enter the
-  results manually, or explicitly request paid cloud extraction. The source report itself remains
-  locally available even when no structured result can be recovered.
+- When local extraction is incomplete or unusable, the person can retry the calm Import → OCR →
+  On-device model → Review journey, enter results manually, or explicitly request later paid cloud
+  extraction. The Original Report itself remains locally available even when no structured result
+  can be recovered.
 - One cloud Lab Report import accepts at most 20 user-selected pages and 25 MB. A larger document
   remains intact locally but must be split into transparent cloud batches; the page selection and
   resulting usage are shown before upload.
@@ -334,16 +335,18 @@ relationship between them. Alyte cannot determine why your result changed.`
 
 ## Redaction
 
-- Report import includes a focused privacy workspace before structured extraction. It presents one
-  aspect-correct full-resolution page at a time with native zoom, pan, page navigation, direct
-  redaction, undo, and compact page-transform controls. It does not render tiny pages inside a
-  scrolling form.
+- When the person explicitly prepares a future cloud upload, a focused privacy workspace opens
+  above the tabs. It presents one aspect-correct full-resolution page at a time with native zoom,
+  pan, page navigation, direct redaction, undo, and compact page-transform controls. It does not
+  render tiny pages inside a scrolling form.
 - On-device recognition may propose regions that contain names, addresses, identifiers, dates, or
   other personal information. The person reviews, adds, adjusts, or removes them.
-- Before a derivative exists the action is `Sanitize Report`. After creation the actions are
+- Sanitization is reserved for a future explicit cloud upload. Before that action exists the local
+  journey does not require a derivative. When a derivative exists, the actions are
   `View Sanitized Report` and `Edit Redactions`.
-- The Original Report remains immutable and separately accessible. The Sanitized Report becomes the
-  working document for extraction, exact preview, export, and any later cloud submission.
+- The Original Report remains immutable and separately accessible. Local OCR and extraction read
+  that Original. The Sanitized Report is a separate, future cloud-submission artifact and never
+  replaces local provenance.
 - The app shows the exact Sanitized Report that a later export or cloud operation would use.
 - Sanitization creates a newly rendered, flattened artifact with selected content, hidden text,
   annotations, and recoverable metadata removed. A removable rectangle is not a redaction.

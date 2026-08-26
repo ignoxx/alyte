@@ -590,6 +590,27 @@ export function createLabReportRepository(
     return row === undefined ? null : decodeSanitizedReportRow(row);
   }
 
+  async function invalidateSanitizedExtractionDrafts(
+    reportId: string,
+    artifactId: string,
+  ): Promise<void> {
+    await database.runAsync(
+      `DELETE FROM extraction_draft_rows
+       WHERE draft_id IN (
+         SELECT id FROM extraction_drafts
+         WHERE report_id = ? AND source_artifact_kind = 'sanitized' AND source_artifact_id = ?
+       );`,
+      reportId,
+      artifactId,
+    );
+    await database.runAsync(
+      `DELETE FROM extraction_drafts
+       WHERE report_id = ? AND source_artifact_kind = 'sanitized' AND source_artifact_id = ?;`,
+      reportId,
+      artifactId,
+    );
+  }
+
   async function saveSanitizedReport(input: CreateSanitizedReportInput): Promise<SanitizedReport> {
     await initialize();
     const report = await getReport(input.reportId);
@@ -598,7 +619,18 @@ export function createLabReportRepository(
     const createdAt = now();
     const state = input.verificationState ?? 'pending';
     const verification = input.verification ?? null;
+    const existing = await getSanitizedReport(input.reportId);
     await withWrite(async () => {
+      if (
+        existing !== null &&
+        (existing.id !== id ||
+          existing.recipeHash !== input.recipeHash ||
+          existing.artifactHash !== input.artifactHash)
+      ) {
+        // Only drafts explicitly sourced from this derivative are stale. Local
+        // Original-derived drafts intentionally survive cloud-artifact changes.
+        await invalidateSanitizedExtractionDrafts(input.reportId, existing.id);
+      }
       await database.runAsync(
         `INSERT INTO sanitized_report_derivatives (
           id, report_id, recipe_json, recipe_hash, artifact_path, artifact_hash, byte_size,
@@ -630,20 +662,6 @@ export function createLabReportRepository(
         createdAt,
         input.deletedAt ?? null,
       );
-      if (state === 'verified') {
-        // Extraction rows are proposals about one exact sanitized artifact. A newly
-        // verified derivative may have different crop/redactions/bytes, so remove the
-        // old proposal in the same transaction as the pointer replacement.
-        await database.runAsync(
-          `DELETE FROM extraction_draft_rows
-           WHERE draft_id IN (SELECT id FROM extraction_drafts WHERE report_id = ?);`,
-          input.reportId,
-        );
-        await database.runAsync(
-          'DELETE FROM extraction_drafts WHERE report_id = ?;',
-          input.reportId,
-        );
-      }
     });
     const saved = await getSanitizedReport(input.reportId);
     if (saved === null) throw new Error('Sanitized Report could not be read back');
@@ -674,6 +692,12 @@ export function createLabReportRepository(
         input.failureReason === undefined ? existing.failureReason : input.failureReason,
       deletedAt: input.deletedAt === undefined ? existing.deletedAt : input.deletedAt,
     };
+    const artifactInvalidated =
+      existing.artifactPath !== next.artifactPath ||
+      existing.artifactHash !== next.artifactHash ||
+      existing.recipeHash !== next.recipeHash ||
+      (existing.verificationState !== next.verificationState &&
+        next.verificationState !== 'verified');
     await withWrite(async () => {
       const result = await database.runAsync(
         `UPDATE sanitized_report_derivatives SET recipe_json = ?, recipe_hash = ?, artifact_path = ?,
@@ -692,6 +716,7 @@ export function createLabReportRepository(
         id,
       );
       if (result.changes !== 1) throw new Error('Sanitized Report update did not complete');
+      if (artifactInvalidated) await invalidateSanitizedExtractionDrafts(existing.reportId, id);
     });
     const saved = await getSanitizedReport(existing.reportId);
     if (saved === null) throw new Error('Updated Sanitized Report could not be read back');
@@ -735,12 +760,9 @@ export function createLabReportRepository(
       if (result.changes !== 1) return;
       const reportId = rows[0]?.report_id;
       if (reportId !== undefined) {
-        await database.runAsync(
-          `DELETE FROM extraction_draft_rows
-           WHERE draft_id IN (SELECT id FROM extraction_drafts WHERE report_id = ?);`,
-          reportId,
-        );
-        await database.runAsync('DELETE FROM extraction_drafts WHERE report_id = ?;', reportId);
+        // A sanitized derivative may invalidate only drafts tied to its own
+        // artifact. Original-derived local drafts remain valid and private.
+        await invalidateSanitizedExtractionDrafts(reportId, id);
       }
     });
   }

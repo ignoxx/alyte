@@ -1,13 +1,9 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import {
-  useNavigation,
-  useRoute,
-  type NavigationProp,
-  type RouteProp,
-} from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { RedactionRegion } from '@alyte/domain';
 import type { RootStackParamList } from '../../navigation/types';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppText } from '../../ui/primitives';
@@ -16,6 +12,7 @@ import { AlytePDFWorkspace } from './AlytePDFWorkspace';
 import { AlyteImageWorkspace } from './image';
 
 type Route = RouteProp<RootStackParamList, 'RecordSourcePreview'>;
+type Navigation = NativeStackNavigationProp<RootStackParamList>;
 type Ready = {
   path: string;
   sourceType: 'pdf' | 'image';
@@ -24,7 +21,7 @@ type Ready = {
   orientation: number;
 };
 export function RecordSourcePreviewScreen() {
-  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
+  const navigation = useNavigation<Navigation>();
   const route = useRoute<Route>();
   const { labs, reports } = useServices();
   const [ready, setReady] = useState<Ready | null>(null);
@@ -48,6 +45,12 @@ export function RecordSourcePreviewScreen() {
       );
       if (!detail || detail.source.kind !== 'retained' || !measurement?.source)
         throw new Error('unavailable');
+      if (measurement.source.artifact?.kind === 'original') {
+        // Local extraction provenance points at the immutable Original. The native
+        // viewer owns its protected path; this screen never receives one.
+        navigation.replace('OriginalSourcePreview', { reportId: detail.source.reportId });
+        return;
+      }
       const preview = await reports.previewSanitizedReport(detail.source.reportId);
       if (!preview.uris[measurement.source.pageIndex]) throw new Error('unavailable');
       if (active)
@@ -64,7 +67,7 @@ export function RecordSourcePreviewScreen() {
     return () => {
       active = false;
     };
-  }, [attempt, labs, reports, route.params]);
+  }, [attempt, labs, navigation, reports, route.params]);
   if (!ready)
     return (
       <View style={styles.center}>

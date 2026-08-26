@@ -65,9 +65,11 @@ Build:
 - a reference-backed UI variant lab for Home's empty and first-populated hierarchy, followed by
   promotion of the maintainer-selected direction;
 - local database schema and repositories;
-- Files/Photos import, password prompt, protected storage, and a full-screen PDFKit privacy
-  workspace for page selection, zoom, pan, crop, rotation, and direct redaction;
-- verified Sanitized Report creation before extraction;
+- Files/Photos import, password prompt, protected storage, and the future cloud-upload PDFKit
+  privacy workspace for page selection, zoom, pan, crop, rotation, and direct redaction;
+- direct Original Report OCR with hash/password verification immediately before Vision, a calm
+  Import → OCR → On-device model → Review journey, and independent source provenance; Sanitized
+  Report creation remains reserved for a future explicit cloud upload;
 - Vision document/table recognition, measurement-candidate filtering, locale parsing, alias mapping,
   unit normalization, and preservation of every credible result;
 - bounded Qwen 3.5 0.8B and Gemma 4 E2B feasibility benchmarks using structured OCR fixtures,

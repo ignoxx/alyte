@@ -1,6 +1,6 @@
 import type { CanonicalId } from './index';
 import { parseLocaleDecimal } from './labs';
-import type { MeasurementValue, SpecimenType, LabDateState } from './labs';
+import type { LabSourceArtifact, MeasurementValue, SpecimenType, LabDateState } from './labs';
 
 export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.document.v2' as const;
 export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v3' as const;
@@ -49,6 +49,7 @@ export type ExtractionSourceLocation = {
   readonly pageIndex: number;
   readonly boundingBox: NormalizedBoundingBox;
   readonly orientation: number;
+  readonly artifact?: LabSourceArtifact | null;
   readonly observationIds: readonly string[];
   readonly observations?: readonly VisionTextObservation[];
   /** Exact OCR tokens copied before parsing or normalization. */
@@ -177,6 +178,7 @@ export type ExtractionDraft = {
   readonly state: 'draft' | 'confirmed' | 'failed';
   readonly ocrContractVersion: typeof VISION_OCR_CONTRACT_VERSION;
   readonly parserVersion: typeof EXTRACTION_PARSER_VERSION;
+  readonly sourceArtifact?: LabSourceArtifact | null;
   readonly collectionDate: LabDateState;
   readonly rows: readonly ExtractionDraftRow[];
   readonly createdAt: string;
@@ -993,6 +995,7 @@ export function groupObservationsIntoRows(
     readonly collectionDateContexts?: readonly ExtractionDateContext[];
     readonly specimenType?: SpecimenType;
     readonly aliases?: readonly ExtractionAliasEntry[];
+    readonly artifact?: LabSourceArtifact | null;
   } = {},
 ): readonly ExtractionDraftRow[] {
   const aliases = options.aliases ?? [];
@@ -1058,6 +1061,7 @@ export function groupObservationsIntoRows(
         options.collectionDateContexts ?? [],
         options.specimenType ?? 'unknown',
         aliases,
+        options.artifact ?? null,
       ),
     )
     .filter(isMeasurementShapedRow);
@@ -1085,6 +1089,7 @@ function parseSourceRow(
   collectionDateContexts: readonly ExtractionDateContext[],
   specimenType: SpecimenType,
   aliases: readonly ExtractionAliasEntry[],
+  artifact: LabSourceArtifact | null,
 ): ExtractionDraftRow {
   const sourceText = group.map((observation) => observation.text.trim()).join('  ');
   const first = group[0];
@@ -1092,6 +1097,7 @@ function parseSourceRow(
   const source = {
     pageIndex: first?.pageIndex ?? 0,
     orientation: first?.orientation ?? 0,
+    artifact,
     observationIds: group.map((item) => item.id),
     observations: [...group],
     semantic: null,

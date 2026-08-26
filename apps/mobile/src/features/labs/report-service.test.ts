@@ -37,6 +37,7 @@ import {
   LabReportImportError,
   type LabReportsServiceOptions,
   type LabReportsService,
+  type LabReportExtractionProgress,
 } from './report-service';
 import type {
   PdfInspection,
@@ -1211,23 +1212,23 @@ describe('protected Lab Report import lifecycle', () => {
     });
   });
 
-  test('refuses extraction before a current Sanitized Report is verified', async () => {
+  test('keeps local extraction independent from the Sanitized Report', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
     let recognitionCalls = 0;
     const service = createService(repository, files, new FakePdf(), {
       async recognize() {
         recognitionCalls += 1;
-        throw new Error('Vision must not receive an Original Report');
+        throw new Error('synthetic Vision failure');
       },
     });
     const report = (await service.importImages([source('unsanitized', 'image')]))[0]!.report;
     await assert.rejects(service.startExtraction(report.id), (error: unknown) => {
       assert.ok(error instanceof LabReportExtractionError);
-      assert.equal(error.reason, 'sanitized-source');
+      assert.equal(error.reason, 'recognition');
       return true;
     });
-    assert.equal(recognitionCalls, 0);
+    assert.equal(recognitionCalls, 1);
   });
 
   test('uses an optional supported semantic mapper and persists its versioned source selection', async () => {
@@ -1937,8 +1938,8 @@ describe('protected Lab Report import lifecycle', () => {
       (await service.getReport(report.id))?.originalPath,
       'protected://original-reports/relocated.pdf',
     );
-    assert.deepEqual(pdf.inspectedPaths, [files.currentPath]);
-    assert.deepEqual(nativePaths, pdf.sanitizedPaths);
+    assert.deepEqual(pdf.inspectedPaths, [files.currentPath, files.currentPath]);
+    assert.deepEqual(nativePaths, [files.currentPath, files.currentPath]);
     assert.equal(draft.rows[0]?.sourceValueString, '3.8');
     assert.equal(
       await repository.getExtractionDraftForReport(report.id).then((value) => value !== null),
@@ -2322,7 +2323,7 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(await files.exists(saved.artifactPath!), true);
   });
 
-  test('extracts an image only from its verified sanitized derivative and preserves page-zero provenance', async () => {
+  test('extracts an image from the protected Original and preserves page-zero provenance', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
     const image = new SanitizingImage(files);
@@ -2380,8 +2381,8 @@ describe('protected Lab Report import lifecycle', () => {
       width: 0.45,
       height: 0.04,
     });
-    assert.deepEqual(visionPaths, [saved.artifactPath]);
-    assert.notEqual(visionPaths[0], imported.originalPath);
+    assert.deepEqual(visionPaths, [imported.originalPath]);
+    assert.notEqual(visionPaths[0], saved.artifactPath);
 
     const records = await service.confirmExtraction(draft.id);
     const measurement = records[0]?.measurements[0];
@@ -2391,7 +2392,7 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(await files.exists(imported.originalPath!), true);
   });
 
-  test('does not call Vision when an image derivative is missing or tampered', async () => {
+  test('does not call Vision when an Original image is missing or tampered', async () => {
     for (const state of ['missing', 'tampered'] as const) {
       const repository = createRepository();
       const files = new FakeFiles();
@@ -2404,7 +2405,7 @@ describe('protected Lab Report import lifecycle', () => {
         {
           async recognize(): Promise<VisionOCRResult> {
             recognitionCalls += 1;
-            throw new Error('Vision must not receive an unavailable image derivative');
+            throw new Error('Vision must not receive an unavailable Original');
           },
         },
         undefined,
@@ -2412,27 +2413,30 @@ describe('protected Lab Report import lifecycle', () => {
       );
       const imported = (await service.importImages([source(`extract-image-${state}`, 'image')]))[0]!
         .report;
-      const saved = await service.saveSanitizedReport(
+      await service.saveSanitizedReport(
         imported.id,
         (await service.openSanitizationEditor(imported.id)).recipe,
       );
       if (state === 'missing') {
-        files.files.delete(saved.artifactPath!);
+        files.files.delete(imported.originalPath!);
       } else {
-        files.files.set(saved.artifactPath!, { hash: 'tampered-image', size: 256 });
+        files.files.set(imported.originalPath!, { hash: 'tampered-image', size: 256 });
       }
 
       await assert.rejects(service.startExtraction(imported.id), (error: unknown) => {
         assert.ok(error instanceof LabReportExtractionError);
-        assert.equal(error.reason, 'sanitized-source');
+        assert.equal(error.reason, 'original-source');
         return true;
       });
       assert.equal(recognitionCalls, 0);
-      assert.equal((await repository.getSanitizedReport(imported.id))?.verificationState, 'failed');
+      assert.equal(
+        (await repository.getSanitizedReport(imported.id))?.verificationState,
+        'verified',
+      );
     }
   });
 
-  test('invalidates image extraction drafts only after a successful derivative replacement or deletion', async () => {
+  test('preserves Original extraction drafts across Sanitized Report replacement or deletion', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
     const image = new SanitizingImage(files);
@@ -2482,15 +2486,15 @@ describe('protected Lab Report import lifecycle', () => {
     image.failSanitize = false;
     const second = await service.saveSanitizedReport(imported.id, secondRecipe);
     assert.notEqual(second.artifactHash, first.artifactHash);
-    assert.equal(await repository.getExtractionDraftForReport(imported.id), null);
-    assert.equal(await repository.getExtractionDraft(firstDraft.id), null);
+    assert.equal((await repository.getExtractionDraftForReport(imported.id))?.id, firstDraft.id);
+    assert.equal((await repository.getExtractionDraft(firstDraft.id))?.id, firstDraft.id);
     assert.equal(await files.exists(first.artifactPath!), false);
 
     const replacementDraft = await service.startExtraction(imported.id);
-    assert.notEqual(replacementDraft.id, firstDraft.id);
+    assert.equal(replacementDraft.id, firstDraft.id);
     await service.deleteSanitizedReport(imported.id);
-    assert.equal(await repository.getExtractionDraftForReport(imported.id), null);
-    assert.equal(await repository.getExtractionDraft(replacementDraft.id), null);
+    assert.equal((await repository.getExtractionDraftForReport(imported.id))?.id, firstDraft.id);
+    assert.equal((await repository.getExtractionDraft(replacementDraft.id))?.id, firstDraft.id);
     assert.equal(await files.exists(imported.originalPath!), true);
   });
 
@@ -2543,11 +2547,7 @@ describe('protected Lab Report import lifecycle', () => {
       ready: false,
       status: 'unverified',
     });
-    await assert.rejects(service.startExtraction(imported.id), (error: unknown) => {
-      assert.ok(error instanceof LabReportExtractionError);
-      assert.equal(error.reason, 'sanitized-source');
-      return true;
-    });
+    assert.equal((await service.startExtraction(imported.id)).id, draft.id);
     assert.equal((await repository.getExtractionDraftForReport(imported.id))?.id, draft.id);
     assert.equal(await files.exists(saved.artifactPath!), true);
   });
@@ -2700,5 +2700,391 @@ describe('protected Lab Report import lifecycle', () => {
     repository.deleteSanitizedReport = deleteRow;
     const relaunched = createService(repository, files, pdf);
     assert.equal(await relaunched.getSanitizedReport(imported.id), null);
+  });
+
+  test('runs the local journey from Original through ordered progress stages without sanitizing', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = sanitizingPdf(files);
+    let calls = 0;
+    const ocr: VisionOCR = {
+      async recognize(_path, pageIndex): Promise<VisionOCRResult> {
+        calls += 1;
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex,
+          orientation: 0,
+          observations: [
+            {
+              id: `progress-row-${pageIndex}`,
+              text: `LDL-C ${pageIndex + 1}.2 mmol/L`,
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+              pageIndex,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        });
+      },
+    };
+    const mapper: ExtractionSemanticMapper = {
+      adapterVersion: 'progress.mapper.v1',
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      maxRowsPerChunk: 1,
+      supports: () => true,
+      async map() {
+        return [];
+      },
+    };
+    const service = createService(repository, files, pdf, ocr, mapper);
+    const report = (await service.importPdf(source('progress-order')))!.report;
+    const events: LabReportExtractionProgress[] = [];
+    const unsubscribe = service.subscribeExtractionProgress((event) => events.push(event));
+    const draft = await service.startExtraction(report.id);
+    unsubscribe();
+
+    assert.equal(draft.sourceArtifact?.kind, 'original');
+    assert.equal(draft.sourceArtifact?.id, null);
+    assert.equal(draft.sourceArtifact?.hash, report.sourceHash);
+    assert.equal(calls, 2);
+    assert.equal(pdf.sanitizedPaths.length, 0);
+    assert.deepEqual(
+      events.map((event) => event.stage).filter((stage, index, all) => stage !== all[index - 1]),
+      ['import', 'ocr', 'model', 'review'],
+    );
+    assert.equal(
+      events.some((event) => event.stage === 'ocr' && event.status === 'complete'),
+      true,
+    );
+    assert.equal(
+      events.some((event) => event.stage === 'model' && event.status === 'complete'),
+      true,
+    );
+    assert.equal(events.at(-1)?.status, 'complete');
+  });
+
+  test('preserves the imported report across extraction retry and does not create duplicate drafts', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    let calls = 0;
+    const service = createService(repository, files, new FakePdf(), {
+      async recognize(): Promise<VisionOCRResult> {
+        calls += 1;
+        if (calls === 1) throw new Error('temporary Vision failure');
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'retry-row',
+              text: 'LDL-C 3.8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        });
+      },
+    });
+    const report = (await service.importPdf(source('retry-progress')))!.report;
+    await assert.rejects(service.startExtraction(report.id), /recognition failed/);
+    assert.equal((await service.getReport(report.id))?.originalPath, report.originalPath);
+    assert.equal(await repository.getExtractionDraftForReport(report.id), null);
+
+    const first = await service.startExtraction(report.id);
+    const second = await service.startExtraction(report.id);
+    assert.equal(second.id, first.id);
+    assert.equal(await service.countOpenExtractionDrafts(), 1);
+    assert.equal(calls, 3);
+  });
+
+  test('unlocks a protected Original only for Vision and never persists the password', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new FakePdf();
+    pdf.locked = true;
+    const visionPasswords: Array<string | null | undefined> = [];
+    const service = createService(repository, files, pdf, {
+      async recognize(_path, pageIndex, _orientation, password): Promise<VisionOCRResult> {
+        visionPasswords.push(password);
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex,
+          orientation: 0,
+          observations: [
+            {
+              id: `protected-row-${pageIndex}`,
+              text: 'LDL-C 3.8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+              pageIndex,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        });
+      },
+    });
+    const report = (await service.importPdf(
+      source('protected-extraction'),
+      async () => 'correct horse',
+    ))!.report;
+    const draft = await service.startExtraction(report.id, async () => 'correct horse');
+
+    assert.equal(report.encrypted, true);
+    assert.equal(
+      visionPasswords.every((password) => password === 'correct horse'),
+      true,
+    );
+    assert.equal(JSON.stringify(draft).includes('correct horse'), false);
+    assert.equal(
+      JSON.stringify(await repository.getExtractionDraft(draft.id)).includes('correct horse'),
+      false,
+    );
+  });
+
+  test('rejects confirmation after Original tampering while preserving the editable draft', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const service = createService(repository, files, new FakePdf(), {
+      async recognize(): Promise<VisionOCRResult> {
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'tamper-after-draft',
+              text: 'LDL-C 3.8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        });
+      },
+    });
+    const report = (await service.importPdf(source('tamper-after-draft')))!.report;
+    const draft = await service.startExtraction(report.id);
+    files.files.set(report.originalPath!, { hash: 'tampered-after-draft', size: 42 });
+
+    await assert.rejects(service.confirmExtraction(draft.id), /integrity could not be verified/);
+    assert.equal((await repository.getExtractionDraft(draft.id))?.state, 'draft');
+    assert.equal((await service.getReport(report.id))?.importState, 'imported');
+  });
+
+  test('cancelling during OCR cannot write a draft and an immediate retry stays unique', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new FakePdf();
+    let service!: LabReportsService;
+    let calls = 0;
+    let resolveFirstRecognition!: (result: VisionOCRResult) => void;
+    let signalRecognitionStarted!: () => void;
+    const recognitionStarted = new Promise<void>((resolve) => {
+      signalRecognitionStarted = resolve;
+    });
+    const firstRecognition = new Promise<VisionOCRResult>((resolve) => {
+      resolveFirstRecognition = resolve;
+    });
+    const result = (pageIndex: number): VisionOCRResult =>
+      decodeVisionOCRResult({
+        contractVersion: 'alyte.vision.document.v2',
+        pageIndex,
+        orientation: 0,
+        observations: [
+          {
+            id: 'cancel-ocr-row',
+            text: 'LDL-C 3.8 mmol/L',
+            alternatives: [],
+            boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+            pageIndex,
+            orientation: 0,
+            recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+          },
+        ],
+      });
+    service = createService(repository, files, pdf, {
+      async recognize(_path, pageIndex): Promise<VisionOCRResult> {
+        calls += 1;
+        if (calls === 1) {
+          signalRecognitionStarted();
+          return firstRecognition;
+        }
+        return result(pageIndex);
+      },
+    });
+    const report = (await service.importPdf(source('cancel-during-ocr')))!.report;
+    const first = service.startExtraction(report.id);
+    await recognitionStarted;
+    await service.cancelExtraction(report.id);
+    const retry = service.startExtraction(report.id);
+    resolveFirstRecognition(result(0));
+
+    await assert.rejects(first, (error: unknown) => {
+      return error instanceof LabReportExtractionError && error.reason === 'cancelled';
+    });
+    const draft = await retry;
+    assert.equal(draft.sourceArtifact?.kind, 'original');
+    assert.equal(await repository.countOpenExtractionDrafts(), 1);
+    assert.equal((await service.getReport(report.id))?.originalPath, report.originalPath);
+    assert.equal(calls, 3);
+  });
+
+  test('cancelling after an on-device model await preserves deterministic rows and allows retry', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    let service!: LabReportsService;
+    let mapCalls = 0;
+    let resolveFirstMap!: (proposals: readonly []) => void;
+    let signalMapStarted!: () => void;
+    const mapStarted = new Promise<void>((resolve) => {
+      signalMapStarted = resolve;
+    });
+    const firstMap = new Promise<readonly []>((resolve) => {
+      resolveFirstMap = resolve;
+    });
+    const vision: VisionOCR = {
+      async recognize(_path, pageIndex): Promise<VisionOCRResult> {
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex,
+          orientation: 0,
+          observations: [
+            {
+              id: 'cancel-model-row',
+              text: 'LDL-C 3.8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+              pageIndex,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        });
+      },
+    };
+    const mapper: ExtractionSemanticMapper = {
+      adapterVersion: 'cancel.mapper.v1',
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      maxRowsPerChunk: 12,
+      maxObservationsPerChunk: 48,
+      provenance: {},
+      prepare: async () => {},
+      supports: () => true,
+      map: async () => {
+        mapCalls += 1;
+        if (mapCalls === 1) {
+          signalMapStarted();
+          return firstMap;
+        }
+        return [];
+      },
+    };
+    service = createService(repository, files, new FakePdf(), vision, mapper);
+    const report = (await service.importPdf(source('cancel-during-model')))!.report;
+    const first = service.startExtraction(report.id);
+    await mapStarted;
+    await service.cancelExtraction(report.id);
+    const retry = service.startExtraction(report.id);
+    resolveFirstMap([]);
+
+    await assert.rejects(first, (error: unknown) => {
+      return error instanceof LabReportExtractionError && error.reason === 'cancelled';
+    });
+    const draft = await retry;
+    assert.equal(draft.rows.length, 1);
+    assert.equal(await repository.countOpenExtractionDrafts(), 1);
+    assert.equal(mapCalls, 2);
+  });
+
+  test('cancelling at the review write boundary creates no draft and retry can complete', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    let service!: LabReportsService;
+    let cancelOnce = true;
+    const vision: VisionOCR = {
+      async recognize(_path, pageIndex): Promise<VisionOCRResult> {
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex,
+          orientation: 0,
+          observations: [
+            {
+              id: 'cancel-review-row',
+              text: 'LDL-C 3.8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+              pageIndex,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        });
+      },
+    };
+    service = createService(repository, files, new FakePdf(), vision);
+    const report = (await service.importPdf(source('cancel-before-write')))!.report;
+    const unsubscribe = service.subscribeExtractionProgress((progress) => {
+      if (cancelOnce && progress.reportId === report.id && progress.stage === 'review') {
+        cancelOnce = false;
+        void service.cancelExtraction(report.id);
+      }
+    });
+    await assert.rejects(service.startExtraction(report.id), (error: unknown) => {
+      return error instanceof LabReportExtractionError && error.reason === 'cancelled';
+    });
+    unsubscribe();
+    assert.equal(await repository.getExtractionDraftForReport(report.id), null);
+    const draft = await service.startExtraction(report.id);
+    assert.equal(draft.sourceArtifact?.kind, 'original');
+    assert.equal(await repository.countOpenExtractionDrafts(), 1);
+  });
+
+  test('invalidates only a draft tied to a failing Sanitized artifact', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const image = new SanitizingImage(files);
+    const service = createService(repository, files, new FakePdf(), undefined, undefined, image);
+    const report = (await service.importImages([source('sanitized-draft', 'image')]))[0]!.report;
+    const sanitized = await service.saveSanitizedReport(
+      report.id,
+      (await service.openSanitizationEditor(report.id)).recipe,
+    );
+    const originalRows = groupObservationsIntoRows(
+      [
+        {
+          id: 'sanitized-source-row',
+          text: 'LDL-C 3.8 mmol/L',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+      ],
+      {
+        aliases: createDefaultExtractionAliases(),
+        artifact: { kind: 'sanitized', id: sanitized.id, hash: sanitized.artifactHash },
+      },
+    );
+    const draft = await repository.createExtractionDraft({
+      reportId: report.id,
+      collectionDate: { kind: 'missing' },
+      rows: originalRows,
+      sourceArtifact: { kind: 'sanitized', id: sanitized.id, hash: sanitized.artifactHash },
+    });
+
+    await repository.updateSanitizedReport(sanitized.id, {
+      verificationState: 'failed',
+      failureReason: 'tampered',
+    });
+    assert.equal(await repository.getExtractionDraft(draft.id), null);
   });
 });

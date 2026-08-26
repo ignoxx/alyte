@@ -17,6 +17,7 @@ import {
   type ExtractionDraftRow,
   type ExtractionDraftRowPatch,
   type ExtractionDateContext,
+  type LabSourceArtifact,
   type SanitizationRecipe,
   createSanitizationRecipe,
 } from '@alyte/domain';
@@ -136,6 +137,9 @@ type ExtractionDraftDb = {
   created_at: unknown;
   updated_at: unknown;
   confirmed_at: unknown;
+  source_artifact_kind: unknown;
+  source_artifact_id: unknown;
+  source_artifact_hash: unknown;
 };
 
 function requiredString(value: unknown, field: string): string {
@@ -264,11 +268,29 @@ function sourceLocationFromUnknown(row: {
     pageIndex: row.source_page_index,
     boundingBox,
     orientation: row.source_orientation,
+    artifact: decodeStoredArtifact(box.artifact),
     observationIds,
     observations,
     raw: decodeStoredRawSource(box.raw) ?? emptyRawSource,
     semantic: decodeStoredSemantic(box.semantic),
   };
+}
+
+function decodeStoredArtifact(value: unknown): LabSourceArtifact | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object') throw new Error('Invalid source artifact provenance');
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind !== 'original' && candidate.kind !== 'sanitized')
+    throw new Error('Invalid source artifact kind');
+  const id = nullableString(candidate.id, 'source artifact id');
+  const hash = nullableString(candidate.hash, 'source artifact hash');
+  if (candidate.kind === 'original') {
+    if (id !== null || hash === null || hash.length === 0)
+      throw new Error('Invalid Original source artifact provenance');
+  } else if (id === null || id.length === 0 || hash === null || hash.length === 0) {
+    throw new Error('Invalid Sanitized source artifact provenance');
+  }
+  return { kind: candidate.kind, id, hash };
 }
 
 function decodeStoredRawSource(value: unknown) {
@@ -353,6 +375,7 @@ function sourceLocationValue(value: unknown): Measurement['source'] {
       observations: candidate.observations,
       raw: candidate.raw,
       semantic: candidate.semantic,
+      artifact: candidate.artifact,
     }),
     source_orientation: candidate.orientation,
   });
@@ -443,6 +466,7 @@ function extractionRowFromDb(row: ExtractionDraftRowDb): ExtractionDraftRow {
       pageIndex,
       boundingBox,
       orientation,
+      artifact: decodeStoredArtifact(sourceBox.artifact),
       observationIds,
       observations,
       raw: decodeStoredRawSource(sourceBox.raw) ?? emptyRawSource,
@@ -496,6 +520,27 @@ function extractionDraftFromDb(
   const parser = requiredString(row.parser_version, 'extraction parser version');
   if (ocr !== VISION_OCR_CONTRACT_VERSION || parser !== EXTRACTION_PARSER_VERSION)
     throw new Error('Unsupported extraction draft version');
+  const sourceArtifact = decodeStoredArtifact(
+    row.source_artifact_kind === null || row.source_artifact_kind === undefined
+      ? null
+      : {
+          kind: row.source_artifact_kind,
+          id: row.source_artifact_id,
+          hash: row.source_artifact_hash,
+        },
+  );
+  for (const draftRow of rows) {
+    const rowArtifact = draftRow.source.artifact ?? null;
+    if (
+      (sourceArtifact === null) !== (rowArtifact === null) ||
+      (sourceArtifact !== null &&
+        (sourceArtifact.kind !== rowArtifact?.kind ||
+          sourceArtifact.id !== rowArtifact?.id ||
+          sourceArtifact.hash !== rowArtifact?.hash))
+    ) {
+      throw new Error('Extraction Draft source artifact provenance does not match its rows');
+    }
+  }
   return {
     id: requiredString(row.id, 'extraction draft id'),
     reportId: requiredString(row.report_id, 'extraction report id'),
@@ -507,6 +552,7 @@ function extractionDraftFromDb(
     createdAt: requiredString(row.created_at, 'extraction draft created timestamp'),
     updatedAt: requiredString(row.updated_at, 'extraction draft updated timestamp'),
     confirmedAt: nullableString(row.confirmed_at, 'extraction draft confirmed timestamp'),
+    sourceArtifact,
   };
 }
 
@@ -745,9 +791,11 @@ export type LabRepository = {
     readonly reportId: string;
     readonly collectionDate: LabRecord['collectionDate'];
     readonly rows: readonly ExtractionDraftRow[];
+    readonly sourceArtifact?: LabSourceArtifact | null;
     readonly now?: string;
   }): Promise<ExtractionDraft>;
   countOpenExtractionDrafts(): Promise<number>;
+  deleteExtractionDraft(id: string): Promise<void>;
   getExtractionDraft(
     id: string,
     aliases?: readonly ExtractionAliasEntry[],
@@ -1254,7 +1302,8 @@ export function createLabRepository(
   }
 
   const extractionDraftColumns = `id, report_id, state, ocr_contract_version, parser_version,
-    collection_date, date_state, created_at, updated_at, confirmed_at`;
+    collection_date, date_state, created_at, updated_at, confirmed_at, source_artifact_kind,
+    source_artifact_id, source_artifact_hash`;
   const extractionRowColumns = `id, draft_id, row_order, panel_label, source_text, source_label,
     source_value_string, source_value_json, source_unit, source_reference_interval, source_flag, source_page_index,
     source_bbox_json, source_orientation, proposed_label, proposed_value_json, proposed_unit,
@@ -1334,6 +1383,16 @@ export function createLabRepository(
     return row === undefined ? null : readExtractionDraft(row, aliases);
   }
 
+  async function deleteExtractionDraft(id: string): Promise<void> {
+    await initialize();
+    await withWrite(async () => {
+      await database.runAsync(
+        "DELETE FROM extraction_drafts WHERE id = ? AND state = 'draft';",
+        id,
+      );
+    });
+  }
+
   async function countOpenExtractionDrafts(): Promise<number> {
     await initialize();
     const rows = await database.getAllAsync<{ count: unknown }>(
@@ -1366,6 +1425,7 @@ export function createLabRepository(
     readonly reportId: string;
     readonly collectionDate: LabRecord['collectionDate'];
     readonly rows: readonly ExtractionDraftRow[];
+    readonly sourceArtifact?: LabSourceArtifact | null;
     readonly now?: string;
   }): Promise<ExtractionDraft> {
     await initialize();
@@ -1377,8 +1437,9 @@ export function createLabRepository(
     await withWrite(async () => {
       await database.runAsync(
         `INSERT INTO extraction_drafts (id, report_id, state, ocr_contract_version, parser_version,
-          collection_date, date_state, created_at, updated_at, confirmed_at)
-         VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, NULL);`,
+          collection_date, date_state, created_at, updated_at, confirmed_at, source_artifact_kind,
+          source_artifact_id, source_artifact_hash)
+         VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?);`,
         draftId,
         input.reportId,
         VISION_OCR_CONTRACT_VERSION,
@@ -1387,6 +1448,9 @@ export function createLabRepository(
         input.collectionDate.kind,
         createdAt,
         createdAt,
+        input.sourceArtifact?.kind ?? null,
+        input.sourceArtifact?.id ?? null,
+        input.sourceArtifact?.hash ?? null,
       );
       for (const row of input.rows) {
         await database.runAsync(
@@ -1415,6 +1479,7 @@ export function createLabRepository(
             observations: row.source.observations ?? [],
             raw: row.source.raw ?? null,
             semantic: row.source.semantic ?? null,
+            artifact: row.source.artifact ?? input.sourceArtifact ?? null,
           }),
           row.source.orientation,
           row.proposedLabel,
@@ -1588,6 +1653,8 @@ export function createLabRepository(
               ...measurement.source.boundingBox,
               observationIds: measurement.source.observationIds,
               observations: measurement.source.observations ?? [],
+              raw: measurement.source.raw ?? null,
+              artifact: measurement.source.artifact ?? null,
               semantic: measurement.source.semantic ?? null,
             }),
             measurement.source.orientation,
@@ -1676,6 +1743,7 @@ export function createLabRepository(
     listPendingCombinedDeletions,
     createExtractionDraft,
     countOpenExtractionDrafts,
+    deleteExtractionDraft,
     getExtractionDraft,
     getExtractionDraftForReport,
     updateExtractionDraftRow,
