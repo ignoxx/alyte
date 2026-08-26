@@ -7,6 +7,10 @@ test('native tab fallback composes device safe area and shared clearance', () =>
   assert.equal(getScreenScrollBottomInset(undefined, 0, 40), 40);
 });
 
+test('non-iOS paths retain the existing safe-area fallback without extra clearance', () => {
+  assert.equal(getScreenScrollBottomInset(undefined, 34), 34);
+});
+
 test('measured tab bars remain authoritative when they are taller than the fallback', () => {
   assert.equal(getScreenScrollBottomInset(83, 34, 40), 83);
 });

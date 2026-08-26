@@ -10,6 +10,7 @@ import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import { Image } from 'expo-image';
 import {
   Pressable,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -92,12 +93,13 @@ export const ScreenScrollView = forwardRef<ScrollView, ScreenScrollViewProps>(
     const tabBarHeight = useContext(BottomTabBarHeightContext);
     const safeAreaInsets = useSafeAreaInsets();
     // Native bottom tabs render outside the JS tree and currently do not provide the React
-    // Navigation height context. The shared clearance keeps an action-ending route above the
-    // translucent bar while regular bottom tabs continue to use their measured height.
+    // Navigation height context. On iOS, the shared clearance keeps an action-ending route above
+    // the translucent bar while regular bottom tabs continue to use their measured height. Other
+    // platforms retain the existing safe-area/measured-tab behavior.
     const bottomInset = getScreenScrollBottomInset(
       tabBarHeight,
       safeAreaInsets.bottom,
-      tabBarClearance === 'native' ? spacing.xxl : 0,
+      tabBarClearance === 'native' && Platform.OS === 'ios' ? spacing.xxl : 0,
     );
 
     return (
