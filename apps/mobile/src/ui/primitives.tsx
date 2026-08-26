@@ -25,7 +25,7 @@ import {
   type ImageStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, spacing, statusColors, typography, type StatusTone } from '../theme';
+import { colors, radii, spacing, statusColors, typography, type StatusTone } from '../theme';
 import { getScreenScrollBottomInset } from './screen-scroll-model';
 
 type AppTextProps = TextProps & {
@@ -301,6 +301,38 @@ export function AppIcon({
   );
 }
 
+/** Shared centered empty state for local laboratory surfaces. */
+export function LabEmptyState({
+  icon,
+  title,
+  body,
+  actionLabel,
+  onAction,
+}: {
+  readonly icon: AppIconName;
+  readonly title: string;
+  readonly body: string;
+  readonly actionLabel: string;
+  readonly onAction: () => void;
+}) {
+  return (
+    <View style={styles.labEmptyState}>
+      <View accessibilityElementsHidden style={styles.labEmptySymbol}>
+        <AppIcon color={colors.accent} name={icon} size={30} />
+      </View>
+      <View style={styles.labEmptyCopy}>
+        <AppText style={styles.labEmptyTitle} variant="title">
+          {title}
+        </AppText>
+        <AppText style={styles.labEmptyBody}>{body}</AppText>
+      </View>
+      <AppButton label={actionLabel} onPress={onAction} style={styles.labEmptyImportButton}>
+        <AppIcon color={colors.onAccent} name="plus" size={17} />
+      </AppButton>
+    </View>
+  );
+}
+
 export function GroupedRow({
   children,
   icon,
@@ -385,4 +417,26 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   groupedRowBody: { flex: 1, gap: spacing.xs },
+  labEmptyState: {
+    alignItems: 'center',
+    flex: 1,
+    gap: spacing.md,
+    justifyContent: 'center',
+    maxWidth: 440,
+    paddingHorizontal: spacing.lg,
+    width: '100%',
+  },
+  labEmptySymbol: {
+    alignItems: 'center',
+    backgroundColor: colors.disabledFill,
+    borderCurve: 'continuous',
+    borderRadius: radii.lg,
+    height: 72,
+    justifyContent: 'center',
+    width: 72,
+  },
+  labEmptyCopy: { alignItems: 'center', gap: spacing.xs, maxWidth: 340 },
+  labEmptyTitle: { textAlign: 'center' },
+  labEmptyBody: { color: colors.mutedInk, textAlign: 'center' },
+  labEmptyImportButton: { alignSelf: 'stretch' },
 });

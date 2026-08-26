@@ -19,12 +19,14 @@ identity, copy, scores, ranges, or medical conclusions are reproduced.
 | InsideTracker Bloodwork | Biomarker collections support compact scanning. | Library tests a data-oriented index, excluding proprietary scoring. |
 | Guava lab trend | Longitudinal results make time the primary relationship. | Timeline makes report chronology the organizing spine. |
 | Ornament lab-results overview | Biomarker and report collections coexist as separate groupings. | Library shows an index and source reports as distinct sections. |
-| Pinned T3 Code mobile project/session screens | Native titles, restrained semantic surfaces, and dense rows produce hierarchy without decorative cards. | All variants use system titles/colors and reserve shaped surfaces for harness or summaries. |
+| Pinned T3 Code mobile implementation at `be7d35aaeb49a04483ec5e0d2284e8b5b70a3b6e` | Direct code/build inspection of `HomeScreen.tsx`, `EmptyState.tsx`, `FileTreeBrowser.tsx`, and `Stack.tsx`: native stack titles, compact rows, semantic surfaces, and native press states. No direct screenshot access was claimed. | All variants use system titles/colors, compact rows, and reserve shaped surfaces for harness or summaries. |
 
 Public sources: Apple Health product/support pages, Apple Files App Store and iPhone User Guide,
 Johns Hopkins MyChart guidance, Function Health product/Google Play imagery, InsideTracker App Store
 and Bloodwork pages, Guava product/lab-results pages, Ornament product/app pages, and the pinned T3
-Code mobile implementation described in `docs/REFERENCE-REPOS.md`.
+Code mobile implementation described in `docs/REFERENCE-REPOS.md`. T3 patterns were verified by
+checking the pinned revision's source/build material in a disposable checkout; this pass did not
+use or imply direct access to a T3 screenshot or simulator window.
 
 Direction hypotheses:
 

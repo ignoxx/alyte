@@ -34,6 +34,13 @@ export const spacing = {
   xxl: 40,
 } as const;
 
+/** Continuous corner scale used by shaped surfaces; keep screen-level radii on this scale. */
+export const radii = {
+  sm: 10,
+  md: 16,
+  lg: 22,
+} as const;
+
 export const typography = StyleSheet.create({
   display: { fontSize: 30, lineHeight: 36, fontWeight: '700' },
   title: { fontSize: 24, lineHeight: 30, fontWeight: '700' },

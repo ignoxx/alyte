@@ -8,8 +8,8 @@ import type { HomeStackParamList } from '../../navigation/types';
 import { dispatchHomeQuickActionFromStack } from '../../navigation/parent-tab';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
-import { colors, screenStyles, spacing } from '../../theme';
+import { AppButton, AppIcon, AppText, LabEmptyState, ScreenScrollView } from '../../ui/primitives';
+import { colors, radii, screenStyles, spacing } from '../../theme';
 import {
   buildHomeLabViewModel,
   type HomeLabViewModel,
@@ -78,20 +78,13 @@ function ReportRow({
 
 function EmptyHome({ onImport }: { readonly onImport: () => void }) {
   return (
-    <View style={styles.emptyState}>
-      <View accessibilityElementsHidden style={styles.heroSymbol}>
-        <AppIcon color={colors.accent} name="doc" size={30} />
-      </View>
-      <View style={styles.emptyCopy}>
-        <AppText style={styles.emptyTitle} variant="title">
-          {t('home.emptyTitle')}
-        </AppText>
-        <AppText style={styles.emptyBody}>{t('home.emptyBody')}</AppText>
-      </View>
-      <AppButton label={t('home.importAction')} onPress={onImport} style={styles.importButton}>
-        <AppIcon color={colors.onAccent} name="plus" size={17} />
-      </AppButton>
-    </View>
+    <LabEmptyState
+      actionLabel={t('home.importAction')}
+      icon="doc"
+      onAction={onImport}
+      body={t('home.emptyBody')}
+      title={t('home.emptyTitle')}
+    />
   );
 }
 
@@ -373,27 +366,6 @@ export function HomeScreen() {
 const styles = StyleSheet.create({
   sections: { gap: spacing.lg, paddingBottom: spacing.lg },
   section: { gap: spacing.sm },
-  emptyState: {
-    alignItems: 'center',
-    flex: 1,
-    gap: spacing.md,
-    justifyContent: 'center',
-    maxWidth: 440,
-    paddingHorizontal: spacing.lg,
-    width: '100%',
-  },
-  heroSymbol: {
-    alignItems: 'center',
-    backgroundColor: colors.disabledFill,
-    borderCurve: 'continuous',
-    borderRadius: 20,
-    height: 72,
-    justifyContent: 'center',
-    width: 72,
-  },
-  emptyCopy: { alignItems: 'center', gap: spacing.xs, maxWidth: 340 },
-  emptyTitle: { textAlign: 'center' },
-  emptyBody: { color: colors.mutedInk, textAlign: 'center' },
   importButton: { alignSelf: 'stretch' },
   eyebrow: {
     color: colors.mutedInk,
@@ -407,7 +379,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentSoft,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 14,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     gap: spacing.xs,
     padding: spacing.md,
@@ -416,7 +388,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderColor: colors.accent,
     borderCurve: 'continuous',
-    borderRadius: 14,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: spacing.sm,

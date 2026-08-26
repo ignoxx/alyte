@@ -7,7 +7,7 @@ import { formatLocaleDate, type LabRecord, type LabReport, type SpecimenType } f
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
+import { AppButton, AppIcon, AppText, LabEmptyState, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { listHistoryEntries } from './biomarker-history-model';
 import { summarizeLabReport } from './lab-read-model';
@@ -111,24 +111,13 @@ export function LabsScreen() {
           </View>
         )}
         {isEmptyState && (
-          <View style={styles.emptyState}>
-            <View accessibilityElementsHidden style={styles.emptySymbol}>
-              <AppIcon color={colors.accent} name="addDocument" size={30} />
-            </View>
-            <View style={styles.emptyCopy}>
-              <AppText style={styles.emptyTitle} variant="title">
-                {t('labs.emptyTitle')}
-              </AppText>
-              <AppText style={styles.emptyBody}>{t('labs.emptyBody')}</AppText>
-            </View>
-            <AppButton
-              label={t('labs.action')}
-              onPress={() => openReportImportFromStack(navigation)}
-              style={styles.importButton}
-            >
-              <AppIcon color={colors.onAccent} name="plus" size={17} />
-            </AppButton>
-          </View>
+          <LabEmptyState
+            actionLabel={t('labs.action')}
+            icon="addDocument"
+            onAction={() => openReportImportFromStack(navigation)}
+            body={t('labs.emptyBody')}
+            title={t('labs.emptyTitle')}
+          />
         )}
         {!loading && !error && !isEmptyState && (
           <View style={styles.sections}>
@@ -253,27 +242,6 @@ const styles = StyleSheet.create({
   sections: { gap: spacing.lg, paddingBottom: spacing.lg },
   section: { gap: spacing.xs },
   sectionLabel: { color: colors.mutedInk, textTransform: 'uppercase' },
-  emptyState: {
-    alignItems: 'center',
-    flex: 1,
-    gap: spacing.md,
-    justifyContent: 'center',
-    maxWidth: 440,
-    paddingHorizontal: spacing.lg,
-    width: '100%',
-  },
-  emptySymbol: {
-    alignItems: 'center',
-    backgroundColor: colors.disabledFill,
-    borderCurve: 'continuous',
-    borderRadius: 20,
-    height: 72,
-    justifyContent: 'center',
-    width: 72,
-  },
-  emptyCopy: { alignItems: 'center', gap: spacing.xs, maxWidth: 340 },
-  emptyTitle: { textAlign: 'center' },
-  emptyBody: { color: colors.mutedInk, textAlign: 'center' },
   importButton: { alignSelf: 'stretch' },
   manualAction: { alignSelf: 'flex-start' },
   listRow: {
