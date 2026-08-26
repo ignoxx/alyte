@@ -1,5 +1,27 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import appConfig from '../apps/mobile/app.config.js';
+
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const mobileRoot = resolve(repositoryRoot, 'apps/mobile');
+const require = createRequire(import.meta.url);
+const expoCliPath = require.resolve('expo/bin/cli', { paths: [mobileRoot] });
+
+function readExpoIntrospection(variant) {
+  const output = execFileSync(
+    process.execPath,
+    [expoCliPath, 'config', '--type', 'introspect', '--json'],
+    {
+      cwd: mobileRoot,
+      env: { ...process.env, APP_VARIANT: variant },
+      encoding: 'utf8',
+    },
+  );
+  return JSON.parse(output);
+}
 
 const expected = {
   development: 'com.alyte.app.dev',
@@ -8,8 +30,7 @@ const expected = {
 };
 
 for (const [variant, bundleIdentifier] of Object.entries(expected)) {
-  process.env.APP_VARIANT = variant;
-  const config = appConfig({ config: {} });
+  const config = readExpoIntrospection(variant);
   assert.equal(config.ios.bundleIdentifier, bundleIdentifier);
   assert.equal(config.ios.deploymentTarget, '26.0');
   assert.equal(config.ios.entitlements['com.apple.developer.kernel.increased-memory-limit'], true);
