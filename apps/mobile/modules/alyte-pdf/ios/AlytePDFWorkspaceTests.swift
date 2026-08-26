@@ -4,6 +4,17 @@ import XCTest
 @testable import AlytePDF
 
 final class AlytePDFWorkspaceTests: XCTestCase {
+  func testExistingRedactionsRemainInteractiveOutsideRedactMode() {
+    XCTAssertTrue(AlytePDFWorkspaceGeometry.overlayInteractionEnabled(inspectionMode: false))
+    XCTAssertFalse(AlytePDFWorkspaceGeometry.overlayInteractionEnabled(inspectionMode: true))
+    XCTAssertTrue(
+      AlytePDFWorkspaceGeometry.canCreateRedaction(redactMode: true, inspectionMode: false))
+    XCTAssertFalse(
+      AlytePDFWorkspaceGeometry.canCreateRedaction(redactMode: false, inspectionMode: false))
+    XCTAssertFalse(
+      AlytePDFWorkspaceGeometry.canCreateRedaction(redactMode: true, inspectionMode: true))
+  }
+
   func testEditGestureIsSingleTouchOnly() {
     XCTAssertEqual(AlytePDFWorkspaceGeometry.editGestureMinimumTouches, 1)
     XCTAssertEqual(AlytePDFWorkspaceGeometry.editGestureMaximumTouches, 1)

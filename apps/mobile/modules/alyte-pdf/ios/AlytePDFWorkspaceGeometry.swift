@@ -84,6 +84,17 @@ public enum AlytePDFWorkspaceGeometry {
   public static let editGestureMinimumTouches = 1
   public static let editGestureMaximumTouches = 1
 
+  /// Existing redactions remain selectable/editable when the Redact mode button is off. Only
+  /// inspection mode makes the overlay read-only; blank-space creation is gated separately by
+  /// `canCreateRedaction` so PDFKit keeps ownership of native navigation everywhere else.
+  public static func overlayInteractionEnabled(inspectionMode: Bool) -> Bool {
+    !inspectionMode
+  }
+
+  public static func canCreateRedaction(redactMode: Bool, inspectionMode: Bool) -> Bool {
+    redactMode && !inspectionMode
+  }
+
   /// Selects resize handles first, then redaction bodies with a minimum touch target. Returning
   /// nil for blank space is intentional: the stable overlay recognizer fails there, allowing the
   /// native PDFKit pan and pinch recognizers to own the touch.

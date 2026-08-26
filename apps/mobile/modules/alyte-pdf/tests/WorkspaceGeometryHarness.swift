@@ -8,6 +8,14 @@ enum WorkspaceGeometryHarness {
   }
 
   static func main() {
+    precondition(AlytePDFWorkspaceGeometry.overlayInteractionEnabled(inspectionMode: false))
+    precondition(!AlytePDFWorkspaceGeometry.overlayInteractionEnabled(inspectionMode: true))
+    precondition(
+      AlytePDFWorkspaceGeometry.canCreateRedaction(redactMode: true, inspectionMode: false))
+    precondition(
+      !AlytePDFWorkspaceGeometry.canCreateRedaction(redactMode: false, inspectionMode: false))
+    precondition(
+      !AlytePDFWorkspaceGeometry.canCreateRedaction(redactMode: true, inspectionMode: true))
     precondition(AlytePDFWorkspaceGeometry.editGestureMinimumTouches == 1)
     precondition(AlytePDFWorkspaceGeometry.editGestureMaximumTouches == 1)
 

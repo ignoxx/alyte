@@ -74,7 +74,8 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   var inspectionMode = false {
     didSet {
       guard oldValue != inspectionMode else { return }
-      overlay.isUserInteractionEnabled = redactMode && !inspectionMode
+      overlay.isUserInteractionEnabled = AlytePDFWorkspaceGeometry.overlayInteractionEnabled(
+        inspectionMode: inspectionMode)
       if inspectionMode { clearSelection() }
       layoutRegions()
     }
@@ -91,7 +92,10 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   }
   var redactMode = false {
     didSet {
-      overlay.isUserInteractionEnabled = redactMode && !inspectionMode
+      // Keep existing redaction targets interactive outside Redact mode. Blank-space hit testing
+      // still bypasses this overlay, so only Redact mode can create a new target there.
+      overlay.isUserInteractionEnabled = AlytePDFWorkspaceGeometry.overlayInteractionEnabled(
+        inspectionMode: inspectionMode)
       if !redactMode { clearSelection() }
     }
   }
@@ -109,6 +113,8 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
     pdfView.backgroundColor = .secondarySystemBackground
     addSubview(pdfView)
     overlay.backgroundColor = .clear
+    overlay.isUserInteractionEnabled = AlytePDFWorkspaceGeometry.overlayInteractionEnabled(
+      inspectionMode: inspectionMode)
     addSubview(overlay)
     let doubleTap = UITapGestureRecognizer(target: self, action: #selector(doubleTapped(_:)))
     doubleTap.numberOfTapsRequired = 2
@@ -420,13 +426,13 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
   }
 
   @objc private func tapped(_ gesture: UITapGestureRecognizer) {
-    guard redactMode else { return }
     let point = gesture.location(in: overlay)
     if let target = gestureTarget(at: point) {
       // Use the same expanded hit target as the stable pan recognizer so a tap just outside a
       // small redaction selects it instead of accidentally creating a second redaction.
       setSelection(target.id)
-    } else if redactMode,
+    } else if AlytePDFWorkspaceGeometry.canCreateRedaction(
+      redactMode: redactMode, inspectionMode: inspectionMode),
       let rect = normalizedRect(CGRect(x: point.x - 55, y: point.y - 18, width: 110, height: 36))
     {
       history.append(regions)
@@ -435,7 +441,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
       regions.append(WorkspaceRedaction(id: id, rect: rect))
       setSelection(id)
       emit()
-    } else {
+    } else if redactMode {
       setSelection(nil)
     }
     layoutRegions()
@@ -456,7 +462,7 @@ final class AlytePDFWorkspaceView: ExpoView, UIGestureRecognizerDelegate {
 
   override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
     guard gestureRecognizer === overlayPan else { return true }
-    guard redactMode, !inspectionMode else {
+    guard !inspectionMode else {
       pendingOverlayGestureTarget = nil
       overlayGestureRole = nil
       return false
