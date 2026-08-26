@@ -20,6 +20,12 @@ enum AlyteLocalModelCoreCompletion {
   case failed(AlyteLocalModelError)
 }
 
+/// Store-facing admission result. Only `.transfer` permits the URLSession adapter to start work.
+enum AlyteLocalModelDownloadAdmission {
+  case ready([String: Any])
+  case transfer(offset: Int64)
+}
+
 /// The production, transport-independent pack lifecycle.
 ///
 /// URLSession, UIKit notifications, and the real llama.cpp factory are adapters around this type.
@@ -128,6 +134,18 @@ final class AlyteLocalModelCore: @unchecked Sendable {
 
   func verifyReady() throws -> Bool {
     try verifyReadyFile(at: readyURL)
+  }
+
+  /// Reconciles an existing final artifact before creating any partial download state.
+  func admitDownload() throws -> AlyteLocalModelDownloadAdmission {
+    if stateValue == .failed || stateValue == .notInstalled {
+      reconcileInstalledPack()
+    }
+    if stateValue == .ready || stateValue == .loaded {
+      guard try verifyReady() else { throw AlyteLocalModelError.failed(.checksumMismatch) }
+      return .ready(stateDictionary())
+    }
+    return .transfer(offset: try prepareDownload())
   }
 
   @discardableResult
@@ -293,6 +311,23 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     }
     setState(.loaded, failure: nil)
     return stateDictionary()
+  }
+
+  /// Activates verified bytes while keeping transient runtime failures separate from transfer
+  /// integrity. The Store calls this boundary directly, and a retry can reuse the same final file.
+  func activateVerifiedPack() throws -> [String: Any] {
+    do {
+      return try load()
+    } catch {
+      let localError = (error as? AlyteLocalModelError) ?? .failed(.runtimeFailed)
+      if localError.failure != .unavailable &&
+          localError.failure != .runtimeFailed &&
+          localError.failure != .incompatible &&
+          localError.failure != .cancelled {
+        fail(localError)
+      }
+      throw localError
+    }
   }
 
   func infer(prompt: String, maxOutputTokens: Int, outputCapacity: Int) throws -> String {

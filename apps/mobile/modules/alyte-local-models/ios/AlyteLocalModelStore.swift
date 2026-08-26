@@ -88,26 +88,16 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
     return try await withCheckedThrowingContinuation { continuation in
       queue.async {
         do {
-          // Loading a verified pack is a separate activation step. If activation failed after
-          // the bytes were promoted (for example because the runtime was temporarily
-          // unavailable), the core may still be carrying a terminal failure state even though
-          // the final artifact is intact. Reconcile that artifact before deciding to create a
-          // new partial download. This hashes the existing file, but it never replaces or
-          // redownloads a verified pack.
-          if self.downloadTask == nil && (self.core.state == .failed || self.core.state == .notInstalled) {
-            self.core.reconcileInstalledPack()
-          }
-          if self.core.state == .ready || self.core.state == .loaded {
-            guard try self.core.verifyReady() else { throw AlyteLocalModelError.failed(.checksumMismatch) }
-            continuation.resume(returning: self.core.currentState())
-            return
-          }
           if self.downloadTask != nil {
             continuation.resume(returning: self.core.currentState())
             return
           }
-          let offset = try self.core.prepareDownload()
-          self.beginDownload(offset: offset) { result in continuation.resume(with: result) }
+          switch try self.core.admitDownload() {
+          case .ready(let state):
+            continuation.resume(returning: state)
+          case .transfer(let offset):
+            self.beginDownload(offset: offset) { result in continuation.resume(with: result) }
+          }
         } catch {
           let localError = (error as? AlyteLocalModelError) ?? AlyteLocalModelError.failed(.runtimeFailed)
           self.fail(localError)
@@ -143,20 +133,9 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
     return try await withCheckedThrowingContinuation { continuation in
       queue.async {
         do {
-          continuation.resume(returning: try self.core.load())
+          continuation.resume(returning: try self.core.activateVerifiedPack())
         } catch {
           let localError = (error as? AlyteLocalModelError) ?? AlyteLocalModelError.failed(.runtimeFailed)
-          // A failed runtime activation must not turn an already verified artifact into a
-          // download failure. Keeping the native state ready makes the next retry an activation
-          // attempt, while integrity and storage failures still become visible terminal states.
-          // Integrity failures still demote the state so the next download can replace the
-          // corrupt artifact safely.
-          if localError.failure != .unavailable &&
-              localError.failure != .runtimeFailed &&
-              localError.failure != .incompatible &&
-              localError.failure != .cancelled {
-            self.fail(localError)
-          }
           continuation.resume(throwing: localError)
         }
       }

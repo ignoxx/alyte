@@ -1,5 +1,6 @@
 import {
   LOCAL_MODEL_FAILURES,
+  canCompleteModelOnboarding,
   hasResumableModelDownload,
   type LocalModelFailure,
   type LocalModelSnapshot,
@@ -20,6 +21,17 @@ export function modelProgressPercent(snapshot: LocalModelSnapshot): number {
 }
 
 export type ModelDownloadAction = 'download' | 'continue' | 'retry' | 'none';
+export type ModelFailureRecoveryAction = 'activate' | 'download';
+
+/**
+ * A verified final pack recovers by activating its runtime. Only an absent, partial, or failed
+ * transfer may enter the download path, so a transient load failure cannot spend bandwidth again.
+ */
+export function modelFailureRecoveryAction(
+  snapshot: LocalModelSnapshot | null,
+): ModelFailureRecoveryAction {
+  return snapshot !== null && canCompleteModelOnboarding(snapshot) ? 'activate' : 'download';
+}
 
 /** Keeps a retained partial distinct from a fresh failure in both model-management screens. */
 export function modelDownloadAction(snapshot: LocalModelSnapshot | null): ModelDownloadAction {

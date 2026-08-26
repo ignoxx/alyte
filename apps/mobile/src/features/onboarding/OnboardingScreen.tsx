@@ -22,6 +22,7 @@ import {
   isExpectedDownloadCancellation,
   modelFailureFromError,
   modelFailureMessageKey,
+  modelFailureRecoveryAction,
   modelDownloadAction,
   modelStatusTone,
 } from '../local-models/model-ui';
@@ -106,6 +107,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   const downloading = snapshot !== null && isModelDownloadActive(snapshot);
   const downloadAction = modelDownloadAction(snapshot);
   const resumable = downloadAction === 'continue';
+  const failureRecoveryAction = modelFailureRecoveryAction(snapshot);
 
   async function startDownload() {
     cancellationRequestedRef.current = false;
@@ -262,7 +264,9 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               <AppButton
                 disabled={busy}
                 label={t('onboarding.modelRetry')}
-                onPress={() => void startDownload()}
+                onPress={() =>
+                  void (failureRecoveryAction === 'activate' ? enterAlyte() : startDownload())
+                }
                 tone="secondary"
               />
             </AppSurface>
@@ -316,7 +320,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               onPress={() => void cancelDownload()}
               tone="quiet"
             />
-          ) : ready && selected ? (
+          ) : ready && selected && modelFailure === null ? (
             <AppButton
               disabled={busy}
               label={busy ? t('onboarding.modelEntering') : t('onboarding.continue')}

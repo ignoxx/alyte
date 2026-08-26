@@ -112,20 +112,23 @@ final class NativeModelHarnessTests: XCTestCase {
     core.reconcileInstalledPack()
 
     XCTAssertEqual(core.state, .ready)
-    XCTAssertThrowsError(try core.load())
+    XCTAssertThrowsError(try core.activateVerifiedPack())
     XCTAssertEqual(core.state, .ready)
     XCTAssertEqual(core.failure, nil)
     XCTAssertTrue(FileManager.default.fileExists(atPath: core.readyURL.path))
     XCTAssertFalse(FileManager.default.fileExists(atPath: core.partialURL.path))
 
-    // Model management retries activation after a runtime failure. It must rediscover the same
-    // verified artifact rather than requiring a fresh download.
-    core.markFailed(.failed(.runtimeFailed))
-    core.reconcileInstalledPack()
-    XCTAssertEqual(core.state, .ready)
+    // This is the exact admission boundary called by Store before URLSession can begin. A ready
+    // result proves neither a partial nor a network transfer is admitted after activation fails.
+    switch try core.admitDownload() {
+    case .ready(let state):
+      XCTAssertEqual(state["state"] as? String, "ready")
+    case .transfer:
+      XCTFail("verified final artifact must not admit a network transfer")
+    }
     XCTAssertFalse(FileManager.default.fileExists(atPath: core.partialURL.path))
     shouldFail = false
-    XCTAssertEqual(try core.load()["state"] as? String, "loaded")
+    XCTAssertEqual(try core.activateVerifiedPack()["state"] as? String, "loaded")
   }
 
   func testIdleTimerPolicyOnlyAwakesForegroundTransfers() {

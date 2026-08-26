@@ -6,6 +6,7 @@ import {
   isExpectedDownloadCancellation,
   modelFailureFromError,
   modelFailureMessageKey,
+  modelFailureRecoveryAction,
   modelDownloadAction,
   modelOperation,
   modelProgressPercent,
@@ -138,6 +139,30 @@ test('native load failures keep their typed category separate from bridge unavai
     'unavailable',
   );
   assert.equal(modelFailureFromError(new Error('model could not load')), 'unknown');
+});
+
+test('a verified pack retries activation and never selects the download path', () => {
+  const initial = notInstalledSnapshot(productionLocalModelManifest);
+  const ready = {
+    ...initial,
+    state: 'ready' as const,
+    bytesReceived: initial.expectedBytes,
+    progress: 1,
+  };
+
+  assert.equal(modelFailureRecoveryAction(ready), 'activate');
+  assert.equal(modelFailureRecoveryAction({ ...ready, state: 'loaded' }), 'activate');
+  assert.equal(modelFailureRecoveryAction(initial), 'download');
+  assert.equal(
+    modelFailureRecoveryAction({
+      ...initial,
+      state: 'failed',
+      bytesReceived: 100,
+      progress: 100 / initial.expectedBytes,
+      failure: 'interrupted',
+    }),
+    'download',
+  );
 });
 
 test('download size formatting follows the device locale and localized unit keys', () => {
