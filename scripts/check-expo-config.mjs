@@ -24,20 +24,29 @@ function readExpoIntrospection(variant) {
 }
 
 const expected = {
-  development: 'com.alyte.app.dev',
-  preview: 'com.alyte.app.preview',
-  production: 'com.alyte.app',
+  development: { bundleIdentifier: 'com.alyte.app.dev', extendedVirtualAddressing: false },
+  preview: { bundleIdentifier: 'com.alyte.app.preview', extendedVirtualAddressing: true },
+  production: { bundleIdentifier: 'com.alyte.app', extendedVirtualAddressing: true },
 };
 
-for (const [variant, bundleIdentifier] of Object.entries(expected)) {
+for (const [variant, policy] of Object.entries(expected)) {
   const config = readExpoIntrospection(variant);
-  assert.equal(config.ios.bundleIdentifier, bundleIdentifier);
+  assert.equal(config.ios.bundleIdentifier, policy.bundleIdentifier);
   assert.equal(config.ios.deploymentTarget, '26.0');
   assert.equal(config.ios.entitlements['com.apple.developer.kernel.increased-memory-limit'], true);
   assert.equal(
-    config.ios.entitlements['com.apple.developer.kernel.extended-virtual-addressing'],
-    true,
+    Object.hasOwn(
+      config.ios.entitlements,
+      'com.apple.developer.kernel.extended-virtual-addressing',
+    ),
+    policy.extendedVirtualAddressing,
   );
+  if (policy.extendedVirtualAddressing) {
+    assert.equal(
+      config.ios.entitlements['com.apple.developer.kernel.extended-virtual-addressing'],
+      true,
+    );
+  }
   assert.equal(config.extra.variant, variant);
   assert.equal(config.extra.apiEnvironment, variant === 'production' ? 'production' : 'none');
   assert.equal(config.extra.showcaseAllowed, variant !== 'production');
@@ -62,8 +71,8 @@ assert.equal(
   true,
 );
 
-assert.notEqual(expected.development, expected.preview);
-assert.notEqual(expected.preview, expected.production);
+assert.notEqual(expected.development.bundleIdentifier, expected.preview.bundleIdentifier);
+assert.notEqual(expected.preview.bundleIdentifier, expected.production.bundleIdentifier);
 process.env.APP_VARIANT = 'typo';
 assert.throws(() => appConfig({ config: {} }), /Unknown APP_VARIANT/);
 process.stdout.write('Expo app variants are valid.\n');

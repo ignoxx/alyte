@@ -1,15 +1,18 @@
 # Issue 85 — increased-memory entitlement
 
 `apps/mobile/app.config.js` declares Apple's supported
-`com.apple.developer.kernel.increased-memory-limit` entitlement for every iOS variant. Issue #89
-adds the related `com.apple.developer.kernel.extended-virtual-addressing` entitlement through the
-same additive merge, so upstream/config entitlements remain intact. The configuration intentionally
-does not declare Increased Debugging Memory Limit.
+`com.apple.developer.kernel.increased-memory-limit` entitlement for every iOS variant. Preview and
+production add the related `com.apple.developer.kernel.extended-virtual-addressing` entitlement
+through the same additive merge, so upstream/config entitlements remain intact. Development omits
+Extended Virtual Addressing by default because Apple Personal Team profiles do not support that
+capability. The configuration intentionally does not declare Increased Debugging Memory Limit.
 
 The focused config check invokes the installed Expo CLI's `config --type introspect --json` pipeline
-for the development, preview, and production variants and asserts the entitlement in each emitted
-configuration. It separately exercises the dynamic config with an upstream entitlement to verify
-that the merge remains additive.
+for the development, preview, and production variants and asserts the exact variant policy: only
+preview and production emit Extended Virtual Addressing, while development emits only Increased
+Memory Limit. It separately exercises the dynamic config with an upstream entitlement to verify
+that the merge remains additive. A development build is therefore not evidence for the full
+production memory entitlement set; that requires a distribution-capable signed build.
 
 This is a supported-device best-effort capability. It does not change model packaging, runtime
 behavior, user-facing copy, report data, or retry/download semantics. Because entitlements are
