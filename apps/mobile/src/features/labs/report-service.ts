@@ -500,7 +500,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
 
   async function repository(): Promise<LabRepository> {
     repositoryPromise ??= repositoryFactory();
-    return repositoryPromise;
+    const pending = repositoryPromise;
+    try {
+      return await pending;
+    } catch (error) {
+      if (repositoryPromise === pending) repositoryPromise = null;
+      throw error;
+    }
   }
 
   async function ensureInitialized(): Promise<void> {

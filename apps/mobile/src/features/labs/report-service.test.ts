@@ -572,6 +572,24 @@ function recordFromMeasurements(
 }
 
 describe('protected Lab Report import lifecycle', () => {
+  test('retries a failed report repository open on the next local read', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    let attempts = 0;
+    const reports = createLabReportsService({
+      repositoryFactory: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('temporary report database open failure');
+        return repository;
+      },
+      fileService: files,
+    });
+
+    await assert.rejects(reports.listReports(), /temporary report database open failure/);
+    assert.deepEqual(await reports.listReports(), []);
+    assert.equal(attempts, 2);
+  });
+
   test('exercises the synthetic Lithuanian, English, and German extraction fixtures', () => {
     const aliases = createDefaultExtractionAliases();
     const counts = Object.fromEntries(

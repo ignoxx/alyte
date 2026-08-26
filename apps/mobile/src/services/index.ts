@@ -12,9 +12,13 @@ import {
   createLabReportsService,
   type LabReportsService,
 } from '../features/labs/report-service';
-import { openProtectedLabDatabase } from '../features/labs/persistence';
-import { createIntakeService, type IntakeService } from '../features/intake/service';
-import { openProtectedIntakeDatabase } from '../features/intake/persistence';
+import { openProtectedLabDatabase, type LabRepository } from '../features/labs/persistence';
+import {
+  createIntakeService,
+  type IntakeMediaStore,
+  type IntakeService,
+} from '../features/intake/service';
+import { openProtectedIntakeDatabase, type IntakeRepository } from '../features/intake/persistence';
 import { createProtectedIntakeMediaStore } from '../features/intake/media-store';
 import {
   createDefaultLocalExportService,
@@ -49,18 +53,30 @@ export interface AlyteServices {
   readonly models: LocalModelService;
 }
 
+export type ServicesCompositionOptions = {
+  /** Test seam for the native-backed shared local database open. */
+  readonly openLabDatabase?: () => Promise<LabRepository>;
+  /** Test seam for the native-backed shared local database open. */
+  readonly openIntakeDatabase?: () => Promise<IntakeRepository>;
+  /** Test seam for recovery reconciliation without touching device media. */
+  readonly intakeMediaStore?: IntakeMediaStore;
+};
+
 export function runtimeVariant(): RuntimeVariant {
   const value = process.env.EXPO_PUBLIC_APP_VARIANT ?? process.env.APP_VARIANT;
   return value === 'preview' || value === 'production' ? value : 'development';
 }
 
-export function createServices(variant: RuntimeVariant = runtimeVariant()): AlyteServices {
+export function createServices(
+  variant: RuntimeVariant = runtimeVariant(),
+  options: ServicesCompositionOptions = {},
+): AlyteServices {
   const requestedShowcase = process.env.EXPO_PUBLIC_SHOWCASE_MODE === 'true';
   const showcase = loadShowcaseSnapshot(variant, requestedShowcase && variant !== 'production');
 
   const { repositoryFactory, intakeRepositoryFactory } = createSharedDatabaseRepositoryFactories(
-    openProtectedLabDatabase,
-    openProtectedIntakeDatabase,
+    options.openLabDatabase ?? openProtectedLabDatabase,
+    options.openIntakeDatabase ?? openProtectedIntakeDatabase,
   );
 
   const clock = { now: () => new Date() };
@@ -68,7 +84,7 @@ export function createServices(variant: RuntimeVariant = runtimeVariant()): Alyt
   const intake = createIntakeService({
     repositoryFactory: intakeRepositoryFactory,
     clock,
-    mediaStore: createProtectedIntakeMediaStore(),
+    mediaStore: options.intakeMediaStore ?? createProtectedIntakeMediaStore(),
   });
 
   const labs = createLabsService({ repositoryFactory });
