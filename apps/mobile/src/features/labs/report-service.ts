@@ -294,6 +294,24 @@ function verificationPassed(
   );
 }
 
+/**
+ * A standalone PDF recheck has no Original Report evidence to compare against. The persisted
+ * source-aware result remains the authoritative render-time gate; this predicate only confirms
+ * that the current derivative is still structurally safe to preview.
+ */
+function structuralVerificationPassed(verification: PdfSanitizedVerification): boolean {
+  return (
+    verification.verified &&
+    !verification.selectableText &&
+    !verification.annotations &&
+    !verification.attachments &&
+    !verification.metadata &&
+    !verification.removableRedactions &&
+    verification.reloadChecked &&
+    verification.failureReasons.length === 0
+  );
+}
+
 function persistedVerificationPassed(
   verification: SanitizedReportVerification | null,
   sourceType: LabReport['sourceType'],
@@ -1122,18 +1140,27 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       throw new LabReportSanitizationError(id, 'The verified Sanitized Report hash changed');
     }
     const sourcePath = await openOriginal(id);
-    const verification =
-      report.sourceType === 'image'
-        ? await imageInspector.verifySanitized(artifactPath, sourcePath, derivative.recipe)
-        : pdfInspector.verifySanitized === undefined
-          ? (() => {
-              throw new LabReportSanitizationError(
-                id,
-                'Sanitized verification is unavailable on this device',
-              );
-            })()
-          : await pdfInspector.verifySanitized(artifactPath);
-    if (!verificationPassed(verification, report.sourceType)) {
+    let verification: PdfSanitizedVerification | ImageSanitizedVerification;
+    let passesVerification = false;
+    if (report.sourceType === 'image') {
+      // Image verification receives the Original Report and recipe, so it remains source-aware.
+      verification = await imageInspector.verifySanitized(
+        artifactPath,
+        sourcePath,
+        derivative.recipe,
+      );
+      passesVerification = verificationPassed(verification, 'image');
+    } else {
+      if (pdfInspector.verifySanitized === undefined) {
+        throw new LabReportSanitizationError(
+          id,
+          'Sanitized verification is unavailable on this device',
+        );
+      }
+      verification = await pdfInspector.verifySanitized(artifactPath);
+      passesVerification = structuralVerificationPassed(verification);
+    }
+    if (!passesVerification) {
       await fileService.remove(derivative.artifactPath);
       await (
         await repository()

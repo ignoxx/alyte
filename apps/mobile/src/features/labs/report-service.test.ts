@@ -309,6 +309,7 @@ const verifiedSanitized: PdfSanitizedVerification = {
 class SanitizingPdf extends FakePdf {
   readonly sanitizedPaths: string[] = [];
   verification: PdfSanitizedVerification = verifiedSanitized;
+  standaloneVerification: PdfSanitizedVerification = verifiedSanitized;
   files: FakeFiles | null = null;
 
   async sanitize(
@@ -328,7 +329,7 @@ class SanitizingPdf extends FakePdf {
   }
 
   async verifySanitized(_path: string): Promise<PdfSanitizedVerification> {
-    return this.verification;
+    return this.standaloneVerification;
   }
 }
 
@@ -2075,6 +2076,60 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(await files.exists(imported.originalPath!), true);
   });
 
+  test('previews a source-aware PDF when standalone verification is structural-only', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new SanitizingPdf();
+    pdf.files = files;
+    pdf.standaloneVerification = {
+      ...verifiedSanitized,
+      sourceAwareChecked: false,
+      sourceContentRemoved: false,
+    };
+    const service = createService(repository, files, pdf);
+    const imported = (await service.importPdf(source('sanitize-structural-preview')))!.report;
+    const saved = await service.saveSanitizedReport(
+      imported.id,
+      (await service.openSanitizationEditor(imported.id)).recipe,
+    );
+
+    assert.equal(saved.verification?.sourceAwareChecked, true);
+    const preview = await service.previewSanitizedReport(imported.id);
+    assert.equal(preview.artifactPath, saved.artifactPath);
+    assert.equal(preview.verification.sourceAwareChecked, false);
+    assert.equal(await files.exists(saved.artifactPath!), true);
+    assert.deepEqual(await service.getExtractionReadiness(imported.id), {
+      ready: true,
+      status: 'verified',
+    });
+  });
+
+  test('rejects a PDF preview when standalone structural verification detects source text', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new SanitizingPdf();
+    pdf.files = files;
+    const service = createService(repository, files, pdf);
+    const imported = (await service.importPdf(source('sanitize-structural-failure')))!.report;
+    const saved = await service.saveSanitizedReport(
+      imported.id,
+      (await service.openSanitizationEditor(imported.id)).recipe,
+    );
+    pdf.standaloneVerification = {
+      ...verifiedSanitized,
+      selectableText: true,
+      failureReasons: ['selectable-source-text'],
+    };
+
+    await assert.rejects(
+      service.previewSanitizedReport(imported.id),
+      /Sanitized Report no longer passes verification/,
+    );
+    assert.equal((await repository.getSanitizedReport(imported.id))?.verificationState, 'failed');
+    assert.equal(await files.exists(saved.artifactPath!), false);
+    assert.equal(await files.exists(imported.originalPath!), true);
+  });
+
   test('sanitizes an image locally without replacing the immutable original', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
@@ -2417,7 +2472,7 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(await files.exists(first.artifactPath!), false);
   });
 
-  test('preview invalidates a derivative after hash or structural tampering', async () => {
+  test('preview invalidates a derivative after hash tampering', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
     const pdf = new SanitizingPdf();
