@@ -4,6 +4,7 @@ import { applyLocalModelEvent, hasResumableModelDownload, notInstalledSnapshot }
 import {
   formatModelDownloadSize,
   isExpectedDownloadCancellation,
+  modelFailureFromError,
   modelFailureMessageKey,
   modelDownloadAction,
   modelOperation,
@@ -124,6 +125,19 @@ test('cancellation is only calm when a requested cancel has the typed cancelled 
   assert.equal(isExpectedDownloadCancellation({ failure: 'cancelled' }, false), false);
   assert.equal(isExpectedDownloadCancellation({ failure: 'runtime-failed' }, true), false);
   assert.equal(isExpectedDownloadCancellation(new Error('cancelled'), true), false);
+});
+
+test('native load failures keep their typed category separate from bridge unavailability', () => {
+  assert.equal(modelFailureFromError({ failure: 'runtime-failed' }), 'runtime-failed');
+  assert.equal(
+    modelFailureFromError({ failureCategory: 'checksum-mismatch' }),
+    'checksum-mismatch',
+  );
+  assert.equal(
+    modelFailureFromError({ userInfo: { failureCategory: 'unavailable' } }),
+    'unavailable',
+  );
+  assert.equal(modelFailureFromError(new Error('model could not load')), 'unknown');
 });
 
 test('download size formatting follows the device locale and localized unit keys', () => {

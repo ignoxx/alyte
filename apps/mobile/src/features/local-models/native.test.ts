@@ -44,3 +44,29 @@ test('native and JavaScript manifest identity mismatch fails closed before downl
   const service = createLocalModelService({ native: mismatchedNative });
   await assert.rejects(() => service.startDownload(), /local model module is unavailable/);
 });
+
+test('late native registration can recover without relaxing the manifest gate', async () => {
+  const native = createFakeLocalModelNativeModule();
+  let available = false;
+  const service = createLocalModelService({
+    resolveNative: () => (available ? native : null),
+  });
+
+  await assert.rejects(() => service.getState(), /local model module is unavailable/);
+  available = true;
+
+  assert.equal((await service.getState()).state, 'not-installed');
+  await assert.rejects(
+    () =>
+      createLocalModelService({
+        resolveNative: () => ({
+          ...native,
+          getManifest: () => ({
+            ...(native.getManifest() as Record<string, unknown>),
+            runtime: { revision: 'tampered' },
+          }),
+        }),
+      }).getState(),
+    /local model module is unavailable/,
+  );
+});

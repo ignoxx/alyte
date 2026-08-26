@@ -38,6 +38,8 @@ export type LocalModelService = {
 
 export type LocalModelServiceOptions = {
   readonly native?: NativeLocalModelsModule | null;
+  /** Test seam and startup recovery for a native module registered after service construction. */
+  readonly resolveNative?: () => NativeLocalModelsModule | null;
 };
 
 function canonical(value: unknown): unknown {
@@ -63,27 +65,40 @@ function nativeManifestMatches(value: unknown): boolean {
 }
 
 export function createLocalModelService(options: LocalModelServiceOptions = {}): LocalModelService {
-  let native: NativeLocalModelsModule | null;
-  if (options.native !== undefined) {
-    native = options.native;
-  } else {
-    native = resolveNativeModule();
-  }
-  // Native and JS must agree on the reviewed pack before any operation can proceed. A mismatch
-  // becomes the ordinary unavailable gate; it never falls back to a different model contract.
-  if (native !== null) {
-    try {
-      if (!nativeManifestMatches(native.getManifest())) native = null;
-    } catch {
-      native = null;
-    }
-  }
-  let snapshot = normalizeLocalModelSnapshot(native?.getState(), productionLocalModelManifest);
   const listeners = new Set<(value: LocalModelSnapshot) => void>();
-  native?.addListener?.('stateChanged', (value) => {
-    snapshot = normalizeLocalModelSnapshot(value, productionLocalModelManifest);
-    listeners.forEach((listener) => listener(snapshot));
-  });
+  let native: NativeLocalModelsModule | null = null;
+  let listenerNative: NativeLocalModelsModule | null = null;
+  let snapshot = normalizeLocalModelSnapshot(undefined, productionLocalModelManifest);
+  const discoverNative = options.resolveNative ?? resolveNativeModule;
+
+  function acceptNative(candidate: NativeLocalModelsModule | null): NativeLocalModelsModule | null {
+    if (candidate === null) return null;
+    // Native and JS must agree on the reviewed pack before any operation can proceed. A mismatch
+    // becomes the ordinary unavailable gate; it never falls back to a different model contract.
+    try {
+      if (!nativeManifestMatches(candidate.getManifest())) return null;
+    } catch {
+      return null;
+    }
+    native = candidate;
+    if (listenerNative !== candidate) {
+      candidate.addListener?.('stateChanged', (value) => {
+        snapshot = normalizeLocalModelSnapshot(value, productionLocalModelManifest);
+        listeners.forEach((listener) => listener(snapshot));
+      });
+      listenerNative = candidate;
+    }
+    return candidate;
+  }
+
+  function resolveNative(): NativeLocalModelsModule | null {
+    if (native !== null) return native;
+    if (options.native !== undefined) return null;
+    return acceptNative(discoverNative());
+  }
+
+  native = acceptNative(options.native !== undefined ? options.native : discoverNative());
+  snapshot = normalizeLocalModelSnapshot(native?.getState(), productionLocalModelManifest);
 
   function unavailable(): never {
     throw Object.assign(new Error('The local model module is unavailable'), {
@@ -91,8 +106,13 @@ export function createLocalModelService(options: LocalModelServiceOptions = {}):
     });
   }
 
+  function requireNative(): NativeLocalModelsModule {
+    const resolved = resolveNative();
+    if (resolved === null) unavailable();
+    return resolved;
+  }
+
   async function stateAfter(work: () => Promise<unknown> | unknown): Promise<LocalModelSnapshot> {
-    if (native === null) unavailable();
     const value = await work();
     snapshot = normalizeLocalModelSnapshot(value, productionLocalModelManifest);
     listeners.forEach((listener) => listener(snapshot));
@@ -102,8 +122,8 @@ export function createLocalModelService(options: LocalModelServiceOptions = {}):
   return {
     manifest: productionLocalModelManifest,
     getState: async () => {
-      if (native === null) unavailable();
-      snapshot = normalizeLocalModelSnapshot(native.getState(), productionLocalModelManifest);
+      const resolved = requireNative();
+      snapshot = normalizeLocalModelSnapshot(resolved.getState(), productionLocalModelManifest);
       return snapshot;
     },
     subscribe: (listener) => {
@@ -112,15 +132,15 @@ export function createLocalModelService(options: LocalModelServiceOptions = {}):
       return () => listeners.delete(listener);
     },
     startDownload: () =>
-      stateAfter(() => native?.startDownload(productionLocalModelManifest.pack.id)),
-    cancelDownload: () => stateAfter(() => native?.cancelDownload()),
-    load: () => stateAfter(() => native?.load(productionLocalModelManifest.pack.id)),
+      stateAfter(() => requireNative().startDownload(productionLocalModelManifest.pack.id)),
+    cancelDownload: () => stateAfter(() => requireNative().cancelDownload()),
+    load: () => stateAfter(() => requireNative().load(productionLocalModelManifest.pack.id)),
     infer: async (prompt) => {
-      if (native === null) unavailable();
+      const resolved = requireNative();
       if (snapshot.state !== 'loaded' || !snapshot.loaded) {
         throw Object.assign(new Error('The local model is not loaded'), { failure: 'unavailable' });
       }
-      const output = await native.infer(prompt, 256, 16_384);
+      const output = await resolved.infer(prompt, 256, 16_384);
       if (typeof output !== 'string') {
         throw Object.assign(new Error('The local model returned malformed output'), {
           failure: 'runtime-failed',
@@ -129,10 +149,11 @@ export function createLocalModelService(options: LocalModelServiceOptions = {}):
       return output;
     },
     cancelInference: () => {
-      native?.cancelInference();
+      resolveNative()?.cancelInference();
     },
-    unload: () => stateAfter(() => native?.unload()),
-    deletePack: () => stateAfter(() => native?.deletePack(productionLocalModelManifest.pack.id)),
+    unload: () => stateAfter(() => requireNative().unload()),
+    deletePack: () =>
+      stateAfter(() => requireNative().deletePack(productionLocalModelManifest.pack.id)),
   };
 }
 

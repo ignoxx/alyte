@@ -1,4 +1,5 @@
 import {
+  LOCAL_MODEL_FAILURES,
   hasResumableModelDownload,
   type LocalModelFailure,
   type LocalModelSnapshot,
@@ -91,6 +92,14 @@ function errorFailureCategory(error: unknown): unknown {
     readonly userInfo?: { readonly failureCategory?: unknown };
   };
   return candidate.failure ?? candidate.failureCategory ?? candidate.userInfo?.failureCategory;
+}
+
+/** Decodes native failures without turning every model error into a missing-module message. */
+export function modelFailureFromError(error: unknown): LocalModelFailure {
+  const category = errorFailureCategory(error);
+  return LOCAL_MODEL_FAILURES.includes(category as LocalModelFailure)
+    ? (category as LocalModelFailure)
+    : 'unknown';
 }
 
 /**

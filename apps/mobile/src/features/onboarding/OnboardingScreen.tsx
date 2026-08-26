@@ -20,6 +20,7 @@ import { ModelDetailsDisclosure } from '../local-models/ModelDetailsDisclosure';
 import { ModelProgress } from '../local-models/ModelProgress';
 import {
   isExpectedDownloadCancellation,
+  modelFailureFromError,
   modelFailureMessageKey,
   modelDownloadAction,
   modelStatusTone,
@@ -76,7 +77,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelled, setCancelled] = useState(false);
   const [cancelError, setCancelError] = useState(false);
-  const [bridgeUnavailable, setBridgeUnavailable] = useState(false);
+  const [modelFailure, setModelFailure] = useState<LocalModelSnapshot['failure']>(null);
   const cancellationRequestedRef = useRef(false);
 
   useEffect(() => {
@@ -89,11 +90,11 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
       .then((next) => {
         if (active) {
           setSnapshot(next);
-          setBridgeUnavailable(false);
+          setModelFailure(null);
         }
       })
       .catch(() => {
-        if (active) setBridgeUnavailable(true);
+        if (active) setModelFailure('unavailable');
       });
     return () => {
       active = false;
@@ -111,7 +112,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
     setSelected(true);
     setCancelled(false);
     setCancelError(false);
-    setBridgeUnavailable(false);
+    setModelFailure(null);
     setBusy(true);
     try {
       const installed = await model.startDownload();
@@ -127,11 +128,11 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
         setSelected(false);
         setCancelled(true);
         setCancelError(false);
-        setBridgeUnavailable(false);
+        setModelFailure(null);
       } else {
         // The native bridge emits a typed failure state. Keep the action retryable and do not write
         // the onboarding preference here.
-        setBridgeUnavailable(true);
+        setModelFailure(modelFailureFromError(error));
       }
     } finally {
       cancellationRequestedRef.current = false;
@@ -142,13 +143,13 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   async function enterAlyte() {
     if (!ready) return;
     setBusy(true);
-    setBridgeUnavailable(false);
+    setModelFailure(null);
     try {
       let current = snapshot;
       if (current?.state === 'ready') current = await model.load();
       if (current !== null && canCompleteModelOnboarding(current)) onComplete();
-    } catch {
-      setBridgeUnavailable(true);
+    } catch (error) {
+      setModelFailure(modelFailureFromError(error));
     } finally {
       setBusy(false);
     }
@@ -162,7 +163,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
       await model.cancelDownload();
       setSelected(false);
       setCancelled(true);
-      setBridgeUnavailable(false);
+      setModelFailure(null);
     } catch {
       // A failed cancellation is distinct from the expected rejection of startDownload after a
       // successful cancel. Leave the operation retryable and explain the next action.
@@ -220,12 +221,13 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               setSelected(true);
               setCancelled(false);
               setCancelError(false);
+              setModelFailure(null);
             }}
             selected={selected}
           />
           <ModelDetailsDisclosure manifest={model.manifest} />
 
-          {snapshot === null && !bridgeUnavailable ? (
+          {snapshot === null && modelFailure === null ? (
             <View accessibilityRole="progressbar" style={styles.checking}>
               <ActivityIndicator color={colors.accent as string} />
               <AppText style={styles.muted} selectable>
@@ -265,10 +267,10 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               />
             </AppSurface>
           ) : null}
-          {bridgeUnavailable && snapshot?.state !== 'failed' ? (
+          {modelFailure !== null && snapshot?.state !== 'failed' ? (
             <AppSurface tone="soft" style={styles.callout}>
               <AppText variant="heading" style={styles.error} selectable>
-                {t('onboarding.modelFailureUnavailable')}
+                {t(modelFailureMessageKey(modelFailure))}
               </AppText>
               <AppButton
                 disabled={busy}
@@ -320,7 +322,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               label={busy ? t('onboarding.modelEntering') : t('onboarding.continue')}
               onPress={() => void enterAlyte()}
             />
-          ) : selected && !resumable && !bridgeUnavailable && snapshot?.state !== 'failed' ? (
+          ) : selected && !resumable && modelFailure === null && snapshot?.state !== 'failed' ? (
             <AppButton
               disabled={busy}
               label={t('onboarding.modelDownload')}
@@ -334,6 +336,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
                 setSelected(true);
                 setCancelled(false);
                 setCancelError(false);
+                setModelFailure(null);
               }}
             />
           ) : null}

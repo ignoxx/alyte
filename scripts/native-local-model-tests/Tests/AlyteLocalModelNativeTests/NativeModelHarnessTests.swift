@@ -90,6 +90,44 @@ final class NativeModelHarnessTests: XCTestCase {
     XCTAssertFalse(FileManager.default.fileExists(atPath: partial.path))
   }
 
+  func testRuntimeActivationFailureKeepsVerifiedPackAvailableForRetry() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("alyte-local-model-runtime-retry-\(UUID().uuidString)")
+    var shouldFail = true
+    let core = AlyteLocalModelCore(
+      directory: root,
+      expectedBytes: 5,
+      expectedDigest: "valid",
+      filename: "model.ready",
+      allowedHosts: ["huggingface.co"],
+      hashFile: { url in String(data: try Data(contentsOf: url), encoding: .utf8) ?? "" },
+      protectFile: { _ in },
+      runtimeFactory: { _ in
+        if shouldFail { throw AlyteLocalModelRuntimeError.unavailable }
+        return SyntheticRuntime()
+      }
+    )
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+    _ = FileManager.default.createFile(atPath: core.readyURL.path, contents: Data("valid".utf8))
+    core.reconcileInstalledPack()
+
+    XCTAssertEqual(core.state, .ready)
+    XCTAssertThrowsError(try core.load())
+    XCTAssertEqual(core.state, .ready)
+    XCTAssertEqual(core.failure, nil)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: core.readyURL.path))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: core.partialURL.path))
+
+    // Model management retries activation after a runtime failure. It must rediscover the same
+    // verified artifact rather than requiring a fresh download.
+    core.markFailed(.failed(.runtimeFailed))
+    core.reconcileInstalledPack()
+    XCTAssertEqual(core.state, .ready)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: core.partialURL.path))
+    shouldFail = false
+    XCTAssertEqual(try core.load()["state"] as? String, "loaded")
+  }
+
   func testIdleTimerPolicyOnlyAwakesForegroundTransfers() {
     var policy = AlyteLocalModelIdleTimerPolicy()
     XCTAssertFalse(policy.shouldDisableIdleTimer)
