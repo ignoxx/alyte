@@ -6,23 +6,36 @@ import UIKit
 final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataDelegate, URLSessionTaskDelegate {
   typealias StateObserver = ([String: Any]) -> Void
   typealias RuntimeFactory = (URL) throws -> any AlyteLocalModelRuntimeSession
+  typealias IdleTimerSetter = (Bool) -> Void
 
   private let fileManager: FileManager
   private let queue = DispatchQueue(label: "com.alyte.local-models", qos: .utility)
+  private let idleTimerQueue = DispatchQueue(label: "com.alyte.local-models.idle-timer")
   private let core: AlyteLocalModelCore
+  private let idleTimerSetter: IdleTimerSetter
   private var session: URLSession?
   private var downloadTask: URLSessionDataTask?
   private var downloadCompletion: ((Result<[String: Any], Error>) -> Void)?
   private var cancelCompletion: ((Result<[String: Any], Error>) -> Void)?
-  var stateObserver: StateObserver? {
-    didSet { core.stateObserver = stateObserver }
-  }
+  private var idleTimerPolicy = AlyteLocalModelIdleTimerPolicy()
+  private var appliedIdleTimerState: Bool?
+  var stateObserver: StateObserver?
 
   init(
     fileManager: FileManager = .default,
-    runtimeFactory: @escaping RuntimeFactory = { url in try AlytePinnedLlamaRuntimeSession(modelURL: url) }
+    runtimeFactory: @escaping RuntimeFactory = { url in try AlytePinnedLlamaRuntimeSession(modelURL: url) },
+    idleTimerSetter: @escaping IdleTimerSetter = { disabled in
+      // UIKit's idle-timer property is main-thread owned. State transitions can arrive from the
+      // URLSession utility queue, so the production adapter hops back to the main queue here.
+      if Thread.isMainThread {
+        UIApplication.shared.isIdleTimerDisabled = disabled
+      } else {
+        DispatchQueue.main.async { UIApplication.shared.isIdleTimerDisabled = disabled }
+      }
+    }
   ) {
     self.fileManager = fileManager
+    self.idleTimerSetter = idleTimerSetter
     let directory = (try? fileManager.url(
       for: .applicationSupportDirectory,
       in: .userDomainMask,
@@ -41,6 +54,7 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
       runtimeFactory: runtimeFactory
     )
     super.init()
+    core.stateObserver = { [weak self] state in self?.handleStateChange(state) }
     queue.sync { core.reconcileInstalledPack() }
     NotificationCenter.default.addObserver(
       self,
@@ -58,6 +72,11 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
 
   deinit {
     NotificationCenter.default.removeObserver(self)
+    idleTimerQueue.sync {
+      idleTimerPolicy.setApplicationIsForeground(false)
+      appliedIdleTimerState = false
+      idleTimerSetter(false)
+    }
     core.requestInferenceCancellation()
     queue.sync { core.releaseForPressure() }
     session?.invalidateAndCancel()
@@ -183,6 +202,15 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
     queue.async { self.core.releaseForPressure() }
   }
 
+  func applicationDidEnterBackground() {
+    updateIdleTimer { $0.setApplicationIsForeground(false) }
+    releaseForBackground()
+  }
+
+  func applicationDidEnterForeground() {
+    updateIdleTimer { $0.setApplicationIsForeground(true) }
+  }
+
   @objc private func memoryWarning() { releaseForBackground() }
 
   @objc private func thermalStateChanged() {
@@ -205,8 +233,17 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
     configuration.httpShouldSetCookies = false
     configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
     session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-    downloadTask = session?.dataTask(with: request)
-    downloadTask?.resume()
+    guard let session, let task = session.dataTask(with: request) else {
+      self.session?.invalidateAndCancel()
+      self.session = nil
+      downloadCompletion = nil
+      let error = AlyteLocalModelError.failed(.runtimeFailed)
+      core.markFailed(error)
+      completion(.failure(error))
+      return
+    }
+    downloadTask = task
+    task.resume()
   }
 
   func urlSession(
@@ -290,6 +327,23 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
 
   private func fail(_ error: AlyteLocalModelError) {
     core.markFailed(error)
+  }
+
+  private func handleStateChange(_ state: [String: Any]) {
+    if let rawState = state["state"] as? String, let value = AlyteLocalModelState(rawValue: rawState) {
+      updateIdleTimer { $0.setState(value) }
+    }
+    stateObserver?(state)
+  }
+
+  private func updateIdleTimer(_ update: (inout AlyteLocalModelIdleTimerPolicy) -> Bool) {
+    idleTimerQueue.sync {
+      _ = update(&idleTimerPolicy)
+      let next = idleTimerPolicy.shouldDisableIdleTimer
+      guard appliedIdleTimerState != next else { return }
+      appliedIdleTimerState = next
+      idleTimerSetter(next)
+    }
   }
 
   private func networkFailure(_ error: Error) -> AlyteLocalModelFailure {

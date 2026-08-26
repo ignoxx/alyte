@@ -17,6 +17,7 @@ import { ModelProgress } from '../local-models/ModelProgress';
 import {
   isExpectedDownloadCancellation,
   modelFailureMessageKey,
+  modelDownloadAction,
   modelOperation,
   modelStateLabelKey,
   modelStatusTone,
@@ -135,6 +136,8 @@ export function ModelStorageScreen() {
   const state = snapshot?.state;
   const failed = state === 'failed';
   const operation = modelOperation(state ?? null);
+  const downloadAction = modelDownloadAction(snapshot);
+  const resumable = downloadAction === 'continue';
 
   return (
     <View style={screenStyles.safe}>
@@ -166,7 +169,19 @@ export function ModelStorageScreen() {
           ) : null}
           <ModelDetailsDisclosure manifest={models.manifest} />
 
-          {error || failed ? (
+          {resumable && snapshot !== null ? (
+            <AppSurface tone="soft" style={styles.callout}>
+              <AppText variant="heading" selectable>
+                {t('settings.modelStoragePartialSaved').replace(
+                  '{progress}',
+                  String(Math.round(snapshot.progress * 100)),
+                )}
+              </AppText>
+              <AppText style={styles.muted} selectable>
+                {t('settings.modelStorageKeepOpen')}
+              </AppText>
+            </AppSurface>
+          ) : error || failed ? (
             <AppSurface tone="soft" style={styles.callout}>
               <AppText variant="heading" style={styles.error} selectable>
                 {failed && snapshot !== null
@@ -194,10 +209,15 @@ export function ModelStorageScreen() {
             </AppText>
           ) : null}
 
-          {!cancelled && downloading && snapshot !== null ? (
+          {(downloading || resumable) && snapshot !== null ? (
             <ModelProgress snapshot={snapshot} />
           ) : null}
-          {cancelled ? (
+          {downloading && snapshot?.state !== 'cancelling' ? (
+            <AppText style={styles.muted} selectable>
+              {t('settings.modelStorageKeepOpen')}
+            </AppText>
+          ) : null}
+          {cancelled && !resumable ? (
             <AppText style={styles.muted} selectable>
               {t('settings.modelStorageCancelled')}
             </AppText>
@@ -211,6 +231,13 @@ export function ModelStorageScreen() {
             />
           ) : !cancelled && operation === 'cancelling' ? (
             <AppButton disabled label={t('settings.modelStorageCancelling')} tone="quiet" />
+          ) : resumable ? (
+            <AppButton
+              disabled={busy}
+              label={t('settings.modelStorageContinueDownload')}
+              onPress={() => void startDownload()}
+              tone="secondary"
+            />
           ) : operation === 'retry' ? (
             <AppButton
               disabled={busy}

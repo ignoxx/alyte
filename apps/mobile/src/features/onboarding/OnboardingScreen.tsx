@@ -21,6 +21,7 @@ import { ModelProgress } from '../local-models/ModelProgress';
 import {
   isExpectedDownloadCancellation,
   modelFailureMessageKey,
+  modelDownloadAction,
   modelStatusTone,
 } from '../local-models/model-ui';
 import type { LocalModelService } from '../local-models/native';
@@ -102,6 +103,8 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
 
   const ready = snapshot !== null && canCompleteModelOnboarding(snapshot);
   const downloading = snapshot !== null && isModelDownloadActive(snapshot);
+  const downloadAction = modelDownloadAction(snapshot);
+  const resumable = downloadAction === 'continue';
 
   async function startDownload() {
     cancellationRequestedRef.current = false;
@@ -230,7 +233,26 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               </AppText>
             </View>
           ) : null}
-          {snapshot?.state === 'failed' ? (
+          {resumable && snapshot !== null ? (
+            <AppSurface tone="soft" style={styles.callout}>
+              <AppText variant="heading" selectable>
+                {t('onboarding.modelPartialSaved').replace(
+                  '{progress}',
+                  String(Math.round(snapshot.progress * 100)),
+                )}
+              </AppText>
+              <AppText style={styles.muted} selectable>
+                {t('onboarding.modelKeepOpen')}
+              </AppText>
+              <AppButton
+                disabled={busy}
+                label={t('onboarding.modelContinueDownload')}
+                onPress={() => void startDownload()}
+                tone="secondary"
+              />
+            </AppSurface>
+          ) : null}
+          {downloadAction === 'retry' && snapshot?.state === 'failed' ? (
             <AppSurface tone="soft" style={styles.callout}>
               <AppText variant="heading" style={styles.error} selectable>
                 {t(modelFailureMessageKey(snapshot.failure))}
@@ -269,14 +291,19 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               />
             </AppSurface>
           ) : null}
-          {cancelled ? (
+          {cancelled && !resumable ? (
             <AppText style={styles.muted} selectable>
               {t('onboarding.modelCancelDisclosure')}
             </AppText>
           ) : null}
 
-          {!cancelled && downloading && snapshot !== null ? (
+          {(downloading || resumable) && snapshot !== null ? (
             <ModelProgress snapshot={snapshot} />
+          ) : null}
+          {downloading && snapshot?.state !== 'cancelling' ? (
+            <AppText style={styles.muted} selectable>
+              {t('onboarding.modelKeepOpen')}
+            </AppText>
           ) : null}
           {!cancelled && downloading && snapshot?.state === 'cancelling' ? (
             <AppButton disabled label={t('onboarding.modelCancelling')} tone="quiet" />
@@ -293,13 +320,13 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               label={busy ? t('onboarding.modelEntering') : t('onboarding.continue')}
               onPress={() => void enterAlyte()}
             />
-          ) : selected && !bridgeUnavailable && snapshot?.state !== 'failed' ? (
+          ) : selected && !resumable && !bridgeUnavailable && snapshot?.state !== 'failed' ? (
             <AppButton
               disabled={busy}
               label={t('onboarding.modelDownload')}
               onPress={() => void startDownload()}
             />
-          ) : !selected && snapshot !== null && snapshot.state !== 'failed' ? (
+          ) : !selected && !resumable && snapshot !== null && snapshot.state !== 'failed' ? (
             <AppButton
               disabled={busy}
               label={t('onboarding.modelSelect')}

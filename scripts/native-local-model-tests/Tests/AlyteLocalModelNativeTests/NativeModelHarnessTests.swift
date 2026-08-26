@@ -63,6 +63,60 @@ final class NativeModelHarnessTests: XCTestCase {
     XCTAssertFalse(FileManager.default.fileExists(atPath: ready.path))
   }
 
+  func testColdRelaunchRestoresPartialAndResumesAtExactRangeOffset() throws {
+    let (core, root, _) = try makeCore()
+    let partial = root.appendingPathComponent(".model.ready.partial")
+    try Data("va".utf8).write(to: partial)
+
+    core.reconcileInstalledPack()
+    XCTAssertEqual(core.state, .failed)
+    XCTAssertEqual(core.failure, .interrupted)
+    XCTAssertEqual(core.bytesReceived, 2)
+    XCTAssertEqual(core.offset, 2)
+
+    XCTAssertEqual(try core.prepareDownload(), 2)
+    XCTAssertEqual(core.state, .downloading)
+    XCTAssertNoThrow(try core.acceptResponse(
+      status: 206,
+      contentRange: "bytes 2-4/5",
+      url: URL(string: "https://huggingface.co/file")!
+    ))
+    try core.append(Data("lid".utf8))
+    guard case .succeeded = core.complete(transportFailure: nil) else {
+      return XCTFail("expected resumed promotion")
+    }
+    XCTAssertEqual(core.state, .ready)
+    XCTAssertEqual(core.bytesReceived, 5)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: partial.path))
+  }
+
+  func testIdleTimerPolicyOnlyAwakesForegroundTransfers() {
+    var policy = AlyteLocalModelIdleTimerPolicy()
+    XCTAssertFalse(policy.shouldDisableIdleTimer)
+
+    _ = policy.setState(.downloading)
+    XCTAssertTrue(policy.shouldDisableIdleTimer)
+    _ = policy.setState(.verifying)
+    XCTAssertTrue(policy.shouldDisableIdleTimer)
+
+    _ = policy.setState(.ready)
+    XCTAssertFalse(policy.shouldDisableIdleTimer)
+    _ = policy.setState(.failed)
+    XCTAssertFalse(policy.shouldDisableIdleTimer)
+    _ = policy.setState(.cancelling)
+    XCTAssertFalse(policy.shouldDisableIdleTimer)
+    _ = policy.setState(.deleting)
+    XCTAssertFalse(policy.shouldDisableIdleTimer)
+
+    _ = policy.setState(.downloading)
+    _ = policy.setApplicationIsForeground(false)
+    XCTAssertFalse(policy.shouldDisableIdleTimer)
+    _ = policy.setApplicationIsForeground(true)
+    XCTAssertTrue(policy.shouldDisableIdleTimer)
+    _ = policy.setState(.notInstalled)
+    XCTAssertFalse(policy.shouldDisableIdleTimer)
+  }
+
   func testCancellationPreservesPartialButNeverReady() throws {
     let (core, _, _) = try makeCore()
     _ = try core.prepareDownload()

@@ -43,6 +43,15 @@ test('cancel and delete return to a safe not-installed state', () => {
   assert.equal(applyLocalModelEvent(cancelled, { kind: 'cancelled' }).state, 'not-installed');
 });
 
+test('cancelling a partial keeps its bytes available for a later continuation', () => {
+  const initial = notInstalledSnapshot(productionLocalModelManifest);
+  const partial = applyLocalModelEvent(initial, { kind: 'progress', bytesReceived: 123 });
+  const cancelled = applyLocalModelEvent(partial, { kind: 'cancelled' });
+  assert.equal(cancelled.state, 'not-installed');
+  assert.equal(cancelled.bytesReceived, 123);
+  assert.equal(cancelled.progress, 123 / cancelled.expectedBytes);
+});
+
 test('normalizing incomplete ready state never grants readiness', async () => {
   const { normalizeLocalModelSnapshot } = await import('./model');
   const snapshot = normalizeLocalModelSnapshot(

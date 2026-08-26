@@ -11,6 +11,30 @@ enum AlyteLocalModelState: String {
   case deleting
 }
 
+/// Pure lifecycle policy for the iOS idle timer. A model transfer is deliberately a foreground
+/// concern: only its active download and verification states keep the screen awake, and app
+/// backgrounding always wins over the model state until the app returns to the foreground.
+struct AlyteLocalModelIdleTimerPolicy {
+  private(set) var state: AlyteLocalModelState = .notInstalled
+  private(set) var isForeground = true
+
+  var shouldDisableIdleTimer: Bool {
+    isForeground && (state == .downloading || state == .verifying)
+  }
+
+  @discardableResult
+  mutating func setState(_ value: AlyteLocalModelState) -> Bool {
+    state = value
+    return shouldDisableIdleTimer
+  }
+
+  @discardableResult
+  mutating func setApplicationIsForeground(_ value: Bool) -> Bool {
+    isForeground = value
+    return shouldDisableIdleTimer
+  }
+}
+
 struct AlyteLocalModelSnapshot {
   let state: AlyteLocalModelState
   let bytesReceived: Int64

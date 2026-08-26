@@ -2,14 +2,16 @@ import { StyleSheet, View } from 'react-native';
 import { t } from '../../localization';
 import { colors, spacing } from '../../theme';
 import { AppText } from '../../ui/primitives';
+import { hasResumableModelDownload, type LocalModelSnapshot } from './model';
 import { modelProgressPercent } from './model-ui';
-import type { LocalModelSnapshot } from './model';
 
 function progressLabel(snapshot: LocalModelSnapshot): string {
   const percent = modelProgressPercent(snapshot);
-  return snapshot.state === 'verifying'
-    ? t('onboarding.modelVerifying')
-    : t('onboarding.modelDownloading').replace('{progress}', String(percent));
+  if (snapshot.state === 'verifying') return t('onboarding.modelVerifying');
+  if (hasResumableModelDownload(snapshot)) {
+    return t('onboarding.modelDownloadPaused').replace('{progress}', String(percent));
+  }
+  return t('onboarding.modelDownloading').replace('{progress}', String(percent));
 }
 
 export function ModelProgress({ snapshot }: { readonly snapshot: LocalModelSnapshot }) {

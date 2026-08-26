@@ -18,9 +18,10 @@ public final class AlyteLocalModelsModule: Module {
       self.store = nil
     }
     OnAppEntersBackground {
-      self.store.releaseForBackground()
+      self.store.applicationDidEnterBackground()
     }
     OnAppEntersForeground {
+      self.store.applicationDidEnterForeground()
       // A verified ready pack remains on disk. The runtime is deliberately loaded only when an
       // extraction requests it, so relaunch/background never pins a multi-gigabyte allocation.
     }

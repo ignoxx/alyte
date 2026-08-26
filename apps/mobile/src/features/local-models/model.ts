@@ -110,6 +110,19 @@ export function isModelDownloadActive(snapshot: LocalModelSnapshot): boolean {
   );
 }
 
+/**
+ * A partial can be continued only from a terminal, non-integrity state. Active transfers keep
+ * their cancel action, while a verified-size/checksum failure has already discarded its bytes.
+ */
+export function hasResumableModelDownload(snapshot: LocalModelSnapshot | null): boolean {
+  return (
+    snapshot !== null &&
+    (snapshot.state === 'not-installed' || snapshot.state === 'failed') &&
+    snapshot.bytesReceived > 0 &&
+    snapshot.bytesReceived < snapshot.expectedBytes
+  );
+}
+
 export type LocalModelEvent =
   | { readonly kind: 'download-requested' }
   | { readonly kind: 'progress'; readonly bytesReceived: number }
@@ -158,7 +171,7 @@ export function applyLocalModelEvent(
     case 'cancel-requested':
       return { ...base, state: 'cancelling' };
     case 'cancelled':
-      return { ...base, state: 'not-installed', bytesReceived: 0, progress: 0, loaded: false };
+      return { ...base, state: 'not-installed', loaded: false };
     case 'delete-requested':
       return { ...base, state: 'deleting' };
     case 'deleted':

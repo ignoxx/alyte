@@ -175,13 +175,16 @@ export function createFakeLocalModelNativeModule(): NativeLocalModelsModule {
       ensurePack(packId);
       if (state.state === 'ready' || state.state === 'loaded') return state;
       cancellationRequested = false;
-      emit({ ...state, state: 'downloading', failure: null, bytesReceived: 0 });
+      emit({ ...state, state: 'downloading', failure: null });
       await wait(transferPhaseDelay);
       if (cancellationRequested) return state;
       emit({
         ...state,
         state: 'downloading',
-        bytesReceived: Math.floor(productionLocalModelManifest.pack.artifact.bytes / 2),
+        bytesReceived: Math.max(
+          Number(state.bytesReceived ?? 0),
+          Math.floor(productionLocalModelManifest.pack.artifact.bytes / 2),
+        ),
       });
       await wait(transferPhaseDelay);
       if (cancellationRequested) return state;
@@ -201,8 +204,6 @@ export function createFakeLocalModelNativeModule(): NativeLocalModelsModule {
       return emit({
         ...state,
         state: 'not-installed',
-        bytesReceived: 0,
-        storageBytes: 0,
         loaded: false,
         failure: null,
       });

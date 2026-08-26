@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyLocalModelEvent, notInstalledSnapshot } from './model';
+import { applyLocalModelEvent, hasResumableModelDownload, notInstalledSnapshot } from './model';
 import {
   formatModelDownloadSize,
   isExpectedDownloadCancellation,
   modelFailureMessageKey,
+  modelDownloadAction,
   modelOperation,
   modelProgressPercent,
   modelStateLabelKey,
@@ -61,6 +62,49 @@ test('lifecycle presentation keeps transition actions exclusive', () => {
       failure: 'checksum-mismatch',
     }),
     'reviewNeeded',
+  );
+  assert.equal(
+    modelStatusTone({
+      ...notInstalledSnapshot(productionLocalModelManifest),
+      state: 'failed',
+      bytesReceived: 100,
+      progress: 100 / productionLocalModelManifest.pack.artifact.bytes,
+      failure: 'interrupted',
+    }),
+    'neutral',
+  );
+});
+
+test('retained partials present a continue action and keep honest progress', () => {
+  const initial = notInstalledSnapshot(productionLocalModelManifest);
+  const interrupted = {
+    ...initial,
+    state: 'failed' as const,
+    bytesReceived: 100,
+    progress: 100 / initial.expectedBytes,
+    failure: 'interrupted' as const,
+  };
+  const partial = applyLocalModelEvent(
+    applyLocalModelEvent(initial, { kind: 'progress', bytesReceived: 100 }),
+    { kind: 'cancel-requested' },
+  );
+  const resumed = applyLocalModelEvent(partial, { kind: 'cancelled' });
+
+  assert.equal(hasResumableModelDownload(interrupted), true);
+  assert.equal(modelDownloadAction(interrupted), 'continue');
+  assert.equal(hasResumableModelDownload(resumed), true);
+  assert.equal(modelDownloadAction(resumed), 'continue');
+  assert.equal(resumed.bytesReceived, 100);
+  assert.equal(resumed.progress, 100 / resumed.expectedBytes);
+  assert.equal(
+    modelDownloadAction({
+      ...resumed,
+      state: 'failed',
+      bytesReceived: 0,
+      progress: 0,
+      failure: 'interrupted',
+    }),
+    'retry',
   );
 });
 

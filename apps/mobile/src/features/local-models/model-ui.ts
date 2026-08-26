@@ -1,4 +1,9 @@
-import type { LocalModelFailure, LocalModelSnapshot, LocalModelState } from './model';
+import {
+  hasResumableModelDownload,
+  type LocalModelFailure,
+  type LocalModelSnapshot,
+  type LocalModelState,
+} from './model';
 import { t } from '../../localization';
 
 export type ModelStatusTone = 'neutral' | 'measured' | 'reviewNeeded';
@@ -13,8 +18,20 @@ export function modelProgressPercent(snapshot: LocalModelSnapshot): number {
   return Math.min(100, Math.max(0, Math.round(snapshot.progress * 100)));
 }
 
+export type ModelDownloadAction = 'download' | 'continue' | 'retry' | 'none';
+
+/** Keeps a retained partial distinct from a fresh failure in both model-management screens. */
+export function modelDownloadAction(snapshot: LocalModelSnapshot | null): ModelDownloadAction {
+  if (snapshot === null) return 'none';
+  if (hasResumableModelDownload(snapshot)) return 'continue';
+  if (snapshot.state === 'failed') return 'retry';
+  if (snapshot.state === 'not-installed') return 'download';
+  return 'none';
+}
+
 export function modelStatusTone(snapshot: LocalModelSnapshot | null): ModelStatusTone {
   if (snapshot?.state === 'ready' || snapshot?.state === 'loaded') return 'measured';
+  if (hasResumableModelDownload(snapshot)) return 'neutral';
   if (snapshot?.state === 'failed') return 'reviewNeeded';
   return 'neutral';
 }

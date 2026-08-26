@@ -16,6 +16,7 @@ const runtimeSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModelRuntime.c
 test('native store owns resumable verification, protection, promotion, and release hooks', () => {
   for (const value of [
     'URLSessionDataDelegate',
+    'URLSessionConfiguration.ephemeral',
     'Range',
     'SHA256',
     'FileProtectionType.complete',
@@ -23,6 +24,9 @@ test('native store owns resumable verification, protection, promotion, and relea
     'didReceiveMemoryWarningNotification',
     'thermalStateDidChangeNotification',
     'releaseForBackground',
+    'idleTimerPolicy',
+    'idleTimerSetter',
+    'isIdleTimerDisabled',
   ]) {
     assert.equal(storeSource.includes(value), true, value);
   }
@@ -32,6 +36,9 @@ test('native store owns resumable verification, protection, promotion, and relea
   assert.equal(storeSource.includes('resumeURL'), false);
   assert.equal(storeSource.includes('.gguf"'), false);
   assert.equal(moduleSource.includes('OnAppEntersBackground'), true);
+  assert.equal(moduleSource.includes('applicationDidEnterBackground'), true);
+  assert.equal(moduleSource.includes('applicationDidEnterForeground'), true);
+  assert.equal(moduleSource.includes('OnDestroy'), true);
 });
 
 test('the production lifecycle core owns promotion and runtime cleanup', () => {
