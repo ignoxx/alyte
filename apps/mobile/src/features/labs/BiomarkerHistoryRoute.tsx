@@ -119,14 +119,22 @@ export function BiomarkerHistoryRoute() {
 
   if (loading) {
     return (
-      <ScreenScrollView contentContainerStyle={styles.content} style={screenStyles.scroll}>
+      <ScreenScrollView
+        contentContainerStyle={styles.content}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         <AppText selectable>{t('labs.historyLoading')}</AppText>
       </ScreenScrollView>
     );
   }
   if (error) {
     return (
-      <ScreenScrollView contentContainerStyle={styles.content} style={screenStyles.scroll}>
+      <ScreenScrollView
+        contentContainerStyle={styles.content}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         <AppSurface tone="soft" style={styles.errorSurface}>
           <AppText variant="heading" selectable>
             {t('labs.historyErrorTitle')}
@@ -141,7 +149,11 @@ export function BiomarkerHistoryRoute() {
   }
   if (model === null) {
     return (
-      <ScreenScrollView contentContainerStyle={styles.content} style={screenStyles.scroll}>
+      <ScreenScrollView
+        contentContainerStyle={styles.content}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         <AppText selectable>{t('labs.historyNotFound')}</AppText>
         <AppButton
           label={t('accessibility.back')}
@@ -161,11 +173,6 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
   const [generalGuidanceOpen, setGeneralGuidanceOpen] = useState(false);
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
   const accessibilityLabel = buildHistoryAccessibilityLabel(model, accessibilityCopy());
-  const pointItems = model.timeline.filter(
-    (item): item is Extract<HistoryTimelineItem, { readonly kind: 'point' }> =>
-      item.kind === 'point',
-  );
-
   const toggle = (key: string) => {
     setExpanded((current) => {
       const next = new Set(current);
@@ -176,14 +183,16 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
   };
 
   return (
-    <ScreenScrollView contentContainerStyle={styles.content} style={screenStyles.scroll}>
-      <View style={styles.headingBlock}>
-        <AppText variant="display" selectable>
-          {model.canonicalLabel}
+    <ScreenScrollView
+      contentContainerStyle={styles.content}
+      style={screenStyles.scroll}
+      tabBarClearance="native"
+    >
+      <View style={styles.statusBlock}>
+        <AppText variant="label" selectable style={styles.secondary}>
+          {t('labs.historyDirection')}
         </AppText>
-        <StatusPill tone="measured">
-          {`${t('labs.historyDirection')}: ${t(directionKey[model.trend.direction])}`}
-        </StatusPill>
+        <StatusPill tone="measured">{t(directionKey[model.trend.direction])}</StatusPill>
       </View>
       <AppSurface tone="soft" style={styles.introSurface}>
         <AppText selectable style={styles.secondary}>
@@ -225,31 +234,6 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
           </AppSurface>
         )}
       </View>
-
-      {pointItems.length > 0 && (
-        <View style={styles.section}>
-          <AppText variant="heading" selectable>
-            {t('labs.historyLaboratoryInterval')}
-          </AppText>
-          <AppSurface style={styles.factsSurface}>
-            {pointItems.map((item) => (
-              <View key={item.point.measurementId} style={styles.factGroup}>
-                <AppText variant="label" selectable>
-                  {formatLocaleDate(item.point.collectionDate, locale)}
-                </AppText>
-                <Fact
-                  label={t('labs.historyLaboratoryInterval')}
-                  value={item.point.laboratoryReference.interval ?? t('labs.historyNotProvided')}
-                />
-                <Fact
-                  label={t('labs.historyLaboratoryFlag')}
-                  value={item.point.laboratoryReference.flag ?? t('labs.historyNotProvided')}
-                />
-              </View>
-            ))}
-          </AppSurface>
-        </View>
-      )}
 
       <View style={styles.section}>
         <AppText variant="heading" selectable>
@@ -492,12 +476,6 @@ function HistoryTimelineRow({
           <AppText selectable style={styles.secondary}>
             {formatLocaleDate(item.point.collectionDate, locale)}
           </AppText>
-          <AppText selectable style={styles.secondary}>
-            {`${t('labs.historyCurrentResult')}: ${current}`}
-          </AppText>
-          <AppText selectable style={styles.secondary}>
-            {`${t('labs.historyOriginalSource')}: ${source}`}
-          </AppText>
           <Pressable
             accessibilityRole="button"
             accessibilityState={{ expanded }}
@@ -512,6 +490,14 @@ function HistoryTimelineRow({
             <View style={styles.details}>
               <Fact label={t('labs.historyCurrentResult')} value={current} />
               <Fact label={t('labs.historyOriginalSource')} value={source} />
+              <Fact
+                label={t('labs.historyLaboratoryInterval')}
+                value={item.point.laboratoryReference.interval ?? t('labs.historyNotProvided')}
+              />
+              <Fact
+                label={t('labs.historyLaboratoryFlag')}
+                value={item.point.laboratoryReference.flag ?? t('labs.historyNotProvided')}
+              />
               <Fact label={t('labs.historySpecimen')} value={item.point.specimenType} />
               <Fact
                 label={t('labs.historyProvenance')}
@@ -560,27 +546,6 @@ function HistoryTimelineRow({
         <AppText selectable style={styles.secondary}>
           {date}
         </AppText>
-        {current !== null && (
-          <AppText selectable style={styles.secondary}>
-            {`${t('labs.historyCurrentResult')}: ${current}`}
-          </AppText>
-        )}
-        {source !== '' && (
-          <AppText selectable style={styles.secondary}>
-            {`${t('labs.historyOriginalSource')}: ${source}`}
-          </AppText>
-        )}
-        <AppText selectable style={styles.secondary}>
-          {`${t('labs.historyLaboratoryInterval')}: ${interval}`}
-        </AppText>
-        <AppText selectable style={styles.secondary}>
-          {`${t('labs.historyLaboratoryFlag')}: ${flag}`}
-        </AppText>
-        {item.provenance !== null && (
-          <AppText selectable style={styles.secondary}>
-            {`${t('labs.historyProvenance')}: ${t(provenanceKey[item.provenance])}`}
-          </AppText>
-        )}
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ expanded }}
@@ -738,7 +703,7 @@ function MeasuredTrendChart({
 
 const styles = StyleSheet.create({
   content: { gap: spacing.lg, paddingHorizontal: spacing.lg, paddingBottom: 140 },
-  headingBlock: { gap: spacing.sm, paddingTop: spacing.sm },
+  statusBlock: { gap: spacing.sm, paddingTop: spacing.sm },
   introSurface: { gap: spacing.sm },
   secondary: { color: colors.mutedInk },
   section: { gap: spacing.sm },

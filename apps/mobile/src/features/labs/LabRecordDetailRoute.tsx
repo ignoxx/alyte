@@ -1,10 +1,12 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, type PropsWithChildren } from 'react';
+import { StyleSheet } from 'react-native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppText } from '../../ui/primitives';
+import { screenStyles, spacing } from '../../theme';
+import { AppButton, AppText, ScreenScrollView } from '../../ui/primitives';
 import { LabRecordDetail } from './LabRecordDetail';
 import type { LabRecordDetail as Detail } from '@alyte/domain';
 import type { NavigationProp } from '@react-navigation/native';
@@ -50,33 +52,49 @@ export function LabRecordDetailRoute() {
     }, [load]),
   );
 
-  if (loading) return <AppText>{t('labs.loading')}</AppText>;
+  if (loading) {
+    return (
+      <DetailScrollView centered>
+        <AppText selectable>{t('labs.loading')}</AppText>
+      </DetailScrollView>
+    );
+  }
   if (notFound) {
     return (
-      <>
-        <AppText>{t('labs.recordNotFound')}</AppText>
+      <DetailScrollView centered>
+        <AppText selectable variant="heading">
+          {t('labs.recordNotFound')}
+        </AppText>
         <AppButton
           label={t('accessibility.back')}
           onPress={() => navigation.goBack()}
           tone="quiet"
         />
-      </>
+      </DetailScrollView>
     );
   }
   if (error && record === null) {
     return (
-      <>
-        <AppText>{t('labs.recordLoadError')}</AppText>
+      <DetailScrollView centered>
+        <AppText selectable variant="heading">
+          {t('labs.recordLoadError')}
+        </AppText>
         <AppButton label={t('labs.retry')} onPress={() => void load()} tone="secondary" />
         <AppButton
-          label={t('labs.recordCancel')}
+          label={t('accessibility.back')}
           onPress={() => navigation.goBack()}
           tone="quiet"
         />
-      </>
+      </DetailScrollView>
     );
   }
-  if (record === null) return <AppText>{t('labs.loading')}</AppText>;
+  if (record === null) {
+    return (
+      <DetailScrollView centered>
+        <AppText selectable>{t('labs.loading')}</AppText>
+      </DetailScrollView>
+    );
+  }
   return (
     <LabRecordDetail
       detail={record}
@@ -108,3 +126,27 @@ export function LabRecordDetailRoute() {
     />
   );
 }
+
+function DetailScrollView({
+  centered = false,
+  children,
+}: PropsWithChildren<{ readonly centered?: boolean }>) {
+  return (
+    <ScreenScrollView
+      contentContainerStyle={[
+        screenStyles.content,
+        styles.detailContent,
+        centered && styles.center,
+      ]}
+      style={screenStyles.scroll}
+      tabBarClearance="native"
+    >
+      {children}
+    </ScreenScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  center: { alignItems: 'center', gap: spacing.md, justifyContent: 'center', padding: spacing.lg },
+  detailContent: { paddingBottom: spacing.xxl },
+});
