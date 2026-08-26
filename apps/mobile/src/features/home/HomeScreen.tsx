@@ -315,8 +315,9 @@ export function HomeScreen() {
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScreenScrollView
+        alwaysBounceVertical={!isEmptyState}
+        bounces={!isEmptyState}
         contentContainerStyle={screenStyles.content}
-        scrollEnabled={!isEmptyState}
         style={screenStyles.scroll}
         tabBarClearance="native"
       >
@@ -325,7 +326,7 @@ export function HomeScreen() {
         {!loading &&
           !error &&
           model !== null &&
-          (model.latestReport === null && model.recentRecords.length === 0 ? (
+          (isEmptyState ? (
             <EmptyHome onImport={openImport} />
           ) : (
             <PopulatedHome

@@ -92,8 +92,9 @@ export function LabsScreen() {
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScreenScrollView
+        alwaysBounceVertical={!isEmptyState}
+        bounces={!isEmptyState}
         contentContainerStyle={screenStyles.content}
-        scrollEnabled={!isEmptyState}
         style={screenStyles.scroll}
         tabBarClearance="native"
       >
@@ -109,7 +110,7 @@ export function LabsScreen() {
             />
           </View>
         )}
-        {!loading && !error && !hasData && (
+        {isEmptyState && (
           <View style={styles.emptyState}>
             <AppIcon name="addDocument" size={32} />
             <AppText variant="title">{t('labs.emptyTitle')}</AppText>
@@ -123,7 +124,7 @@ export function LabsScreen() {
             </AppButton>
           </View>
         )}
-        {!loading && !error && hasData && (
+        {!loading && !error && !isEmptyState && (
           <View style={styles.sections}>
             <AppButton
               label={t('labs.action')}
