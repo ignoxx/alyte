@@ -435,6 +435,74 @@ async function createFrozenLabsFixture(database: SqliteDatabase, version: number
 }
 
 describe('local schema forward migrations', () => {
+  test('direct v11 to v12 invalidates legacy Sanitized drafts without reinterpreting them as Original', async () => {
+    const database = new NodeSqliteDatabase(temporaryDatabase());
+    await createFrozenLabsFixture(database, 8);
+    const v11 = createBoundary(
+      database,
+      LOCAL_MIGRATIONS.filter((migration) => migration.version <= 11),
+    );
+    await v11.initialize();
+    await database.runAsync(
+      `INSERT INTO extraction_drafts
+         (id, report_id, state, ocr_contract_version, parser_version, collection_date, date_state,
+          created_at, updated_at, confirmed_at)
+       VALUES ('legacy-draft', 'report-old-v5', 'draft', 'alyte.vision-ocr.v1', 'alyte.extraction.v1',
+         NULL, 'missing', '2026-08-22T09:00:00.000Z', '2026-08-22T09:00:00.000Z', NULL);`,
+    );
+    await database.runAsync(
+      `INSERT INTO extraction_draft_rows
+         (id, draft_id, row_order, panel_label, source_text, source_label, source_value_string,
+          source_value_json, source_unit, source_reference_interval, source_flag, source_page_index,
+          source_bbox_json, source_orientation, proposed_label, proposed_value_json, proposed_unit,
+          proposed_reference_interval, proposed_flag, proposed_biomarker_id, proposed_specimen_type,
+          collection_date, date_state, date_context_json, review_reasons_json, review_state, decision)
+       VALUES ('legacy-row', 'legacy-draft', 0, NULL, 'LDL-C 3.2 mmol/L', 'LDL-C', '3.2',
+         '{"kind":"numeric","value":3.2}', 'mmol/L', NULL, NULL, 0,
+         '{"x":0.1,"y":0.2,"width":0.5,"height":0.04,"artifact":null}', 0, 'LDL-C',
+         '{"kind":"numeric","value":3.2}', 'mmol/L', NULL, NULL, 'biomarker.ldl_c', 'blood',
+         NULL, 'missing', NULL, '[]', 'ready', 'unresolved');`,
+    );
+
+    await createBoundary(database).initialize();
+    const draftRow = await database.getAllAsync<{
+      state: string;
+      provenance_state: string;
+      failure_reason: string;
+    }>(
+      'SELECT state, provenance_state, failure_reason FROM extraction_drafts WHERE id = ?;',
+      'legacy-draft',
+    );
+    assert.deepEqual(
+      { ...draftRow[0] },
+      {
+        state: 'failed',
+        provenance_state: 'legacy-sanitized',
+        failure_reason: 'legacy-sanitized-provenance',
+      },
+    );
+    const operation = await database.getAllAsync<{
+      state: string;
+      error: string;
+    }>('SELECT state, error FROM extraction_operations WHERE report_id = ?;', 'report-old-v5');
+    assert.deepEqual(
+      { ...operation[0] },
+      {
+        state: 'interrupted',
+        error: 'legacy-sanitized-provenance',
+      },
+    );
+    const rows = await database.getAllAsync<{ id: string }>(
+      'SELECT id FROM extraction_draft_rows WHERE draft_id = ?;',
+      'legacy-draft',
+    );
+    assert.deepEqual(
+      rows.map((row) => row.id),
+      ['legacy-row'],
+    );
+    await database.closeAsync();
+  });
+
   for (let releasedVersion = 1; releasedVersion <= 8; releasedVersion += 1) {
     test(`upgrades released v${releasedVersion} to v11`, async () => {
       const database = new NodeSqliteDatabase(temporaryDatabase());
@@ -721,13 +789,14 @@ describe('local schema forward migrations', () => {
     );
     assert.equal(versionRows[0]?.version, CURRENT_SCHEMA_VERSION);
     const requiredTables = await firstDatabase.getAllAsync<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('lab_reports', 'lab_records', 'measurements', 'intake_events', 'intake_components', 'cloud_jobs', 'app_preferences', 'intake_capture_recovery', 'extraction_drafts', 'extraction_draft_rows', 'lab_combined_deletions', 'local_export_jobs', 'local_deletion_operations');",
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('lab_reports', 'lab_records', 'measurements', 'intake_events', 'intake_components', 'cloud_jobs', 'app_preferences', 'intake_capture_recovery', 'extraction_drafts', 'extraction_draft_rows', 'extraction_operations', 'lab_combined_deletions', 'local_export_jobs', 'local_deletion_operations');",
     );
     assert.deepEqual(requiredTables.map((table) => table.name).sort(), [
       'app_preferences',
       'cloud_jobs',
       'extraction_draft_rows',
       'extraction_drafts',
+      'extraction_operations',
       'intake_capture_recovery',
       'intake_components',
       'intake_events',

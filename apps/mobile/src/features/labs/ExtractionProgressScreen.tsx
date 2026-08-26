@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, View } from 'react-native';
-import { useIsFocused, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import {
+  useIsFocused,
+  useNavigation,
+  usePreventRemove,
+  useRoute,
+  type RouteProp,
+} from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { RootStackParamList } from '../../navigation/types';
@@ -46,6 +52,7 @@ function failureMessage(reason: LabReportExtractionError['reason']): string {
   if (reason === 'original-source') return t('labs.extractionProgressSourceError');
   if (reason === 'no-reviewable-measurements') return t('labs.extractionNoMeasurementsError');
   if (reason === 'cancelled') return t('labs.extractionProgressCancelled');
+  if (reason === 'interrupted') return t('labs.extractionProgressInterrupted');
   return t('labs.extractionRecognitionError');
 }
 
@@ -71,18 +78,63 @@ export function ExtractionProgressScreen() {
   );
   const [modelReady, setModelReady] = useState(false);
   const [failure, setFailure] = useState<LabReportExtractionError['reason'] | null>(null);
+  const [activeOperation, setActiveOperation] = useState(false);
+  const [cancellationRequested, setCancellationRequested] = useState(false);
+  const [durableLoaded, setDurableLoaded] = useState(false);
   const started = useRef(false);
   const completed = useRef(false);
+  const mounted = useRef(true);
+  const focused = useRef(isFocused);
+
+  useEffect(() => {
+    focused.current = isFocused;
+  }, [isFocused]);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  usePreventRemove(activeOperation && failure === null, () => {
+    // Extraction is an in-flight local write. Explicit Cancel is the only dismissal path until
+    // the operation reaches a terminal state.
+  });
 
   useEffect(() => {
     const unsubscribe = reports.subscribeExtractionProgress((next) => {
       if (next.reportId !== route.params.reportId) return;
       setProgress(next);
-      if (next.status === 'failed' || next.status === 'cancelled')
+      if (next.status === 'active') setActiveOperation(true);
+      if (
+        next.status === 'failed' ||
+        next.status === 'cancelled' ||
+        next.status === 'interrupted'
+      ) {
         setFailure(next.error ?? 'recognition');
+        setActiveOperation(false);
+      }
     });
     const current = reports.getExtractionProgress(route.params.reportId);
     if (current !== null) setProgress(current);
+    void reports
+      .loadExtractionProgress(route.params.reportId)
+      .then((durable) => {
+        setDurableLoaded(true);
+        if (!mounted.current || durable === null) return;
+        setProgress(durable);
+        if (durable.status === 'active') setActiveOperation(true);
+        if (
+          durable.status === 'failed' ||
+          durable.status === 'cancelled' ||
+          durable.status === 'interrupted'
+        ) {
+          setFailure(durable.error ?? 'recognition');
+        }
+      })
+      .catch(() => {
+        setDurableLoaded(true);
+        // The in-memory subscription remains the live source while durable state is unavailable.
+      });
     return unsubscribe;
   }, [reports, route.params.reportId]);
 
@@ -107,12 +159,24 @@ export function ExtractionProgressScreen() {
   }, [models]);
 
   const start = useCallback(async () => {
-    if (started.current || completed.current || !isFocused) return;
+    if (
+      started.current ||
+      completed.current ||
+      !isFocused ||
+      !durableLoaded ||
+      failure !== null ||
+      cancellationRequested
+    )
+      return;
     started.current = true;
+    setActiveOperation(true);
+    setCancellationRequested(false);
     setFailure(null);
     try {
       const draft = await reports.startExtraction(route.params.reportId, passwordRequest());
       completed.current = true;
+      setActiveOperation(false);
+      if (!mounted.current || !focused.current) return;
       navigation.navigate('MainTabs', {
         screen: 'Labs',
         params: {
@@ -123,8 +187,18 @@ export function ExtractionProgressScreen() {
     } catch (error) {
       setFailure(error instanceof LabReportExtractionError ? error.reason : 'recognition');
       started.current = false;
+      setActiveOperation(false);
     }
-  }, [isFocused, modelReady, navigation, reports, route.params.reportId]);
+  }, [
+    cancellationRequested,
+    durableLoaded,
+    failure,
+    isFocused,
+    modelReady,
+    navigation,
+    reports,
+    route.params.reportId,
+  ]);
 
   useEffect(() => {
     void start();
@@ -136,14 +210,14 @@ export function ExtractionProgressScreen() {
   );
   async function cancel() {
     await reports.cancelExtraction(route.params.reportId);
-    setFailure('cancelled');
-    started.current = false;
+    setCancellationRequested(true);
   }
 
   function retry() {
     completed.current = false;
     started.current = false;
     setFailure(null);
+    setCancellationRequested(false);
     void start();
   }
 
@@ -209,6 +283,7 @@ export function ExtractionProgressScreen() {
             <AppButton
               label={t('labs.extractionProgressCancel')}
               tone="quiet"
+              disabled={cancellationRequested || !activeOperation}
               onPress={() => void cancel()}
             />
           </>

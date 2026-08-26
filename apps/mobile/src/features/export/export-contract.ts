@@ -37,7 +37,7 @@ export type ExportTableName =
   | 'app_preferences';
 
 export type ExportControlTableName =
-  'schema_migrations' | 'local_export_jobs' | 'local_deletion_operations';
+  'schema_migrations' | 'local_export_jobs' | 'local_deletion_operations' | 'extraction_operations';
 
 export type ExportColumnDecision = {
   readonly name: string;
@@ -172,6 +172,8 @@ export const EXPORT_SCHEMA_DECISIONS: readonly ExportTableDecision[] = [
     'source_artifact_kind',
     'source_artifact_id',
     'source_artifact_hash',
+    'provenance_state',
+    'failure_reason',
   ]),
   includedTable('extraction_draft_rows', [
     'id',
@@ -276,6 +278,7 @@ export const EXPORT_SCHEMA_DECISIONS: readonly ExportTableDecision[] = [
   excludedTable('schema_migrations'),
   excludedTable('local_export_jobs'),
   excludedTable('local_deletion_operations'),
+  excludedTable('extraction_operations'),
 ] as const;
 
 export const EXPORT_INTERPRETATION_PREFERENCE_KEYS = [

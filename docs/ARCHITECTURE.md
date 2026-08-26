@@ -230,6 +230,7 @@ must remain.
 | `intake_components` | User-entered or recognized substances and amount/dose state |
 | `nutrition_estimates` | Internal ranges, provenance, estimate quality, and schema/model version |
 | `cloud_jobs` | Durable device outbox and request/result lifecycle |
+| `extraction_operations` | Report-keyed local extraction progress and interrupted/retry state |
 | `saved_insights` | Reproducible snapshot with source IDs and catalogue version |
 | `insight_feedback` | Correction, dismissal, and relevance feedback from this device |
 | `catalogue_state` | Installed signed catalogue version and verification metadata |
@@ -282,6 +283,13 @@ Files/Photos selection
   → exception-focused user review
   → atomic Lab Report + Lab Record + Measurement save
 ```
+
+Extraction progress is durable but deliberately minimal: it stores only a report ID, stage,
+bounded counts, and typed failure category. An active marker is reconciled to `interrupted` on
+relaunch, preserving the Original and making retry explicit without retaining passwords, paths,
+OCR text, or model health details. Every draft root and row must carry the same validated artifact
+identity; pre-#75 drafts without that identity are marked legacy Sanitized-derived and require
+regeneration rather than being migrated as Original.
 
 Recognition confidence is an internal routing signal. The user sees the precise field or row that
 needs review and why; they do not see a medical-looking confidence percentage.

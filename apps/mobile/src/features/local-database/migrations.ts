@@ -59,6 +59,9 @@ const EXTRACTION_DRAFT_DDL = `
     source_artifact_kind TEXT CHECK (source_artifact_kind IN ('original', 'sanitized')),
     source_artifact_id TEXT,
     source_artifact_hash TEXT,
+    provenance_state TEXT NOT NULL DEFAULT 'current'
+      CHECK (provenance_state IN ('current', 'legacy-sanitized')),
+    failure_reason TEXT,
     UNIQUE(report_id)
   );
 
@@ -92,6 +95,19 @@ const EXTRACTION_DRAFT_DDL = `
 
   CREATE INDEX IF NOT EXISTS extraction_drafts_report_id_idx ON extraction_drafts(report_id);
   CREATE INDEX IF NOT EXISTS extraction_draft_rows_draft_id_idx ON extraction_draft_rows(draft_id, row_order);
+
+  CREATE TABLE IF NOT EXISTS extraction_operations (
+    report_id TEXT PRIMARY KEY NOT NULL REFERENCES lab_reports(id) ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK (state IN ('active', 'interrupted', 'failed', 'cancelled', 'complete')),
+    stage TEXT NOT NULL CHECK (stage IN ('import', 'ocr', 'model', 'review')),
+    completed INTEGER NOT NULL DEFAULT 0,
+    total INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS extraction_operations_state_idx
+    ON extraction_operations(state, updated_at ASC);
 `;
 
 /** The single forward-only schema history shared by the local feature repositories. */
@@ -442,6 +458,32 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
   {
     version: 12,
     apply: async (database) => {
+      const draftTables = await database.getAllAsync<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'extraction_drafts';",
+      );
+      if (draftTables.length === 0) return;
+      const reportTables = await database.getAllAsync<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'lab_reports';",
+      );
+      await database.execAsync(`
+        ${
+          reportTables.length === 0
+            ? ''
+            : `CREATE TABLE IF NOT EXISTS extraction_operations (
+          report_id TEXT PRIMARY KEY NOT NULL REFERENCES lab_reports(id) ON DELETE CASCADE,
+          state TEXT NOT NULL CHECK (state IN ('active', 'interrupted', 'failed', 'cancelled', 'complete')),
+          stage TEXT NOT NULL CHECK (stage IN ('import', 'ocr', 'model', 'review')),
+          completed INTEGER NOT NULL DEFAULT 0,
+          total INTEGER NOT NULL DEFAULT 0,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS extraction_operations_state_idx
+          ON extraction_operations(state, updated_at ASC);
+        `
+        }
+      `);
       const columns = await database.getAllAsync<{ name: string }>(
         'PRAGMA table_info(extraction_drafts);',
       );
@@ -450,10 +492,41 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
         ['source_artifact_kind', "TEXT CHECK (source_artifact_kind IN ('original', 'sanitized'))"],
         ['source_artifact_id', 'TEXT'],
         ['source_artifact_hash', 'TEXT'],
+        [
+          'provenance_state',
+          "TEXT NOT NULL DEFAULT 'current' CHECK (provenance_state IN ('current', 'legacy-sanitized'))",
+        ],
+        ['failure_reason', 'TEXT'],
       ] as const) {
         if (!existing.has(name))
           await database.execAsync(`ALTER TABLE extraction_drafts ADD COLUMN ${name} ${type};`);
       }
+
+      // Before #75, open drafts were produced from Sanitized artifacts but had no persisted
+      // identity. Keep their rows recoverable for diagnostics, but explicitly invalidate them so
+      // neither persistence nor confirmation can reinterpret them as Original-derived.
+      if (reportTables.length === 0) return;
+      await database.execAsync(`
+        UPDATE extraction_drafts
+        SET state = 'failed', provenance_state = 'legacy-sanitized',
+          failure_reason = 'legacy-sanitized-provenance'
+        WHERE source_artifact_kind IS NULL AND source_artifact_id IS NULL AND source_artifact_hash IS NULL;
+      `);
+      await database.execAsync(`
+        INSERT INTO extraction_operations
+          (report_id, state, stage, completed, total, error, created_at, updated_at)
+        SELECT report_id, 'interrupted', 'review', 0, 0, 'legacy-sanitized-provenance', created_at, updated_at
+        FROM extraction_drafts WHERE provenance_state = 'legacy-sanitized'
+        ON CONFLICT(report_id) DO UPDATE SET state = 'interrupted', stage = 'review', completed = 0,
+          total = 0, error = 'legacy-sanitized-provenance', updated_at = excluded.updated_at;
+      `);
+
+      // A process can die after marking extraction active. Reconcile this durable marker before
+      // any service exposes progress so a relaunch is honest and retryable.
+      await database.execAsync(
+        `UPDATE extraction_operations SET state = 'interrupted', error = 'interrupted-after-relaunch'
+         WHERE state = 'active';`,
+      );
     },
   },
 ];

@@ -288,6 +288,7 @@
     "extractionProgressPasswordError": "That password did not unlock the Original Report. Try again; the password is not saved.",
     "extractionProgressSourceError": "The protected Original Report changed or is unavailable. Import it again before retrying.",
     "extractionProgressCancelled": "The import was paused. Your Original Report remains available to try again.",
+    "extractionProgressInterrupted": "The import stopped before it finished. Your Original Report remains available to try again.",
     "extractionSearch": "Search measurements",
     "extractionFilterAll": "All {count}",
     "extractionFilterNeedsReview": "Needs Review {count}",

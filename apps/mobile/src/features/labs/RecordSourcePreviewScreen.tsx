@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { useIsFocused, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { RedactionRegion } from '@alyte/domain';
 import type { RootStackParamList } from '../../navigation/types';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -23,6 +23,7 @@ type Ready = {
 export function RecordSourcePreviewScreen() {
   const navigation = useNavigation<Navigation>();
   const route = useRoute<Route>();
+  const isFocused = useIsFocused();
   const { labs, reports } = useServices();
   const [ready, setReady] = useState<Ready | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -48,10 +49,15 @@ export function RecordSourcePreviewScreen() {
       if (measurement.source.artifact?.kind === 'original') {
         // Local extraction provenance points at the immutable Original. The native
         // viewer owns its protected path; this screen never receives one.
-        navigation.replace('OriginalSourcePreview', { reportId: detail.source.reportId });
+        if (!active || !isFocused) return;
+        navigation.replace('OriginalSourcePreview', {
+          reportId: detail.source.reportId,
+          pageIndex: measurement.source.pageIndex,
+        });
         return;
       }
       const preview = await reports.previewSanitizedReport(detail.source.reportId);
+      if (!active || !isFocused) return;
       if (!preview.uris[measurement.source.pageIndex]) throw new Error('unavailable');
       if (active)
         setReady({
@@ -67,7 +73,7 @@ export function RecordSourcePreviewScreen() {
     return () => {
       active = false;
     };
-  }, [attempt, labs, navigation, reports, route.params]);
+  }, [attempt, isFocused, labs, navigation, reports, route.params]);
   if (!ready)
     return (
       <View style={styles.center}>

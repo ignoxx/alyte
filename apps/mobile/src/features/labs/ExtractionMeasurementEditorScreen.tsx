@@ -164,7 +164,10 @@ export function ExtractionMeasurementEditorScreen() {
     const target = sourceRegionPresentation(saved);
     setAllowRemove(true);
     if (saved.source.artifact?.kind === 'original') {
-      navigation.replace('OriginalSourcePreview', { reportId: route.params.reportId });
+      navigation.replace('OriginalSourcePreview', {
+        reportId: route.params.reportId,
+        pageIndex: target.pageIndex,
+      });
       return;
     }
     navigation.replace('SanitizedSourcePreview', {

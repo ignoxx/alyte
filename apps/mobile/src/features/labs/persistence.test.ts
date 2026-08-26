@@ -264,6 +264,33 @@ describe('protected manual Lab Record persistence', () => {
       { aliases: [], artifact },
     );
     assert.ok(row);
+    await assert.rejects(
+      repository.createExtractionDraft({
+        id: 'provenance-mismatch-before-write',
+        reportId: 'report-artifact-provenance',
+        collectionDate: { kind: 'missing' },
+        rows: [
+          {
+            ...row,
+            source: {
+              ...row.source,
+              artifact: { kind: 'sanitized', id: 'derivative-id', hash: 'derivative-hash' },
+            },
+          },
+        ],
+        sourceArtifact: artifact,
+      }),
+      /source artifact provenance does not match its rows/,
+    );
+    assert.equal(
+      (
+        await database.getAllAsync<{ count: number }>(
+          'SELECT COUNT(*) AS count FROM extraction_drafts WHERE id = ?;',
+          'provenance-mismatch-before-write',
+        )
+      )[0]?.count,
+      0,
+    );
     const draft = await repository.createExtractionDraft({
       id: 'provenance-draft',
       reportId: 'report-artifact-provenance',
@@ -308,6 +335,44 @@ describe('protected manual Lab Record persistence', () => {
       /source artifact provenance does not match/,
     );
     await repository.close();
+  });
+
+  test('relaunch reconciles an active extraction operation without touching the Original report', async () => {
+    const path = temporaryDatabase();
+    const first = createRepository(path);
+    await first.repository.createReport({
+      id: 'report-interrupted-extraction',
+      sourceType: 'image',
+      originalFilename: 'synthetic-interrupted.png',
+      mimeType: 'image/png',
+      importState: 'imported',
+      originalPath: 'protected://original/synthetic-interrupted.png',
+      sourceHash: 'interrupted-original-hash',
+      pageCount: 1,
+    });
+    await first.repository.upsertExtractionOperation({
+      reportId: 'report-interrupted-extraction',
+      state: 'active',
+      stage: 'ocr',
+      completed: 1,
+      total: 2,
+      error: null,
+      createdAt: '2026-08-22T09:00:00.000Z',
+      updatedAt: '2026-08-22T09:00:01.000Z',
+    });
+    await first.repository.close();
+
+    const second = createRepository(path);
+    const operation = await second.repository.getExtractionOperation(
+      'report-interrupted-extraction',
+    );
+    assert.equal(operation?.state, 'interrupted');
+    assert.equal(operation?.error, 'interrupted-after-relaunch');
+    assert.equal(
+      (await second.repository.getReport('report-interrupted-extraction'))?.sourceHash,
+      'interrupted-original-hash',
+    );
+    await second.repository.close();
   });
 
   test('revalidates open drafts created by the previous parser policy before confirmation', async () => {

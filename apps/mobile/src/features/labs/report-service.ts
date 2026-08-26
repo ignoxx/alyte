@@ -31,7 +31,11 @@ import {
   type SpecimenType,
 } from '@alyte/domain';
 import { comparableBiomarkers } from '@alyte/catalogue';
-import { openProtectedLabDatabase, type LabRepository } from './persistence';
+import {
+  openProtectedLabDatabase,
+  type LabReportExtractionOperation,
+  type LabRepository,
+} from './persistence';
 import {
   createProtectedReportFileService,
   deleteProtectedReportArtifacts,
@@ -101,7 +105,7 @@ export type LabReportExtractionReadiness = {
 export type LabReportExtractionProgress = {
   readonly reportId: string;
   readonly stage: 'import' | 'ocr' | 'model' | 'review';
-  readonly status: 'active' | 'complete' | 'failed' | 'cancelled';
+  readonly status: 'active' | 'complete' | 'failed' | 'cancelled' | 'interrupted';
   readonly completed: number;
   readonly total: number;
   readonly error?: LabReportExtractionError['reason'];
@@ -155,7 +159,8 @@ export class LabReportExtractionError extends Error {
       | 'model-unavailable'
       | 'original-source'
       | 'wrong-password'
-      | 'cancelled',
+      | 'cancelled'
+      | 'interrupted',
     message: string,
     options?: { readonly cause?: unknown },
   ) {
@@ -196,6 +201,7 @@ export type LabReportsService = {
     listener: (progress: LabReportExtractionProgress) => void,
   ): () => void;
   getExtractionProgress(id: string): LabReportExtractionProgress | null;
+  loadExtractionProgress(id: string): Promise<LabReportExtractionProgress | null>;
   cancelExtraction(id: string): Promise<void>;
   getSanitizedReport(id: string): Promise<SanitizedReport | null>;
   deleteSanitizedReport(id: string): Promise<void>;
@@ -413,7 +419,15 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
 
   function publishExtractionProgress(progress: LabReportExtractionProgress): void {
     extractionProgress.set(progress.reportId, progress);
-    for (const listener of extractionProgressListeners) listener(progress);
+    // A screen is an observer, never part of the extraction transaction. One malformed or
+    // unmounted subscriber must not turn a written draft into a failed extraction.
+    for (const listener of extractionProgressListeners) {
+      try {
+        listener(progress);
+      } catch {
+        // Observers are best-effort and must not affect the operation.
+      }
+    }
   }
 
   function extractionProgressEvent(
@@ -431,6 +445,48 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       completed,
       total,
       ...(error === undefined ? {} : { error }),
+    });
+  }
+
+  function progressError(
+    value: string | null,
+    state: LabReportExtractionOperation['state'],
+  ): LabReportExtractionError['reason'] | undefined {
+    if (state === 'interrupted') return 'interrupted';
+    const supported: readonly LabReportExtractionError['reason'][] = [
+      'sanitized-source',
+      'recognition',
+      'no-reviewable-measurements',
+      'model-unavailable',
+      'original-source',
+      'wrong-password',
+      'cancelled',
+      'interrupted',
+    ];
+    return value !== null && supported.includes(value as LabReportExtractionError['reason'])
+      ? (value as LabReportExtractionError['reason'])
+      : undefined;
+  }
+
+  async function persistExtractionOperation(
+    repo: LabRepository,
+    reportId: string,
+    state: LabReportExtractionOperation['state'],
+    stage: LabReportExtractionProgress['stage'],
+    completed: number,
+    total: number,
+    error: string | null = null,
+  ): Promise<void> {
+    const current = await repo.getExtractionOperation(reportId);
+    await repo.upsertExtractionOperation({
+      reportId,
+      state,
+      stage,
+      completed,
+      total,
+      error,
+      createdAt: current?.createdAt ?? now(),
+      updatedAt: now(),
     });
   }
 
@@ -1391,6 +1447,32 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     return extractionProgress.get(id) ?? null;
   }
 
+  async function loadExtractionProgress(id: string): Promise<LabReportExtractionProgress | null> {
+    await ensureInitialized();
+    const durable = await (await repository()).getExtractionOperation(id);
+    if (durable === null) return extractionProgress.get(id) ?? null;
+    const durableError = progressError(durable.error, durable.state);
+    const progress: LabReportExtractionProgress = {
+      reportId: id,
+      stage: durable.stage,
+      status:
+        durable.state === 'active'
+          ? 'active'
+          : durable.state === 'complete'
+            ? 'complete'
+            : durable.state === 'cancelled'
+              ? 'cancelled'
+              : durable.state === 'interrupted'
+                ? 'interrupted'
+                : 'failed',
+      completed: durable.completed,
+      total: durable.total,
+      ...(durableError === undefined ? {} : { error: durableError }),
+    };
+    extractionProgress.set(id, progress);
+    return progress;
+  }
+
   async function cancelExtraction(id: string): Promise<void> {
     const operationToken = extractionOperations.get(id);
     if (operationToken !== undefined) operationToken.cancelled = true;
@@ -1766,16 +1848,21 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     extractionOperations.set(id, operationToken);
     return serialized(async () => {
       let password = '';
+      let createdDraft: ExtractionDraft | null = null;
+      let activeRepo: LabRepository | null = null;
       const isCancelled = () =>
         extractionOperations.get(id) !== operationToken || operationToken.cancelled;
       try {
         await ensureInitialized();
         const repo = await repository();
+        activeRepo = repo;
         const report = await repo.getReport(id);
         if (report === null) throw new Error('Lab Report was not found');
         if (report.importState !== 'imported' || report.originalPath === null) {
           throw new Error('Only an imported Lab Report can be extracted');
         }
+        await persistExtractionOperation(repo, id, 'active', 'import', 0, 1);
+        if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         extractionProgressEvent(id, 'import', 'complete', 1, 1);
         if ((await verifySource(id)) !== 'verified') {
           throw new LabReportExtractionError(
@@ -1783,8 +1870,21 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             'The protected Original Report is missing or has changed',
           );
         }
+        if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         const existingDraft = await repo.getExtractionDraftForReport(id, extractionAliases);
-        if (existingDraft !== null) return existingDraft;
+        if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
+        if (existingDraft !== null && existingDraft.state !== 'failed') {
+          await persistExtractionOperation(repo, id, 'complete', 'review', 1, 1);
+          extractionProgressEvent(id, 'review', 'complete', 1, 1);
+          if (isCancelled())
+            throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
+          return existingDraft;
+        }
+        if (existingDraft?.state === 'failed') {
+          // v11 drafts have no trustworthy artifact identity. They are explicitly invalidated by
+          // migration and are removed only when a user requests regeneration.
+          await repo.discardLegacyExtractionDraft(id);
+        }
 
         const sourcePath = await openOriginal(id);
         let inspection: PdfInspection | null = null;
@@ -1850,6 +1950,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         if (pages.length === 0) {
           throw new LabReportExtractionError('recognition', 'The report has no readable pages');
         }
+        await persistExtractionOperation(repo, id, 'active', 'ocr', 0, pages.length);
         extractionProgressEvent(id, 'ocr', 'active', 0, pages.length);
         const results: VisionOCRResult[] = [];
         for (const [pageNumber, page] of pages.entries()) {
@@ -1886,8 +1987,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           }
           if (isCancelled())
             throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
+          await persistExtractionOperation(repo, id, 'active', 'ocr', pageNumber, pages.length);
           extractionProgressEvent(id, 'ocr', 'active', pageNumber + 1, pages.length);
         }
+        await persistExtractionOperation(repo, id, 'active', 'ocr', pages.length, pages.length);
         extractionProgressEvent(id, 'ocr', 'complete', pages.length, pages.length);
 
         const dateContext = dateContextFromOCR(results);
@@ -1925,6 +2028,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             );
           })
           .map((row, order) => ({ ...row, order }));
+        await persistExtractionOperation(repo, id, 'active', 'model', 0, 0);
         extractionProgressEvent(id, 'model', 'active', 0, 0);
         const rows = await applySemanticMappings(
           deterministicRows,
@@ -1934,6 +2038,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         );
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         const modelTotal = extractionProgress.get(id)?.total ?? 0;
+        await persistExtractionOperation(repo, id, 'active', 'model', modelTotal, modelTotal);
         extractionProgressEvent(id, 'model', 'complete', modelTotal, modelTotal);
         if (rows.length === 0) {
           throw new LabReportExtractionError(
@@ -1941,19 +2046,45 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             'Local OCR found no reviewable Measurements',
           );
         }
+        await persistExtractionOperation(repo, id, 'active', 'review', 0, 1);
         extractionProgressEvent(id, 'review', 'active', 0, 1);
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
+        if ((await verifySource(id)) !== 'verified') {
+          throw new LabReportExtractionError(
+            'original-source',
+            'The Original Report changed and must be imported again',
+          );
+        }
         const draft = await repo.createExtractionDraft({
           reportId: id,
           collectionDate: dateContext.collectionDate,
           rows,
           sourceArtifact,
         });
+        createdDraft = draft;
+        // The source can change while SQLite is writing a large draft. Reverify immediately
+        // before exposing it; a stale result is never allowed to survive this race.
+        if ((await verifySource(id)) !== 'verified') {
+          await repo.deleteExtractionDraft(draft.id);
+          createdDraft = null;
+          throw new LabReportExtractionError(
+            'original-source',
+            'The Original Report changed and must be imported again',
+          );
+        }
         if (isCancelled()) {
           await repo.deleteExtractionDraft(draft.id);
+          createdDraft = null;
           throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         }
+        await persistExtractionOperation(repo, id, 'complete', 'review', 1, 1);
         extractionProgressEvent(id, 'review', 'complete', 1, 1);
+        if (isCancelled()) {
+          await repo.deleteExtractionDraft(draft.id);
+          createdDraft = null;
+          await persistExtractionOperation(repo, id, 'cancelled', 'review', 1, 1, 'cancelled');
+          throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
+        }
         return draft;
       } catch (error) {
         const extractionError =
@@ -1962,14 +2093,42 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             : new LabReportExtractionError('recognition', 'Local document extraction failed', {
                 cause: error,
               });
+        const cancelled = isCancelled() || extractionError.reason === 'cancelled';
+        if (cancelled && createdDraft !== null) {
+          try {
+            await activeRepo?.deleteExtractionDraft(createdDraft.id);
+          } catch {
+            // The cancellation result remains non-success; cleanup is retried by the next run.
+          }
+          createdDraft = null;
+        }
+        const terminalReason = cancelled ? 'cancelled' : extractionError.reason;
+        try {
+          if (activeRepo !== null)
+            await persistExtractionOperation(
+              activeRepo,
+              id,
+              cancelled ? 'cancelled' : 'failed',
+              extractionProgress.get(id)?.stage ?? 'import',
+              extractionProgress.get(id)?.completed ?? 0,
+              extractionProgress.get(id)?.total ?? 0,
+              terminalReason,
+            );
+        } catch {
+          // A terminal UI state is still safe if the database is unavailable; relaunch will
+          // reconcile a remaining active marker as interrupted.
+        }
         extractionProgressEvent(
           id,
           extractionProgress.get(id)?.stage ?? 'import',
-          extractionError.reason === 'cancelled' ? 'cancelled' : 'failed',
+          cancelled ? 'cancelled' : 'failed',
           extractionProgress.get(id)?.completed ?? 0,
           extractionProgress.get(id)?.total ?? 0,
-          extractionError.reason,
+          terminalReason,
         );
+        if (cancelled && extractionError.reason !== 'cancelled') {
+          throw new LabReportExtractionError('cancelled', 'Extraction cancelled', { cause: error });
+        }
         throw extractionError;
       } finally {
         password = '';
@@ -2005,8 +2164,19 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       // A draft is still extracted source material until it is confirmed. Recheck the immutable
       // Original before the first confirmation, while an already confirmed draft remains
       // readable after the user explicitly deletes its source.
-      if (draft.state === 'draft' && (await verifySource(draft.reportId)) !== 'verified') {
-        throw new Error('Original Report integrity could not be verified');
+      if (draft.state === 'draft') {
+        const report = await repo.getReport(draft.reportId);
+        const artifact = draft.sourceArtifact;
+        if (
+          report === null ||
+          artifact?.kind !== 'original' ||
+          artifact.id !== null ||
+          artifact.hash === null ||
+          artifact.hash !== report.sourceHash ||
+          (await verifySource(draft.reportId)) !== 'verified'
+        ) {
+          throw new Error('Original Report integrity could not be verified');
+        }
       }
       return repo.confirmExtractionDraft(id, extractionAliases);
     });
@@ -2031,6 +2201,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     getExtractionReadiness,
     subscribeExtractionProgress,
     getExtractionProgress,
+    loadExtractionProgress,
     cancelExtraction,
     getSanitizedReport,
     deleteSanitizedReport,

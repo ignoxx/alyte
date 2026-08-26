@@ -140,6 +140,30 @@ type ExtractionDraftDb = {
   source_artifact_kind: unknown;
   source_artifact_id: unknown;
   source_artifact_hash: unknown;
+  provenance_state: unknown;
+  failure_reason: unknown;
+};
+
+export type LabReportExtractionOperation = {
+  readonly reportId: string;
+  readonly state: 'active' | 'interrupted' | 'failed' | 'cancelled' | 'complete';
+  readonly stage: 'import' | 'ocr' | 'model' | 'review';
+  readonly completed: number;
+  readonly total: number;
+  readonly error: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+type ExtractionOperationDb = {
+  report_id: unknown;
+  state: unknown;
+  stage: unknown;
+  completed: unknown;
+  total: unknown;
+  error: unknown;
+  created_at: unknown;
+  updated_at: unknown;
 };
 
 function requiredString(value: unknown, field: string): string {
@@ -164,6 +188,34 @@ function enumValue<T extends string>(value: unknown, values: readonly T[], field
     throw new Error(`Invalid ${field} in local database`);
   }
   return value as T;
+}
+
+function nonNegativeInteger(value: unknown, field: string): number {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(numeric) || numeric < 0)
+    throw new Error(`Invalid ${field} in local database`);
+  return numeric;
+}
+
+function extractionOperationFromDb(row: ExtractionOperationDb): LabReportExtractionOperation {
+  return {
+    reportId: requiredString(row.report_id, 'extraction operation report id'),
+    state: enumValue(
+      row.state,
+      ['active', 'interrupted', 'failed', 'cancelled', 'complete'] as const,
+      'extraction operation state',
+    ),
+    stage: enumValue(
+      row.stage,
+      ['import', 'ocr', 'model', 'review'] as const,
+      'extraction operation stage',
+    ),
+    completed: nonNegativeInteger(row.completed, 'extraction operation completed count'),
+    total: nonNegativeInteger(row.total, 'extraction operation total count'),
+    error: nullableString(row.error, 'extraction operation error'),
+    createdAt: requiredString(row.created_at, 'extraction operation created timestamp'),
+    updatedAt: requiredString(row.updated_at, 'extraction operation updated timestamp'),
+  };
 }
 
 function storedValue(value: unknown): MeasurementValue {
@@ -516,6 +568,14 @@ function extractionDraftFromDb(
     ['draft', 'confirmed', 'failed'] as const,
     'extraction draft state',
   );
+  const provenanceState = enumValue(
+    row.provenance_state ?? 'current',
+    ['current', 'legacy-sanitized'] as const,
+    'extraction draft provenance state',
+  );
+  if (provenanceState === 'legacy-sanitized' && state !== 'failed') {
+    throw new Error('Legacy Sanitized extraction draft must be invalidated');
+  }
   const ocr = requiredString(row.ocr_contract_version, 'OCR contract version');
   const parser = requiredString(row.parser_version, 'extraction parser version');
   if (ocr !== VISION_OCR_CONTRACT_VERSION || parser !== EXTRACTION_PARSER_VERSION)
@@ -554,6 +614,29 @@ function extractionDraftFromDb(
     confirmedAt: nullableString(row.confirmed_at, 'extraction draft confirmed timestamp'),
     sourceArtifact,
   };
+}
+
+function canonicalExtractionArtifacts(
+  sourceArtifactValue: unknown,
+  rows: readonly ExtractionDraftRow[],
+): {
+  readonly sourceArtifact: LabSourceArtifact | null;
+  readonly rows: readonly ExtractionDraftRow[];
+} {
+  const sourceArtifact = decodeStoredArtifact(sourceArtifactValue);
+  const canonicalRows = rows.map((row) => {
+    const rowArtifact = decodeStoredArtifact(row.source.artifact);
+    const same =
+      (sourceArtifact === null) === (rowArtifact === null) &&
+      (sourceArtifact === null ||
+        (sourceArtifact.kind === rowArtifact?.kind &&
+          sourceArtifact.id === rowArtifact?.id &&
+          sourceArtifact.hash === rowArtifact?.hash));
+    if (!same)
+      throw new Error('Extraction Draft source artifact provenance does not match its rows');
+    return { ...row, source: { ...row.source, artifact: sourceArtifact } };
+  });
+  return { sourceArtifact, rows: canonicalRows };
 }
 
 function extractionDraftVersions(row: ExtractionDraftDb): {
@@ -796,6 +879,9 @@ export type LabRepository = {
   }): Promise<ExtractionDraft>;
   countOpenExtractionDrafts(): Promise<number>;
   deleteExtractionDraft(id: string): Promise<void>;
+  discardLegacyExtractionDraft(reportId: string): Promise<void>;
+  upsertExtractionOperation(operation: LabReportExtractionOperation): Promise<void>;
+  getExtractionOperation(reportId: string): Promise<LabReportExtractionOperation | null>;
   getExtractionDraft(
     id: string,
     aliases?: readonly ExtractionAliasEntry[],
@@ -845,7 +931,22 @@ export function createLabRepository(
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.idGenerator === undefined ? {} : { idGenerator: options.idGenerator }),
   });
-  const { initialize, close, withWrite, now, makeId } = boundary;
+  const { initialize: boundaryInitialize, close, withWrite, now, makeId } = boundary;
+  let extractionOperationsReconciled = false;
+  async function initialize(): Promise<void> {
+    await boundaryInitialize();
+    if (extractionOperationsReconciled) return;
+    extractionOperationsReconciled = true;
+    // An active marker means the process ended before it could publish a terminal state. Mark it
+    // interrupted at the persistence boundary so relaunch exposes a retryable, honest state.
+    await withWrite(async () => {
+      await database.runAsync(
+        `UPDATE extraction_operations
+         SET state = 'interrupted', error = 'interrupted-after-relaunch'
+         WHERE state = 'active';`,
+      );
+    });
+  }
 
   async function listRecords(): Promise<readonly LabRecord[]> {
     await initialize();
@@ -1303,7 +1404,7 @@ export function createLabRepository(
 
   const extractionDraftColumns = `id, report_id, state, ocr_contract_version, parser_version,
     collection_date, date_state, created_at, updated_at, confirmed_at, source_artifact_kind,
-    source_artifact_id, source_artifact_hash`;
+    source_artifact_id, source_artifact_hash, provenance_state, failure_reason`;
   const extractionRowColumns = `id, draft_id, row_order, panel_label, source_text, source_label,
     source_value_string, source_value_json, source_unit, source_reference_interval, source_flag, source_page_index,
     source_bbox_json, source_orientation, proposed_label, proposed_value_json, proposed_unit,
@@ -1393,6 +1494,55 @@ export function createLabRepository(
     });
   }
 
+  async function discardLegacyExtractionDraft(reportId: string): Promise<void> {
+    await initialize();
+    await withWrite(async () => {
+      await database.runAsync(
+        `DELETE FROM extraction_drafts
+         WHERE report_id = ? AND state = 'failed' AND provenance_state = 'legacy-sanitized';`,
+        reportId,
+      );
+    });
+  }
+
+  async function upsertExtractionOperation(operation: LabReportExtractionOperation): Promise<void> {
+    await initialize();
+    if (operation.completed < 0 || operation.total < 0 || operation.completed > operation.total) {
+      throw new Error('Invalid extraction operation progress');
+    }
+    await withWrite(async () => {
+      await database.runAsync(
+        `INSERT INTO extraction_operations
+           (report_id, state, stage, completed, total, error, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(report_id) DO UPDATE SET state = excluded.state, stage = excluded.stage,
+           completed = excluded.completed, total = excluded.total, error = excluded.error,
+           updated_at = excluded.updated_at;`,
+        operation.reportId,
+        operation.state,
+        operation.stage,
+        operation.completed,
+        operation.total,
+        operation.error,
+        operation.createdAt,
+        operation.updatedAt,
+      );
+    });
+  }
+
+  async function getExtractionOperation(
+    reportId: string,
+  ): Promise<LabReportExtractionOperation | null> {
+    await initialize();
+    const rows = await database.getAllAsync<ExtractionOperationDb>(
+      `SELECT report_id, state, stage, completed, total, error, created_at, updated_at
+       FROM extraction_operations WHERE report_id = ?;`,
+      reportId,
+    );
+    const row = rows[0];
+    return row === undefined ? null : extractionOperationFromDb(row);
+  }
+
   async function countOpenExtractionDrafts(): Promise<number> {
     await initialize();
     const rows = await database.getAllAsync<{ count: unknown }>(
@@ -1432,14 +1582,15 @@ export function createLabRepository(
     assertLabDateState(input.collectionDate);
     if (input.rows.length === 0)
       throw new Error('Extraction Draft must preserve at least one source row');
+    const canonical = canonicalExtractionArtifacts(input.sourceArtifact ?? null, input.rows);
     const draftId = input.id ?? makeId('extraction-draft');
     const createdAt = input.now ?? now();
     await withWrite(async () => {
       await database.runAsync(
         `INSERT INTO extraction_drafts (id, report_id, state, ocr_contract_version, parser_version,
           collection_date, date_state, created_at, updated_at, confirmed_at, source_artifact_kind,
-          source_artifact_id, source_artifact_hash)
-         VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?);`,
+          source_artifact_id, source_artifact_hash, provenance_state, failure_reason)
+         VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'current', NULL);`,
         draftId,
         input.reportId,
         VISION_OCR_CONTRACT_VERSION,
@@ -1448,11 +1599,11 @@ export function createLabRepository(
         input.collectionDate.kind,
         createdAt,
         createdAt,
-        input.sourceArtifact?.kind ?? null,
-        input.sourceArtifact?.id ?? null,
-        input.sourceArtifact?.hash ?? null,
+        canonical.sourceArtifact?.kind ?? null,
+        canonical.sourceArtifact?.id ?? null,
+        canonical.sourceArtifact?.hash ?? null,
       );
-      for (const row of input.rows) {
+      for (const row of canonical.rows) {
         await database.runAsync(
           `INSERT INTO extraction_draft_rows (
             id, draft_id, row_order, panel_label, source_text, source_label, source_value_string,
@@ -1479,7 +1630,7 @@ export function createLabRepository(
             observations: row.source.observations ?? [],
             raw: row.source.raw ?? null,
             semantic: row.source.semantic ?? null,
-            artifact: row.source.artifact ?? input.sourceArtifact ?? null,
+            artifact: row.source.artifact ?? canonical.sourceArtifact ?? null,
           }),
           row.source.orientation,
           row.proposedLabel,
@@ -1744,6 +1895,9 @@ export function createLabRepository(
     createExtractionDraft,
     countOpenExtractionDrafts,
     deleteExtractionDraft,
+    discardLegacyExtractionDraft,
+    upsertExtractionOperation,
+    getExtractionOperation,
     getExtractionDraft,
     getExtractionDraftForReport,
     updateExtractionDraftRow,

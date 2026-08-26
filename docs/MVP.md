@@ -242,8 +242,10 @@ Biomarker is not currently included in the person's comparable laboratory trends
   exceptions before confirmation. Nothing becomes confirmed history until that review completes.
 - When local extraction is incomplete or unusable, the person can retry the calm Import → OCR →
   On-device model → Review journey, enter results manually, or explicitly request later paid cloud
-  extraction. The Original Report itself remains locally available even when no structured result
-  can be recovered.
+  extraction. The report-keyed operation status survives suspension/relaunch as an honest
+  interrupted/retry state, and the Original Report itself remains locally available even when no
+  structured result can be recovered. Drafts from before the artifact-provenance contract are
+  explicitly invalidated for regeneration rather than being treated as Original-derived.
 - One cloud Lab Report import accepts at most 20 user-selected pages and 25 MB. A larger document
   remains intact locally but must be split into transparent cloud batches; the page selection and
   resulting usage are shown before upload.

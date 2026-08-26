@@ -57,7 +57,7 @@ export function OriginalSourcePreviewScreen() {
     interruptedRef.current = false;
     setViewer(null);
     setFailure(null);
-    setPageIndex(0);
+    setPageIndex(Math.max(0, route.params.pageIndex ?? 0));
 
     void reports
       .openOriginalViewer(route.params.reportId, promptPassword)
@@ -89,7 +89,7 @@ export function OriginalSourcePreviewScreen() {
       sessionRef.current = null;
       void session?.close();
     };
-  }, [attempt, reports, route.params.reportId]);
+  }, [attempt, reports, route.params.pageIndex, route.params.reportId]);
 
   function handleNativeViewerFailure() {
     interruptedRef.current = true;

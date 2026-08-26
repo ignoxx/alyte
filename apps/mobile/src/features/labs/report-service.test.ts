@@ -2764,6 +2764,40 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(events.at(-1)?.status, 'complete');
   });
 
+  test('progress subscribers are isolated and completion is available after relaunch', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const service = createService(repository, files, new FakePdf(), {
+      async recognize(_path, pageIndex): Promise<VisionOCRResult> {
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex,
+          orientation: 0,
+          observations: [
+            {
+              id: 'durable-progress-row',
+              text: 'LDL-C 3.8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+              pageIndex,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        });
+      },
+    });
+    const report = (await service.importPdf(source('durable-progress')))!.report;
+    const unsubscribe = service.subscribeExtractionProgress(() => {
+      throw new Error('screen observer failed');
+    });
+    await assert.doesNotReject(service.startExtraction(report.id));
+    unsubscribe();
+    const progress = await service.loadExtractionProgress(report.id);
+    assert.equal(progress?.status, 'complete');
+    assert.equal((await repository.getExtractionOperation(report.id))?.state, 'complete');
+  });
+
   test('preserves the imported report across extraction retry and does not create duplicate drafts', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
@@ -3080,6 +3114,10 @@ describe('protected Lab Report import lifecycle', () => {
       rows: originalRows,
       sourceArtifact: { kind: 'sanitized', id: sanitized.id, hash: sanitized.artifactHash },
     });
+    await assert.rejects(
+      service.confirmExtraction(draft.id),
+      /Original Report integrity could not be verified/,
+    );
 
     await repository.updateSanitizedReport(sanitized.id, {
       verificationState: 'failed',
