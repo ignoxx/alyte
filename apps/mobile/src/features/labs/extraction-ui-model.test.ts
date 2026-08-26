@@ -13,6 +13,7 @@ import {
   extractionNeedsResolution,
   extractionReviewCounts,
   extractionSourcePresentation,
+  extractionSourcePreviewRequestAllowed,
   filterExtractionRows,
   sourceRegionPresentation,
 } from './extraction-ui-model';
@@ -59,9 +60,35 @@ test('confirmation opens one created Lab Record and returns to Labs for multiple
   });
   assert.deepEqual(extractionConfirmationDestination([{ id: 'record-1' }, { id: 'record-2' }]), {
     kind: 'labs',
-    route: 'LabsRoot',
   });
   assert.throws(() => extractionConfirmationDestination([]), /No Lab Records were created/);
+});
+
+test('source preview activation rejects a rapid double activation', () => {
+  assert.equal(
+    extractionSourcePreviewRequestAllowed({
+      pending: false,
+      busy: false,
+      artifactKind: 'original',
+    }),
+    true,
+  );
+  assert.equal(
+    extractionSourcePreviewRequestAllowed({
+      pending: true,
+      busy: false,
+      artifactKind: 'original',
+    }),
+    false,
+  );
+  assert.equal(
+    extractionSourcePreviewRequestAllowed({
+      pending: false,
+      busy: false,
+      artifactKind: 'sanitized',
+    }),
+    true,
+  );
 });
 
 test('source copy follows persisted Original or Sanitized Report provenance', () => {

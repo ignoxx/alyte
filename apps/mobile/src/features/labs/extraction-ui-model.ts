@@ -26,7 +26,6 @@ export type ExtractionConfirmationDestination =
     }
   | {
       readonly kind: 'labs';
-      readonly route: 'LabsRoot';
     };
 
 /**
@@ -39,7 +38,7 @@ export function extractionConfirmationDestination(
   if (records.length === 1) {
     return { kind: 'record', route: 'LabRecordDetail', recordId: records[0]!.id };
   }
-  if (records.length > 1) return { kind: 'labs', route: 'LabsRoot' };
+  if (records.length > 1) return { kind: 'labs' };
   throw new Error('No Lab Records were created');
 }
 
@@ -82,6 +81,14 @@ export function extractionSourcePresentation(
         regionKey: 'labs.extractionSourceUnavailable',
       };
   }
+}
+
+export function extractionSourcePreviewRequestAllowed(input: {
+  readonly pending: boolean;
+  readonly busy: boolean;
+  readonly artifactKind: ExtractionSourcePresentation['artifactKind'];
+}): boolean {
+  return !input.pending && !input.busy && input.artifactKind !== 'unavailable';
 }
 
 export type ExtractionReviewSection = {

@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import {
   useNavigation,
+  useFocusEffect,
   usePreventRemove,
   useRoute,
   type RouteProp,
@@ -17,7 +18,11 @@ import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import { colors, spacing } from '../../theme';
-import { extractionSourcePresentation, sourceRegionPresentation } from './extraction-ui-model';
+import {
+  extractionSourcePresentation,
+  extractionSourcePreviewRequestAllowed,
+  sourceRegionPresentation,
+} from './extraction-ui-model';
 
 type EditorRoute = RouteProp<RootStackParamList, 'ExtractionMeasurementEditor'>;
 type EditorNavigation = NativeStackNavigationProp<
@@ -59,6 +64,8 @@ export function ExtractionMeasurementEditorScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [allowRemove, setAllowRemove] = useState(false);
+  const previewRequestPending = useRef(false);
+  const [previewOpening, setPreviewOpening] = useState(false);
   const initialEdit = useMemo(() => (row === null ? null : editFrom(row)), [row]);
   const dirty =
     edit !== null && initialEdit !== null && JSON.stringify(edit) !== JSON.stringify(initialEdit);
@@ -83,6 +90,13 @@ export function ExtractionMeasurementEditorScreen() {
     void load();
   }, [route.params.draftId, route.params.rowId]);
 
+  useFocusEffect(
+    useCallback(() => {
+      previewRequestPending.current = false;
+      setPreviewOpening(false);
+    }, []),
+  );
+
   usePreventRemove(dirty && !allowRemove, ({ data }) => {
     Alert.alert(t('labs.extractionDiscardTitle'), t('labs.extractionDiscardBody'), [
       { text: t('labs.cancel'), style: 'cancel' },
@@ -96,11 +110,15 @@ export function ExtractionMeasurementEditorScreen() {
 
   useLayoutEffect(() => {
     navigation.setOptions({
-      headerLeft: () => (
-        <AppButton label={t('labs.done')} onPress={() => navigation.goBack()} tone="quiet" />
-      ),
+      headerLeft: () => <AppButton label={t('labs.done')} onPress={closeEditor} tone="quiet" />,
     });
   }, [navigation]);
+
+  function closeEditor() {
+    const parent = navigation.getParent<NativeStackNavigationProp<RootStackParamList>>();
+    if (parent !== undefined) parent.goBack();
+    else navigation.goBack();
+  }
 
   async function save(): Promise<ExtractionDraftRow | null> {
     if (row === null || edit === null) return null;
@@ -140,7 +158,7 @@ export function ExtractionMeasurementEditorScreen() {
     try {
       await reports.updateExtractionRow(saved.id, { decision });
       setAllowRemove(true);
-      requestAnimationFrame(() => navigation.goBack());
+      requestAnimationFrame(closeEditor);
     } catch {
       setError(true);
     } finally {
@@ -149,22 +167,41 @@ export function ExtractionMeasurementEditorScreen() {
   }
 
   async function viewInReport() {
-    const saved = dirty ? await save() : row;
-    if (saved === null) return;
-    const target = sourceRegionPresentation(saved);
-    if (saved.source.artifact?.kind === 'original') {
-      navigation.push('OriginalSourcePreview', {
-        reportId: route.params.reportId,
-        pageIndex: target.pageIndex,
-      });
+    if (row === null) return;
+    const sourcePresentation = extractionSourcePresentation(row);
+    if (
+      !extractionSourcePreviewRequestAllowed({
+        pending: previewRequestPending.current,
+        busy,
+        artifactKind: sourcePresentation.artifactKind,
+      })
+    )
       return;
-    }
-    if (saved.source.artifact?.kind === 'sanitized') {
-      navigation.push('SanitizedSourcePreview', {
-        reportId: route.params.reportId,
-        pageIndex: target.pageIndex,
-        boundingBox: target.boundingBox,
-      });
+
+    // Preview uses persisted provenance. Keep the mounted editor's local edit buffer and decision
+    // untouched so an incomplete correction can return exactly as it was entered.
+    const target = sourceRegionPresentation(row);
+    previewRequestPending.current = true;
+    setPreviewOpening(true);
+    try {
+      if (row.source.artifact?.kind === 'original') {
+        navigation.push('OriginalSourcePreview', {
+          reportId: route.params.reportId,
+          pageIndex: target.pageIndex,
+        });
+        return;
+      }
+      if (row.source.artifact?.kind === 'sanitized') {
+        navigation.push('SanitizedSourcePreview', {
+          reportId: route.params.reportId,
+          pageIndex: target.pageIndex,
+          boundingBox: target.boundingBox,
+        });
+      }
+    } catch {
+      previewRequestPending.current = false;
+      setPreviewOpening(false);
+      setError(true);
     }
   }
 
@@ -204,7 +241,7 @@ export function ExtractionMeasurementEditorScreen() {
           {t(sourcePresentation.regionKey).replace('{page}', String(row.source.pageIndex + 1))}
         </AppText>
         <AppButton
-          disabled={sourcePresentation.artifactKind === 'unavailable'}
+          disabled={sourcePresentation.artifactKind === 'unavailable' || busy || previewOpening}
           label={t('labs.extractionViewInReport')}
           onPress={viewInReport}
           tone="quiet"
