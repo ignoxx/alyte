@@ -5,6 +5,10 @@
 enum {
     ALYTE_LOCAL_MODEL_FULL_BATCH_TOKENS = 256,
     ALYTE_LOCAL_MODEL_REDUCED_BATCH_TOKENS = 128,
+    // These are bounded context-allocation fallbacks for devices where the evaluated
+    // context batch does not fit. Keep context size, backend order, and model choice fixed.
+    ALYTE_LOCAL_MODEL_LOW_BATCH_TOKENS = 64,
+    ALYTE_LOCAL_MODEL_MINIMUM_BATCH_TOKENS = 32,
 };
 
 static bool alyte_local_model_create_context(
@@ -15,6 +19,8 @@ static bool alyte_local_model_create_context(
     const uint32_t attempts[] = {
         ALYTE_LOCAL_MODEL_FULL_BATCH_TOKENS,
         ALYTE_LOCAL_MODEL_REDUCED_BATCH_TOKENS,
+        ALYTE_LOCAL_MODEL_LOW_BATCH_TOKENS,
+        ALYTE_LOCAL_MODEL_MINIMUM_BATCH_TOKENS,
     };
     for (size_t index = 0; index < sizeof(attempts) / sizeof(attempts[0]); index += 1) {
         void *context = hooks->create_context(model, attempts[index]);

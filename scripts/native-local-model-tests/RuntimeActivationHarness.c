@@ -15,9 +15,9 @@ typedef struct SyntheticContext {
 
 static SyntheticModel gpu_model = { ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED };
 static SyntheticModel cpu_model = { ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY };
-static SyntheticContext cpu_context = { 128 };
+static SyntheticContext cpu_context = { 32 };
 static AlyteLocalModelBackendMode load_modes[2];
-static uint32_t context_batches[4];
+static uint32_t context_batches[8];
 static void *freed_models[2];
 static size_t load_count;
 static size_t context_count;
@@ -48,15 +48,19 @@ int main(void) {
     assert(alyte_local_model_activate_with_fallback("synthetic", &hooks, &activation));
     assert(activation.failure_stage == ALYTE_LOCAL_MODEL_ACTIVATION_FAILURE_NONE);
     assert(activation.backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY);
-    assert(activation.batch_tokens == 128);
+    assert(activation.batch_tokens == 32);
     assert(load_count == 2);
     assert(load_modes[0] == ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED);
     assert(load_modes[1] == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY);
-    assert(context_count == 4);
+    assert(context_count == 8);
     assert(context_batches[0] == 256);
     assert(context_batches[1] == 128);
-    assert(context_batches[2] == 256);
-    assert(context_batches[3] == 128);
+    assert(context_batches[2] == 64);
+    assert(context_batches[3] == 32);
+    assert(context_batches[4] == 256);
+    assert(context_batches[5] == 128);
+    assert(context_batches[6] == 64);
+    assert(context_batches[7] == 32);
     assert(free_count == 1);
     assert(freed_models[0] == &gpu_model);
 

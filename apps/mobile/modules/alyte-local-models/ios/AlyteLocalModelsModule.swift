@@ -1,13 +1,9 @@
 import ExpoModulesCore
 import Foundation
-#if DEBUG
 import os
-#endif
 
 public final class AlyteLocalModelsModule: Module {
-#if DEBUG
   private static let activationLogger = Logger(subsystem: "com.alyte.local-models", category: "activation")
-#endif
   private var store: AlyteLocalModelStore!
 
   public func definition() -> ModuleDefinition {
@@ -93,9 +89,11 @@ public final class AlyteLocalModelsModule: Module {
     ]
     if let stage = localError?.runtimeFailureStage {
       userInfo["failureStage"] = stage.rawValue
-      #if DEBUG
-      activationLogger.debug("Local model activation failed at stage \(stage.rawValue, privacy: .public)")
-      #endif
+      // Release diagnostics are deliberately limited to finite, typed values. Never include
+      // paths, prompts, model contents, generated output, or health data in this log.
+      Self.activationLogger.error(
+        "Local model activation failed category=\(category, privacy: .public) stage=\(stage.rawValue, privacy: .public)"
+      )
     }
     return NSError(
       domain: "AlyteLocalModels",

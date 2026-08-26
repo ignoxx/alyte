@@ -201,7 +201,7 @@ enum AlyteLocalModelFailure: String {
   case unknown = "unknown"
 }
 
-/// Debug-safe stage from the native runtime creation boundary. It intentionally carries no
+/// Release-safe stage from the native runtime creation boundary. It intentionally carries no
 /// path, prompt, model, or health data; release-facing errors continue to use runtime-failed.
 enum AlyteLocalModelRuntimeFailureStage: String {
   case modelLoad = "model-load"
