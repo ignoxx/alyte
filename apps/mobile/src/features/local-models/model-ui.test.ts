@@ -8,6 +8,8 @@ import {
   modelFailureMessageKey,
   modelFailureRecoveryAction,
   modelDownloadAction,
+  modelSetupFailureMessageKey,
+  modelSetupFailureVisible,
   modelSetupPrimaryAction,
   modelOperation,
   modelProgressPercent,
@@ -121,6 +123,20 @@ test('failures preserve action-oriented copy categories', () => {
   assert.equal(modelFailureMessageKey('unknown'), 'onboarding.modelFailureGeneric');
 });
 
+test('setup failure copy stays separate from the shared Settings mapping', () => {
+  assert.equal(modelSetupFailureMessageKey('offline'), 'onboarding.modelSetupFailureOffline');
+  assert.equal(
+    modelSetupFailureMessageKey('checksum-mismatch'),
+    'onboarding.modelSetupFailureChecksum',
+  );
+  assert.equal(modelSetupFailureMessageKey('cancelled'), 'onboarding.modelSetupCancelDisclosure');
+  assert.equal(
+    modelSetupFailureMessageKey('runtime-failed'),
+    'onboarding.modelSetupFailureGeneric',
+  );
+  assert.equal(modelFailureMessageKey('offline'), 'onboarding.modelFailureOffline');
+});
+
 test('cancellation is only calm when a requested cancel has the typed cancelled category', () => {
   assert.equal(isExpectedDownloadCancellation({ failure: 'cancelled' }, true), true);
   assert.equal(isExpectedDownloadCancellation({ failureCategory: 'cancelled' }, true), true);
@@ -197,6 +213,22 @@ test('required-model setup exposes one action for every lifecycle state', () => 
   assert.equal(modelSetupPrimaryAction(ready), 'open');
   assert.equal(modelSetupPrimaryAction(ready, 'runtime-failed'), 'retry');
   assert.equal(modelSetupPrimaryAction({ ...initial, state: 'deleting' }), 'none');
+});
+
+test('resumable setup owns its failure presentation', () => {
+  const initial = notInstalledSnapshot(productionLocalModelManifest);
+  const partial = {
+    ...initial,
+    state: 'failed' as const,
+    bytesReceived: 100,
+    progress: 100 / initial.expectedBytes,
+    failure: 'interrupted' as const,
+  };
+
+  assert.equal(modelSetupFailureVisible(partial, null), false);
+  assert.equal(modelSetupFailureVisible(partial, 'offline'), false);
+  assert.equal(modelSetupFailureVisible({ ...initial, state: 'failed' }, null), true);
+  assert.equal(modelSetupFailureVisible(null, 'unavailable'), true);
 });
 
 test('download size formatting follows the device locale and localized unit keys', () => {

@@ -7,10 +7,11 @@ import {
 } from '@react-navigation/native';
 import { createNativeBottomTabNavigator } from '@react-navigation/bottom-tabs/unstable';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useColorScheme } from 'react-native';
+import { Pressable, useColorScheme } from 'react-native';
 import type { AlyteServices } from '../services';
 import { t } from '../localization';
 import { colors } from '../theme';
+import { AppText } from '../ui/primitives';
 import { createNavigationRegistry } from './registry';
 import type { FeatureTarget, NavigationFeature } from './registry-model';
 import { featureStackRootName, preGateTabNames, reportImportDestination } from './registry-model';
@@ -239,14 +240,33 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
         <RootStack.Screen
           name="ModelInstall"
           component={LocalModelInstallScreen}
-          options={{
+          options={({ navigation }) => ({
             presentation: 'fullScreenModal',
             headerShown: true,
             title: t('onboarding.contextualNavigationTitle'),
             headerBackButtonDisplayMode: 'minimal',
             headerShadowVisible: false,
             headerTintColor: colors.accent as string,
-          }}
+            // Keep the native back affordance/gesture and add a clearly labeled dismissal action.
+            headerRight: () => (
+              <Pressable
+                accessibilityLabel={t('onboarding.contextualClose')}
+                accessibilityRole="button"
+                hitSlop={8}
+                onPress={() => navigation.goBack()}
+                style={{
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minHeight: 44,
+                  minWidth: 44,
+                }}
+              >
+                <AppText variant="label" style={{ color: colors.accent }}>
+                  {t('onboarding.contextualClose')}
+                </AppText>
+              </Pressable>
+            ),
+          })}
         />
         <RootStack.Screen
           name={reportImportDestination.route}

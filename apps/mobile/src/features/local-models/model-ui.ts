@@ -189,3 +189,42 @@ export function modelFailureMessageKey(failure: LocalModelFailure | null): strin
       return 'onboarding.modelFailureGeneric';
   }
 }
+
+/**
+ * Setup deliberately has shorter recovery copy than model storage management. Keep this mapping
+ * separate so contextual/first-run setup does not rewrite the shared Settings messages.
+ */
+export function modelSetupFailureMessageKey(failure: LocalModelFailure | null): string {
+  switch (failure) {
+    case 'offline':
+      return 'onboarding.modelSetupFailureOffline';
+    case 'insufficient-space':
+      return 'onboarding.modelSetupFailureSpace';
+    case 'checksum-mismatch':
+    case 'size-mismatch':
+      return 'onboarding.modelSetupFailureChecksum';
+    case 'incompatible':
+      return 'onboarding.modelSetupFailureIncompatible';
+    case 'interrupted':
+      return 'onboarding.modelSetupFailureInterrupted';
+    case 'http-failed':
+    case 'upstream-missing':
+    case 'redirect-rejected':
+    case 'range-rejected':
+      return 'onboarding.modelSetupFailureNetwork';
+    case 'unavailable':
+      return 'onboarding.modelSetupFailureUnavailable';
+    case 'cancelled':
+      return 'onboarding.modelSetupCancelDisclosure';
+    default:
+      return 'onboarding.modelSetupFailureGeneric';
+  }
+}
+
+/** A saved partial owns its recovery presentation; it must not share a second failure callout. */
+export function modelSetupFailureVisible(
+  snapshot: LocalModelSnapshot | null,
+  failure: LocalModelFailure | null,
+): boolean {
+  return !hasResumableModelDownload(snapshot) && (snapshot?.state === 'failed' || failure !== null);
+}

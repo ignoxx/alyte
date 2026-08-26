@@ -21,8 +21,9 @@ import { ModelProgress } from '../local-models/ModelProgress';
 import {
   isExpectedDownloadCancellation,
   modelFailureFromError,
-  modelFailureMessageKey,
   modelFailureRecoveryAction,
+  modelSetupFailureMessageKey,
+  modelSetupFailureVisible,
   modelSetupPrimaryAction,
   modelStatusTone,
 } from '../local-models/model-ui';
@@ -87,6 +88,8 @@ export function ModelSetupPanel({ model, onComplete, contextual = false }: Model
   const primaryAction = modelSetupPrimaryAction(snapshot, modelFailure);
   const ready = snapshot !== null && canCompleteModelOnboarding(snapshot);
   const failed = snapshot?.state === 'failed';
+  const setupFailureVisible = modelSetupFailureVisible(snapshot, modelFailure);
+  const showCancelError = cancelError && !resumable;
 
   async function startDownload() {
     cancellationRequestedRef.current = false;
@@ -160,7 +163,7 @@ export function ModelSetupPanel({ model, onComplete, contextual = false }: Model
   }
 
   const statusLabel = ready ? t('onboarding.modelReady') : t('onboarding.modelEyebrow');
-  const showFailure = failed || modelFailure !== null;
+  const failureForMessage = failed ? (snapshot?.failure ?? null) : modelFailure;
 
   return (
     <AppSurface style={styles.modelCard}>
@@ -203,26 +206,23 @@ export function ModelSetupPanel({ model, onComplete, contextual = false }: Model
       {resumable && snapshot !== null ? (
         <AppSurface tone="soft" style={styles.callout}>
           <AppText variant="heading" selectable>
-            {t('onboarding.modelPartialSaved').replace(
+            {t('onboarding.modelSetupPartialSaved').replace(
               '{progress}',
               String(Math.round(snapshot.progress * 100)),
             )}
           </AppText>
-          <AppText style={styles.muted} selectable>
-            {t('onboarding.modelKeepOpen')}
-          </AppText>
         </AppSurface>
       ) : null}
 
-      {showFailure ? (
+      {setupFailureVisible && !showCancelError ? (
         <AppSurface tone="soft" style={styles.callout}>
           <AppText variant="heading" style={styles.error} selectable>
-            {t(modelFailureMessageKey(failed ? (snapshot?.failure ?? null) : modelFailure))}
+            {t(modelSetupFailureMessageKey(failureForMessage))}
           </AppText>
         </AppSurface>
       ) : null}
 
-      {cancelError ? (
+      {showCancelError ? (
         <AppSurface tone="soft" style={styles.callout}>
           <AppText variant="heading" style={styles.error} selectable>
             {t('onboarding.modelCancelFailure')}
@@ -230,9 +230,9 @@ export function ModelSetupPanel({ model, onComplete, contextual = false }: Model
         </AppSurface>
       ) : null}
 
-      {cancelled && !resumable ? (
+      {cancelled && !resumable && !setupFailureVisible ? (
         <AppText style={styles.muted} selectable>
-          {t('onboarding.modelCancelDisclosure')}
+          {t('onboarding.modelSetupCancelDisclosure')}
         </AppText>
       ) : null}
 
@@ -245,7 +245,7 @@ export function ModelSetupPanel({ model, onComplete, contextual = false }: Model
         </AppText>
       ) : null}
 
-      {cancelError ? (
+      {showCancelError ? (
         <AppButton
           disabled={cancelBusy}
           label={t('onboarding.modelRetryCancel')}
