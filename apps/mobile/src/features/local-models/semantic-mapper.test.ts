@@ -28,6 +28,12 @@ const observation: VisionTextObservation = {
   recognition: { level: 'accurate', language: 'de', internalConfidence: null },
 };
 
+const candidateRow = {
+  rowId: observation.id,
+  sourceObservationIds: [observation.id],
+  observations: [observation],
+} as const;
+
 function models(
   infer: (prompt: string) => Promise<string>,
   state: LocalModelSnapshot = loadedState,
@@ -80,7 +86,7 @@ test('accepts only validated source selections and preserves versioned provenanc
     ),
     aliases,
   });
-  const mapped = await mapper.map({ pageIndex: 0, observations: [observation] });
+  const mapped = await mapper.map({ pageIndex: 0, rows: [candidateRow] });
   assert.deepEqual(mapped, [
     {
       sourceObservationIds: ['synthetic-ldl'],
@@ -89,7 +95,7 @@ test('accepts only validated source selections and preserves versioned provenanc
       role: 'measurement',
     },
   ]);
-  assert.equal(mapper.provenance?.promptVersion, 'alyte.semantic-mapper.prompt.v1');
+  assert.equal(mapper.provenance?.promptVersion, 'alyte.semantic-mapper.prompt.v2');
   assert.equal(mapper.maxRowsPerChunk, 12);
 });
 
@@ -104,7 +110,7 @@ test('rejects invented root keys before semantic validation', async () => {
     ),
     aliases,
   });
-  assert.deepEqual(await mapper.map({ pageIndex: 0, observations: [observation] }), []);
+  assert.deepEqual(await mapper.map({ pageIndex: 0, rows: [candidateRow] }), []);
 });
 
 test('rejects a partial envelope and times out without retaining model output', async () => {
@@ -143,9 +149,9 @@ test('rejects a partial envelope and times out without retaining model output', 
     ),
     aliases,
   });
-  assert.deepEqual(await mapper.map({ pageIndex: 0, observations: [observation] }), []);
+  assert.deepEqual(await mapper.map({ pageIndex: 0, rows: [candidateRow] }), []);
   await assert.rejects(
-    mapper.map({ pageIndex: 0, observations: [observation] }),
+    mapper.map({ pageIndex: 0, rows: [candidateRow] }),
     /semantic-inference-timeout/,
   );
   // The timeout is a cooperative native cancellation request, not only a JS race.

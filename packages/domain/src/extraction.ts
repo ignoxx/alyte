@@ -61,6 +61,7 @@ export type ExtractionSourceLocation = {
     readonly modelVersion?: string;
     readonly runtimeVersion?: string;
     readonly promptVersion?: string;
+    readonly chunkVersion?: string;
     readonly parserVersion?: string;
     readonly catalogueVersion?: string;
   } | null;
@@ -214,6 +215,18 @@ export type ExtractionSemanticProposal = {
   readonly role?: 'measurement' | 'specimen-context' | 'ignore';
 };
 
+/**
+ * A deterministic Vision/table/geometry group supplied to the semantic mapper. The row ID is
+ * internal bookkeeping; the model may only copy the complete sourceObservationIds array when it
+ * proposes a mapping. Keeping cells nested under a row prevents the wire contract from presenting
+ * one physical result as an unrelated OCR wall.
+ */
+export type ExtractionSemanticCandidateRow = {
+  readonly rowId: string;
+  readonly sourceObservationIds: readonly string[];
+  readonly observations: readonly VisionTextObservation[];
+};
+
 export type ExtractionSemanticProvenance = NonNullable<ExtractionSourceLocation['semantic']>;
 
 export interface ExtractionSemanticMapper {
@@ -229,22 +242,60 @@ export interface ExtractionSemanticMapper {
     Partial<
       Pick<
         ExtractionSemanticProvenance,
-        'modelVersion' | 'runtimeVersion' | 'promptVersion' | 'parserVersion' | 'catalogueVersion'
+        | 'modelVersion'
+        | 'runtimeVersion'
+        | 'promptVersion'
+        | 'chunkVersion'
+        | 'parserVersion'
+        | 'catalogueVersion'
       >
     >
   >;
   supports(locale: string | null): boolean;
   map(input: {
     readonly pageIndex: number;
-    readonly observations: readonly VisionTextObservation[];
+    readonly rows: readonly ExtractionSemanticCandidateRow[];
     readonly headings?: readonly VisionTextObservation[];
   }): Promise<unknown>;
 }
 
-/** Rejects model output unless it refers only to exact local observations and known catalogue IDs. */
+type SemanticCandidateRowsInput =
+  readonly ExtractionSemanticCandidateRow[] | readonly VisionTextObservation[];
+
+/**
+ * Keeps the old observation-array shape available to pure-domain callers while production uses
+ * explicit candidate rows. This compatibility adapter is intentionally not used by the native
+ * production wire serializer.
+ */
+function candidateRowsFromInput(
+  input: SemanticCandidateRowsInput,
+): readonly ExtractionSemanticCandidateRow[] {
+  if (input.length === 0) return [];
+  const first = input[0];
+  if (first !== undefined && 'text' in first) {
+    const observations = input as readonly VisionTextObservation[];
+    const rowKeys = semanticObservationRowKeys(observations);
+    const rows = new Map<string, VisionTextObservation[]>();
+    for (const observation of observations) {
+      const rowId = rowKeys.get(observation.id);
+      if (rowId === undefined) continue;
+      const row = rows.get(rowId) ?? [];
+      row.push(observation);
+      rows.set(rowId, row);
+    }
+    return [...rows].map(([rowId, rowObservations]) => ({
+      rowId,
+      sourceObservationIds: rowObservations.map((observation) => observation.id),
+      observations: rowObservations,
+    }));
+  }
+  return input as readonly ExtractionSemanticCandidateRow[];
+}
+
+/** Rejects model output unless it refers only to exact local rows and known catalogue IDs. */
 export function validateSemanticProposals(
   input: unknown,
-  observations: readonly VisionTextObservation[],
+  candidateRowsInput: SemanticCandidateRowsInput,
   aliases: readonly ExtractionAliasEntry[],
 ): readonly ExtractionSemanticProposal[] {
   const isEnvelope = !Array.isArray(input);
@@ -257,10 +308,34 @@ export function validateSemanticProposals(
       : null;
   if (proposals === null) return [];
   if (proposals.length > 24) return [];
-  const sourceIds = new Set(observations.map((item) => item.id));
+  const candidateRows = candidateRowsFromInput(candidateRowsInput);
+  const sourceById = new Map<string, VisionTextObservation>();
+  const rowBySourceIds = new Map<string, ExtractionSemanticCandidateRow>();
+  const rowIds = new Set<string>();
+  for (const row of candidateRows) {
+    if (
+      row.rowId.length === 0 ||
+      row.rowId.length > 96 ||
+      rowIds.has(row.rowId) ||
+      row.sourceObservationIds.length === 0 ||
+      row.sourceObservationIds.length > 8 ||
+      new Set(row.sourceObservationIds).size !== row.sourceObservationIds.length ||
+      row.sourceObservationIds.some((id) => id.length === 0 || id.length > 96) ||
+      row.observations.length !== row.sourceObservationIds.length
+    )
+      return [];
+    const rowObservationIds = row.observations.map((observation) => observation.id);
+    if (
+      rowObservationIds.some((id, index) => id !== row.sourceObservationIds[index]) ||
+      row.observations.some((observation) => sourceById.has(observation.id))
+    )
+      return [];
+    row.observations.forEach((observation) => sourceById.set(observation.id, observation));
+    rowIds.add(row.rowId);
+    rowBySourceIds.set(JSON.stringify(row.sourceObservationIds), row);
+  }
   const biomarkerIds = new Set(aliases.map((item) => item.id));
   const consumedRows = new Set<string>();
-  const rowKeys = semanticObservationRowKeys(observations);
   const accepted = proposals.flatMap((item) => {
     if (typeof item !== 'object' || item === null) return [];
     const value = item as Record<string, unknown>;
@@ -283,20 +358,15 @@ export function validateSemanticProposals(
       sourceObservationIds.length > 8 ||
       sourceObservationIds.some((id) => id.length === 0 || id.length > 96) ||
       new Set(sourceObservationIds).size !== sourceObservationIds.length ||
-      !sourceObservationIds.every((id) => sourceIds.has(id))
+      !sourceObservationIds.every((id) => sourceById.has(id))
     )
       return [];
-    const sourceRows = sourceObservationIds.map((id) =>
-      observations.find((observation) => observation.id === id),
-    );
-    const rowIds = new Set(
-      sourceRows.map((observation) => observation && rowKeys.get(observation.id)),
-    );
-    if (rowIds.size !== 1) return [];
-    const rowId = [...rowIds][0];
-    if (typeof rowId !== 'string' && typeof rowId !== 'number') return [];
-    const rowKey = String(rowId);
-    if (consumedRows.has(rowKey)) return [];
+    const row = rowBySourceIds.get(JSON.stringify(sourceObservationIds));
+    // The model must copy the complete row ID array, including order. A partial, cross-row,
+    // reordered, or extra-ID proposal is rejected rather than inferred or repaired.
+    if (row === undefined || consumedRows.has(row.rowId)) return [];
+    const sourceRows = sourceObservationIds.map((id) => sourceById.get(id));
+    if (sourceRows.some((observation) => observation === undefined)) return [];
     const rawBiomarkerId =
       value.proposedBiomarkerId === undefined ? value.biomarkerId : value.proposedBiomarkerId;
     const proposedBiomarkerId =
@@ -340,7 +410,7 @@ export function validateSemanticProposals(
     };
     if (proposal.proposedBiomarkerId !== null && !biomarkerIds.has(proposal.proposedBiomarkerId))
       return [];
-    consumedRows.add(rowKey);
+    consumedRows.add(row.rowId);
     return [proposal];
   });
   // A malformed or duplicate envelope must never partially influence the draft. The production

@@ -12,6 +12,7 @@ import {
   SEMANTIC_MAPPER_LIMITS,
   SEMANTIC_MAPPER_PROMPT_VERSION,
   SEMANTIC_MAPPER_SCHEMA_VERSION,
+  SEMANTIC_OCR_CHUNK_VERSION,
   serializeSemanticMapperChunk,
   validateSemanticMapperOutput,
 } from './semantic-contract';
@@ -61,12 +62,13 @@ export function createLocalSemanticMapper(
   return {
     adapterVersion: 'alyte.gemma4-e2b.semantic-mapper.v1',
     schemaVersion: SEMANTIC_MAPPER_SCHEMA_VERSION,
-    maxRowsPerChunk: 12,
+    maxRowsPerChunk: SEMANTIC_MAPPER_LIMITS.maxRows,
     maxObservationsPerChunk: SEMANTIC_MAPPER_LIMITS.maxObservations,
     provenance: {
       modelVersion: productionLocalModelManifest.pack.artifact.revision,
       runtimeVersion: productionLocalModelManifest.runtime.revision,
       promptVersion: PROMPT_VERSION,
+      chunkVersion: SEMANTIC_OCR_CHUNK_VERSION,
       parserVersion: EXTRACTION_PARSER_VERSION,
       catalogueVersion: CATALOGUE_VERSION,
     },
@@ -84,12 +86,13 @@ export function createLocalSemanticMapper(
         productionLocalModelManifest.compatibility.languages.includes(code as SupportedLanguage)
       );
     },
-    map: async ({ observations, headings }) => {
+    map: async ({ rows, headings }) => {
+      const observations = rows.flatMap((row) => row.observations);
       const locale =
         observations[0] === undefined
           ? 'en'
           : (languageCode(observations[0].recognition.language) ?? 'en');
-      const serialized = serializeSemanticMapperChunk(observations, locale, headings ?? []);
+      const serialized = serializeSemanticMapperChunk(rows, locale, headings ?? []);
       const prompt = createSemanticMapperPrompt(locale, serialized);
       if (new TextEncoder().encode(prompt).byteLength > SEMANTIC_MAPPER_LIMITS.maxInputBytes) {
         throw new Error('semantic-inference-input-too-large');
@@ -105,13 +108,14 @@ export function createLocalSemanticMapper(
       } catch {
         return [];
       }
-      return validateSemanticMapperOutput(parsed, observations, options.aliases);
+      return validateSemanticMapperOutput(parsed, rows, options.aliases);
     },
   };
 }
 
 export const localSemanticMapperMetadata = Object.freeze({
   promptVersion: PROMPT_VERSION,
+  chunkVersion: SEMANTIC_OCR_CHUNK_VERSION,
   schemaVersion: SEMANTIC_MAPPER_SCHEMA_VERSION,
   maxOutputTokens: SEMANTIC_MAPPER_LIMITS.outputTokenLimit,
   maxOutputBytes: SEMANTIC_MAPPER_LIMITS.maxOutputBytes,

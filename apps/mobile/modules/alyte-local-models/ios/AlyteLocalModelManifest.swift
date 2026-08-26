@@ -19,7 +19,8 @@ enum AlyteLocalModelManifest {
   static let runtimeID = "llama.cpp"
   static let runtimeRepository = "ggml-org/llama.cpp"
   static let runtimeRevision = "bb4caa7540188872173c44d161602d9271386413"
-  static let promptBundle = "alyte.semantic-mapper.prompt.v1"
+  static let promptBundle = "alyte.semantic-mapper.prompt.v2"
+  static let ocrChunk = "alyte.semantic-ocr-chunk.v2"
   static let semanticSchema = "alyte.semantic-mapper.v1"
   static let languages = ["en", "de", "lt", "fr", "es", "it", "pt", "nl", "pl"]
   static let minimumIOS = "26.0"
@@ -52,6 +53,7 @@ enum AlyteLocalModelManifest {
       "compatibility": [
         "languages": languages,
         "promptBundle": promptBundle,
+        "ocrChunk": ocrChunk,
         "semanticSchema": semanticSchema,
       ],
       "requirements": [

@@ -5,6 +5,7 @@ export type LocalModelManifest = typeof productionLocalModelManifest;
 export const LOCAL_MODEL_MANIFEST_VERSION = productionLocalModelManifest.manifestVersion;
 export const LOCAL_MODEL_PACK_ID = productionLocalModelManifest.pack.id;
 export const LOCAL_MODEL_PROMPT_BUNDLE = productionLocalModelManifest.compatibility.promptBundle;
+export const LOCAL_MODEL_OCR_CHUNK = productionLocalModelManifest.compatibility.ocrChunk;
 export const LOCAL_MODEL_SCHEMA = productionLocalModelManifest.compatibility.semanticSchema;
 export const LOCAL_MODEL_RUNTIME_REVISION = productionLocalModelManifest.runtime.revision;
 
@@ -57,6 +58,7 @@ export function assertLocalModelManifest(
   }
   if (
     manifest.compatibility.promptBundle !== expected.compatibility.promptBundle ||
+    manifest.compatibility.ocrChunk !== expected.compatibility.ocrChunk ||
     manifest.compatibility.semanticSchema !== expected.compatibility.semanticSchema ||
     manifest.requirements.minimumIOS !== expected.requirements.minimumIOS ||
     manifest.requirements.minimumFreeBytes !== expected.requirements.minimumFreeBytes ||

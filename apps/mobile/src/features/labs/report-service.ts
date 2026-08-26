@@ -22,6 +22,7 @@ import {
   type ExtractionDraftRow,
   type ExtractionDraftRowPatch,
   type ExtractionDateContext,
+  type ExtractionSemanticCandidateRow,
   type ExtractionSemanticMapper,
   type ExtractionSemanticProposal,
   type VisionTextObservation,
@@ -1389,7 +1390,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       rowGroups.set(key, group);
     }
     const chunks: {
-      readonly observations: VisionTextObservation[];
+      readonly rows: readonly ExtractionSemanticCandidateRow[];
       readonly headings: VisionTextObservation[];
     }[] = [];
     const maxRowsPerChunk = Math.max(1, Math.floor(semanticMapper.maxRowsPerChunk ?? 12));
@@ -1402,12 +1403,21 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       let rowObservationCount = 0;
       const flushChunk = () => {
         if (rowChunk.length === 0) return;
-        const chunk = rowChunk.flatMap((row) =>
-          row.source.observationIds.flatMap((id) => {
+        const candidateRows = rowChunk.flatMap((row): ExtractionSemanticCandidateRow[] => {
+          const rowObservations = row.source.observationIds.flatMap((id) => {
             const observation = observationById.get(id);
             return observation === undefined ? [] : [observation];
-          }),
-        );
+          });
+          return rowObservations.length === row.source.observationIds.length
+            ? [
+                {
+                  rowId: row.id,
+                  sourceObservationIds: [...row.source.observationIds],
+                  observations: rowObservations,
+                },
+              ]
+            : [];
+        });
         // Preserve nearby section/table headings even when Vision placed them outside the table
         // cells. A heading is context only: it is never added to the candidate row itself.
         const anchor = rowChunk[0]?.source.observations?.[0];
@@ -1422,7 +1432,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           const isAbove = observation.boundingBox.y <= anchorY;
           return specimenHeading && isAbove && anchorY - observation.boundingBox.y <= 0.25;
         });
-        if (chunk.length > 0) chunks.push({ observations: chunk, headings });
+        if (candidateRows.length > 0) chunks.push({ rows: candidateRows, headings });
         rowChunk = [];
         rowObservationCount = 0;
       };
@@ -1447,18 +1457,18 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }
     const proposals: ExtractionSemanticProposal[] = [];
     for (const chunk of chunks) {
-      const locale = chunk.observations[0]?.recognition.language ?? null;
+      const locale = chunk.rows[0]?.observations[0]?.recognition.language ?? null;
       try {
         if (!semanticMapper.supports(locale)) continue;
         const input = {
-          pageIndex: chunk.observations[0]?.pageIndex ?? 0,
-          observations: chunk.observations,
+          pageIndex: chunk.rows[0]?.observations[0]?.pageIndex ?? 0,
+          rows: chunk.rows,
           headings: chunk.headings,
         };
         proposals.push(
           ...validateSemanticProposals(
             await semanticMapper.map(input),
-            chunk.observations,
+            chunk.rows,
             extractionAliases,
           ),
         );
@@ -1468,8 +1478,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       }
     }
     return rows.map((row) => {
-      const proposal = proposals.find((item) =>
-        item.sourceObservationIds.every((id) => row.source.observationIds.includes(id)),
+      const proposal = proposals.find(
+        (item) =>
+          item.sourceObservationIds.length === row.source.observationIds.length &&
+          item.sourceObservationIds.every((id, index) => id === row.source.observationIds[index]),
       );
       if (proposal === undefined) return row;
       if (proposal.role === 'ignore') return row;

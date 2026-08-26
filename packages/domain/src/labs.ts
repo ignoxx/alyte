@@ -61,6 +61,7 @@ export type MeasurementSourceLocation = {
     readonly modelVersion?: string;
     readonly runtimeVersion?: string;
     readonly promptVersion?: string;
+    readonly chunkVersion?: string;
     readonly parserVersion?: string;
     readonly catalogueVersion?: string;
   } | null;

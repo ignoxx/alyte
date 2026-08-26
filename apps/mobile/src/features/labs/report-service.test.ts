@@ -1237,7 +1237,7 @@ describe('protected Lab Report import lifecycle', () => {
       schemaVersion: 'alyte.semantic-mapper.v1',
       maxRowsPerChunk: 12,
       supports: () => true,
-      async map({ observations: chunk }) {
+      async map({ rows: chunk }) {
         chunkSizes.push(chunk.length);
         if (chunkSizes.length === 1) {
           // The valid-looking candidate must not partially apply when the same envelope also

@@ -39,6 +39,7 @@ enum AlyteLocalModelManifest {
   static let runtimeRepository = ${swiftString(manifest.runtime.repository)}
   static let runtimeRevision = ${swiftString(manifest.runtime.revision)}
   static let promptBundle = ${swiftString(manifest.compatibility.promptBundle)}
+  static let ocrChunk = ${swiftString(manifest.compatibility.ocrChunk)}
   static let semanticSchema = ${swiftString(manifest.compatibility.semanticSchema)}
   static let languages = ${swiftArray(manifest.compatibility.languages)}
   static let minimumIOS = ${swiftString(manifest.requirements.minimumIOS)}
@@ -71,6 +72,7 @@ enum AlyteLocalModelManifest {
       "compatibility": [
         "languages": languages,
         "promptBundle": promptBundle,
+        "ocrChunk": ocrChunk,
         "semanticSchema": semanticSchema,
       ],
       "requirements": [

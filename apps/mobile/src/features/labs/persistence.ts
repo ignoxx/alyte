@@ -331,6 +331,7 @@ function decodeStoredSemantic(
     ...(typeof item.modelVersion === 'string' ? { modelVersion: item.modelVersion } : {}),
     ...(typeof item.runtimeVersion === 'string' ? { runtimeVersion: item.runtimeVersion } : {}),
     ...(typeof item.promptVersion === 'string' ? { promptVersion: item.promptVersion } : {}),
+    ...(typeof item.chunkVersion === 'string' ? { chunkVersion: item.chunkVersion } : {}),
     ...(typeof item.parserVersion === 'string' ? { parserVersion: item.parserVersion } : {}),
     ...(typeof item.catalogueVersion === 'string'
       ? { catalogueVersion: item.catalogueVersion }
