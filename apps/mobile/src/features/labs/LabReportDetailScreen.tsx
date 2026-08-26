@@ -1,20 +1,19 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
-import {
-  ActionSheetIOS,
-  Alert,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { ActionSheetIOS, Alert, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { LabReport } from '@alyte/domain';
 import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
+import {
+  AppButton,
+  AppIcon,
+  AppSurface,
+  AppText,
+  ScreenScrollView,
+  StatusPill,
+} from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import {
   LabReportExtractionError,
@@ -260,11 +259,8 @@ export function LabReportDetailScreen() {
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
 
   return (
-    <ScrollView
-      automaticallyAdjustContentInsets
-      automaticallyAdjustsScrollIndicatorInsets
+    <ScreenScrollView
       contentContainerStyle={[screenStyles.content, styles.detailContent]}
-      contentInsetAdjustmentBehavior="automatic"
       style={screenStyles.scroll}
     >
       <AppText variant="heading">{report.originalFilename}</AppText>
@@ -382,7 +378,7 @@ export function LabReportDetailScreen() {
           {t('labs.reportLinkedRecords').replace('{count}', String(report.labRecordIds.length))}
         </AppText>
       )}
-    </ScrollView>
+    </ScreenScrollView>
   );
 }
 
