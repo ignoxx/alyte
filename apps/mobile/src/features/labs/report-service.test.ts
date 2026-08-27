@@ -121,17 +121,43 @@ afterEach(() => {
 });
 
 function createRepository(databasePath?: string): LabRepository {
+  return createRepositoryWithDatabase(databasePath).repository;
+}
+
+function createRepositoryWithDatabase(databasePath?: string): {
+  readonly database: NodeSqliteDatabase;
+  readonly repository: LabRepository;
+} {
   const directory =
     databasePath === undefined ? mkdtempSync(join(tmpdir(), 'alyte-reports-')) : null;
   if (directory !== null) temporaryPaths.push(directory);
   const database = new NodeSqliteDatabase(
     databasePath ?? join(directory as string, 'alyte.sqlite'),
   );
-  return createLabRepository(database, {
-    protection,
-    now: () => '2026-08-22T10:00:00.000Z',
-    idGenerator: (prefix) => `${prefix}-test-${Math.random().toString(36).slice(2)}`,
-  });
+  return {
+    database,
+    repository: createLabRepository(database, {
+      protection,
+      now: () => '2026-08-22T10:00:00.000Z',
+      idGenerator: (prefix) => `${prefix}-test-${Math.random().toString(36).slice(2)}`,
+    }),
+  };
+}
+
+/** Reproduce legacy local stores created before the per-report draft uniqueness constraint. */
+async function allowMultipleExtractionDrafts(database: NodeSqliteDatabase): Promise<void> {
+  await database.execAsync(`
+    PRAGMA foreign_keys = OFF;
+    CREATE TABLE extraction_drafts_without_unique AS SELECT * FROM extraction_drafts WHERE 0;
+    CREATE TABLE extraction_draft_rows_without_fk AS SELECT * FROM extraction_draft_rows WHERE 0;
+    DROP TABLE extraction_draft_rows;
+    DROP TABLE extraction_drafts;
+    ALTER TABLE extraction_drafts_without_unique RENAME TO extraction_drafts;
+    ALTER TABLE extraction_draft_rows_without_fk RENAME TO extraction_draft_rows;
+    CREATE INDEX extraction_drafts_report_id_idx ON extraction_drafts(report_id);
+    CREATE INDEX extraction_draft_rows_draft_id_idx ON extraction_draft_rows(draft_id, row_order);
+    PRAGMA foreign_keys = ON;
+  `);
 }
 
 class FakeFiles implements ProtectedReportFileService {
@@ -2137,6 +2163,67 @@ describe('protected Lab Report import lifecycle', () => {
       (await service.listReports()).filter((report) => report.importState !== 'deleted').length,
       1,
     );
+  });
+
+  test('duplicate hashes select the open draft when a legacy report has confirmed and open drafts', async () => {
+    const { database, repository } = createRepositoryWithDatabase();
+    await repository.initialize();
+    await allowMultipleExtractionDrafts(database);
+    const files = new FakeFiles();
+    const pdf = new FakePdf();
+    const service = createService(repository, files, pdf);
+    const first = (await service.importPdf(source('same-multiple-drafts')))!;
+    const rows = groupObservationsIntoRows(
+      [
+        {
+          id: 'multiple-drafts-row',
+          text: 'LDL-C 3.8 mmol/L',
+          alternatives: [],
+          pageIndex: 0,
+          orientation: 0,
+          boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+          recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+        },
+      ],
+      {
+        locale: 'en-US',
+        collectionDate: { kind: 'known', value: '2026-08-20' },
+        specimenType: 'blood',
+        aliases: createDefaultExtractionAliases(),
+        artifact: { kind: 'original', id: null, hash: first.report.sourceHash },
+      },
+    );
+    const confirmedDraft = await repository.createExtractionDraft({
+      id: 'confirmed-legacy-draft',
+      reportId: first.report.id,
+      collectionDate: { kind: 'known', value: '2026-08-20' },
+      rows,
+      sourceArtifact: { kind: 'original', id: null, hash: first.report.sourceHash },
+    });
+    await database.runAsync(
+      "UPDATE extraction_drafts SET state = 'confirmed', confirmed_at = ?, updated_at = ? WHERE id = ?;",
+      '2026-08-21T10:00:00.000Z',
+      '2026-08-21T10:00:00.000Z',
+      confirmedDraft.id,
+    );
+    const openDraft = await repository.createExtractionDraft({
+      id: 'open-new-draft',
+      reportId: first.report.id,
+      collectionDate: { kind: 'known', value: '2026-08-22' },
+      rows,
+      sourceArtifact: { kind: 'original', id: null, hash: first.report.sourceHash },
+    });
+
+    assert.equal((await repository.getExtractionDraftForReport(first.report.id))?.id, openDraft.id);
+    const duplicate = await service.importPdf(source('same-multiple-drafts'));
+
+    assert.equal(duplicate?.duplicate, true);
+    assert.deepEqual(duplicate?.destination, {
+      kind: 'extraction-draft',
+      draftId: openDraft.id,
+    });
+    assert.equal(pdf.inspectCalls, 1);
+    await repository.close();
   });
 
   test('does not treat a failed pathless import as a usable duplicate', async () => {

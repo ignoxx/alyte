@@ -1580,7 +1580,15 @@ export function createLabRepository(
   ): Promise<ExtractionDraft | null> {
     await initialize();
     const rows = await database.getAllAsync<ExtractionDraftDb>(
-      `SELECT ${extractionDraftColumns} FROM extraction_drafts WHERE report_id = ?;`,
+      `SELECT ${extractionDraftColumns} FROM extraction_drafts
+       WHERE report_id = ?
+       ORDER BY CASE state
+         WHEN 'draft' THEN 0
+         WHEN 'confirmed' THEN 1
+         WHEN 'failed' THEN 2
+         ELSE 3
+       END ASC, updated_at DESC, created_at DESC, id DESC
+       LIMIT 1;`,
       reportId,
     );
     const row = rows[0];
