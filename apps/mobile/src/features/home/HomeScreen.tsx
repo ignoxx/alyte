@@ -88,6 +88,10 @@ function EmptyHome({ onImport }: { readonly onImport: () => void }) {
   );
 }
 
+function countCopy(count: number, singularKey: string, pluralKey: string): string {
+  return t(count === 1 ? singularKey : pluralKey).replace('{count}', String(count));
+}
+
 function PendingWork({ model }: { readonly model: HomeLabViewModel }) {
   if (model.pendingImports.length === 0 && model.openDraftCount === 0 && model.reviewCount === 0)
     return null;
@@ -96,17 +100,17 @@ function PendingWork({ model }: { readonly model: HomeLabViewModel }) {
       <AppText variant="heading">{t('home.reviewWork')}</AppText>
       {model.pendingImports.length > 0 && (
         <AppText style={styles.muted}>
-          {t('home.pendingImports').replace('{count}', String(model.pendingImports.length))}
+          {countCopy(model.pendingImports.length, 'home.pendingImport', 'home.pendingImports')}
         </AppText>
       )}
       {model.openDraftCount > 0 && (
         <AppText style={styles.muted}>
-          {t('home.pendingDrafts').replace('{count}', String(model.openDraftCount))}
+          {countCopy(model.openDraftCount, 'home.pendingDraft', 'home.pendingDrafts')}
         </AppText>
       )}
       {model.reviewCount > 0 && (
         <AppText style={styles.muted}>
-          {t('home.pendingMeasurements').replace('{count}', String(model.reviewCount))}
+          {countCopy(model.reviewCount, 'home.pendingMeasurement', 'home.pendingMeasurements')}
         </AppText>
       )}
     </View>
