@@ -46,60 +46,97 @@ export function extractionConfirmationSummary(
 
 export type ExtractionConfirmationPresentation = ExtractionConfirmationSummary & {
   readonly state: ExtractionConfirmationState;
-  readonly statusLabel: string;
-  readonly disabled: boolean;
+  readonly action: ExtractionConfirmationAction | null;
 };
 
 export type ExtractionConfirmationState = 'blocked' | 'ready' | 'busy' | 'failure';
 
-export type ExtractionConfirmationLayout = 'inline' | 'stacked';
+export type ExtractionConfirmationActionKind = 'review' | 'save' | 'retry';
 
-/** Stack before Dynamic Type can squeeze either visible count out of the accessory. */
-export function extractionConfirmationLayout(
-  fontScale: number,
-  width: number,
-): ExtractionConfirmationLayout {
-  return fontScale > 1 || width < 360 ? 'stacked' : 'inline';
+export type ExtractionConfirmationAction = {
+  readonly kind: ExtractionConfirmationActionKind;
+  /** Short visible copy for the native accessory. */
+  readonly label: string;
+  /** Complete state and action copy for VoiceOver. */
+  readonly accessibilityLabel: string;
+  readonly disabled: boolean;
+};
+
+function measurementCountLabel(count: number): string {
+  return t(
+    count === 1
+      ? 'labs.extractionConfirmationSaveMeasurement'
+      : 'labs.extractionConfirmationSaveMeasurements',
+  ).replace('{count}', String(count));
 }
 
-function confirmationStatusLabel(
-  state: ExtractionConfirmationState,
-  summary: ExtractionConfirmationSummary,
-): string {
-  switch (state) {
-    case 'busy':
-      return t('labs.extractionConfirmationBusy');
-    case 'failure':
-      return t('labs.extractionConfirmationFailure');
-    case 'ready':
-      return t('labs.extractionConfirmationReady');
-    case 'blocked':
-      return summary.blockedReason === 'no-included-rows'
-        ? t('labs.extractionConfirmationNoIncluded')
-        : t('labs.extractionConfirmationBlocked').replace(
-            '{count}',
-            String(summary.remainingBlockers),
-          );
-  }
+function reviewCountLabel(count: number): string {
+  return t('labs.extractionConfirmationReviewRemaining').replace('{count}', String(count));
 }
 
-/** Resolve stable accessory states without making a spinner the only busy/failure feedback. */
+function stateSummaryLabel(summary: ExtractionConfirmationSummary): string {
+  return t('labs.extractionConfirmationProgress')
+    .replace('{included}', String(summary.included))
+    .replace('{review}', String(summary.needsReview));
+}
+
+/** Resolve the one concise accessory action from the existing confirmation/domain state. */
 export function extractionConfirmationPresentation(
   summary: ExtractionConfirmationSummary,
   input: { readonly busy: boolean; readonly failure?: boolean },
 ): ExtractionConfirmationPresentation {
   const state = input.busy
     ? 'busy'
-    : input.failure
-      ? 'failure'
-      : summary.canConfirm
-        ? 'ready'
-        : 'blocked';
+    : summary.included === 0
+      ? 'blocked'
+      : input.failure
+        ? 'failure'
+        : summary.canConfirm
+          ? 'ready'
+          : 'blocked';
+
+  let action: ExtractionConfirmationAction | null = null;
+  if (summary.included > 0) {
+    const summaryLabel = stateSummaryLabel(summary);
+    if (state === 'busy') {
+      action = {
+        kind: 'save',
+        label: t('labs.extractionConfirmationBusyAction'),
+        accessibilityLabel: `${t('labs.extractionConfirmationBusyAction')}. ${summaryLabel}`,
+        disabled: true,
+      };
+    } else if (state === 'failure') {
+      action = {
+        kind: 'retry',
+        label: t('labs.extractionConfirmationRetry'),
+        accessibilityLabel: `${t('labs.extractionConfirmationRetry')}. ${t(
+          'labs.extractionConfirmationFailure',
+        )} ${summaryLabel}`,
+        disabled: false,
+      };
+    } else if (state === 'ready') {
+      const label = measurementCountLabel(summary.included);
+      action = {
+        kind: 'save',
+        label,
+        accessibilityLabel: `${label}. ${summaryLabel}`,
+        disabled: false,
+      };
+    } else {
+      const label = reviewCountLabel(summary.remainingBlockers);
+      action = {
+        kind: 'review',
+        label,
+        accessibilityLabel: `${label}. ${summaryLabel}`,
+        disabled: false,
+      };
+    }
+  }
+
   return {
     ...summary,
     state,
-    statusLabel: confirmationStatusLabel(state, summary),
-    disabled: input.busy || !summary.canConfirm,
+    action,
   };
 }
 
@@ -112,24 +149,5 @@ export type ExtractionConfirmationProps = {
   readonly remainingBlockers: number;
   readonly blockedReason: ExtractionConfirmationBlockReason | null;
   readonly onConfirm: () => void;
+  readonly onReviewRemaining: () => void;
 };
-
-export function confirmationAccessibilityLabel(
-  included: number,
-  needsReview: number,
-  remainingBlockers = 0,
-  blockedReason: ExtractionConfirmationBlockReason | null = null,
-): string {
-  const blockedReasonText =
-    blockedReason === 'no-included-rows'
-      ? ` ${t('labs.extractionConfirmationNoIncluded')}`
-      : blockedReason === 'rows-need-resolution'
-        ? ` ${t('labs.extractionConfirmationBlocked').replace(
-            '{count}',
-            String(remainingBlockers),
-          )}`
-        : '';
-  return `${t('labs.extractionConfirm')}. ${t('labs.extractionConfirmationProgress')
-    .replace('{included}', String(included))
-    .replace('{review}', String(needsReview))}.${blockedReasonText}`;
-}

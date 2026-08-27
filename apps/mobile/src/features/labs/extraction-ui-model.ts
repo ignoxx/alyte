@@ -6,11 +6,11 @@ import {
 import { extractionConfirmationSummary } from './ExtractionConfirmation.shared';
 
 export {
-  extractionConfirmationLayout,
   extractionConfirmationPresentation,
   extractionConfirmationSummary,
   type ExtractionConfirmationBlockReason,
-  type ExtractionConfirmationLayout,
+  type ExtractionConfirmationAction,
+  type ExtractionConfirmationActionKind,
   type ExtractionConfirmationPresentation,
   type ExtractionConfirmationState,
   type ExtractionConfirmationSummary,

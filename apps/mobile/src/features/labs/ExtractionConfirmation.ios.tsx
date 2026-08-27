@@ -1,17 +1,16 @@
-import { useLayoutEffect } from 'react';
-import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { useLayoutEffect, useMemo } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { LabsStackParamList } from '../../navigation/types';
 import { t } from '../../localization';
 import { colors, spacing } from '../../theme';
 import { AppText } from '../../ui/primitives';
-import type { ExtractionConfirmationProps } from './ExtractionConfirmation.shared';
-import {
-  confirmationAccessibilityLabel,
-  extractionConfirmationLayout,
-  extractionConfirmationPresentation,
+import type {
+  ExtractionConfirmationAction,
+  ExtractionConfirmationProps,
 } from './ExtractionConfirmation.shared';
+import { extractionConfirmationPresentation } from './ExtractionConfirmation.shared';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
 
@@ -25,110 +24,91 @@ export function ExtractionConfirmation({
   remainingBlockers,
   blockedReason,
   onConfirm,
+  onReviewRemaining,
 }: ExtractionConfirmationProps) {
   const navigation = useNavigation<Navigation>();
+  const presentation = useMemo(
+    () =>
+      extractionConfirmationPresentation(
+        {
+          included,
+          needsReview,
+          remainingBlockers,
+          canConfirm,
+          blockedReason,
+        },
+        { busy, failure },
+      ),
+    [blockedReason, busy, canConfirm, failure, included, needsReview, remainingBlockers],
+  );
+  const action = presentation.action;
 
   useLayoutEffect(() => {
     const tabNavigation = navigation.getParent();
     if (tabNavigation === undefined) return;
+    if (action === null) {
+      tabNavigation.setOptions({ bottomAccessory: undefined });
+      return;
+    }
+
     tabNavigation.setOptions({
       bottomAccessory: () => (
         <ReviewAccessory
-          busy={busy}
-          canConfirm={canConfirm}
-          failure={failure}
-          included={included}
-          needsReview={needsReview}
-          remainingBlockers={remainingBlockers}
-          blockedReason={blockedReason}
+          action={action}
+          failure={presentation.state === 'failure'}
           onConfirm={onConfirm}
+          onReviewRemaining={onReviewRemaining}
         />
       ),
     });
     return () => tabNavigation.setOptions({ bottomAccessory: undefined });
-  }, [
-    blockedReason,
-    busy,
-    canConfirm,
-    failure,
-    included,
-    navigation,
-    needsReview,
-    onConfirm,
-    remainingBlockers,
-  ]);
+  }, [action, navigation, onConfirm, onReviewRemaining, presentation.state]);
 
   return null;
 }
 
 function ReviewAccessory({
-  busy,
-  canConfirm,
-  failure = false,
-  included,
-  needsReview,
-  remainingBlockers,
-  blockedReason,
+  action,
+  failure,
   onConfirm,
-}: ExtractionConfirmationProps) {
-  const { fontScale, width } = useWindowDimensions();
-  const layout = extractionConfirmationLayout(fontScale, width);
-  const presentation = extractionConfirmationPresentation(
-    {
-      included,
-      needsReview,
-      remainingBlockers,
-      canConfirm,
-      blockedReason,
-    },
-    { busy, failure },
-  );
-  const disabled = presentation.disabled;
+  onReviewRemaining,
+}: {
+  readonly action: ExtractionConfirmationAction;
+  readonly failure: boolean;
+  readonly onConfirm: () => void;
+  readonly onReviewRemaining: () => void;
+}) {
+  const handlePress = () => {
+    if (action.kind === 'review') onReviewRemaining();
+    else onConfirm();
+  };
 
   return (
-    <View style={[styles.accessory, layout === 'stacked' && styles.accessoryStacked]}>
-      <View
-        accessibilityRole="text"
-        style={[styles.summary, layout === 'stacked' && styles.summaryStacked]}
-      >
-        <AppText
-          selectable
-          style={styles.progress}
-          // Keep the compact native slot readable while VoiceOver receives the full label below.
-          numberOfLines={layout === 'stacked' ? undefined : 2}
-        >
-          {t('labs.extractionConfirmationProgress')
-            .replace('{included}', String(included))
-            .replace('{review}', String(needsReview))}
+    <View style={[styles.accessory, failure && styles.failureAccessory]}>
+      {failure && (
+        <AppText accessibilityRole="text" numberOfLines={1} selectable style={styles.failure}>
+          {t('labs.extractionConfirmationFailure')}
         </AppText>
-        <AppText
-          selectable
-          numberOfLines={layout === 'stacked' ? undefined : 2}
-          style={presentation.state === 'blocked' ? styles.blocked : styles.status}
-        >
-          {presentation.statusLabel}
-        </AppText>
-      </View>
+      )}
       <Pressable
-        accessibilityLabel={confirmationAccessibilityLabel(
-          included,
-          needsReview,
-          remainingBlockers,
-          blockedReason,
-        )}
+        accessibilityLabel={action.accessibilityLabel}
         accessibilityRole="button"
-        accessibilityState={{ busy, disabled }}
-        disabled={disabled}
-        onPress={onConfirm}
+        accessibilityState={{ busy: action.disabled, disabled: action.disabled }}
+        disabled={action.disabled}
+        onPress={handlePress}
         style={({ pressed }) => [
           styles.action,
-          layout === 'stacked' && styles.actionStacked,
-          pressed && !disabled && styles.actionPressed,
-          disabled && styles.actionDisabled,
+          action.kind === 'save' && !failure ? styles.saveAction : styles.quietAction,
+          pressed && !action.disabled && styles.actionPressed,
+          action.disabled && styles.actionDisabled,
         ]}
       >
-        <AppText variant="label" style={styles.actionLabel}>
-          {busy ? t('labs.extractionConfirmationBusyAction') : t('labs.extractionConfirmShort')}
+        <AppText
+          numberOfLines={1}
+          variant="label"
+          style={[styles.actionLabel, action.kind === 'save' && !failure && styles.saveLabel]}
+        >
+          {action.label}
         </AppText>
       </Pressable>
     </View>
@@ -139,30 +119,28 @@ const styles = StyleSheet.create({
   accessory: {
     alignItems: 'stretch',
     flex: 1,
-    flexDirection: 'row',
-    gap: spacing.sm,
-    minHeight: 56,
+    justifyContent: 'center',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },
-  accessoryStacked: { flexDirection: 'column' },
-  summary: { flex: 1, gap: spacing.xs, justifyContent: 'center', minWidth: 0 },
-  summaryStacked: { flex: 0, width: '100%' },
-  progress: { color: colors.mutedInk, fontVariant: ['tabular-nums'] },
-  status: { color: colors.mutedInk },
-  blocked: { color: colors.danger },
+  failureAccessory: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  failure: { color: colors.danger, flex: 1, minWidth: 0 },
   action: {
     alignItems: 'center',
     borderCurve: 'continuous',
-    borderRadius: 999,
+    borderRadius: 12,
     justifyContent: 'center',
     minHeight: 44,
-    minWidth: 104,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
   },
-  actionStacked: { alignSelf: 'flex-end' },
-  actionPressed: { backgroundColor: colors.accentSoft },
-  actionDisabled: { opacity: 0.45 },
+  quietAction: { backgroundColor: colors.accentSoft },
+  saveAction: { backgroundColor: colors.accent },
+  actionPressed: { opacity: 0.78 },
+  actionDisabled: { opacity: 0.58 },
   actionLabel: { color: colors.accent, textAlign: 'center' },
+  saveLabel: { color: colors.onAccent },
 });

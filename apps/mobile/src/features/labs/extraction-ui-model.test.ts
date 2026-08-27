@@ -6,7 +6,6 @@ import {
   buildExtractionReviewSections,
   canConfirmExtraction,
   extractionConfirmationDestination,
-  extractionConfirmationLayout,
   extractionConfirmationPresentation,
   extractionConfirmationSummary,
   extractionDecisionPresentation,
@@ -262,42 +261,62 @@ test('Extraction confirmation separates review attention from exact included-row
   });
 });
 
-test('Extraction confirmation presentation keeps ready, busy, failure, and blocked states stable', () => {
+test('Extraction confirmation presentation maps each state to one concise action', () => {
   const summary = extractionConfirmationSummary([row()]);
   assert.deepEqual(extractionConfirmationPresentation(summary, { busy: false }), {
     ...summary,
     state: 'ready',
-    statusLabel: 'Ready to confirm.',
-    disabled: false,
+    action: {
+      kind: 'save',
+      label: 'Save 1 measurement',
+      accessibilityLabel: 'Save 1 measurement. 1 included · 0 need review',
+      disabled: false,
+    },
   });
   assert.deepEqual(extractionConfirmationPresentation(summary, { busy: true }), {
     ...summary,
     state: 'busy',
-    statusLabel: 'Confirming Lab Records…',
-    disabled: true,
+    action: {
+      kind: 'save',
+      label: 'Saving…',
+      accessibilityLabel: 'Saving…. 1 included · 0 need review',
+      disabled: true,
+    },
   });
   assert.deepEqual(extractionConfirmationPresentation(summary, { busy: false, failure: true }), {
     ...summary,
     state: 'failure',
-    statusLabel: 'Confirmation failed. Try again.',
-    disabled: false,
+    action: {
+      kind: 'retry',
+      label: 'Try again',
+      accessibilityLabel: 'Try again. Couldn’t save measurements. 1 included · 0 need review',
+      disabled: false,
+    },
   });
-  assert.equal(extractionConfirmationPresentation(summary, { busy: true }).disabled, true);
+  assert.equal(extractionConfirmationPresentation(summary, { busy: true }).action?.disabled, true);
   const blocked = extractionConfirmationSummary([
     row({ reviewReasons: ['unsupported-layout'], reviewState: 'needs-review' }),
   ]);
+  assert.deepEqual(extractionConfirmationPresentation(blocked, { busy: false }).action, {
+    kind: 'review',
+    label: 'Review 1 remaining',
+    accessibilityLabel: 'Review 1 remaining. 1 included · 1 need review',
+    disabled: false,
+  });
   assert.deepEqual(extractionConfirmationPresentation(blocked, { busy: false }), {
     ...blocked,
     state: 'blocked',
-    statusLabel: '1 included row(s) still need resolution.',
-    disabled: true,
+    action: {
+      kind: 'review',
+      label: 'Review 1 remaining',
+      accessibilityLabel: 'Review 1 remaining. 1 included · 1 need review',
+      disabled: false,
+    },
   });
-});
-
-test('Extraction confirmation stacks before XL text can hide either visible count', () => {
-  assert.equal(extractionConfirmationLayout(1, 390), 'inline');
-  assert.equal(extractionConfirmationLayout(1.3, 390), 'stacked');
-  assert.equal(extractionConfirmationLayout(1, 359), 'stacked');
+  assert.equal(
+    extractionConfirmationPresentation(extractionConfirmationSummary([]), { busy: false }).action,
+    null,
+  );
 });
 
 test('groups compact rows by Lab Record and panel while keeping date and specimen in headers', () => {

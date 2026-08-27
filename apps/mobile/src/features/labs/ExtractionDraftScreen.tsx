@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, SectionList, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { ExtractionDraft, ExtractionDraftRow } from '@alyte/domain';
+import {
+  extractionReviewBlocksConfirmation,
+  type ExtractionDraft,
+  type ExtractionDraftRow,
+} from '@alyte/domain';
 import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
@@ -85,6 +89,9 @@ export function ExtractionDraftScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
+  const [reviewFocusRequest, setReviewFocusRequest] = useState(0);
+  const listRef = useRef<SectionList<ExtractionDraftRow, ListSection> | null>(null);
+  const pendingReviewRowId = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -128,9 +135,42 @@ export function ExtractionDraftScreen() {
   const needsReview = confirmation.needsReview;
   const included = confirmation.included;
   const canConfirm = draft !== null && confirmation.canConfirm;
+  const hasBottomAccessory = confirmation.included > 0;
+
+  useEffect(() => {
+    const rowId = pendingReviewRowId.current;
+    if (rowId === null || filter !== 'needs-review' || search !== '') return;
+
+    const sectionIndex = sections.findIndex((section) =>
+      section.data.some((row) => row.id === rowId),
+    );
+    if (sectionIndex < 0) return;
+    const itemIndex = sections[sectionIndex]!.data.findIndex((row) => row.id === rowId);
+    if (itemIndex < 0) return;
+
+    pendingReviewRowId.current = null;
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToLocation({
+        animated: true,
+        itemIndex,
+        sectionIndex,
+        viewPosition: 0.2,
+      });
+    });
+  }, [filter, reviewFocusRequest, search, sections]);
+
+  const reviewRemaining = useCallback(() => {
+    const nextBlockingRow = draft?.rows.find(extractionReviewBlocksConfirmation);
+    if (nextBlockingRow === undefined) return;
+    pendingReviewRowId.current = nextBlockingRow.id;
+    setSearch('');
+    setFilter('needs-review');
+    setReviewFocusRequest((request) => request + 1);
+  }, [draft?.rows]);
 
   const confirm = useCallback(async () => {
-    if (draft === null || !canConfirmExtraction(draft.rows)) return;
+    if (busy || draft === null || !canConfirmExtraction(draft.rows)) return;
+    setError(false);
     setBusy(true);
     try {
       const records = await reports.confirmExtraction(draft.id);
@@ -145,7 +185,7 @@ export function ExtractionDraftScreen() {
     } finally {
       setBusy(false);
     }
-  }, [draft, navigation, reports]);
+  }, [busy, draft, navigation, reports]);
 
   if (loading) return <AppText style={styles.loading}>{t('labs.loading')}</AppText>;
   if (draft === null) {
@@ -160,8 +200,9 @@ export function ExtractionDraftScreen() {
   return (
     <View style={styles.safe}>
       <SectionList
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, hasBottomAccessory && styles.contentWithAccessory]}
         contentInsetAdjustmentBehavior="automatic"
+        ref={listRef}
         sections={sections}
         keyExtractor={(row) => row.id}
         keyboardDismissMode="interactive"
@@ -179,11 +220,6 @@ export function ExtractionDraftScreen() {
               )}`}
             </AppText>
             <AppText style={styles.intro}>{t('labs.extractionCompactIntro')}</AppText>
-            {error && (
-              <AppText selectable style={styles.error}>
-                {t('labs.extractionSaveError')}
-              </AppText>
-            )}
             <View accessibilityRole="tablist" style={styles.filters}>
               <FilterButton
                 active={filter === 'all'}
@@ -298,6 +334,7 @@ export function ExtractionDraftScreen() {
         remainingBlockers={confirmation.remainingBlockers}
         blockedReason={confirmation.blockedReason}
         onConfirm={confirm}
+        onReviewRemaining={reviewRemaining}
       />
     </View>
   );
@@ -342,6 +379,9 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxl },
+  // UIKit adjusts for the native tab bar; this extra end-cap keeps the last row above the
+  // iOS bottom accessory as well when the tab controller does not report its accessory height.
+  contentWithAccessory: { paddingBottom: spacing.xxl + 56 },
   header: {
     alignItems: 'stretch',
     gap: spacing.sm,
@@ -350,7 +390,6 @@ const styles = StyleSheet.create({
   },
   summary: { flexShrink: 1, fontVariant: ['tabular-nums'], width: '100%' },
   intro: { color: colors.mutedInk, flexShrink: 1, width: '100%' },
-  error: { color: colors.danger },
   muted: { color: colors.mutedInk },
   filters: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingTop: spacing.xs },
   filter: {
