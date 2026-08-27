@@ -297,7 +297,6 @@ export function LabReportDetailScreen() {
           </Pressable>
           {report.importState === 'imported' && report.labRecordIds.length === 0 && (
             <View style={styles.extractAction}>
-              <AppText variant="heading">{t('labs.extractionStart')}</AppText>
               <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
               <AppButton
                 disabled={busy}
@@ -348,11 +347,7 @@ function DetailScrollView({
 }: PropsWithChildren<{ readonly centered?: boolean }>) {
   return (
     <ScreenScrollView
-      contentContainerStyle={[
-        screenStyles.content,
-        styles.detailContent,
-        centered && styles.center,
-      ]}
+      contentContainerStyle={[screenStyles.content, centered && styles.center]}
       style={screenStyles.scroll}
       tabBarClearance="native"
     >
@@ -379,9 +374,6 @@ const styles = StyleSheet.create({
   headerAction: { alignItems: 'center', justifyContent: 'center', minHeight: 44, minWidth: 44 },
   pressed: { opacity: 0.6 },
   metaSection: { gap: 0, marginTop: spacing.md, padding: 0 },
-  // Keep an end-cap in addition to the shared native-tab clearance so the final action remains
-  // clear while the translucent bar is at rest and after a long/failure state is scrolled.
-  detailContent: { paddingBottom: spacing.xxl },
   detailRow: {
     alignItems: 'center',
     borderBottomColor: colors.border,
