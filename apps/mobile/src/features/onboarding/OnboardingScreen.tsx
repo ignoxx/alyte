@@ -33,7 +33,6 @@ import {
 import type { LocalModelService } from '../local-models/native';
 import {
   ONBOARDING_MODEL_DOWNLOAD_PAGE,
-  ONBOARDING_MODEL_SELECTION_PAGE,
   ONBOARDING_PAGE_COUNT,
   ONBOARDING_READY_PAGE,
   onboardingCanContinue,

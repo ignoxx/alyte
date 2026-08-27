@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 export const SESSION_RETENTION_MS = 24 * 60 * 60 * 1_000;
 export const OPERATION_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -91,6 +91,14 @@ export interface CommercePurchaseRow {
   readonly created_at: string;
 }
 
+export interface CommercePurchaseClaimRow {
+  readonly transaction_id: string;
+  readonly product_id: string;
+  readonly claimed_account_id: string | null;
+  readonly claimed_at: string;
+  readonly retired_at: string | null;
+}
+
 export interface CommerceWebhookEventRow {
   readonly event_id: string;
   readonly event_type: string;
@@ -106,6 +114,8 @@ export interface AllowanceLedgerRow {
   readonly entry_type: CommerceLedgerEntryType;
   readonly units: number;
   readonly source_id: string;
+  readonly grant_source_id: string | null;
+  readonly grant_period_start: string | null;
   readonly period_end: string | null;
   readonly created_at: string;
 }
@@ -276,6 +286,14 @@ const migrations: readonly string[] = [
       ON allowance_ledger(account_id, kind, entry_type, source_id);
     CREATE INDEX allowance_ledger_account_idx
       ON allowance_ledger(account_id, kind, created_at);
+  `,
+  `
+    ALTER TABLE commerce_purchase_claims ADD COLUMN claimed_account_id TEXT;
+    ALTER TABLE commerce_purchase_claims ADD COLUMN retired_at TEXT;
+    ALTER TABLE allowance_ledger ADD COLUMN grant_source_id TEXT;
+    ALTER TABLE allowance_ledger ADD COLUMN grant_period_start TEXT;
+    CREATE INDEX allowance_ledger_grant_source_idx
+      ON allowance_ledger(account_id, kind, grant_source_id);
   `,
 ];
 
@@ -672,6 +690,7 @@ export class AccountDatabase {
     // Account-linked operation responses are removed, but retain unlinkable Apple replay markers
     // until their normal expiry so a captured token cannot recreate a deleted account.
     this.preserveAppleExchangeReplayMarkers(accountId);
+    this.retireCommercePurchaseClaims(accountId, new Date().toISOString());
     this.sqlite
       .prepare(
         "DELETE FROM operation_idempotency WHERE account_id = ? AND operation <> 'account.delete'",
@@ -767,15 +786,52 @@ export class AccountDatabase {
       .all(accountId) as CommercePurchaseRow[];
   }
 
-  claimCommercePurchase(transactionId: string, productId: string, claimedAt: string): boolean {
+  claimCommercePurchase(
+    accountId: string,
+    transactionId: string,
+    productId: string,
+    claimedAt: string,
+  ): boolean {
+    const existing = this.sqlite
+      .prepare('SELECT * FROM commerce_purchase_claims WHERE transaction_id = ?')
+      .get(transactionId) as CommercePurchaseClaimRow | undefined;
+    if (existing === undefined) {
+      return (
+        this.sqlite
+          .prepare(
+            `INSERT INTO commerce_purchase_claims
+              (transaction_id, product_id, claimed_account_id, claimed_at, retired_at)
+             VALUES (?, ?, ?, ?, NULL)`,
+          )
+          .run(transactionId, productId, accountId, claimedAt).changes > 0
+      );
+    }
+    if (existing.claimed_account_id === accountId) return false;
+    if (
+      existing.claimed_account_id !== null &&
+      this.sqlite.prepare('SELECT 1 FROM accounts WHERE id = ?').get(existing.claimed_account_id)
+    ) {
+      return false;
+    }
     return (
       this.sqlite
         .prepare(
-          `INSERT INTO commerce_purchase_claims (transaction_id, product_id, claimed_at)
-           VALUES (?, ?, ?) ON CONFLICT(transaction_id) DO NOTHING`,
+          `UPDATE commerce_purchase_claims
+           SET product_id = ?, claimed_account_id = ?, claimed_at = ?, retired_at = NULL
+           WHERE transaction_id = ?`,
         )
-        .run(transactionId, productId, claimedAt).changes > 0
+        .run(productId, accountId, claimedAt, transactionId).changes > 0
     );
+  }
+
+  retireCommercePurchaseClaims(accountId: string, retiredAt: string): void {
+    this.sqlite
+      .prepare(
+        `UPDATE commerce_purchase_claims
+         SET claimed_account_id = NULL, retired_at = ?
+         WHERE claimed_account_id = ?`,
+      )
+      .run(retiredAt, accountId);
   }
 
   findCommerceWebhookEvent(eventId: string): CommerceWebhookEventRow | undefined {
@@ -854,8 +910,8 @@ export class AccountDatabase {
       this.sqlite
         .prepare(
           `INSERT INTO allowance_ledger
-            (id, account_id, kind, entry_type, units, source_id, period_end, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account_id, kind, entry_type, source_id)
+            (id, account_id, kind, entry_type, units, source_id, grant_source_id, grant_period_start, period_end, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account_id, kind, entry_type, source_id)
            DO NOTHING`,
         )
         .run(
@@ -865,6 +921,8 @@ export class AccountDatabase {
           entry.entry_type,
           entry.units,
           entry.source_id,
+          entry.grant_source_id,
+          entry.grant_period_start,
           entry.period_end,
           entry.created_at,
         ).changes > 0

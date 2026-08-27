@@ -6,7 +6,7 @@ import {
 import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { CLOUD_PLAN_OFFERS, CLOUD_PRODUCT_IDS, type CloudProductId } from '@alyte/contracts';
+import { CLOUD_PRODUCT_IDS, type CloudProductId } from '@alyte/contracts';
 import { t } from '../../localization';
 import { useServices } from '../../services';
 import type { RootStackParamList } from '../../navigation/types';
@@ -42,7 +42,7 @@ function priceFor(
   );
 }
 
-export function CloudPaywallScreen({ navigation }: Props) {
+export function CloudPaywallScreen({ navigation, route }: Props) {
   const services = useServices();
   const account = services.account;
   const commerce = services.commerce;
@@ -67,11 +67,20 @@ export function CloudPaywallScreen({ navigation }: Props) {
   }, [account, commerce]);
 
   useEffect(() => {
+    if (route.params.operation === 'snap' || route.params.operation === 'report') {
+      commerce.setPendingIntent({ operation: route.params.operation });
+      return () => commerce.setPendingIntent(null);
+    }
+    commerce.setPendingIntent(null);
+    return undefined;
+  }, [commerce, route.params.operation]);
+
+  useEffect(() => {
     if (accountSnapshot.signedIn && commerceSnapshot.status === 'idle') void commerce.load();
   }, [accountSnapshot.signedIn, commerce, commerceSnapshot.status]);
 
   async function signIn() {
-    if (!disclosureAccepted) return;
+    if (!disclosureAccepted || isBusy) return;
     try {
       await account.signInWithApple();
     } catch {
@@ -80,6 +89,7 @@ export function CloudPaywallScreen({ navigation }: Props) {
   }
 
   async function purchase(productId: CloudProductId) {
+    if (isBusy || purchased) return;
     try {
       await commerce.purchase(productId);
       setPurchased(true);
@@ -118,6 +128,12 @@ export function CloudPaywallScreen({ navigation }: Props) {
         {t('settings.cloudPaywallTitle')}
       </AppText>
       <AppText style={styles.intro}>{t('settings.cloudPaywallIntro')}</AppText>
+      {route.params.operation === 'snap' && (
+        <AppText style={styles.intent}>{t('settings.cloudPaywallSnapIntent')}</AppText>
+      )}
+      {route.params.operation === 'report' && (
+        <AppText style={styles.intent}>{t('settings.cloudPaywallReportIntent')}</AppText>
+      )}
 
       {!accountSnapshot.signedIn ? (
         <AppSurface style={styles.signInSurface}>
@@ -265,6 +281,7 @@ const styles = StyleSheet.create({
   content: { flexGrow: 1, padding: spacing.lg, paddingBottom: spacing.xxl },
   title: { marginBottom: spacing.sm },
   intro: { color: colors.mutedInk, marginBottom: spacing.lg },
+  intent: { color: colors.accent, marginBottom: spacing.lg },
   signInSurface: { gap: spacing.md, marginBottom: spacing.lg },
   benefitSurface: { gap: spacing.sm, marginBottom: spacing.lg },
   row: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },

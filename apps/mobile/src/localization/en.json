@@ -750,6 +750,8 @@
     "cloudPaywallTitle": "Use Alyte in the cloud",
     "cloudPaywallIntro": "Cloud analysis can look more deeply at a report or image. Your local records remain on this iPhone.",
     "cloudPaywallBenefit": "Choose a small one-time pack or a monthly allowance. Nothing is uploaded until you choose a cloud action.",
+    "cloudPaywallSnapIntent": "This cloud action uses 1 Snap.",
+    "cloudPaywallReportIntent": "This cloud action uses 1 Lab Report analysis.",
     "cloudStarterName": "Starter Pack",
     "cloudStarterPrice": "€0.99 one-time",
     "cloudStarterDetail": "5 image analyses · 1 Lab Report · never expires",

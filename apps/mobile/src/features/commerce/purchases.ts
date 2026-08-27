@@ -1,4 +1,5 @@
 import { CLOUD_PLAN_OFFERS, CLOUD_PRODUCT_IDS, type CloudProductId } from '@alyte/contracts';
+import type Purchases from 'react-native-purchases';
 
 export class MobileCommerceError extends Error {
   readonly code: 'store_unavailable' | 'purchase_cancelled' | 'purchase_failed';
@@ -43,7 +44,7 @@ export function createNativePurchaseAdapter(
   options: NativePurchaseAdapterOptions = {},
 ): PurchaseAdapter {
   const apiKey = (options.apiKey ?? process.env.EXPO_PUBLIC_REVENUECAT_IOS_KEY)?.trim();
-  let sdk: typeof import('react-native-purchases').default | null = null;
+  let sdk: typeof Purchases | null = null;
   let configuredAccountId: string | null = null;
   const packages = new Map<
     string,

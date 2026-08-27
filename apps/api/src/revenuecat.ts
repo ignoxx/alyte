@@ -71,6 +71,11 @@ function dateFromRevenueCat(value: unknown): string | null {
     const milliseconds = value < 10_000_000_000 ? value * 1_000 : value;
     return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : null;
   }
+  if (typeof value === 'string' && /^\d{9,16}$/.test(value)) {
+    const numeric = Number(value);
+    const milliseconds = numeric < 10_000_000_000 ? numeric * 1_000 : numeric;
+    return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : null;
+  }
   return isoDate(value);
 }
 
@@ -83,13 +88,19 @@ function parseSubscription(
   const transactionId =
     boundedText(value.store_transaction_id) ??
     boundedText(value.transaction_id) ??
-    boundedText(value.original_purchase_transaction_id);
-  const purchasedAt = dateFromRevenueCat(value.purchase_date ?? value.original_purchase_date);
+    boundedText(value.original_purchase_transaction_id) ??
+    boundedText(value.original_transaction_id);
+  const purchasedAt = dateFromRevenueCat(
+    value.purchased_at_ms ?? value.purchase_date ?? value.original_purchase_date,
+  );
   if (transactionId === null || purchasedAt === null) return null;
-  const periodStart = dateFromRevenueCat(value.purchase_date ?? value.original_purchase_date);
-  const periodEnd = dateFromRevenueCat(value.expires_date);
-  const willRenew =
-    value.unsubscribe_detected_at === null || value.unsubscribe_detected_at === undefined;
+  const periodStart = dateFromRevenueCat(
+    value.purchased_at_ms ?? value.purchase_date ?? value.original_purchase_date,
+  );
+  const periodEnd = dateFromRevenueCat(value.expiration_at_ms ?? value.expires_date);
+  const cancellation =
+    value.unsubscribe_detected_at ?? value.cancellation_date ?? value.cancelled_at;
+  const willRenew = cancellation === null || cancellation === undefined;
   return {
     productId,
     transactionId,
@@ -105,8 +116,11 @@ function parseNonSubscription(productId: string, values: unknown): RevenueCatPur
   if (!Array.isArray(values)) return [];
   return values.slice(0, 64).flatMap((value) => {
     if (!isRecord(value)) return [];
-    const transactionId = boundedText(value.id) ?? boundedText(value.store_transaction_id);
-    const purchasedAt = dateFromRevenueCat(value.purchase_date);
+    const transactionId =
+      boundedText(value.id) ??
+      boundedText(value.store_transaction_id) ??
+      boundedText(value.transaction_id);
+    const purchasedAt = dateFromRevenueCat(value.purchased_at_ms ?? value.purchase_date);
     return transactionId !== null && purchasedAt !== null
       ? [{ productId, transactionId, purchasedAt }]
       : [];

@@ -150,6 +150,7 @@ export function createCloudAccountService(
   };
   let bootstrapPromise: Promise<void> | null = null;
   let refreshPromise: Promise<string> | null = null;
+  let signInPromise: Promise<void> | null = null;
 
   function publish(
     status: CloudAccountStatus,
@@ -318,7 +319,7 @@ export function createCloudAccountService(
     }
   }
 
-  async function signInWithApple(): Promise<void> {
+  async function performSignInWithApple(): Promise<void> {
     publish('working', null);
     try {
       if (api.isConfigured !== undefined && !api.isConfigured()) {
@@ -363,6 +364,18 @@ export function createCloudAccountService(
     }
   }
 
+  function signInWithApple(): Promise<void> {
+    if (signInPromise !== null) return signInPromise;
+    const operation = performSignInWithApple();
+    signInPromise = operation;
+    void operation
+      .finally(() => {
+        if (signInPromise === operation) signInPromise = null;
+      })
+      .catch(() => undefined);
+    return operation;
+  }
+
   async function exportAccount(signal?: AbortSignal): Promise<AccountExportResponse> {
     const result = await withAccess((accessToken) => api.exportAccount(accessToken, signal));
     accountId = result.accountId;
@@ -375,6 +388,9 @@ export function createCloudAccountService(
       throw new CloudApiError(503, 'cloud_allowances_unavailable');
     }
     const result = await withAccess((accessToken) => api.getAllowanceSummary!(accessToken));
+    if (accountId !== null && result.accountId !== accountId) {
+      throw new CloudApiError(502, 'account_mismatch');
+    }
     accountId = result.accountId;
     publish('active', null);
     return result;
@@ -385,6 +401,9 @@ export function createCloudAccountService(
       throw new CloudApiError(503, 'cloud_allowances_unavailable');
     }
     const result = await withAccess((accessToken) => api.reconcileAllowances!(accessToken));
+    if (accountId !== null && result.accountId !== accountId) {
+      throw new CloudApiError(502, 'account_mismatch');
+    }
     accountId = result.accountId;
     publish('active', null);
     return result;

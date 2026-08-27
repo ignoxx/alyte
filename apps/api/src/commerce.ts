@@ -11,21 +11,18 @@ import {
   type CloudReconcileResponse,
   type RevenueCatWebhookResponse,
 } from '@alyte/contracts';
-import {
+import type {
   AccountDatabase,
-  type AllowanceLedgerRow,
-  type CommerceEntitlementRow,
-  type CommerceLedgerEntryType,
-  type CommercePlanId,
-  type CommercePurchaseRow,
+  AllowanceLedgerRow,
+  CommerceLedgerEntryType,
+  CommercePlanId,
+  CommercePurchaseRow,
 } from './database.js';
 import {
   parseRevenueCatWebhookBody,
   RevenueCatFailure,
   type RevenueCatAuthority,
   type RevenueCatCustomerSnapshot,
-  type RevenueCatPurchaseSnapshot,
-  type RevenueCatSubscriptionSnapshot,
   UnavailableRevenueCatAuthority,
   verifyRevenueCatSignature,
 } from './revenuecat.js';
@@ -100,6 +97,11 @@ function parseDate(value: unknown): string | null {
     return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : null;
   }
   if (typeof value !== 'string' || value.length === 0 || value.length > 128) return null;
+  if (/^\d{9,16}$/.test(value)) {
+    const numeric = Number(value);
+    const milliseconds = numeric < 10_000_000_000 ? numeric * 1_000 : numeric;
+    return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : null;
+  }
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 }
@@ -120,6 +122,7 @@ type WebhookEvent = {
   readonly type: string;
   readonly accountId: string;
   readonly productId: string;
+  readonly previousProductId: string | null;
   readonly transactionId: string | null;
   readonly purchasedAt: string;
   readonly periodStart: string | null;
@@ -133,9 +136,13 @@ function decodeWebhookEvent(root: Record<string, unknown>): WebhookEvent {
   const id = boundedString(event.id, 256);
   const type = boundedString(event.type, 64);
   const accountId = boundedString(event.app_user_id, 256);
-  const productId = boundedString(event.product_id, 256);
+  const currentProductId = boundedString(event.product_id, 256);
+  const replacementProductId = boundedString(event.new_product_id, 256);
+  const productId =
+    type === 'PRODUCT_CHANGE' ? (replacementProductId ?? currentProductId) : currentProductId;
   const purchasedAt =
-    parseDate(event.purchase_date ?? event.event_timestamp_ms) ?? new Date(0).toISOString();
+    parseDate(event.purchased_at_ms ?? event.purchase_date ?? event.event_timestamp_ms) ??
+    new Date(0).toISOString();
   if (id === null || type === null || accountId === null) {
     throw new CommerceFailure(400, 'webhook_invalid_event');
   }
@@ -153,12 +160,15 @@ function decodeWebhookEvent(root: Record<string, unknown>): WebhookEvent {
     type,
     accountId,
     productId: productId ?? '',
+    previousProductId: type === 'PRODUCT_CHANGE' ? currentProductId : null,
     transactionId:
       boundedString(event.transaction_id, 256) ??
       boundedString(event.store_transaction_id, 256) ??
       boundedString(event.original_transaction_id, 256),
     purchasedAt,
-    periodStart: parseDate(event.purchase_date ?? event.original_purchase_date),
+    periodStart: parseDate(
+      event.purchased_at_ms ?? event.purchase_date ?? event.original_purchase_date,
+    ),
     periodEnd: parseDate(event.expiration_at_ms ?? event.expires_date),
     willRenew:
       event.unsubscribe_detected_at === undefined || event.unsubscribe_detected_at === null,
@@ -183,8 +193,73 @@ function warningFor(included: number, remaining: number): CloudAllowanceWarning 
   return 'normal';
 }
 
-function grantSource(transactionId: string, kind: CloudAllowanceKind): string {
-  return `grant:${transactionId}:${kind}`;
+function grantSource(
+  transactionId: string,
+  kind: CloudAllowanceKind,
+  periodStart: string | null = null,
+): string {
+  return periodStart === null
+    ? `grant:${transactionId}:${kind}`
+    : `grant:${transactionId}:${periodStart}:${kind}`;
+}
+
+type GrantAllocation = {
+  readonly grant: AllowanceLedgerRow;
+  readonly purchase: CommercePurchaseRow;
+};
+
+function isWithinGrantPeriod(grant: AllowanceLedgerRow, now: number): boolean {
+  if (grant.period_end !== null && !isFuture(grant.period_end, now)) return false;
+  return grant.grant_period_start === null || Date.parse(grant.grant_period_start) <= now;
+}
+
+function addCalendarMonth(value: Date): Date {
+  const year = value.getUTCFullYear();
+  const month = value.getUTCMonth();
+  const day = value.getUTCDate();
+  const lastDay = new Date(Date.UTC(year, month + 2, 0)).getUTCDate();
+  return new Date(
+    Date.UTC(
+      year,
+      month + 1,
+      Math.min(day, lastDay),
+      value.getUTCHours(),
+      value.getUTCMinutes(),
+      value.getUTCSeconds(),
+      value.getUTCMilliseconds(),
+    ),
+  );
+}
+
+function subscriptionBuckets(
+  periodStart: string | null,
+  periodEnd: string | null,
+): readonly { periodStart: string | null; periodEnd: string | null }[] {
+  if (periodStart === null || periodEnd === null) {
+    return [{ periodStart, periodEnd }];
+  }
+  const start = new Date(periodStart);
+  const end = new Date(periodEnd);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) {
+    return [{ periodStart, periodEnd }];
+  }
+  // RevenueCat's annual product is granted in monthly buckets so a year does not become
+  // twelve months of allowance on day one. The period start is the deterministic anchor.
+  if (end.getTime() - start.getTime() <= 45 * 24 * 60 * 60 * 1_000) {
+    return [{ periodStart, periodEnd }];
+  }
+  const buckets: { periodStart: string; periodEnd: string }[] = [];
+  let cursor = start;
+  for (let count = 0; count < 24 && cursor < end; count += 1) {
+    const next = addCalendarMonth(cursor);
+    const bucketEnd = next < end ? next : end;
+    buckets.push({
+      periodStart: cursor.toISOString(),
+      periodEnd: bucketEnd.toISOString(),
+    });
+    cursor = bucketEnd;
+  }
+  return buckets.length > 0 ? buckets : [{ periodStart, periodEnd }];
 }
 
 function entryId(idFactory: () => string): string {
@@ -196,7 +271,6 @@ export class CommerceService {
   private readonly authority: RevenueCatAuthority;
   private readonly webhookSecret: string | undefined;
   private readonly now: () => Date;
-  private readonly cloudMaxEnabled: boolean;
   private readonly idFactory: () => string;
 
   constructor(options: CommerceServiceOptions) {
@@ -204,7 +278,6 @@ export class CommerceService {
     this.authority = options.authority ?? new UnavailableRevenueCatAuthority();
     this.webhookSecret = options.webhookSecret;
     this.now = options.now ?? (() => new Date());
-    this.cloudMaxEnabled = options.cloudMaxEnabled ?? false;
     this.idFactory = options.idFactory ?? randomUUID;
   }
 
@@ -233,7 +306,7 @@ export class CommerceService {
       if (allowance === undefined || allowance.remaining < 1) {
         throw new CommerceFailure(409, 'allowance_exhausted');
       }
-      const periodEnd = this.periodForReservation(accountId, kind);
+      const allocation = this.periodForReservation(accountId, kind);
       this.database.addAllowanceLedgerEntry({
         id: entryId(this.idFactory),
         account_id: accountId,
@@ -241,7 +314,9 @@ export class CommerceService {
         entry_type: 'reserve',
         units: 1,
         source_id: requestId,
-        period_end: periodEnd,
+        grant_source_id: allocation.grant.source_id,
+        grant_period_start: allocation.grant.grant_period_start,
+        period_end: allocation.grant.period_end,
         created_at: this.now().toISOString(),
       });
       return { requestId, kind, reserved: true };
@@ -352,13 +427,9 @@ export class CommerceService {
         this.database.updateCommerceWebhookEvent(event.id, receivedAt, 'ignored');
         return { accepted: true, processed: false };
       }
-      if (this.cloudMaxEnabled || plan.planId !== 'cloud_max') {
-        this.applyEvent(event, plan);
-        this.database.updateCommerceWebhookEvent(event.id, receivedAt, 'processed');
-        return { accepted: true, processed: true };
-      }
-      this.database.updateCommerceWebhookEvent(event.id, receivedAt, 'ignored');
-      return { accepted: true, processed: false };
+      this.applyEvent(event, plan);
+      this.database.updateCommerceWebhookEvent(event.id, receivedAt, 'processed');
+      return { accepted: true, processed: true };
     });
   }
 
@@ -370,9 +441,7 @@ export class CommerceService {
 
   private summary(accountId: string): CloudAllowanceResponse {
     const now = this.now().getTime();
-    const entitlements = this.database
-      .listCommerceEntitlements(accountId)
-      .filter((item) => this.cloudMaxEnabled || item.plan_id !== 'cloud_max');
+    const entitlements = this.database.listCommerceEntitlements(accountId);
     const purchases = this.database.listCommercePurchases(accountId);
     const ledger = this.database.listAllowanceLedger(accountId);
     const activeEntitlements = new Set(
@@ -384,10 +453,9 @@ export class CommerceService {
       ledger.filter((item) => item.entry_type === 'release').map((item) => item.source_id),
     );
     const validGrants = ledger.filter((item) => {
-      if (item.entry_type !== 'grant' || !isFuture(item.period_end, now)) return false;
+      if (item.entry_type !== 'grant' || !isWithinGrantPeriod(item, now)) return false;
       if (releasedSources.has(item.source_id)) return false;
-      const transactionId = item.source_id.match(/^grant:(.+):(snap|report)$/)?.[1];
-      const purchase = purchases.find((candidate) => candidate.transaction_id === transactionId);
+      const purchase = purchases.find((candidate) => this.grantBelongsToPurchase(item, candidate));
       return (
         purchase !== undefined &&
         activeEntitlements.has(`${purchase.plan_id}:${purchase.product_id}`)
@@ -398,11 +466,17 @@ export class CommerceService {
       const included = grants.reduce((sum, item) => sum + item.units, 0);
       const reservations = ledger.filter(
         (item) =>
-          item.kind === kind && item.entry_type === 'reserve' && isFuture(item.period_end, now),
+          item.kind === kind &&
+          item.entry_type === 'reserve' &&
+          isWithinGrantPeriod(item, now) &&
+          grants.some((grant) => this.entryBelongsToGrant(item, grant)),
       );
       const consumed = ledger.filter(
         (item) =>
-          item.kind === kind && item.entry_type === 'consume' && isFuture(item.period_end, now),
+          item.kind === kind &&
+          item.entry_type === 'consume' &&
+          isWithinGrantPeriod(item, now) &&
+          grants.some((grant) => this.entryBelongsToGrant(item, grant)),
       );
       const activeReservations = reservations.filter(
         (item) =>
@@ -413,17 +487,10 @@ export class CommerceService {
         consumed.reduce((sum, item) => sum + item.units, 0) +
         activeReservations.reduce((sum, item) => sum + item.units, 0);
       const resetAt =
-        entitlements
-          .filter(
-            (item) =>
-              item.plan_id !== 'starter_pack' &&
-              activeStatus(item.status) &&
-              isFuture(item.period_end, now) &&
-              item.period_end !== null,
-          )
-          .map((item) => item.period_end as string)
-          .sort()
-          .at(-1) ?? null;
+        grants
+          .map((item) => item.period_end)
+          .filter((item): item is string => item !== null)
+          .sort()[0] ?? null;
       const remaining = Math.max(0, included - used);
       return {
         kind,
@@ -460,41 +527,98 @@ export class CommerceService {
     };
   }
 
-  private periodForReservation(accountId: string, kind: CloudAllowanceKind): string | null {
+  private periodForReservation(accountId: string, kind: CloudAllowanceKind): GrantAllocation {
     const now = this.now().getTime();
+    const allocations = this.activeGrantAllocations(accountId, kind);
     const ledger = this.database.listAllowanceLedger(accountId, kind);
-    const purchases = this.database.listCommercePurchases(accountId);
-    const starterAvailable = ledger.some((grant) => {
-      if (grant.entry_type !== 'grant' || grant.period_end !== null || grant.kind !== kind)
-        return false;
-      if (
-        this.database.findAllowanceLedgerEntry(accountId, kind, 'release', grant.source_id) !==
-        undefined
-      )
-        return false;
-      const transactionId = grant.source_id.match(/^grant:(.+):(snap|report)$/)?.[1];
-      const purchase = purchases.find((item) => item.transaction_id === transactionId);
-      return purchase?.plan_id === 'starter_pack';
-    });
-    if (starterAvailable) return null;
-    return (
-      this.database
-        .listCommerceEntitlements(accountId)
-        .filter(
-          (item) =>
-            item.plan_id !== 'starter_pack' &&
-            activeStatus(item.status) &&
-            isFuture(item.period_end, now) &&
-            item.period_end !== null,
-        )
-        .map((item) => item.period_end as string)
-        .sort()
-        .at(-1) ?? null
-    );
+    const available = allocations
+      .map((allocation) => {
+        const used = ledger
+          .filter(
+            (entry) =>
+              (entry.entry_type === 'consume' || entry.entry_type === 'reserve') &&
+              this.entryBelongsToGrant(entry, allocation.grant) &&
+              isWithinGrantPeriod(entry, now) &&
+              (entry.entry_type === 'consume' ||
+                (this.database.findAllowanceLedgerEntry(
+                  accountId,
+                  kind,
+                  'release',
+                  entry.source_id,
+                ) === undefined &&
+                  this.database.findAllowanceLedgerEntry(
+                    accountId,
+                    kind,
+                    'consume',
+                    entry.source_id,
+                  ) === undefined)),
+          )
+          .reduce((sum, entry) => sum + entry.units, 0);
+        return { allocation, remaining: allocation.grant.units - used };
+      })
+      .filter((item) => item.remaining > 0)
+      .sort((left, right) => {
+        const leftStarter = left.allocation.purchase.plan_id === 'starter_pack';
+        const rightStarter = right.allocation.purchase.plan_id === 'starter_pack';
+        if (leftStarter !== rightStarter) return leftStarter ? -1 : 1;
+        return (left.allocation.grant.period_end ?? '').localeCompare(
+          right.allocation.grant.period_end ?? '',
+        );
+      });
+    const selected = available[0]?.allocation;
+    if (selected === undefined) throw new CommerceFailure(409, 'allowance_exhausted');
+    return selected;
   }
 
   private findReservation(requestId: string): AllowanceLedgerRow | undefined {
     return this.database.findAllowanceReservation(requestId);
+  }
+
+  private grantBelongsToPurchase(
+    grant: AllowanceLedgerRow,
+    purchase: CommercePurchaseRow,
+  ): boolean {
+    const source = grant.grant_source_id ?? grant.source_id;
+    return source.startsWith(`grant:${purchase.transaction_id}:`);
+  }
+
+  private entryBelongsToGrant(entry: AllowanceLedgerRow, grant: AllowanceLedgerRow): boolean {
+    if (entry.grant_source_id !== null) return entry.grant_source_id === grant.source_id;
+    return entry.period_end === grant.period_end;
+  }
+
+  private activeGrantAllocations(accountId: string, kind: CloudAllowanceKind): GrantAllocation[] {
+    const now = this.now().getTime();
+    const purchases = this.database.listCommercePurchases(accountId);
+    const entitlements = new Set(
+      this.database
+        .listCommerceEntitlements(accountId)
+        .filter((item) => activeStatus(item.status) && isFuture(item.period_end, now))
+        .map((item) => `${item.plan_id}:${item.product_id}`),
+    );
+    const releasedSources = new Set(
+      this.database
+        .listAllowanceLedger(accountId, kind)
+        .filter((item) => item.entry_type === 'release')
+        .map((item) => item.source_id),
+    );
+    return this.database
+      .listAllowanceLedger(accountId, kind)
+      .filter(
+        (grant) =>
+          grant.entry_type === 'grant' &&
+          isWithinGrantPeriod(grant, now) &&
+          !releasedSources.has(grant.source_id),
+      )
+      .flatMap((grant) => {
+        const purchase = purchases.find((item) => this.grantBelongsToPurchase(grant, item));
+        if (
+          purchase === undefined ||
+          !entitlements.has(`${purchase.plan_id}:${purchase.product_id}`)
+        )
+          return [];
+        return [{ grant, purchase }];
+      });
   }
 
   private addLedger(
@@ -511,6 +635,8 @@ export class CommerceService {
       entry_type: entryType,
       units: reservation.units,
       source_id: sourceId,
+      grant_source_id: reservation.grant_source_id,
+      grant_period_start: reservation.grant_period_start,
       period_end: reservation.period_end,
       created_at: this.now().toISOString(),
     });
@@ -520,7 +646,7 @@ export class CommerceService {
     const activeProducts: string[] = [];
     for (const purchase of customer.nonSubscriptions) {
       const plan = planForProduct(purchase.productId);
-      if (plan === undefined || (plan.planId === 'cloud_max' && !this.cloudMaxEnabled)) continue;
+      if (plan === undefined) continue;
       this.applyPurchase(
         accountId,
         plan,
@@ -534,7 +660,7 @@ export class CommerceService {
     }
     for (const subscription of customer.subscriptions) {
       const plan = planForProduct(subscription.productId);
-      if (plan === undefined || (plan.planId === 'cloud_max' && !this.cloudMaxEnabled)) continue;
+      if (plan === undefined) continue;
       activeProducts.push(subscription.productId);
       this.applyPurchase(
         accountId,
@@ -561,6 +687,26 @@ export class CommerceService {
       : isPending
         ? 'pending'
         : 'active';
+    if (event.type === 'PRODUCT_CHANGE' && event.previousProductId !== null) {
+      const previousPlan = planForProduct(event.previousProductId);
+      if (previousPlan !== undefined && previousPlan.productId !== plan.productId) {
+        const previousEntitlement = this.database
+          .listCommerceEntitlements(event.accountId)
+          .find((item) => item.plan_id === previousPlan.planId);
+        this.revokeGrant(event.accountId, previousPlan, event.transactionId);
+        this.database.upsertCommerceEntitlement({
+          account_id: event.accountId,
+          plan_id: previousPlan.planId,
+          product_id: previousPlan.productId,
+          status: 'expired',
+          will_renew: 0,
+          period_start: previousEntitlement?.period_start ?? event.periodStart,
+          period_end: event.periodEnd ?? previousEntitlement?.period_end ?? null,
+          management_url: previousEntitlement?.management_url ?? null,
+          updated_at: this.now().toISOString(),
+        });
+      }
+    }
     if (isEnded) {
       this.revokeGrant(event.accountId, plan, event.transactionId);
     }
@@ -587,7 +733,7 @@ export class CommerceService {
       plan_id: plan.planId,
       product_id: plan.productId,
       status,
-      will_renew: event.willRenew ? 1 : 0,
+      will_renew: event.type === 'CANCELLATION' ? 0 : event.willRenew ? 1 : 0,
       period_start: event.periodStart ?? existing?.period_start ?? null,
       period_end: event.periodEnd ?? existing?.period_end ?? null,
       management_url: event.managementUrl ?? existing?.management_url ?? null,
@@ -597,22 +743,30 @@ export class CommerceService {
 
   private revokeGrant(accountId: string, plan: PlanDefinition, transactionId: string | null): void {
     if (transactionId === null) return;
+    const purchases = this.database.listCommercePurchases(accountId);
     for (const kind of GRANT_KINDS) {
-      const sourceId = grantSource(transactionId, kind);
-      const purchase = this.database
-        .listCommercePurchases(accountId)
-        .find((item) => item.transaction_id === transactionId);
-      if (purchase === undefined) continue;
-      this.database.addAllowanceLedgerEntry({
-        id: entryId(this.idFactory),
-        account_id: accountId,
-        kind,
-        entry_type: 'release',
-        units: kind === 'snap' ? plan.snapAllowance : plan.reportAllowance,
-        source_id: sourceId,
-        period_end: purchase.period_end,
-        created_at: this.now().toISOString(),
-      });
+      const grants = this.database
+        .listAllowanceLedger(accountId, kind)
+        .filter(
+          (item) =>
+            item.entry_type === 'grant' &&
+            (item.grant_source_id ?? item.source_id).startsWith(`grant:${transactionId}:`),
+        );
+      const purchase = purchases.find((item) => item.transaction_id === transactionId);
+      for (const grant of grants) {
+        this.database.addAllowanceLedgerEntry({
+          id: entryId(this.idFactory),
+          account_id: accountId,
+          kind,
+          entry_type: 'release',
+          units: grant.units,
+          source_id: grant.source_id,
+          grant_source_id: grant.source_id,
+          grant_period_start: grant.grant_period_start,
+          period_end: grant.period_end ?? purchase?.period_end ?? null,
+          created_at: this.now().toISOString(),
+        });
+      }
     }
   }
 
@@ -629,6 +783,7 @@ export class CommerceService {
     status: CloudEntitlementStatus = 'active',
   ): void {
     const claimed = this.database.claimCommercePurchase(
+      accountId,
       transactionId,
       plan.productId,
       this.now().toISOString(),
@@ -646,17 +801,23 @@ export class CommerceService {
         created_at: this.now().toISOString(),
       };
       this.database.recordCommercePurchase(purchase);
-      for (const kind of GRANT_KINDS) {
-        this.database.addAllowanceLedgerEntry({
-          id: entryId(this.idFactory),
-          account_id: accountId,
-          kind,
-          entry_type: 'grant',
-          units: kind === 'snap' ? plan.snapAllowance : plan.reportAllowance,
-          source_id: grantSource(transactionId, kind),
-          period_end: periodEnd,
-          created_at: this.now().toISOString(),
-        });
+      for (const bucket of subscription
+        ? subscriptionBuckets(periodStart, periodEnd)
+        : [{ periodStart: null, periodEnd: null }]) {
+        for (const kind of GRANT_KINDS) {
+          this.database.addAllowanceLedgerEntry({
+            id: entryId(this.idFactory),
+            account_id: accountId,
+            kind,
+            entry_type: 'grant',
+            units: kind === 'snap' ? plan.snapAllowance : plan.reportAllowance,
+            source_id: grantSource(transactionId, kind, bucket.periodStart),
+            grant_source_id: grantSource(transactionId, kind, bucket.periodStart),
+            grant_period_start: bucket.periodStart,
+            period_end: bucket.periodEnd,
+            created_at: this.now().toISOString(),
+          });
+        }
       }
     }
     this.database.upsertCommerceEntitlement({
