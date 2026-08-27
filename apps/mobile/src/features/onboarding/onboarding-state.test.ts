@@ -7,6 +7,7 @@ import {
   ONBOARDING_MODEL_SELECTION_PAGE,
   ONBOARDING_READY_PAGE,
   onboardingCanContinue,
+  onboardingCanNavigateTo,
   onboardingPagerLocked,
   onboardingResumePage,
 } from './onboarding-state';
@@ -20,6 +21,14 @@ test('the mandatory gate only completes from an explicit selection and verified 
   const ready = applyLocalModelEvent(initial, { kind: 'verified' });
   assert.equal(onboardingCanContinue(ONBOARDING_MODEL_DOWNLOAD_PAGE, true, ready), true);
   assert.equal(onboardingCanContinue(ONBOARDING_READY_PAGE, true, ready), true);
+  assert.equal(
+    onboardingCanNavigateTo(ONBOARDING_MODEL_SELECTION_PAGE, ONBOARDING_READY_PAGE, true, initial),
+    false,
+  );
+  assert.equal(
+    onboardingCanNavigateTo(ONBOARDING_MODEL_SELECTION_PAGE, ONBOARDING_READY_PAGE, true, ready),
+    true,
+  );
 });
 
 test('relaunch resumes model work and locks the pager during transfer', () => {

@@ -21,6 +21,28 @@ export function onboardingCanContinue(
   return snapshot !== null && canCompleteModelOnboarding(snapshot);
 }
 
+/** Every forward pager path crosses the same page eligibility gates. */
+export function onboardingCanNavigateTo(
+  currentPage: number,
+  targetPage: number,
+  modelSelected: boolean,
+  snapshot: LocalModelSnapshot | null,
+): boolean {
+  if (
+    currentPage < 0 ||
+    currentPage >= ONBOARDING_PAGE_COUNT ||
+    targetPage < 0 ||
+    targetPage >= ONBOARDING_PAGE_COUNT
+  ) {
+    return false;
+  }
+  if (targetPage <= currentPage) return true;
+  for (let page = currentPage; page < targetPage; page += 1) {
+    if (!onboardingCanContinue(page, modelSelected, snapshot)) return false;
+  }
+  return true;
+}
+
 /**
  * An interrupted first run resumes at the only page that can safely repair it. The app still
  * starts at the welcome page when no model work has begun, so a fresh install always gets the

@@ -5,7 +5,10 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ServicesContext, createServices, type AlyteServices } from './src/services';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { OnboardingScreen } from './src/features/onboarding/OnboardingScreen';
-import { ONBOARDING_COMPLETED_PREFERENCE } from './src/features/onboarding/preferences';
+import {
+  ONBOARDING_COMPLETED_PREFERENCE,
+  persistOnboardingCompletion,
+} from './src/features/onboarding/preferences';
 import { AppLockProvider, useAppLock } from './src/features/app-lock/AppLockProvider';
 import { createAppLockAuthService } from './src/features/app-lock/auth';
 import {
@@ -109,14 +112,8 @@ function AppContent({ services }: { readonly services: AlyteServices }) {
       ) : (
         <OnboardingScreen
           model={services.models}
-          onComplete={() => {
-            void services.intake
-              .setLocalPreference(ONBOARDING_COMPLETED_PREFERENCE, 'true')
-              .catch(() => {
-                // Continue into local mode even when the preference write is unavailable. A
-                // later launch safely shows onboarding again rather than risking a false
-                // preference.
-              });
+          onComplete={async () => {
+            await persistOnboardingCompletion(services.intake);
             setOnboardingComplete(true);
           }}
         />

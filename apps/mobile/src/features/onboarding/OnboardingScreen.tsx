@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
+  AccessibilityInfo,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -35,13 +36,15 @@ import {
   ONBOARDING_MODEL_SELECTION_PAGE,
   ONBOARDING_PAGE_COUNT,
   ONBOARDING_READY_PAGE,
+  onboardingCanContinue,
+  onboardingCanNavigateTo,
   onboardingPagerLocked,
   onboardingResumePage,
 } from './onboarding-state';
 
 type OnboardingScreenProps = {
   readonly model: LocalModelService;
-  readonly onComplete: () => void;
+  readonly onComplete: () => Promise<void>;
 };
 
 function ModelFact({
@@ -236,7 +239,7 @@ function ModelDownloadPage({
   );
 }
 
-function ReadyPage() {
+function ReadyPage({ completionFailed }: { readonly completionFailed: boolean }) {
   return (
     <IntroPage
       icon="checkmarkCircle"
@@ -248,6 +251,11 @@ function ReadyPage() {
           {t('onboarding.modelReadyBody')}
         </AppText>
       </AppSurface>
+      {completionFailed ? (
+        <AppSurface tone="soft" style={styles.callout}>
+          <AppText selectable>{t('onboarding.completionFailure')}</AppText>
+        </AppSurface>
+      ) : null}
     </IntroPage>
   );
 }
@@ -259,6 +267,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   const hasInteractedRef = useRef(false);
   const shouldSyncPagerRef = useRef(false);
   const cancellationRequestedRef = useRef(false);
+  const previousReadyRef = useRef(false);
   const [page, setPage] = useState(0);
   const [modelSelected, setModelSelected] = useState(false);
   const [snapshot, setSnapshot] = useState<LocalModelSnapshot | null>(null);
@@ -266,6 +275,8 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   const [busy, setBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [finishing, setFinishing] = useState(false);
+  const [completionFailed, setCompletionFailed] = useState(false);
+  const [reduceMotion, setReduceMotion] = useState(false);
   const pagerLocked = onboardingPagerLocked(snapshot);
   const ready = snapshot !== null && canCompleteModelOnboarding(snapshot);
   const resumable = hasResumableModelDownload(snapshot);
@@ -301,20 +312,44 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   }, [model]);
 
   useEffect(() => {
+    let active = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
+      if (active) setReduceMotion(enabled);
+    });
+    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
+    return () => {
+      active = false;
+      subscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!shouldSyncPagerRef.current) return;
     pagerRef.current?.scrollTo({ x: width * page, animated: false });
     shouldSyncPagerRef.current = false;
   }, [page, width]);
 
   useEffect(() => {
-    if (page !== ONBOARDING_MODEL_DOWNLOAD_PAGE || !ready) return;
+    const becameReady = ready && !previousReadyRef.current;
+    previousReadyRef.current = ready;
+    if (
+      page !== ONBOARDING_MODEL_DOWNLOAD_PAGE ||
+      !becameReady ||
+      !onboardingCanNavigateTo(page, ONBOARDING_READY_PAGE, modelSelected, snapshot)
+    ) {
+      return;
+    }
     hasInteractedRef.current = true;
     shouldSyncPagerRef.current = true;
     setPage(ONBOARDING_READY_PAGE);
-  }, [page, ready]);
+  }, [modelSelected, page, ready, snapshot]);
 
-  function moveToPage(nextPage: number, animated = true) {
+  function moveToPage(nextPage: number, animated = !reduceMotion) {
     if (pagerLocked || nextPage < 0 || nextPage >= ONBOARDING_PAGE_COUNT) return;
+    if (!onboardingCanNavigateTo(page, nextPage, modelSelected, snapshot)) {
+      pagerRef.current?.scrollTo({ x: width * page, animated: false });
+      return;
+    }
     hasInteractedRef.current = true;
     setPage(nextPage);
     pagerRef.current?.scrollTo({ x: width * nextPage, animated });
@@ -326,12 +361,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
       0,
       Math.min(ONBOARDING_PAGE_COUNT - 1, Math.round(event.nativeEvent.contentOffset.x / width)),
     );
-    if (nextPage > ONBOARDING_MODEL_SELECTION_PAGE && !modelSelected) {
-      moveToPage(ONBOARDING_MODEL_SELECTION_PAGE, false);
-      return;
-    }
-    hasInteractedRef.current = true;
-    setPage(nextPage);
+    moveToPage(nextPage, false);
   }
 
   async function startDownload() {
@@ -366,42 +396,43 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
 
   function continueLabel(): string {
     if (page === ONBOARDING_MODEL_DOWNLOAD_PAGE) {
-      if (ready) return t('onboarding.continue');
+      if (ready) return t('onboarding.next');
       if (pagerLocked || busy) return t('onboarding.modelPreparing');
       if (resumable) return t('onboarding.modelContinueDownload');
       if (modelAction === 'retry') return t('onboarding.modelRetry');
       if (modelAction === 'checking') return t('onboarding.modelChecking');
       return t('onboarding.modelDownload');
     }
-    return t('onboarding.continue');
+    return page === ONBOARDING_READY_PAGE ? t('onboarding.continue') : t('onboarding.next');
   }
 
   function continueDisabled(): boolean {
     if (finishing || cancelBusy) return true;
-    if (page === ONBOARDING_MODEL_SELECTION_PAGE) return !modelSelected;
     if (page === ONBOARDING_MODEL_DOWNLOAD_PAGE)
       return snapshot === null || (pagerLocked && !ready) || busy;
-    if (page === ONBOARDING_READY_PAGE) return !ready;
-    return false;
+    return !onboardingCanContinue(page, modelSelected, snapshot);
   }
 
   async function handleContinue() {
     if (continueDisabled()) return;
-    if (page < ONBOARDING_MODEL_SELECTION_PAGE) {
-      moveToPage(page + 1);
+    const eligible = onboardingCanContinue(page, modelSelected, snapshot);
+    if (page === ONBOARDING_MODEL_DOWNLOAD_PAGE && !eligible) {
+      await startDownload();
       return;
     }
-    if (page === ONBOARDING_MODEL_SELECTION_PAGE) {
-      moveToPage(ONBOARDING_MODEL_DOWNLOAD_PAGE);
-      return;
-    }
-    if (page === ONBOARDING_MODEL_DOWNLOAD_PAGE && ready) {
-      moveToPage(ONBOARDING_READY_PAGE);
-      return;
-    }
+    if (!eligible) return;
+    if (page < ONBOARDING_MODEL_DOWNLOAD_PAGE && eligible) return moveToPage(page + 1);
+    if (page === ONBOARDING_MODEL_DOWNLOAD_PAGE && eligible)
+      return moveToPage(ONBOARDING_READY_PAGE);
     if (page === ONBOARDING_READY_PAGE) {
       setFinishing(true);
-      onComplete();
+      setCompletionFailed(false);
+      try {
+        await onComplete();
+      } catch {
+        setCompletionFailed(true);
+        setFinishing(false);
+      }
       return;
     }
     await startDownload();
@@ -416,13 +447,13 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
     />,
     <IntroPage
       key="local"
-      icon="lockShield"
-      title={t('onboarding.localTitle')}
-      body={t('onboarding.localBody')}
+      icon="chart"
+      title={t('onboarding.historyTitle')}
+      body={t('onboarding.historyBody')}
     />,
     <IntroPage
       key="measured"
-      icon="chart"
+      icon="lockShield"
       title={t('onboarding.privacyTitle')}
       body={t('onboarding.privacyBody')}
     />,
@@ -436,7 +467,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
       }}
     />,
     <ModelDownloadPage key="model-download" modelFailure={modelFailure} snapshot={snapshot} />,
-    <ReadyPage key="ready" />,
+    <ReadyPage key="ready" completionFailed={completionFailed} />,
   ];
 
   return (
