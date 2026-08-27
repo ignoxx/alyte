@@ -3,7 +3,7 @@ import { Pressable, SectionList, StyleSheet, View } from 'react-native';
 import { formatLocaleDate, type LabRecordDetail as Detail, type Measurement } from '@alyte/domain';
 import { t } from '../../localization';
 import { colors, spacing } from '../../theme';
-import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
+import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import {
   correctionChangedFields,
   labRecordSupportReasonLocalizationKeys,
@@ -140,6 +140,12 @@ export function LabRecordDetail({
                   </AppText>
                 )}
               </View>
+              <AppIcon
+                color={colors.mutedInk}
+                name="chevronRight"
+                size={16}
+                style={{ transform: [{ rotate: open ? '90deg' : '0deg' }] }}
+              />
             </Pressable>
             {open && (
               <MeasurementDetails
