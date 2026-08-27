@@ -2,6 +2,7 @@ import { CATALOGUE_VERSION } from '@alyte/catalogue';
 import {
   EXTRACTION_PARSER_VERSION,
   type ExtractionAliasEntry,
+  type ExtractionSemanticLease,
   type ExtractionSemanticMapper,
 } from '@alyte/domain';
 import { productionLocalModelManifest } from './production-manifest.generated';
@@ -69,6 +70,18 @@ export function createLocalSemanticMapper(
   options: LocalSemanticMapperOptions,
 ): ExtractionSemanticMapper {
   const timeoutMs = options.timeoutMs ?? INFERENCE_TIMEOUT_MS;
+  let activeLeases = 0;
+  let lifecycleQueue: Promise<void> = Promise.resolve();
+
+  function enqueueLifecycle<T>(work: () => Promise<T>): Promise<T> {
+    const next = lifecycleQueue.then(work, work);
+    lifecycleQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
   return {
     adapterVersion: 'alyte.gemma4-e2b.semantic-mapper.v1',
     schemaVersion: SEMANTIC_MAPPER_SCHEMA_VERSION,
@@ -82,20 +95,30 @@ export function createLocalSemanticMapper(
       parserVersion: EXTRACTION_PARSER_VERSION,
       catalogueVersion: CATALOGUE_VERSION,
     },
-    prepare: async () => {
-      const state = await options.models.getState();
-      if (!canStartAutomatedExtraction(state)) {
-        throw new SemanticModelUnavailableError('The verified Gemma model pack is not installed');
-      }
-      if (!state.loaded) await options.models.load();
-    },
-    release: async () => {
-      // The pack is an extraction-scoped resource. Keep the verified bytes on disk, but release
-      // the llama model/context as soon as the semantic stage ends so the app stays responsive
-      // between imports and never pays the multi-gigabyte allocation at launch.
-      const state = await options.models.getState();
-      if (state.loaded) await options.models.unload();
-    },
+    prepare: () =>
+      enqueueLifecycle(async (): Promise<ExtractionSemanticLease> => {
+        const state = await options.models.getState();
+        if (!canStartAutomatedExtraction(state)) {
+          throw new SemanticModelUnavailableError('The verified Gemma model pack is not installed');
+        }
+        if (!state.loaded) await options.models.load();
+        activeLeases += 1;
+        let released = false;
+        return {
+          release: () => {
+            if (released) return Promise.resolve();
+            released = true;
+            return enqueueLifecycle(async () => {
+              activeLeases = Math.max(0, activeLeases - 1);
+              if (activeLeases !== 0) return;
+              // The pack is an extraction-scoped resource. Keep verified bytes on disk, but
+              // release the llama model/context as soon as the last extraction finishes.
+              const current = await options.models.getState();
+              if (current.loaded) await options.models.unload();
+            });
+          },
+        };
+      }),
     supports: (locale) => {
       const code = locale?.toLocaleLowerCase().split(/[-_]/u)[0];
       return (

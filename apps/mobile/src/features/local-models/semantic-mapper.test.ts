@@ -69,6 +69,36 @@ test('routes missing packs before Vision/model inference', async () => {
   });
 });
 
+test('keeps an overlapping extraction runtime until the last lease is released', async () => {
+  let state: LocalModelSnapshot = { ...loadedState, state: 'ready', loaded: false };
+  let loadCalls = 0;
+  let unloadCalls = 0;
+  const runtimeModels = {
+    getState: async () => state,
+    load: async () => {
+      loadCalls += 1;
+      state = { ...state, state: 'loaded', loaded: true };
+      return state;
+    },
+    unload: async () => {
+      unloadCalls += 1;
+      state = { ...state, state: 'ready', loaded: false };
+      return state;
+    },
+  } as unknown as LocalModelService;
+  const mapper = createLocalSemanticMapper({ models: runtimeModels, aliases });
+
+  const first = await mapper.prepare!();
+  const second = await mapper.prepare!();
+  assert.equal(loadCalls, 1);
+  await first.release();
+  assert.equal(unloadCalls, 0);
+  await second.release();
+  assert.equal(unloadCalls, 1);
+  await second.release();
+  assert.equal(unloadCalls, 1);
+});
+
 test('translates only typed native unavailability during inference', async () => {
   const unavailable = Object.assign(new Error('synthetic model removed'), {
     failureCategory: 'unavailable' as const,

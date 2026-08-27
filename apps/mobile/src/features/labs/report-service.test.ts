@@ -1620,17 +1620,21 @@ describe('protected Lab Report import lifecycle', () => {
         };
       },
     };
-    const mapper = (error: Error): ExtractionSemanticMapper => ({
+    const mapper = (
+      error: Error,
+      onRelease: () => void = () => undefined,
+    ): ExtractionSemanticMapper => ({
       adapterVersion: 'mid-operation.mapper.v1',
       schemaVersion: 'alyte.semantic-mapper.v1',
       supports: () => true,
-      prepare: async () => undefined,
+      prepare: async () => ({ release: async () => onRelease() }),
       async map() {
         throw error;
       },
     });
 
     const unavailableRepository = createRepository();
+    let unavailableReleaseCalls = 0;
     const unavailableService = createService(
       unavailableRepository,
       new FakeFiles(),
@@ -1640,6 +1644,9 @@ describe('protected Lab Report import lifecycle', () => {
         Object.assign(new Error('synthetic model removed'), {
           code: 'semantic-model-unavailable' as const,
         }),
+        () => {
+          unavailableReleaseCalls += 1;
+        },
       ),
     );
     const unavailableReport = (await unavailableService.importPdf(
@@ -1651,7 +1658,9 @@ describe('protected Lab Report import lifecycle', () => {
         error instanceof LabReportExtractionError && error.reason === 'model-unavailable',
     );
     assert.equal(await unavailableService.countOpenExtractionDrafts(), 0);
+    assert.equal(unavailableReleaseCalls, 1);
 
+    let runtimeReleaseCalls = 0;
     const runtimeRepository = createRepository();
     const runtimeService = createService(
       runtimeRepository,
@@ -1662,12 +1671,16 @@ describe('protected Lab Report import lifecycle', () => {
         Object.assign(new Error('synthetic runtime failure'), {
           failureCategory: 'runtime-failed' as const,
         }),
+        () => {
+          runtimeReleaseCalls += 1;
+        },
       ),
     );
     const runtimeReport = (await runtimeService.importPdf(source('mid-operation-runtime')))!.report;
     const runtimeDraft = await runtimeService.startExtraction(runtimeReport.id);
     assert.equal(runtimeDraft.rows.length, 1);
     assert.equal(runtimeDraft.rows[0]?.source.semantic, null);
+    assert.equal(runtimeReleaseCalls, 1);
   });
 
   test('keeps deterministic extraction when the semantic mapper does not support the language', async () => {
@@ -3064,14 +3077,16 @@ describe('protected Lab Report import lifecycle', () => {
       maxRowsPerChunk: 1,
       prepare: async () => {
         lifecycle.push('prepare');
+        return {
+          release: async () => {
+            lifecycle.push('release');
+          },
+        };
       },
       supports: () => true,
       async map() {
         lifecycle.push('map');
         return [];
-      },
-      release: async () => {
-        lifecycle.push('release');
       },
     };
     const service = createService(repository, files, pdf, ocr, mapper);
@@ -3100,6 +3115,51 @@ describe('protected Lab Report import lifecycle', () => {
       true,
     );
     assert.equal(events.at(-1)?.status, 'complete');
+  });
+
+  test('does not report completion when the final semantic lease release fails', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const ocr: VisionOCR = {
+      async recognize(_path, pageIndex): Promise<VisionOCRResult> {
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex,
+          orientation: 0,
+          observations: [
+            {
+              id: `release-failure-row-${pageIndex}`,
+              text: 'LDL-C 3.8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+              pageIndex,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        });
+      },
+    };
+    const mapper: ExtractionSemanticMapper = {
+      adapterVersion: 'release-failure.mapper.v1',
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      supports: () => true,
+      prepare: async () => ({
+        release: async () => {
+          throw new Error('synthetic release failure');
+        },
+      }),
+      map: async () => [],
+    };
+    const service = createService(repository, files, new FakePdf(), ocr, mapper);
+    const report = (await service.importPdf(source('release-failure')))!.report;
+
+    await assert.rejects(
+      service.startExtraction(report.id),
+      (error: unknown) =>
+        error instanceof LabReportExtractionError && error.reason === 'recognition',
+    );
+    assert.equal(await repository.countOpenExtractionDrafts(), 0);
   });
 
   test('progress subscribers are isolated and completion is available after relaunch', async () => {
@@ -3314,6 +3374,7 @@ describe('protected Lab Report import lifecycle', () => {
     const files = new FakeFiles();
     let service!: LabReportsService;
     let mapCalls = 0;
+    let releaseCalls = 0;
     let resolveFirstMap!: (proposals: readonly []) => void;
     let signalMapStarted!: () => void;
     const mapStarted = new Promise<void>((resolve) => {
@@ -3348,7 +3409,11 @@ describe('protected Lab Report import lifecycle', () => {
       maxRowsPerChunk: 12,
       maxObservationsPerChunk: 48,
       provenance: {},
-      prepare: async () => {},
+      prepare: async () => ({
+        release: async () => {
+          releaseCalls += 1;
+        },
+      }),
       supports: () => true,
       map: async () => {
         mapCalls += 1;
@@ -3374,6 +3439,7 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(draft.rows.length, 1);
     assert.equal(await repository.countOpenExtractionDrafts(), 1);
     assert.equal(mapCalls, 2);
+    assert.equal(releaseCalls, 2);
   });
 
   test('cancelling at the review write boundary creates no draft and retry can complete', async () => {

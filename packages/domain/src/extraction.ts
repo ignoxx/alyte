@@ -231,6 +231,15 @@ export type ExtractionSemanticCandidateRow = {
 
 export type ExtractionSemanticProvenance = NonNullable<ExtractionSourceLocation['semantic']>;
 
+/**
+ * Ownership token for one extraction's use of a semantic runtime. The mapper may share the
+ * underlying loaded model across extractions, but each successful prepare must release exactly
+ * its own lease.
+ */
+export type ExtractionSemanticLease = {
+  readonly release: () => Promise<void>;
+};
+
 export interface ExtractionSemanticMapper {
   readonly adapterVersion: string;
   readonly schemaVersion: 'alyte.semantic-mapper.v1';
@@ -238,10 +247,8 @@ export interface ExtractionSemanticMapper {
   readonly maxRowsPerChunk?: number;
   /** Maximum OCR observations in one model request, including every cell in those rows. */
   readonly maxObservationsPerChunk?: number;
-  /** Optional production gate. Test-only deterministic mappers may omit it. */
-  readonly prepare?: () => Promise<void>;
-  /** Releases a runtime acquired by prepare after the semantic stage completes. */
-  readonly release?: () => Promise<void>;
+  /** Optional production gate. A successful prepare returns an extraction-scoped runtime lease. */
+  readonly prepare?: () => Promise<ExtractionSemanticLease>;
   readonly provenance?: Readonly<
     Partial<
       Pick<

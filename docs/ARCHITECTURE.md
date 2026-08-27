@@ -154,14 +154,17 @@ Build narrow, typed modules rather than one general native bridge.
   gated repositories that would require a user or bundled access token;
 - stores completed packs under Application Support, excludes them from iCloud Backup, stages
   partial downloads separately, and atomically promotes a verified pack;
+- ends download/onboarding at an on-disk `ready` artifact. Runtime activation/load is a separate
+  extraction-scoped operation, performed lazily immediately before the first supported semantic
+  mapping and released after the last extraction using it;
 - never bundles model weights in the application binary and exposes Gemma 4 E2B (Q4_0) as the sole
   first-release pack;
 - loads at most one pack at a time, releases it under memory or thermal pressure, and exposes
   observable not-installed, downloading, verifying, ready, loaded, failed, and deleting states;
 - requires explicit selection and verified installation of the sole first-release pack before
-  onboarding completes; after later deletion it preserves access to existing local history while
-  gating only new automated extraction, and exposes user-visible storage, retry, and delete
-  controls; and
+  onboarding completes, without activating/loading the runtime; after later deletion it preserves
+  access to existing local history while gating only new automated extraction, and exposes
+  user-visible storage, retry, and delete controls; and
 - never logs structured OCR input, prompts, generated tokens, or model results.
 
 `AlytePDF`:

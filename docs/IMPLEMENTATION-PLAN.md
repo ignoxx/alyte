@@ -299,7 +299,8 @@ Cloud Plus passes Gate C.
    Lithuanian fixtures, per-section specimen context, deterministic validation, a provider-neutral
    semantic mapper, and structured-fixture candidate evaluation through #50 and #66.
 6. **Required extraction model pack** — no bundled weights; explicit selection and verified Gemma
-   4 E2B (Q4_0) download before onboarding completes; contextual reinstall gate after later deletion;
+   4 E2B (Q4_0) download ending in on-disk `ready` before onboarding completes; runtime activation
+   and load stay lazy and extraction-scoped; contextual reinstall gate after later deletion;
    direct public/ungated Hugging Face download from an immutable revision; reviewed
    manifest/license, checksum verification, and storage/load/delete lifecycle through #51; followed
    by constrained extraction integration and deterministic inference-failure fallback through #52.

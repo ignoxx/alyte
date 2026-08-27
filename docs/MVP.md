@@ -130,11 +130,14 @@ headroom rather than treating it as abuse.
   allowlisted file only after installation from a public, ungated Hugging Face repository at a
   pinned commit; model weights are never bundled with the app. The app shows the model, publisher,
   license, download size, device-space requirement, and source before download and verifies the
-  expected SHA-256 before activation. It does not ask for or embed a Hugging Face account token,
+  expected SHA-256 before promoting the artifact to on-disk `ready`. Runtime activation/load is
+  separate and happens lazily only for semantic extraction. It does not ask for or embed a
+  Hugging Face account token,
   use a gated model, silently follow a moving branch such as `main`, or expose an experimental
   model picker.
 - Onboarding presents Gemma 4 E2B (Q4_0) as the sole first-release model choice and requires the person
-  to select, download, verify, and activate it before entering Alyte. There is no skip, account, or
+  to select, download, verify, and reach on-disk `ready` before entering Alyte. It never activates
+  or loads the runtime during onboarding. There is no skip, account, or
   paywall gate. Offline, cancelled, failed, or insufficient-space downloads remain in the download
   step with a safe retry. If the pack is deleted later, Alyte presents the same disclosure as a
   contextual reinstall gate before new automated extraction while existing local history remains
@@ -607,7 +610,8 @@ messages, medication reminders, biomarker warnings, and inferred-health alerts a
 - The already-shipped onboarding is not presumed final: the release pass must verify that each
   screen earns its place and emphasizes the two-report outcome over implementation details.
 - Onboarding discloses Gemma 4 E2B (Q4_0)'s source, publisher, license, download size, and device-space
-  requirement, then requires explicit selection and a verified download. Gemma is the only
+  requirement, then requires explicit selection and a verified download ending in on-disk `ready`.
+  Runtime activation/load happens only immediately before semantic extraction. Gemma is the only
   first-release option, but the selection step keeps the model-pack boundary explicit; it is not a
   public multi-model picker. Permissions, account creation, and payment remain deferred until
   contextually needed.

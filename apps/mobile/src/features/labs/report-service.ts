@@ -24,6 +24,7 @@ import {
   type ExtractionDraftRowPatch,
   type ExtractionDateContext,
   type ExtractionSemanticCandidateRow,
+  type ExtractionSemanticLease,
   type ExtractionSemanticMapper,
   type ExtractionSemanticProposal,
   type VisionTextObservation,
@@ -1897,6 +1898,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     const proposals: ExtractionSemanticProposal[] = [];
     onProgress?.(0, chunks.length);
     let preparationAttempted = false;
+    let semanticLease: ExtractionSemanticLease | null = null;
+    let semanticStageError: unknown = null;
     try {
       for (const [chunkIndex, chunk] of chunks.entries()) {
         if (isCancelled?.())
@@ -1912,7 +1915,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           // and one loaded session is reused for every subsequent chunk in this stage.
           if (preparationAttempted === false) {
             preparationAttempted = true;
-            await semanticMapper.prepare?.();
+            semanticLease = (await semanticMapper.prepare?.()) ?? null;
           }
           const input = {
             pageIndex: chunk.rows[0]?.observations[0]?.pageIndex ?? 0,
@@ -1939,16 +1942,30 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         }
         onProgress?.(chunkIndex + 1, chunks.length);
       }
+    } catch (error) {
+      semanticStageError = error;
+      throw error;
     } finally {
-      // Cleanup is attempted for every semantic stage, including unsupported languages and an
-      // empty candidate set. This also clears a runtime left by a prior interrupted operation.
-      // A failed unload must not discard deterministic rows or turn a valid extraction into a
-      // misleading model error; native pressure/background callbacks still signal cancellation
-      // directly while the queue settles.
-      try {
-        await semanticMapper.release?.();
-      } catch {
-        // The next native lifecycle callback can still release an outstanding runtime.
+      if (semanticLease !== null) {
+        // Release only a lease acquired by this extraction. The mapper may keep a shared runtime
+        // alive for another extraction, and a final release failure must remain observable.
+        try {
+          await semanticLease.release();
+        } catch (releaseError) {
+          if (semanticStageError instanceof LabReportExtractionError) {
+            throw new LabReportExtractionError(
+              semanticStageError.reason,
+              semanticStageError.message,
+              { cause: { extraction: semanticStageError, release: releaseError } },
+            );
+          }
+          throw new Error('The on-device model could not be released after extraction', {
+            cause:
+              semanticStageError === null
+                ? releaseError
+                : { extraction: semanticStageError, release: releaseError },
+          });
+        }
       }
     }
     return rows.map((row) => {
