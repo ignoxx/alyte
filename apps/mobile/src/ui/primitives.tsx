@@ -182,7 +182,6 @@ export function StatusPill({
         subtle && styles.subtlePill,
         {
           backgroundColor: subtle ? colors.accentSoft : status.fill,
-          maxWidth: maxPillWidth,
         },
       ]}
     >
