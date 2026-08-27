@@ -319,7 +319,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   pressed: { backgroundColor: colors.accentSoft },
-  rowCopy: { flex: 1, gap: spacing.xs },
+  rowCopy: { flex: 1, gap: spacing.xs, minWidth: 0 },
   value: { alignItems: 'flex-end', maxWidth: '40%' },
   numerals: { fontVariant: ['tabular-nums'], textAlign: 'right' },
   details: {
