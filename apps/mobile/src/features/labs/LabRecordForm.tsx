@@ -6,10 +6,11 @@ import {
   useMemo,
   useRef,
   useState,
+  type RefObject,
   type ReactNode,
 } from 'react';
 import { Host, Picker } from '@expo/ui';
-import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, TextInput, View, type ScrollView } from 'react-native';
 import {
   parseLocaleDecimal,
   parseLocalDateInput,
@@ -153,6 +154,7 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
     const [saving, setSaving] = useState(false);
     const allowRemovalRef = useRef(false);
     const saveInFlightRef = useRef<Promise<void> | null>(null);
+    const scrollRef = useRef<ScrollView | null>(null);
     const locale = Intl.DateTimeFormat().resolvedOptions().locale;
     const initialSnapshot = useMemo(
       () =>
@@ -172,6 +174,11 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
     const dirty =
       JSON.stringify({ date, dateMissing, specimenType, laboratoryName, notes, measurements }) !==
       initialSnapshot;
+
+    const showError = useCallback((message: string) => {
+      scrollRef.current?.scrollTo({ animated: false, y: 0 });
+      setError(message);
+    }, []);
 
     useEffect(() => {
       onSavingChange?.(saving);
@@ -195,6 +202,7 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
     });
 
     const updateMeasurement = useCallback((index: number, patch: Partial<MeasurementDraft>) => {
+      setError(null);
       setMeasurements((current) =>
         current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)),
       );
@@ -215,11 +223,11 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
         setError(null);
         const parsedDate = dateMissing ? null : parseLocalDateInput(date, locale);
         if (!dateMissing && parsedDate === null) {
-          setError(t('labs.invalidDate'));
+          showError(t('labs.invalidDate'));
           return;
         }
         if (!editing && measurements.length === 0) {
-          setError(t('labs.requiredMeasurement'));
+          showError(t('labs.requiredMeasurement'));
           return;
         }
         if (
@@ -228,12 +236,12 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
               measurement.label.trim().length === 0 || measurement.value.trim().length === 0,
           )
         ) {
-          setError(t('labs.requiredField'));
+          showError(t('labs.requiredField'));
           return;
         }
         const inputs = measurements.map(inputForMeasurement);
         if (inputs.some((input) => input === null)) {
-          setError(t('labs.invalidNumeric'));
+          showError(t('labs.invalidNumeric'));
           return;
         }
 
@@ -264,7 +272,7 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
             onSaved(record.id);
           }
         } catch {
-          setError(t('labs.recordSaveError'));
+          showError(t('labs.recordSaveError'));
         } finally {
           setSaving(false);
         }
@@ -290,20 +298,28 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
       notes,
       onSaved,
       service,
+      showError,
       specimenType,
     ]);
 
     useImperativeHandle(ref, () => ({ save }), [save]);
 
     return (
-      <SafeForm>
-        {!editing && <AppText style={styles.intro}>{t('labs.recordIntro')}</AppText>}
+      <SafeForm scrollRef={scrollRef}>
+        {error !== null && (
+          <AppText accessibilityRole="alert" style={styles.error}>
+            {error}
+          </AppText>
+        )}
         <AppSurface style={styles.section}>
           <AppText variant="label">{t('labs.recordDateLabel')}</AppText>
           <TextInput
             accessibilityLabel={t('labs.recordDateLabel')}
             editable={!dateMissing && !saving}
-            onChangeText={setDate}
+            onChangeText={(value) => {
+              setError(null);
+              setDate(value);
+            }}
             placeholder={t('labs.recordDatePlaceholder')}
             style={[styles.input, dateMissing && styles.disabledInput]}
             value={date}
@@ -313,14 +329,20 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
             accessibilityState={{ selected: dateMissing }}
             disabled={saving}
             label={t('labs.recordDateMissingLabel')}
-            onPress={() => setDateMissing((current) => !current)}
+            onPress={() => {
+              setError(null);
+              setDateMissing((current) => !current);
+            }}
             tone="quiet"
           />
           {dateMissing && <StatusPill>{t('labs.dateMissing')}</StatusPill>}
           <NativePickerField
             disabled={saving}
             label={t('labs.recordSpecimenLabel')}
-            onChange={setSpecimenType}
+            onChange={(value) => {
+              setError(null);
+              setSpecimenType(value);
+            }}
             options={specimens.map((value) => ({ value, label: specimenLabel(value) }))}
             value={specimenType}
           />
@@ -334,14 +356,20 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
               <Field
                 editable={!saving}
                 label={t('labs.recordLabLabel')}
-                onChangeText={setLaboratoryName}
+                onChangeText={(value) => {
+                  setError(null);
+                  setLaboratoryName(value);
+                }}
                 value={laboratoryName}
               />
               <Field
                 editable={!saving}
                 label={t('labs.recordNotesLabel')}
                 multiline
-                onChangeText={setNotes}
+                onChangeText={(value) => {
+                  setError(null);
+                  setNotes(value);
+                }}
                 value={notes}
               />
             </View>
@@ -357,7 +385,9 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
               const detailsExpanded = expandedMeasurementDetails.has(index);
               return (
                 <AppSurface key={index} style={styles.section}>
-                  <AppText variant="heading">{`${t('labs.recordDetail')} ${index + 1}`}</AppText>
+                  <AppText variant="heading">
+                    {`${t('labs.recordMeasurementTitle')} ${index + 1}`}
+                  </AppText>
                   <Field
                     editable={!saving}
                     label={t('labs.measurementLabel')}
@@ -433,22 +463,31 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
             <AppButton
               disabled={saving}
               label={t('labs.measurementAdd')}
-              onPress={() => setMeasurements((current) => [...current, emptyMeasurement()])}
+              onPress={() => {
+                setError(null);
+                setMeasurements((current) => [...current, emptyMeasurement()]);
+              }}
               tone="secondary"
             />
           </>
         )}
-        {error !== null && <AppText style={styles.error}>{error}</AppText>}
       </SafeForm>
     );
   },
 );
 
-function SafeForm({ children }: { readonly children: ReactNode }) {
+function SafeForm({
+  children,
+  scrollRef,
+}: {
+  readonly children: ReactNode;
+  readonly scrollRef: RefObject<ScrollView | null>;
+}) {
   return (
     <ScreenScrollView
       contentContainerStyle={[screenStyles.content, styles.formContent]}
       keyboardShouldPersistTaps="handled"
+      ref={scrollRef}
       style={screenStyles.safe}
     >
       {children}
@@ -563,7 +602,6 @@ function DisclosureButton({
 
 const styles = StyleSheet.create({
   formContent: { gap: spacing.md },
-  intro: { color: colors.mutedInk },
   section: { gap: spacing.sm },
   details: { gap: spacing.sm },
   field: { gap: spacing.xs },
