@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useIsFocused, useNavigation } from '@react-navigation/native';
+import { useIsFocused, useNavigation, type NavigationProp } from '@react-navigation/native';
 import { formatLocaleDate, type LabRecord, type LabReport, type SpecimenType } from '@alyte/domain';
-import type { LabsStackParamList } from '../../navigation/types';
+import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppIcon, AppText, LabEmptyState, ScreenScrollView } from '../../ui/primitives';
@@ -71,6 +71,7 @@ export function LabsScreen() {
   const services = useServices();
   const { labs } = services;
   const isFocused = useIsFocused();
+  const root = navigation.getParent()?.getParent<NavigationProp<RootStackParamList>>();
   const [records, setRecords] = useState<readonly LabRecord[]>([]);
   const [reports, setReports] = useState<readonly LabReport[]>([]);
   const [loading, setLoading] = useState(true);
@@ -242,7 +243,7 @@ export function LabsScreen() {
             )}
             <AppButton
               label={t('labs.manualAction')}
-              onPress={() => navigation.navigate('LabRecordForm')}
+              onPress={() => root?.navigate('LabRecordForm')}
               style={styles.manualAction}
               tone="quiet"
             />

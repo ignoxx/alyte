@@ -2,7 +2,6 @@ import type { MainTabParamList } from './types';
 import { HomeScreen } from '../features/home/HomeScreen';
 import { LabsScreen } from '../features/labs/LabsScreen';
 import { LabRecordDetailRoute } from '../features/labs/LabRecordDetailRoute';
-import { LabRecordFormRoute } from '../features/labs/LabRecordFormRoute';
 import { LabReportDetailRoute } from '../features/labs/LabReportDetailRoute';
 import { BiomarkerHistoryRoute } from '../features/labs/BiomarkerHistoryRoute';
 import { ExtractionDraftScreen } from '../features/labs/ExtractionDraftScreen';
@@ -55,12 +54,6 @@ const labsFeatures: readonly NavigationFeature[] = [
     target: 'labs',
     component: ExtractionDraftScreen,
     titleKey: 'labs.extractionTitle',
-  },
-  {
-    name: 'LabRecordForm',
-    target: 'labs',
-    component: LabRecordFormRoute,
-    titleKey: 'labs.recordCreateTitle',
   },
   {
     name: 'LabRecordDetail',

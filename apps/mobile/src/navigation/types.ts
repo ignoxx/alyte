@@ -29,7 +29,6 @@ export type LabsStackParamList = {
     readonly reportId: string;
     readonly draftId: string;
   };
-  LabRecordForm: { readonly recordId?: string } | undefined;
   LabRecordDetail: { readonly recordId: string };
   BiomarkerHistory: { readonly biomarkerId: string };
   MeasurementDetail: { readonly recordId: string; readonly measurementId: string };
@@ -53,6 +52,7 @@ export type RootStackParamList = {
     readonly draftId: string;
     readonly rowId: string;
   };
+  LabRecordForm: { readonly recordId?: string } | undefined;
   SanitizedSourcePreview: {
     readonly reportId: string;
     readonly pageIndex: number;

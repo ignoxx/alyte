@@ -29,6 +29,7 @@ import { OriginalSourcePreviewScreen } from '../features/labs/OriginalSourcePrev
 import { ExtractionProgressScreen } from '../features/labs/ExtractionProgressScreen';
 import { FullExportScreen } from '../features/settings/FullExportScreen';
 import { LocalModelInstallScreen } from '../features/onboarding/LocalModelInstallScreen';
+import { LabRecordFormRoute } from '../features/labs/LabRecordFormRoute';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 type ExtractionEditorStackParamList = Pick<
@@ -275,6 +276,20 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
             presentation: reportImportDestination.presentation,
             headerShown: true,
             title: t('labs.reportImportTitle'),
+          }}
+        />
+        <RootStack.Screen
+          name="LabRecordForm"
+          component={LabRecordFormRoute}
+          options={{
+            contentStyle: { backgroundColor: colors.canvas },
+            presentation: 'fullScreenModal',
+            headerBackVisible: false,
+            headerLargeTitle: false,
+            headerShown: true,
+            headerShadowVisible: false,
+            headerTintColor: colors.accent as string,
+            title: t('labs.recordCreateTitle'),
           }}
         />
         <RootStack.Screen
