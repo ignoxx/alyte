@@ -297,7 +297,6 @@ export function LabReportDetailScreen() {
           </Pressable>
           {report.importState === 'imported' && report.labRecordIds.length === 0 && (
             <View style={styles.extractAction}>
-              <AppText style={styles.body}>{t('labs.reportRetainedBody')}</AppText>
               <AppButton
                 disabled={busy}
                 label={t('labs.extractionStart')}

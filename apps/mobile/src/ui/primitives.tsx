@@ -63,10 +63,9 @@ export function AppSurface({ tone = 'default', style, ...props }: AppSurfaceProp
 /**
  * The outer scrolling surface for app screens.
  *
- * Native tabs are translucent on iOS 26. Explicitly opting into the shared native clearance puts
- * the measured/fallback space in the content layout, so short content cannot finish beneath the
- * bar. Keyboard and indicator adjustment stay here as well so screens do not need per-screen
- * inset guesses.
+ * Native tabs are translucent on iOS 26. Explicitly opting into UIKit's automatic adjustment
+ * keeps the last control and the scroll indicator above the native tab bar. Keyboard and
+ * indicator adjustment stay here as well so forms do not need per-screen inset guesses.
  */
 type ScreenScrollViewProps = Omit<
   ScrollViewProps,
@@ -81,16 +80,15 @@ type ScreenScrollViewProps = Omit<
 
 export const ScreenScrollView = forwardRef<ScrollView, ScreenScrollViewProps>(
   function ScreenScrollView(
-    { contentContainerStyle, contentInset, scrollIndicatorInsets, tabBarClearance, ...props },
+    { contentInset, scrollIndicatorInsets, tabBarClearance, ...props },
     ref,
   ) {
     const tabBarHeight = useContext(BottomTabBarHeightContext);
     const safeAreaInsets = useSafeAreaInsets();
-    const reservesNativeTabSpace = tabBarClearance === 'native';
     // Native bottom tabs render outside the JS tree and currently do not provide the React
-    // Navigation height context. On iOS, the shared clearance keeps an action-ending route's
-    // content above the translucent bar while regular bottom tabs continue to use their measured
-    // height. Other platforms retain the existing safe-area/measured-tab behavior.
+    // Navigation height context. On iOS, the shared clearance keeps an action-ending route above
+    // the translucent bar while regular bottom tabs continue to use their measured height. Other
+    // platforms retain the existing safe-area/measured-tab behavior.
     const bottomInset = getScreenScrollBottomInset(
       tabBarHeight,
       safeAreaInsets.bottom,
@@ -105,14 +103,9 @@ export const ScreenScrollView = forwardRef<ScrollView, ScreenScrollViewProps>(
         automaticallyAdjustKeyboardInsets
         automaticallyAdjustsScrollIndicatorInsets
         contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={
-          reservesNativeTabSpace
-            ? [contentContainerStyle, { paddingBottom: bottomInset }]
-            : contentContainerStyle
-        }
         contentInset={{
           ...contentInset,
-          bottom: (contentInset?.bottom ?? 0) + (reservesNativeTabSpace ? 0 : bottomInset),
+          bottom: (contentInset?.bottom ?? 0) + bottomInset,
         }}
         scrollIndicatorInsets={{
           ...scrollIndicatorInsets,
