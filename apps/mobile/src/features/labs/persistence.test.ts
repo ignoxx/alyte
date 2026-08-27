@@ -668,6 +668,73 @@ describe('protected manual Lab Record persistence', () => {
     assert.deepEqual(reopened?.measurements[0]?.source?.observationIds, ['decision-source']);
   });
 
+  test('updates one date/specimen group atomically without changing other groups', async () => {
+    const { repository } = createRepository();
+    await repository.createReport({
+      id: 'report-group-date',
+      sourceType: 'image',
+      originalFilename: 'synthetic-group-date.png',
+      mimeType: 'image/png',
+      importState: 'imported',
+      originalPath: 'protected://original/synthetic-group-date.png',
+      sourceHash: 'group-date-hash',
+      pageCount: 1,
+    });
+    const aliases: readonly ExtractionAliasEntry[] = [
+      { id: 'biomarker.ldl_c', aliases: ['LDL-C'], specimens: ['blood'], units: ['mmol/L'] },
+    ];
+    const makeRow = (id: string, date: string, defaulted: boolean) =>
+      groupObservationsIntoRows(
+        [
+          {
+            id,
+            text: 'LDL-C 3.8 mmol/L',
+            alternatives: [],
+            boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+            pageIndex: 0,
+            orientation: 0,
+            recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+          },
+        ],
+        {
+          aliases,
+          collectionDate: { kind: 'known', value: date },
+          collectionDateDefaulted: defaulted,
+          specimenType: 'blood',
+        },
+      )[0]!;
+    const first = makeRow('group-date-1', '2026-08-22', true);
+    const second = makeRow('group-date-2', '2026-08-22', true);
+    const other = makeRow('group-date-other', '2026-08-23', false);
+    const draft = await repository.createExtractionDraft({
+      id: 'draft-group-date',
+      reportId: 'report-group-date',
+      collectionDate: { kind: 'missing' },
+      rows: [first, second, other].map((row, order) => ({ ...row, order })),
+    });
+
+    const updated = await repository.updateExtractionDraftGroupDate(
+      draft.id,
+      { kind: 'known', value: '2026-08-22' },
+      'blood',
+      { kind: 'known', value: '2026-08-24' },
+      aliases,
+    );
+    assert.deepEqual(updated.collectionDate, { kind: 'missing' });
+    assert.deepEqual(
+      updated.rows.map((row) => row.collectionDate),
+      [
+        { kind: 'known', value: '2026-08-24' },
+        { kind: 'known', value: '2026-08-24' },
+        { kind: 'known', value: '2026-08-23' },
+      ],
+    );
+    assert.equal(updated.rows[0]?.reviewReasons.includes('defaulted-collection-date'), false);
+    assert.equal(updated.rows[1]?.reviewReasons.includes('defaulted-collection-date'), false);
+    assert.equal(updated.rows[2]?.reviewReasons.includes('defaulted-collection-date'), false);
+    await repository.close();
+  });
+
   test('migration and typed repository preserve every manual value kind', async () => {
     const { repository, database } = createRepository();
     const record = await repository.createRecord({

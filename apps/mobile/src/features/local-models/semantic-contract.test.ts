@@ -80,7 +80,7 @@ test('serializes candidate rows with compact keys and headings without source ID
   );
 });
 
-test('accepts Lithuanian ferritin while unsupported urine rows stay omitted', () => {
+test('requires one exhaustive proposal and preserves an unsupported urine row', () => {
   const ferritin = row('lt-ferritin', 'lt', ['Feritinas', '42', 'ng/mL', '15–150']);
   const urine = row('lt-urine-glucose', 'lt', [
     'Gliukozė (šlapimas)',
@@ -93,10 +93,26 @@ test('accepts Lithuanian ferritin while unsupported urine rows stay omitted', ()
       schemaVersion: SEMANTIC_MAPPER_SCHEMA_VERSION,
       proposals: [
         {
-          sourceObservationIds: ferritin.sourceObservationIds,
+          rowKey: 'r0',
+          labelKey: 'c0',
+          valueKey: 'c1',
+          unitKey: 'c2',
+          referenceIntervalKey: 'c3',
+          flagKey: null,
           role: 'measurement',
           specimenType: 'serum',
           biomarkerId: 'biomarker.ferritin',
+        },
+        {
+          rowKey: 'r1',
+          labelKey: 'c0',
+          valueKey: 'c1',
+          unitKey: 'c2',
+          referenceIntervalKey: 'c3',
+          flagKey: null,
+          role: 'preserve',
+          specimenType: 'urine',
+          biomarkerId: null,
         },
       ],
     },
@@ -106,9 +122,29 @@ test('accepts Lithuanian ferritin while unsupported urine rows stay omitted', ()
   assert.deepEqual(accepted, [
     {
       sourceObservationIds: ferritin.sourceObservationIds,
+      sourceFields: {
+        label: ferritin.sourceObservationIds[0]!,
+        value: ferritin.sourceObservationIds[1]!,
+        unit: ferritin.sourceObservationIds[2]!,
+        referenceInterval: ferritin.sourceObservationIds[3]!,
+        flag: null,
+      },
       proposedBiomarkerId: 'biomarker.ferritin',
       proposedSpecimenType: 'serum',
       role: 'measurement',
+    },
+    {
+      sourceObservationIds: urine.sourceObservationIds,
+      sourceFields: {
+        label: urine.sourceObservationIds[0]!,
+        value: urine.sourceObservationIds[1]!,
+        unit: urine.sourceObservationIds[2]!,
+        referenceInterval: urine.sourceObservationIds[3]!,
+        flag: null,
+      },
+      proposedBiomarkerId: null,
+      proposedSpecimenType: 'urine',
+      role: 'preserve',
     },
   ]);
 });
@@ -121,13 +157,23 @@ test('accepts both supported Polish candidate rows with their complete source ID
       schemaVersion: SEMANTIC_MAPPER_SCHEMA_VERSION,
       proposals: [
         {
-          sourceObservationIds: hematocrit.sourceObservationIds,
+          rowKey: 'r0',
+          labelKey: 'c0',
+          valueKey: 'c1',
+          unitKey: 'c2',
+          referenceIntervalKey: 'c3',
+          flagKey: null,
           role: 'measurement',
           specimenType: 'blood',
           biomarkerId: 'biomarker.hematocrit',
         },
         {
-          sourceObservationIds: triglycerides.sourceObservationIds,
+          rowKey: 'r1',
+          labelKey: 'c0',
+          valueKey: 'c1',
+          unitKey: 'c2',
+          referenceIntervalKey: 'c3',
+          flagKey: null,
           role: 'measurement',
           specimenType: 'plasma',
           biomarkerId: 'biomarker.triglycerides',
@@ -143,7 +189,7 @@ test('accepts both supported Polish candidate rows with their complete source ID
   );
 });
 
-test('rejects invented compact keys while preserving an independent valid row proposal', () => {
+test('rejects the complete response when any compact row key is invented', () => {
   const first = row('first', 'lt', ['Feritinas', '42', 'ng/mL', '15–150']);
   const second = row('second', 'pl', ['Hematokryt', '42', '%', '36–46']);
   const accepted = validateSemanticMapperOutput(
@@ -177,21 +223,7 @@ test('rejects invented compact keys while preserving an independent valid row pr
     [first, second],
     multilingualAliases,
   );
-  assert.deepEqual(accepted, [
-    {
-      sourceObservationIds: second.sourceObservationIds,
-      sourceFields: {
-        label: second.sourceObservationIds[0],
-        value: second.sourceObservationIds[1],
-        unit: second.sourceObservationIds[2],
-        referenceInterval: second.sourceObservationIds[3],
-        flag: null,
-      },
-      proposedBiomarkerId: 'biomarker.hematocrit',
-      proposedSpecimenType: 'blood',
-      role: 'measurement',
-    },
-  ]);
+  assert.deepEqual(accepted, []);
 });
 
 test('rejects partial, cross-row, reordered, and extra-ID proposals individually', () => {
@@ -298,13 +330,13 @@ test('bounds candidate rows, cells, headings, and the complete UTF-8 input', () 
   );
   assert.match(
     createSemanticMapperPrompt('lt', serializeSemanticMapperChunk([candidate], 'lt')),
-    /compact row and cell keys/u,
+    /compact row(?:\/| and )cell keys/u,
   );
 });
 
 test('keeps production prompt, chunk, and manifest versions aligned', () => {
   assert.equal(SEMANTIC_MAPPER_SCHEMA_VERSION, 'alyte.semantic-mapper.v2');
-  assert.equal(SEMANTIC_MAPPER_PROMPT_VERSION, 'alyte.semantic-mapper.prompt.v4');
+  assert.equal(SEMANTIC_MAPPER_PROMPT_VERSION, 'alyte.semantic-mapper.prompt.v5');
   assert.equal(SEMANTIC_OCR_CHUNK_VERSION, 'alyte.semantic-ocr-chunk.v3');
   assert.equal(
     SEMANTIC_MAPPER_PROMPT_VERSION,

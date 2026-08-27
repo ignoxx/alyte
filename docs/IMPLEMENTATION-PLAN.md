@@ -102,7 +102,8 @@ fixtures, logs, screenshots, or agent context.
 Build:
 
 - Biomarker history and measured chart model;
-- missing-date, missing-test, comparator, and incompatible-unit behavior;
+- missing-date behavior, including a single device-local fallback only when OCR finds no date
+  context, group-level date correction, missing-test, comparator, and incompatible-unit behavior;
 - Lab Record summary and two-record comparison;
 - laboratory range first, versioned General Guidance fallback second;
 - reviewed plain-language explanations for the initial comparable catalogue; and

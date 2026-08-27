@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
-import { Pressable, SectionList, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Alert, Pressable, SectionList, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   extractionReviewBlocksConfirmation,
+  parseLabDate,
   type ExtractionDraft,
   type ExtractionDraftRow,
+  type LabDateState,
 } from '@alyte/domain';
 import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
@@ -31,6 +33,8 @@ type ListSection = {
   readonly recordKey: string;
   readonly showRecordHeader: boolean;
   readonly collectionDateLabel: string | null;
+  readonly collectionDate: LabDateState;
+  readonly dateDefaulted: boolean;
   readonly specimenType: ExtractionDraftRow['proposedSpecimenType'];
   readonly panelLabel: string | null;
   readonly data: readonly ExtractionDraftRow[];
@@ -56,6 +60,8 @@ function flattenSections(rows: readonly ExtractionDraftRow[]): readonly ListSect
       recordKey: record.key,
       showRecordHeader: index === 0,
       collectionDateLabel: record.collectionDateLabel,
+      collectionDate: record.collectionDate,
+      dateDefaulted: record.dateDefaulted,
       specimenType: record.specimenType,
       panelLabel: panel.label,
       data: panel.rows,
@@ -161,6 +167,52 @@ export function ExtractionDraftScreen() {
     openRow(nextBlockingRow.id, true);
   }, [draft?.rows, openRow]);
 
+  const editGroupDate = useCallback(
+    (section: ListSection) => {
+      if (busy || draft === null) return;
+      const current = section.collectionDate.kind === 'known' ? section.collectionDate.value : '';
+      Alert.prompt(
+        t('labs.extractionDateEditorTitle'),
+        t('labs.extractionDateEditorBody'),
+        [
+          { text: t('labs.cancel'), style: 'cancel' },
+          {
+            text: t('labs.extractionDateSave'),
+            onPress: (input?: string) => {
+              const value = input?.trim() ?? '';
+              const parsed: LabDateState | null =
+                value.length === 0
+                  ? { kind: 'missing' }
+                  : parseLabDate(value, Intl.DateTimeFormat().resolvedOptions().locale);
+              if (parsed === null) {
+                Alert.alert(
+                  t('labs.extractionDateEditorErrorTitle'),
+                  t('labs.extractionDateEditorErrorBody'),
+                );
+                return;
+              }
+              const next = parsed;
+              setBusy(true);
+              void reports
+                .updateExtractionGroupDate(
+                  draft.id,
+                  section.collectionDate,
+                  section.specimenType,
+                  next,
+                )
+                .then(() => load())
+                .catch(() => setSaveError(true))
+                .finally(() => setBusy(false));
+            },
+          },
+        ],
+        'plain-text',
+        current,
+      );
+    },
+    [busy, draft, load, reports],
+  );
+
   const confirm = useCallback(async () => {
     if (busy || draft === null || !canConfirmExtraction(draft.rows)) return;
     setSaveError(false);
@@ -244,14 +296,32 @@ export function ExtractionDraftScreen() {
           <View style={styles.sectionHeader}>
             {section.showRecordHeader && (
               <View style={styles.recordHeader}>
-                <View style={styles.recordCopy}>
+                <Pressable
+                  accessibilityLabel={t('labs.extractionEditCollectionDate')}
+                  accessibilityRole="button"
+                  onPress={() => editGroupDate(section)}
+                  style={styles.recordCopy}
+                >
                   <AppText variant="label">{t('labs.extractionLabRecord')}</AppText>
                   <AppText selectable variant="heading">
                     {section.collectionDateLabel ?? t('labs.recordDateMissing')}
                   </AppText>
-                </View>
+                  <AppText style={styles.dateEditorLabel}>
+                    {t('labs.extractionEditCollectionDate')}
+                  </AppText>
+                </Pressable>
                 <StatusPill tone="neutral">{t(`labs.specimen.${section.specimenType}`)}</StatusPill>
               </View>
+            )}
+            {section.showRecordHeader && section.dateDefaulted && (
+              <AppText selectable style={styles.dateCallout}>
+                {t('labs.extractionDateFallbackCallout')}
+              </AppText>
+            )}
+            {section.showRecordHeader && section.collectionDate.kind === 'missing' && (
+              <AppText selectable style={styles.dateCallout}>
+                {t('labs.extractionDateMissing')}
+              </AppText>
             )}
             {section.panelLabel !== null && (
               <AppText style={styles.panelLabel} variant="label">
@@ -402,6 +472,8 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   recordCopy: { flex: 1, gap: spacing.xs },
+  dateEditorLabel: { color: colors.accent },
+  dateCallout: { color: colors.mutedInk, paddingBottom: spacing.xs },
   panelLabel: { color: colors.mutedInk, paddingTop: spacing.xs, textTransform: 'uppercase' },
   row: {
     alignItems: 'center',

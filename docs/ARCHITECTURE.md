@@ -256,7 +256,10 @@ Preserve source and normalized values separately:
 - internal reasons that require review.
 
 The trend query includes only compatible exact numeric Measurements with a known collection date.
-Missing tests create gaps in evidence, not zero values or interpolated points.
+When OCR finds no collection-date context, extraction may seed one editable device-local calendar
+date per Lab Record/specimen group; the draft marks that date as defaulted and keeps source date
+provenance null. Ambiguous, invalid, or multiple collection candidates remain missing. Missing
+tests create gaps in evidence, not zero values or interpolated points.
 
 ### Files
 

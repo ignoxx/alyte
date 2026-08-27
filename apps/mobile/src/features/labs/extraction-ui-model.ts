@@ -94,6 +94,8 @@ export function extractionSourcePreviewRequestAllowed(input: {
 export type ExtractionReviewSection = {
   readonly key: string;
   readonly collectionDateLabel: string | null;
+  readonly collectionDate: ExtractionDraftRow['collectionDate'];
+  readonly dateDefaulted: boolean;
   readonly specimenType: ExtractionDraftRow['proposedSpecimenType'];
   readonly panels: readonly {
     readonly label: string | null;
@@ -181,7 +183,14 @@ export function buildExtractionReviewSections(
     const key = `${collectionDateLabel ?? 'missing'}|${row.proposedSpecimenType}`;
     let record = records.get(key);
     if (record === undefined) {
-      record = { key, collectionDateLabel, specimenType: row.proposedSpecimenType, panels: [] };
+      record = {
+        key,
+        collectionDateLabel,
+        collectionDate: row.collectionDate,
+        dateDefaulted: row.reviewReasons.includes('defaulted-collection-date'),
+        specimenType: row.proposedSpecimenType,
+        panels: [],
+      };
       records.set(key, record);
     }
     const panels = [...record.panels];
@@ -191,7 +200,12 @@ export function buildExtractionReviewSections(
       const panel = panels[panelIndex]!;
       panels[panelIndex] = { ...panel, rows: [...panel.rows, row] };
     }
-    records.set(key, { ...record, panels });
+    records.set(key, {
+      ...record,
+      dateDefaulted:
+        record.dateDefaulted || row.reviewReasons.includes('defaulted-collection-date'),
+      panels,
+    });
   }
   return [...records.values()];
 }

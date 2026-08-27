@@ -12,7 +12,7 @@ import { normalizeAlias } from './text';
 export { normalizeAlias } from './text';
 
 export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.document.v2' as const;
-export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v4' as const;
+export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v5' as const;
 
 const NUMERIC_TOKEN_PATTERN =
   '[<>≤≥]?\\s*[+-]?(?:(?:\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)|(?:\\d+(?:[.,]\\d+)?)|(?:\\.\\d+))';
@@ -128,6 +128,7 @@ export const EXTRACTION_REVIEW_REASONS = [
   'missing-collection-date',
   'ambiguous-date',
   'unsupported-layout',
+  'defaulted-collection-date',
 ] as const;
 
 export type ExtractionReviewReason = (typeof EXTRACTION_REVIEW_REASONS)[number];
@@ -164,7 +165,7 @@ function defaultExtractionDecision(
 ): ExtractionRowDecision {
   return reasons.some((reason) => AUTO_EXCLUDED_EXTRACTION_REVIEW_REASONS.has(reason))
     ? 'skip'
-    : reasons.length === 0
+    : reasons.length === 0 || reasons.every((reason) => reason === 'defaulted-collection-date')
       ? 'resolve'
       : 'preserve';
 }
@@ -645,12 +646,15 @@ export type ExtractionDraftRowPatch = {
   readonly proposedFlag?: string | null;
   readonly proposedBiomarkerId?: CanonicalId | null;
   readonly proposedSpecimenType?: SpecimenType;
-  readonly collectionDate?: LabDateState;
   readonly decision?: ExtractionRowDecision;
 };
 
 type SemanticRevalidationOptions = {
   readonly sourceFields?: ExtractionSemanticFieldSelection;
+  /** Internal group-date update seam; collection dates are never a per-row public patch. */
+  readonly collectionDate?: LabDateState;
+  /** False means a user supplied group date has replaced an app fallback. */
+  readonly collectionDateDefaulted?: boolean;
 };
 
 export type ExtractionConfirmationPlan = {
@@ -1082,6 +1086,68 @@ function findAliasMatches(
   return matches;
 }
 
+function measurementValueText(value: MeasurementValue): string {
+  return value.kind === 'numeric'
+    ? String(value.value)
+    : value.kind === 'bounded'
+      ? `${value.comparator}${value.value}`
+      : value.value;
+}
+
+/**
+ * Removes a result-shaped suffix from a proposed display label only when the suffix leaves one
+ * uniquely identifiable catalogue alias. The complete selected OCR cell remains in `source` and
+ * therefore this helper can never rewrite Original Report provenance.
+ */
+export function cleanProposedDisplayLabel(
+  input: string,
+  fields: {
+    readonly value: MeasurementValue;
+    readonly unit: string | null;
+    readonly referenceInterval: string | null;
+    readonly flag?: string | null;
+  },
+  aliases: readonly ExtractionAliasEntry[],
+): string {
+  const label = input.trim();
+  if (label.length === 0) return label;
+  const parts = [
+    { kind: 'value', text: measurementValueText(fields.value) },
+    { kind: 'unit', text: fields.unit },
+    { kind: 'reference', text: fields.referenceInterval },
+    { kind: 'flag', text: fields.flag ?? null },
+  ].filter(
+    (part): part is { kind: string; text: string } => part.text !== null && part.text !== '',
+  );
+  if (
+    parts.length === 0 ||
+    parts.every((part) => part.kind !== 'value' && part.kind !== 'reference')
+  )
+    return label;
+
+  const candidates = new Map<string, string>();
+  const visit = (remaining: readonly (typeof parts)[number][], suffix: readonly string[]) => {
+    if (suffix.length > 0 && suffix.some((text) => text !== '') && suffix.length <= parts.length) {
+      const pattern = suffix
+        .map((text) => escapeRegExp(text.trim()).replace(/\s+/gu, '\\s+'))
+        .join('\\s+');
+      // A separator is intentionally limited to whitespace. Punctuation embedded in a source
+      // value/range is part of that exact selected cell and must not be guessed away.
+      const match = new RegExp(`\\s+${pattern}\\s*$`, 'u').exec(label);
+      if (match !== null) {
+        const prefix = label.slice(0, match.index).trim();
+        const aliasIds = new Set(findAliasMatches(prefix, aliases).map((item) => item.id));
+        if (aliasIds.size === 1) candidates.set(prefix, prefix);
+      }
+    }
+    for (const [index, part] of remaining.entries()) {
+      visit([...remaining.slice(0, index), ...remaining.slice(index + 1)], [...suffix, part.text]);
+    }
+  };
+  visit(parts, []);
+  return candidates.size === 1 ? [...candidates.values()][0]! : label;
+}
+
 type NumericSourceCandidate = {
   readonly raw: string;
   readonly start: number;
@@ -1179,6 +1245,8 @@ export function groupObservationsIntoRows(
   options: {
     readonly locale?: string;
     readonly collectionDate?: LabDateState;
+    /** True when the known date is an app-supplied local-day fallback, not source provenance. */
+    readonly collectionDateDefaulted?: boolean;
     readonly collectionDateContexts?: readonly ExtractionDateContext[];
     readonly specimenType?: SpecimenType;
     readonly aliases?: readonly ExtractionAliasEntry[];
@@ -1245,6 +1313,7 @@ export function groupObservationsIntoRows(
         order,
         options.locale ?? 'en-US',
         options.collectionDate ?? { kind: 'missing' },
+        options.collectionDateDefaulted ?? false,
         options.collectionDateContexts ?? [],
         options.specimenType ?? 'unknown',
         aliases,
@@ -1273,6 +1342,7 @@ function parseSourceRow(
   order: number,
   locale: string,
   collectionDate: LabDateState,
+  collectionDateDefaulted: boolean,
   collectionDateContexts: readonly ExtractionDateContext[],
   specimenType: SpecimenType,
   aliases: readonly ExtractionAliasEntry[],
@@ -1359,6 +1429,8 @@ function parseSourceRow(
     .sort((a, b) => Math.abs(a.centerY - rowCenterY) - Math.abs(b.centerY - rowCenterY))[0];
   const effectiveDate = nearestDateContext?.collectionDate ?? collectionDate;
   if (effectiveDate.kind === 'missing') reasons.push('missing-collection-date');
+  else if (collectionDateDefaulted && nearestDateContext === undefined)
+    reasons.push('defaulted-collection-date');
   if (nearestDateContext?.ambiguous) reasons.push('ambiguous-date');
   return {
     id: first?.id ?? `row-${order}`,
@@ -1392,7 +1464,10 @@ function parseSourceRow(
     proposedSpecimenType: specimenType,
     collectionDate: effectiveDate,
     reviewReasons: [...new Set(reasons)],
-    reviewState: reasons.length === 0 ? 'ready' : 'needs-review',
+    reviewState:
+      reasons.length === 0 || reasons.every((reason) => reason === 'defaulted-collection-date')
+        ? 'ready'
+        : 'needs-review',
     decision: defaultExtractionDecision([...new Set(reasons)]),
   };
 }
@@ -1441,21 +1516,38 @@ export function reparseExtractionRowFromSemanticFields(
   const valueIndex = sourceCellIndex(sourceFields.value);
   const unitIndex = sourceCellIndex(sourceFields.unit);
   const referenceIndex = sourceCellIndex(sourceFields.referenceInterval);
+  const selectedIndexes = [
+    labelIndex,
+    valueIndex,
+    unitIndex,
+    referenceIndex,
+    sourceCellIndex(sourceFields.flag),
+  ].filter((index): index is number => index !== null);
+  // Cell order is a layout detail, not a semantic invariant. Same-row membership is already
+  // guaranteed by selectedObservationText; distinct cells remain mandatory to prevent one source
+  // token from being silently reused for multiple roles.
   if (
     labelIndex === null ||
     valueIndex === null ||
-    valueIndex <= labelIndex ||
-    (unitIndex !== null && valueIndex >= unitIndex) ||
-    (referenceIndex !== null && valueIndex >= referenceIndex)
+    new Set(selectedIndexes).size !== selectedIndexes.length
   )
-    throw new Error('semantic-source-field-order-invalid');
+    throw new Error('semantic-source-field-selection-invalid');
   const parsedValue = parseSelectedMeasurementValue(value);
   if (parsedValue === null) throw new Error('semantic-source-value-unparseable');
   if (referenceInterval !== null && parseReferenceInterval(referenceInterval) === null)
     throw new Error('semantic-source-reference-unparseable');
   const next: ExtractionDraftRow = {
     ...row,
-    proposedLabel: label,
+    proposedLabel: cleanProposedDisplayLabel(
+      label,
+      {
+        value: parsedValue,
+        unit: normalizeUnit(unit),
+        referenceInterval,
+        flag,
+      },
+      aliases,
+    ),
     proposedValue: parsedValue,
     proposedUnit: normalizeUnit(unit),
     proposedReferenceInterval: referenceInterval,
@@ -1488,7 +1580,13 @@ export function revalidateExtractionRow(
   aliases: readonly ExtractionAliasEntry[],
   options: SemanticRevalidationOptions = {},
 ): ExtractionDraftRow {
-  const next = { ...row, ...patch, source: row.source, sourceValue: row.sourceValue };
+  const next = {
+    ...row,
+    ...patch,
+    ...(options.collectionDate === undefined ? {} : { collectionDate: options.collectionDate }),
+    source: row.source,
+    sourceValue: row.sourceValue,
+  };
   const reasons = new Set<ExtractionReviewReason>();
   if (!next.proposedLabel.trim()) reasons.add('missing-label');
   if (!next.sourceValueString.trim()) reasons.add('missing-value');
@@ -1553,6 +1651,12 @@ export function revalidateExtractionRow(
   if (!specimenCompatible(next.proposedSpecimenType, id, aliases))
     reasons.add('incompatible-specimen');
   if (next.collectionDate.kind === 'missing') reasons.add('missing-collection-date');
+  else if (
+    options.collectionDateDefaulted === true ||
+    (options.collectionDateDefaulted === undefined &&
+      row.reviewReasons.includes('defaulted-collection-date'))
+  )
+    reasons.add('defaulted-collection-date');
   if (next.collectionDateContext?.ambiguous) reasons.add('ambiguous-date');
   if (next.proposedReferenceInterval !== null && next.proposedReferenceInterval !== '') {
     if (parseReferenceInterval(next.proposedReferenceInterval) === null)
@@ -1565,7 +1669,11 @@ export function revalidateExtractionRow(
     ...next,
     proposedBiomarkerId: id,
     reviewReasons,
-    reviewState: reasons.size === 0 ? 'ready' : 'needs-review',
+    reviewState:
+      reviewReasons.length === 0 ||
+      reviewReasons.every((reason) => reason === 'defaulted-collection-date')
+        ? 'ready'
+        : 'needs-review',
     decision:
       patch.decision ?? (wasExplicitlySkipped ? 'skip' : defaultExtractionDecision(reviewReasons)),
   };

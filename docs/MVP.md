@@ -236,9 +236,11 @@ Biomarker is not currently included in the person's comparable laboratory trends
   intentionally separate and need to be defined precisely.
 - Numeric, bounded (`<` or `>`), categorical, and free-text results can be retained. Only exact
   numeric Measurements with safely compatible units participate in ordinary numeric trend lines.
-- A record with no specimen-collection date may be saved as `date missing`, but it remains outside
-  chronological comparisons until the user supplies the date. A report-issued date is never used
-  silently as its collection date.
+- When OCR finds no collection-date context, extraction starts each Lab Record/specimen group with
+  one captured device-local calendar date. The draft labels that date as defaulted, keeps the
+  Original Report date fields null, and lets the person edit the group date once before
+  confirmation. Ambiguous, invalid, or multiple collection-date candidates remain missing and
+  reviewable; report-issued and birth dates are never substituted.
 - Local extraction always opens as an editable draft. Structurally and semantically valid
   Measurements are included by default; genuine ambiguities are highlighted individually. The
   person reviews a compact grouped table, can inspect or edit any candidate, and resolves only the

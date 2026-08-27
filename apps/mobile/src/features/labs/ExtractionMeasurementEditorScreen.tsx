@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   useNavigation,
   useFocusEffect,
@@ -59,6 +60,7 @@ export function ExtractionMeasurementEditorScreen() {
   const navigation = useNavigation<EditorNavigation>();
   const route = useRoute<EditorRoute>();
   const { reports } = useServices();
+  const insets = useSafeAreaInsets();
   const [row, setRow] = useState<ExtractionDraftRow | null>(null);
   const [edit, setEdit] = useState<RowEdit | null>(null);
   const [busy, setBusy] = useState(false);
@@ -218,82 +220,84 @@ export function ExtractionMeasurementEditorScreen() {
 
   const included = row.decision !== 'skip';
   const sourcePresentation = extractionSourcePresentation(row);
+  const attentionReasons = row.reviewReasons.filter(
+    (reason) => reason !== 'defaulted-collection-date',
+  );
   return (
-    <ScrollView
-      automaticallyAdjustKeyboardInsets
-      contentContainerStyle={styles.content}
-      key={`${route.key}-${row.id}`}
-      keyboardShouldPersistTaps="handled"
-      style={[styles.safe, styles.scroll]}
-    >
-      {error && (
-        <AppText selectable style={styles.error}>
-          {t('labs.extractionSaveError')}
-        </AppText>
-      )}
-      <AppSurface tone="soft" style={styles.sourceCard}>
-        <View style={styles.sourceHeader}>
-          <AppText variant="label">{t(sourcePresentation.labelKey)}</AppText>
-          <StatusPill tone="extracted">{t('labs.extracted')}</StatusPill>
-        </View>
-        <AppText selectable>{row.sourceText}</AppText>
-        <AppText selectable style={styles.muted}>
-          {t(sourcePresentation.regionKey).replace('{page}', String(row.source.pageIndex + 1))}
-        </AppText>
-        <AppButton
-          disabled={sourcePresentation.artifactKind === 'unavailable' || busy || previewOpening}
-          label={t('labs.extractionViewInReport')}
-          onPress={viewInReport}
-          tone="quiet"
-        />
-      </AppSurface>
-
-      <View style={styles.recordContext}>
-        <AppText variant="label">{t('labs.extractionLabRecord')}</AppText>
-        <AppText selectable style={styles.muted}>
-          {`${row.collectionDate.kind === 'known' ? row.collectionDate.value : t('labs.recordDateMissing')} · ${t(`labs.specimen.${row.proposedSpecimenType}`)}`}
-        </AppText>
-      </View>
-
-      {row.reviewReasons.length > 0 && (
-        <AppSurface tone="soft" style={styles.reasons}>
-          <StatusPill tone="reviewNeeded">{t('labs.extractionNeedsReview')}</StatusPill>
-          <AppText selectable style={styles.muted}>
-            {row.reviewReasons.map((reason) => t(`labs.extractionReason.${reason}`)).join(' · ')}
+    <View style={styles.safe}>
+      <ScrollView
+        automaticallyAdjustContentInsets
+        automaticallyAdjustKeyboardInsets
+        automaticallyAdjustsScrollIndicatorInsets
+        contentContainerStyle={styles.content}
+        contentInsetAdjustmentBehavior="automatic"
+        key={`${route.key}-${row.id}`}
+        keyboardShouldPersistTaps="handled"
+        style={styles.scroll}
+      >
+        {error && (
+          <AppText selectable style={styles.error}>
+            {t('labs.extractionSaveError')}
+          </AppText>
+        )}
+        <AppSurface tone="soft" style={styles.provenance}>
+          <View style={styles.sourceHeader}>
+            <View style={styles.provenanceTitle}>
+              <AppText variant="label">{t(sourcePresentation.labelKey)}</AppText>
+              <StatusPill tone="extracted">{t('labs.extracted')}</StatusPill>
+            </View>
+            <AppButton
+              disabled={sourcePresentation.artifactKind === 'unavailable' || busy || previewOpening}
+              label={t('labs.extractionViewInReport')}
+              onPress={viewInReport}
+              tone="quiet"
+            />
+          </View>
+          <AppText numberOfLines={2} selectable style={styles.muted}>
+            {`${row.sourceText} · ${t(sourcePresentation.regionKey).replace('{page}', String(row.source.pageIndex + 1))}`}
           </AppText>
         </AppSurface>
-      )}
 
-      <View style={styles.form}>
-        <Field
-          label={t('labs.measurementLabel')}
-          value={edit.label}
-          onChangeText={(label) => setEdit({ ...edit, label })}
-        />
-        <Field
-          keyboardType="numeric"
-          label={t('labs.measurementValue')}
-          value={edit.value}
-          onChangeText={(value) => setEdit({ ...edit, value })}
-        />
-        <Field
-          label={t('labs.measurementUnit')}
-          value={edit.unit}
-          onChangeText={(unit) => setEdit({ ...edit, unit })}
-        />
-        <Field
-          label={t('labs.measurementReference')}
-          value={edit.reference}
-          onChangeText={(reference) => setEdit({ ...edit, reference })}
-        />
-        <AppButton
-          disabled={busy || !dirty}
-          label={t('labs.extractionSaveRow')}
-          onPress={() => void save()}
-          tone="secondary"
-        />
-      </View>
-      <View style={styles.footer}>
+        {extractionReviewRequiresAttention(row) && attentionReasons.length > 0 && (
+          <AppSurface tone="soft" style={styles.reasons}>
+            <StatusPill tone="reviewNeeded">{t('labs.extractionNeedsReview')}</StatusPill>
+            <AppText selectable style={styles.muted}>
+              {attentionReasons.map((reason) => t(`labs.extractionReason.${reason}`)).join(' · ')}
+            </AppText>
+          </AppSurface>
+        )}
+
+        <View style={styles.form}>
+          <AppText variant="label">{t('labs.extractionPrimaryFields')}</AppText>
+          <View style={styles.fieldGroup}>
+            <Field
+              label={t('labs.measurementLabel')}
+              value={edit.label}
+              onChangeText={(label) => setEdit({ ...edit, label })}
+            />
+            <Field
+              keyboardType="numeric"
+              label={t('labs.measurementValue')}
+              value={edit.value}
+              onChangeText={(value) => setEdit({ ...edit, value })}
+            />
+          </View>
+          <AppText variant="label">{t('labs.extractionSecondaryFields')}</AppText>
+          <View style={styles.fieldGroup}>
+            <Field
+              label={t('labs.measurementUnit')}
+              value={edit.unit}
+              onChangeText={(unit) => setEdit({ ...edit, unit })}
+            />
+            <Field
+              label={t('labs.measurementReference')}
+              value={edit.reference}
+              onChangeText={(reference) => setEdit({ ...edit, reference })}
+            />
+          </View>
+        </View>
+      </ScrollView>
+      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
         <AppButton
           disabled={busy}
           label={included ? t('labs.extractionKeep') : t('labs.extractionInclude')}
@@ -311,7 +315,7 @@ export function ExtractionMeasurementEditorScreen() {
           style={styles.action}
         />
       </View>
-    </ScrollView>
+    </View>
   );
 }
 
@@ -351,14 +355,15 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     padding: spacing.lg,
   },
-  content: { gap: spacing.md, padding: spacing.lg, paddingBottom: spacing.lg },
-  sourceCard: { gap: spacing.sm },
+  content: { gap: spacing.md, padding: spacing.lg, paddingBottom: spacing.xl },
+  provenance: { gap: spacing.xs },
+  provenanceTitle: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: spacing.sm },
   sourceHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
-  recordContext: { gap: spacing.xs },
   reasons: { gap: spacing.sm },
   muted: { color: colors.mutedInk },
   error: { color: colors.danger },
   form: { gap: spacing.md },
+  fieldGroup: { gap: spacing.md },
   field: { gap: spacing.xs },
   fieldLabel: { color: colors.mutedInk },
   input: {

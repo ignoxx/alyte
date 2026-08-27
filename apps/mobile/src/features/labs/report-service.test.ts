@@ -34,6 +34,7 @@ import {
 import {
   createLabReportsService,
   createDefaultExtractionAliases,
+  localCalendarDateFromInstant,
   LabReportExtractionError,
   LabReportImportError,
   LabReportSelectionError,
@@ -42,6 +43,15 @@ import {
   type LabReportsService,
   type LabReportExtractionProgress,
 } from './report-service';
+
+test('fallback collection dates use the device local calendar rather than UTC slicing', () => {
+  const instant = '2026-08-27T22:30:00.000Z';
+  const local = new Date(instant);
+  const expected = `${local.getFullYear().toString().padStart(4, '0')}-${(local.getMonth() + 1)
+    .toString()
+    .padStart(2, '0')}-${local.getDate().toString().padStart(2, '0')}`;
+  assert.deepEqual(localCalendarDateFromInstant(instant), { kind: 'known', value: expected });
+});
 import type { LabSourcePicker } from './pickers';
 import type {
   PdfInspection,
@@ -1224,11 +1234,19 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(draft.rows.length, 1);
     assert.equal(draft.rows[0]?.source.pageIndex, 0);
     assert.equal(draft.rows[0]?.sourceValueString, '3,8');
-    assert.equal(draft.rows[0]?.reviewState, 'needs-review');
-    assert.ok(draft.rows[0]?.reviewReasons.includes('missing-collection-date'));
+    assert.equal(draft.rows[0]?.reviewReasons.includes('defaulted-collection-date'), true);
+    assert.equal(draft.rows[0]?.collectionDateContext, null);
+    assert.equal(draft.rows[0]?.source.raw?.collectionDate, null);
+    const dated = await service.updateExtractionGroupDate(
+      draft.id,
+      draft.rows[0]!.collectionDate,
+      draft.rows[0]!.proposedSpecimenType,
+      { kind: 'known', value: '2026-08-22' },
+    );
+    assert.deepEqual(dated.rows[0]?.collectionDate, { kind: 'known', value: '2026-08-22' });
+    assert.equal(dated.rows[0]?.reviewReasons.includes('defaulted-collection-date'), false);
     const corrected = await service.updateExtractionRow(draft.rows[0]!.id, {
       proposedLabel: 'LDL-C',
-      collectionDate: { kind: 'known', value: '2026-08-22' },
     });
     assert.equal(corrected.proposedBiomarkerId, 'biomarker.ldl_c');
     await service.updateExtractionRow(corrected.id, { decision: 'resolve' });

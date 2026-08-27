@@ -13,6 +13,8 @@ import {
   type MeasurementSnapshot,
   type MeasurementValue,
   type UpdateLabRecordInput,
+  type LabDateState,
+  type SpecimenType,
   type ExtractionDraft,
   type ExtractionDraftRow,
   type ExtractionDraftRowPatch,
@@ -967,6 +969,13 @@ export type LabRepository = {
     patch: ExtractionDraftRowPatch,
     aliases: readonly ExtractionAliasEntry[],
   ): Promise<ExtractionDraftRow>;
+  updateExtractionDraftGroupDate(
+    draftId: string,
+    currentDate: LabDateState,
+    specimenType: SpecimenType,
+    collectionDate: LabDateState,
+    aliases: readonly ExtractionAliasEntry[],
+  ): Promise<ExtractionDraft>;
   confirmExtractionDraft(
     id: string,
     aliases?: readonly ExtractionAliasEntry[],
@@ -1836,6 +1845,80 @@ export function createLabRepository(
     return updated;
   }
 
+  async function updateExtractionDraftGroupDate(
+    draftId: string,
+    currentDate: LabDateState,
+    specimenType: SpecimenType,
+    collectionDate: LabDateState,
+    aliases: readonly ExtractionAliasEntry[],
+  ): Promise<ExtractionDraft> {
+    await initialize();
+    assertLabDateState(currentDate);
+    assertLabDateState(collectionDate);
+    const dateKey = (date: LabDateState): string =>
+      date.kind === 'known' ? `known:${date.value}` : 'missing';
+    const currentKey = dateKey(currentDate);
+    await withWrite(async () => {
+      const draftRows = await database.getAllAsync<ExtractionDraftRowDb>(
+        `SELECT ${extractionRowColumns} FROM extraction_draft_rows WHERE draft_id = ? ORDER BY row_order ASC;`,
+        draftId,
+      );
+      const draftState = await database.getAllAsync<ExtractionDraftDb>(
+        `SELECT ${extractionDraftColumns} FROM extraction_drafts WHERE id = ?;`,
+        draftId,
+      );
+      const draft = draftState[0];
+      if (draft === undefined) throw new Error('Extraction Draft was not found');
+      if (draft.state !== 'draft') throw new Error('Only a draft can be edited');
+      const decodedRows = draftRows.map(extractionRowFromDb);
+      const matchingRows = decodedRows.filter(
+        (row) =>
+          row.proposedSpecimenType === specimenType && dateKey(row.collectionDate) === currentKey,
+      );
+      if (matchingRows.length === 0) {
+        throw new Error('Extraction Draft group was not found');
+      }
+      for (const current of matchingRows) {
+        const next = revalidateExtractionRow(current, {}, aliases, {
+          collectionDate,
+          collectionDateDefaulted: false,
+        });
+        await database.runAsync(
+          `UPDATE extraction_draft_rows SET collection_date = ?, date_state = ?, review_reasons_json = ?,
+            review_state = ?, decision = ? WHERE id = ?;`,
+          next.collectionDate.kind === 'known' ? next.collectionDate.value : null,
+          next.collectionDate.kind,
+          JSON.stringify(next.reviewReasons),
+          next.reviewState,
+          next.decision,
+          next.id,
+        );
+      }
+      const rootDate = draftDate(draft.collection_date, draft.date_state);
+      const allRowsShareCurrentDate = decodedRows.every(
+        (row) => dateKey(row.collectionDate) === currentKey,
+      );
+      if (dateKey(rootDate) === currentKey || allRowsShareCurrentDate) {
+        await database.runAsync(
+          'UPDATE extraction_drafts SET collection_date = ?, date_state = ?, updated_at = ? WHERE id = ?;',
+          collectionDate.kind === 'known' ? collectionDate.value : null,
+          collectionDate.kind,
+          now(),
+          draftId,
+        );
+      } else {
+        await database.runAsync(
+          'UPDATE extraction_drafts SET updated_at = ? WHERE id = ?;',
+          now(),
+          draftId,
+        );
+      }
+    });
+    const updated = await getExtractionDraft(draftId, aliases);
+    if (updated === null) throw new Error('Extraction Draft could not be read back');
+    return updated;
+  }
+
   async function confirmExtractionDraft(
     id: string,
     aliases?: readonly ExtractionAliasEntry[],
@@ -2029,6 +2112,7 @@ export function createLabRepository(
     getExtractionDraft,
     getExtractionDraftForReport,
     updateExtractionDraftRow,
+    updateExtractionDraftGroupDate,
     confirmExtractionDraft,
     getSanitizationDraft,
     saveSanitizationDraft,

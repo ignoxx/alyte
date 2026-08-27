@@ -279,6 +279,12 @@ export type LabReportsService = {
   countOpenExtractionDrafts(): Promise<number>;
   getExtractionDraft(id: string): Promise<ExtractionDraft | null>;
   updateExtractionRow(id: string, patch: ExtractionDraftRowPatch): Promise<ExtractionDraftRow>;
+  updateExtractionGroupDate(
+    draftId: string,
+    currentDate: LabDateState,
+    specimenType: SpecimenType,
+    collectionDate: LabDateState,
+  ): Promise<ExtractionDraft>;
   confirmExtraction(id: string): Promise<readonly LabRecord[]>;
 };
 
@@ -361,6 +367,21 @@ function singleImageSelection(value: unknown): LabSourceSelection | null {
 
 function isoNow(): string {
   return new Date().toISOString();
+}
+
+/**
+ * Derive the fallback from the device's local calendar. UTC slicing would move the Lab Record
+ * across a day for users west or east of Greenwich around local midnight.
+ */
+export function localCalendarDateFromInstant(instant: string): LabDateState {
+  const date = new Date(instant);
+  if (Number.isNaN(date.getTime())) return { kind: 'missing' };
+  return {
+    kind: 'known',
+    value: `${date.getFullYear().toString().padStart(4, '0')}-${(date.getMonth() + 1)
+      .toString()
+      .padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`,
+  };
 }
 
 function isCancellation(error: unknown): boolean {
@@ -2329,6 +2350,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         extractionProgressEvent(id, 'ocr', 'complete', pages.length, pages.length);
 
         const dateContext = dateContextFromOCR(results);
+        // A report with no collection-date context gets one captured local-day fallback. The
+        // source context remains null, and all rows share this injected instant until the group
+        // editor changes them atomically.
+        const collectionDateDefaulted = dateContext.contexts.length === 0;
+        const collectionDate = collectionDateDefaulted
+          ? localCalendarDateFromInstant(now())
+          : dateContext.collectionDate;
         const observations = [
           ...new Map(
             results
@@ -2346,7 +2374,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           .flatMap(({ observations: contextObservations, specimenType }) =>
             groupObservationsIntoRows(contextObservations, {
               locale: Intl.DateTimeFormat().resolvedOptions().locale,
-              collectionDate: dateContext.collectionDate,
+              collectionDate,
+              collectionDateDefaulted,
               collectionDateContexts: dateContext.contexts,
               specimenType,
               aliases: extractionAliases,
@@ -2392,7 +2421,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         }
         const draft = await repo.createExtractionDraft({
           reportId: id,
-          collectionDate: dateContext.collectionDate,
+          collectionDate,
           rows,
           sourceArtifact,
         });
@@ -2501,6 +2530,22 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     return (await repository()).updateExtractionDraftRow(id, patch, extractionAliases);
   }
 
+  async function updateExtractionGroupDate(
+    draftId: string,
+    currentDate: LabDateState,
+    specimenType: SpecimenType,
+    collectionDate: LabDateState,
+  ): Promise<ExtractionDraft> {
+    await ensureInitialized();
+    return (await repository()).updateExtractionDraftGroupDate(
+      draftId,
+      currentDate,
+      specimenType,
+      collectionDate,
+      extractionAliases,
+    );
+  }
+
   async function confirmExtraction(id: string): Promise<readonly LabRecord[]> {
     return serialized(async () => {
       await ensureInitialized();
@@ -2557,6 +2602,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     countOpenExtractionDrafts,
     getExtractionDraft,
     updateExtractionRow,
+    updateExtractionGroupDate,
     confirmExtraction,
   };
 }

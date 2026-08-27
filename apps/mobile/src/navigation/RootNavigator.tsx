@@ -84,7 +84,14 @@ function ExtractionMeasurementEditorModal({
   route: RouteProp<RootStackParamList, 'ExtractionMeasurementEditor'>;
 }) {
   return (
-    <ExtractionEditorStack.Navigator screenOptions={stackScreenOptions}>
+    <ExtractionEditorStack.Navigator
+      screenOptions={{
+        ...stackScreenOptions,
+        // The sheet owns the outer presentation; keep the inner native header opaque so source
+        // text never competes with a translucent canvas while the keyboard or preview moves.
+        headerTransparent: false,
+      }}
+    >
       <ExtractionEditorStack.Screen
         name="ExtractionMeasurementEditor"
         component={ExtractionMeasurementEditorScreen}
@@ -332,7 +339,7 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
           component={ExtractionMeasurementEditorModal}
           options={{
             presentation: extractionEditorDestination.presentation,
-            sheetAllowedDetents: [0.6, 0.92],
+            sheetAllowedDetents: [0.92],
             sheetInitialDetentIndex: 1,
             sheetGrabberVisible: true,
             headerLargeTitle: false,

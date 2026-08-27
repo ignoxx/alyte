@@ -156,15 +156,13 @@ export function serializeSemanticMapperChunk(
  * prompt. Compact row/cell keys keep one physical row within one bounded proposal. */
 export function createSemanticMapperPrompt(locale: string, serializedChunk: string): string {
   const prompt = `<bos><|turn>system
-You are an offline semantic mapper. Return only the JSON object required by the grammar.
-Do not provide values, units, intervals, translations, explanations or medical copy.
-Each row has compact row and cell keys. For each unambiguous candidate row, emit at most one proposal. Select label, value, unit, reference interval, and optional flag cell keys only from that same row. Never invent, reorder, duplicate, or cross rows. Choose biomarkerId only from the checked-in catalogue map. Use preserve with null biomarkerId for a credible unsupported row. Do not use ignore: only deterministic local evidence can exclude a row, and unresolved rows must remain reviewable. Omit ambiguous rows.
+Offline laboratory OCR mapper. compact row and cell keys are bookkeeping only. Return exactly one proposal per input row, keyed by row/cell, in any order, with grammar keys only and no extra fields. For every row select label, complete observed result (including comparator/range), unit, reference, and flag keys only from that row. Label is the test name only: exclude result, unit, range, flag, method, date, and metadata. measurement requires a checked-in biomarker; preserve is for unresolved, ambiguous, or unsupported rows and requires biomarkerId null; specimen-context is only a specimen heading and also has biomarkerId null. Never omit, duplicate, cross, invent, rewrite, reorder, or translate source cells; never author values, units, ranges, flags, conversions, explanations, confidence, dates, metadata, or medical copy. There is no ignore: uncertainty stays preserve.
 <turn|>
 <|turn>user
 Schema version: ${SEMANTIC_MAPPER_SCHEMA_VERSION}. Locale: ${locale}.
-The chunk's biomarkers map provides canonical English labels and checked-in multilingual aliases. It is input context only; never author a translation.
+The chunk's biomarkers map provides canonical English labels and checked-in multilingual aliases. These are input matching hints only; never author a translation or replace source text.
 OCR chunk: ${serializedChunk}
-Select only bounded row/cell keys and semantic roles.
+Return one compact proposal per row with exact source keys. Keep result, unit, reference, flag, and specimen context exact; preserve rather than guess.
 <turn|>
 <|turn>model
 `;
@@ -219,10 +217,19 @@ export function validateSemanticMapperOutput(
   if (candidate.schemaVersion !== SEMANTIC_MAPPER_SCHEMA_VERSION) return [];
   if (
     !Array.isArray(candidate.proposals) ||
-    candidate.proposals.length > SEMANTIC_MAPPER_LIMITS.maxProposals
+    candidate.proposals.length !== candidateRows.length ||
+    candidate.proposals.length > SEMANTIC_MAPPER_LIMITS.maxProposals ||
+    candidate.proposals.some(
+      (proposal) =>
+        typeof proposal !== 'object' ||
+        proposal === null ||
+        Array.isArray(proposal) ||
+        typeof (proposal as Record<string, unknown>).rowKey !== 'string',
+    )
   )
     return [];
-  return validateSemanticProposals(candidate, candidateRows, aliases);
+  const proposals = validateSemanticProposals(candidate, candidateRows, aliases);
+  return proposals.length === candidateRows.length ? proposals : [];
 }
 
 export const localSemanticContractMetadata = Object.freeze({

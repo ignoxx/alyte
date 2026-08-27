@@ -934,20 +934,18 @@ describe('local extraction domain', () => {
         ),
       /semantic-source-value-unparseable/,
     );
-    assert.throws(
-      () =>
-        reparseExtractionRowFromSemanticFields(
-          row,
-          {
-            label: 'lt-label',
-            value: 'lt-noisy-value',
-            unit: 'lt-unit',
-            referenceInterval: 'lt-range',
-            flag: null,
-          },
-          aliases,
-        ),
-      /semantic-source-field-order-invalid/,
+    const resultFirst = reparseExtractionRowFromSemanticFields(
+      row,
+      {
+        // Semantic roles are intentionally independent of their physical column order.
+        label: 'lt-label',
+        value: 'lt-noisy-value',
+        unit: 'lt-unit',
+        referenceInterval: 'lt-range',
+        flag: null,
+      },
+      aliases,
     );
+    assert.deepEqual(resultFirst.proposedValue, { kind: 'numeric', value: 1.2 });
   });
 });
