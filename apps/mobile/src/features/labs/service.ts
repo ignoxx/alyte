@@ -7,7 +7,7 @@ import type {
   Measurement,
   UpdateLabRecordInput,
 } from '@alyte/domain';
-import { buildLabRecordDetail } from '@alyte/domain';
+import { buildLabRecordDetail, resolveUserMeasurementBiomarker } from '@alyte/domain';
 import { comparableBiomarkers } from '@alyte/catalogue';
 import { openProtectedLabDatabase, type LabRepository } from './persistence';
 import { createLabReportsService } from './report-service';
@@ -47,6 +47,32 @@ export type LabsServiceOptions = {
   readonly comparableCatalogue?: readonly ComparableBiomarkerConstraint[];
   readonly deleteSource?: (reportId: string) => Promise<void>;
 };
+
+function mapUserMeasurement(
+  measurement: CreateLabRecordInput['measurements'][number],
+  recordSpecimen: CreateLabRecordInput['specimenType'],
+  comparableCatalogue: readonly ComparableBiomarkerConstraint[],
+) {
+  if (measurement.biomarkerId !== undefined || measurement.provenance === 'extracted') {
+    return measurement;
+  }
+  const resolution = resolveUserMeasurementBiomarker(
+    {
+      label: measurement.label,
+      value: measurement.value,
+      unit: measurement.unit ?? null,
+      specimenType: measurement.specimenType ?? recordSpecimen ?? 'unknown',
+      ...(measurement.original === undefined ? {} : { originalLabel: measurement.original.label }),
+      ...(measurement.reviewState === undefined ? {} : { reviewState: measurement.reviewState }),
+      ...(measurement.source === undefined ? {} : { source: measurement.source }),
+    },
+    comparableCatalogue,
+  );
+  return {
+    ...measurement,
+    biomarkerId: resolution.kind === 'mapped' ? resolution.biomarkerId : null,
+  };
+}
 
 export function createLabsService(options: LabsServiceOptions = {}): LabsService {
   let repositoryPromise: Promise<LabRepository> | null = null;
@@ -171,13 +197,41 @@ export function createLabsService(options: LabsServiceOptions = {}): LabsService
       return buildLabRecordDetail(record, source, comparableCatalogue);
     },
     async createRecord(input) {
-      return (await repository()).createRecord(input);
+      const mappedInput = {
+        ...input,
+        measurements: input.measurements.map((measurement) =>
+          mapUserMeasurement(measurement, input.specimenType, comparableCatalogue),
+        ),
+      };
+      return (await repository()).createRecord(mappedInput);
     },
     async updateRecord(id, input) {
       return (await repository()).updateRecord(id, input);
     },
     async correctMeasurement(id, input) {
-      return (await repository()).correctMeasurement(id, input);
+      const repo = await repository();
+      if (input.biomarkerId !== undefined) return repo.correctMeasurement(id, input);
+      const recordId = await repo.findMeasurementRecordId(id);
+      if (recordId === null) return repo.correctMeasurement(id, input);
+      const record = await repo.getRecord(recordId);
+      const existing = record?.measurements.find((measurement) => measurement.id === id);
+      if (existing === undefined) return repo.correctMeasurement(id, input);
+      const resolution = resolveUserMeasurementBiomarker(
+        {
+          label: input.label ?? existing.current.label,
+          originalLabel: existing.original.label,
+          value: input.value ?? existing.current.value,
+          unit: input.unit === undefined ? existing.current.unit : input.unit,
+          specimenType: input.specimenType ?? existing.specimenType,
+          reviewState: input.reviewState ?? existing.reviewState,
+          source: input.source === undefined ? existing.source : input.source,
+        },
+        comparableCatalogue,
+      );
+      return repo.correctMeasurement(id, {
+        ...input,
+        biomarkerId: resolution.kind === 'mapped' ? resolution.biomarkerId : null,
+      });
     },
     planDeletion,
     executeDeletion,

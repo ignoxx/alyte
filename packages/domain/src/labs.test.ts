@@ -10,6 +10,7 @@ import {
   formatMeasurementValue,
   parseLocalDateInput,
   parseLocaleDecimal,
+  resolveUserMeasurementBiomarker,
   type LabRecord,
 } from './labs.js';
 import { canonicalId } from './index.js';
@@ -55,6 +56,123 @@ describe('manual laboratory value model', () => {
     assert.match(
       createSortableOpaqueId('lab-record', 1000, 'b'.repeat(20)),
       /^lab-record-[0-9a-f]{12}-b{20}$/,
+    );
+  });
+
+  it('maps only a unique reviewed alias with compatible measurement facts', () => {
+    const catalogue = [
+      {
+        id: 'biomarker.total_cholesterol',
+        aliases: ['Total cholesterol'],
+        specimens: ['blood', 'serum', 'plasma', 'unknown'] as const,
+        units: ['mg/dL'],
+        valueType: 'numeric' as const,
+      },
+    ];
+    assert.deepEqual(
+      resolveUserMeasurementBiomarker(
+        {
+          label: 'Total cholesterol',
+          value: { kind: 'numeric', value: 205 },
+          unit: 'mg/dL',
+          specimenType: 'unknown',
+        },
+        catalogue,
+      ),
+      { kind: 'mapped', biomarkerId: canonicalId('biomarker.total_cholesterol') },
+    );
+  });
+
+  it('preserves ambiguous, unsafe, and incompatible user labels', () => {
+    const catalogue = [
+      {
+        id: 'biomarker.first',
+        aliases: ['Shared label'],
+        specimens: ['serum'] as const,
+        units: ['mg/dL'],
+      },
+      {
+        id: 'biomarker.second',
+        aliases: ['Shared label'],
+        specimens: ['serum'] as const,
+        units: ['mg/dL'],
+      },
+      {
+        id: 'biomarker.unsafe',
+        aliases: ['Unsafe label'],
+        unsafeAliases: ['Unsafe label'],
+        specimens: ['serum'] as const,
+        units: ['mg/dL'],
+      },
+      {
+        id: 'biomarker.numeric',
+        aliases: ['Numeric label'],
+        specimens: ['serum'] as const,
+        units: ['mg/dL'],
+      },
+    ];
+    const base = {
+      value: { kind: 'numeric' as const, value: 1 },
+      unit: 'mg/dL',
+      specimenType: 'serum' as const,
+    };
+    assert.deepEqual(
+      resolveUserMeasurementBiomarker({ ...base, label: 'Shared label' }, catalogue),
+      { kind: 'preserved-only', reason: 'unmapped' },
+    );
+    assert.deepEqual(
+      resolveUserMeasurementBiomarker({ ...base, label: 'Unsafe label' }, catalogue),
+      { kind: 'preserved-only', reason: 'unmapped' },
+    );
+    assert.deepEqual(
+      resolveUserMeasurementBiomarker(
+        { ...base, label: 'Numeric label', unit: 'mmol/L' },
+        catalogue,
+      ),
+      { kind: 'preserved-only', reason: 'incompatible-unit' },
+    );
+    assert.deepEqual(
+      resolveUserMeasurementBiomarker(
+        { ...base, label: 'Numeric label', specimenType: 'urine' },
+        catalogue,
+      ),
+      { kind: 'preserved-only', reason: 'incompatible-specimen' },
+    );
+    assert.deepEqual(
+      resolveUserMeasurementBiomarker(
+        { ...base, label: 'Numeric label', value: { kind: 'bounded', comparator: '<', value: 1 } },
+        catalogue,
+      ),
+      { kind: 'preserved-only', reason: 'non-numeric-value' },
+    );
+  });
+
+  it('fails closed when a reviewed biomarker requires method context', () => {
+    const catalogue = [
+      {
+        id: 'biomarker.method-dependent',
+        aliases: ['Method-dependent result'],
+        specimens: ['serum'] as const,
+        units: ['U/L'],
+        methodPolicy: {
+          version: '1',
+          kind: 'requires-explicit-method' as const,
+          allowedMethods: ['supported assay'],
+          unsafePatterns: [],
+        },
+      },
+    ];
+    assert.deepEqual(
+      resolveUserMeasurementBiomarker(
+        {
+          label: 'Method-dependent result',
+          value: { kind: 'numeric', value: 42 },
+          unit: 'U/L',
+          specimenType: 'serum',
+        },
+        catalogue,
+      ),
+      { kind: 'preserved-only', reason: 'incompatible-method' },
     );
   });
 });

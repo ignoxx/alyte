@@ -561,6 +561,50 @@ describe('protected manual Lab Record persistence', () => {
     await repository.close();
   });
 
+  test('LabsService safely maps manual labels and corrected identity without rewriting provenance', async () => {
+    const { repository } = createRepository();
+    const labs = createLabsService({ repositoryFactory: async () => repository });
+    const created = await labs.createRecord({
+      id: 'lab-record-safe-mapping',
+      collectionDate: { kind: 'known', value: '2026-08-20' },
+      specimenType: 'unknown',
+      measurements: [
+        {
+          id: 'measurement-safe-mapping',
+          label: 'Total cholesterol',
+          value: { kind: 'numeric', value: 205 },
+          unit: 'mg/dL',
+        },
+        {
+          id: 'measurement-preserved-then-corrected',
+          label: 'Home result',
+          value: { kind: 'numeric', value: 1 },
+          unit: null,
+        },
+      ],
+    });
+    const mapped = created.measurements.find(
+      (measurement) => measurement.id === 'measurement-safe-mapping',
+    );
+    assert.equal(mapped?.biomarkerId, canonicalId('biomarker.total_cholesterol'));
+    assert.equal(mapped?.original.label, 'Total cholesterol');
+    assert.equal(mapped?.provenance, 'user-entered');
+
+    const corrected = await labs.correctMeasurement('measurement-preserved-then-corrected', {
+      label: 'Total cholesterol',
+      value: { kind: 'numeric', value: 210 },
+      unit: 'mg/dL',
+      specimenType: 'unknown',
+      reason: 'Mapped reviewed label',
+    });
+    assert.equal(corrected.biomarkerId, canonicalId('biomarker.total_cholesterol'));
+    assert.equal(corrected.original.label, 'Home result');
+    assert.equal(corrected.originalState.biomarkerId, null);
+    assert.equal(corrected.provenance, 'user-corrected');
+    assert.equal(corrected.corrections[0]?.next.biomarkerId, corrected.biomarkerId);
+    await repository.close();
+  });
+
   test('reopening the same database preserves records offline without an account', async () => {
     const databasePath = temporaryDatabase();
     const first = createRepository(databasePath);

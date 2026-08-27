@@ -85,7 +85,6 @@ export function correctionInput(
     value = { kind: draft.kind, value: text };
   }
   return {
-    biomarkerId: measurement.biomarkerId,
     label,
     value,
     unit: draft.unit.trim() || null,
