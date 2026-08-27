@@ -233,6 +233,7 @@ export type AppIconName =
   | 'log'
   | 'settings'
   | 'chevronRight'
+  | 'chevronLeft'
   | 'ellipsis'
   | 'plus'
   | 'doc'
@@ -257,6 +258,7 @@ const iconSymbols: Record<AppIconName, string> = {
   log: 'list.bullet',
   settings: 'gearshape',
   chevronRight: 'chevron.right',
+  chevronLeft: 'chevron.left',
   ellipsis: 'ellipsis',
   plus: 'plus',
   doc: 'doc.text',

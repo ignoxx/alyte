@@ -4,7 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ServicesContext, createServices, type AlyteServices } from './src/services';
 import { RootNavigator } from './src/navigation/RootNavigator';
-import { ModelSetupScreen } from './src/features/onboarding/ModelSetupPanel';
+import { OnboardingScreen } from './src/features/onboarding/OnboardingScreen';
 import { ONBOARDING_COMPLETED_PREFERENCE } from './src/features/onboarding/preferences';
 import { AppLockProvider, useAppLock } from './src/features/app-lock/AppLockProvider';
 import { createAppLockAuthService } from './src/features/app-lock/auth';
@@ -107,7 +107,7 @@ function AppContent({ services }: { readonly services: AlyteServices }) {
       ) : onboardingComplete ? (
         <RootNavigator services={services} />
       ) : (
-        <ModelSetupScreen
+        <OnboardingScreen
           model={services.models}
           onComplete={() => {
             void services.intake
