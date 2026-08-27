@@ -341,6 +341,7 @@
     "extractionProgressSourceError": "The protected Original Report changed or is unavailable. Import it again before retrying.",
     "extractionProgressCancelled": "Processing was cancelled before it finished.",
     "extractionProgressInterrupted": "Processing stopped before it finished.",
+    "extractionPersistenceError": "Alyte could not save this extraction. Your Original Report remains on this iPhone. Try again.",
     "extractionSearch": "Search measurements",
     "extractionFilterAll": "All {count}",
     "extractionFilterNeedsReview": "Needs Review {count}",

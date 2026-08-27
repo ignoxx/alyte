@@ -8,6 +8,7 @@ export type ExtractionFailurePresentation = {
     | 'labs.extractionNoMeasurementsError'
     | 'labs.extractionProgressCancelled'
     | 'labs.extractionProgressInterrupted'
+    | 'labs.extractionPersistenceError'
     | 'labs.extractionRecognitionError';
 };
 
@@ -30,7 +31,9 @@ export function extractionFailurePresentation(
             ? 'labs.extractionProgressCancelled'
             : reason === 'interrupted'
               ? 'labs.extractionProgressInterrupted'
-              : 'labs.extractionRecognitionError';
+              : reason === 'persistence'
+                ? 'labs.extractionPersistenceError'
+                : 'labs.extractionRecognitionError';
 
   return { titleKey, messageKey };
 }

@@ -22,4 +22,8 @@ test('keeps actionable source failures distinct from generic processing failures
     titleKey: 'labs.extractionProgressFailureTitle',
     messageKey: 'labs.extractionRecognitionError',
   });
+  assert.deepEqual(extractionFailurePresentation('persistence'), {
+    titleKey: 'labs.extractionProgressFailureTitle',
+    messageKey: 'labs.extractionPersistenceError',
+  });
 });

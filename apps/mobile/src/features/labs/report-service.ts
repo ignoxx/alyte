@@ -199,6 +199,7 @@ export class LabReportExtractionError extends Error {
       | 'no-reviewable-measurements'
       | 'model-unavailable'
       | 'original-source'
+      | 'persistence'
       | 'wrong-password'
       | 'cancelled'
       | 'interrupted',
@@ -541,6 +542,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       'no-reviewable-measurements',
       'model-unavailable',
       'original-source',
+      'persistence',
       'wrong-password',
       'cancelled',
       'interrupted',
@@ -2291,12 +2293,17 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         }
         return draft;
       } catch (error) {
+        const stage = extractionProgress.get(id)?.stage ?? 'import';
         const extractionError =
           error instanceof LabReportExtractionError
             ? error
-            : new LabReportExtractionError('recognition', 'Local document extraction failed', {
-                cause: error,
-              });
+            : new LabReportExtractionError(
+                stage === 'review' ? 'persistence' : 'recognition',
+                stage === 'review'
+                  ? 'The local extraction draft could not be saved'
+                  : 'Local document extraction failed',
+                { cause: error },
+              );
         const cancelled = isCancelled() || extractionError.reason === 'cancelled';
         if (cancelled && createdDraft !== null) {
           try {

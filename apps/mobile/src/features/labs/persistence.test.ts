@@ -238,6 +238,70 @@ describe('protected manual Lab Record persistence', () => {
     await relaunched.repository.close();
   });
 
+  test('allocates distinct persisted row identities for drafts with repeated OCR observation IDs', async () => {
+    const { repository } = createRepository();
+    const reportInput = (id: string) => ({
+      id,
+      sourceType: 'image' as const,
+      originalFilename: `${id}.png`,
+      mimeType: 'image/png',
+      importState: 'imported' as const,
+      originalPath: `protected://original/${id}.png`,
+      sourceHash: `${id}-hash`,
+      pageCount: 1,
+    });
+    await repository.createReport(reportInput('report-repeated-a'));
+    await repository.createReport(reportInput('report-repeated-b'));
+
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'document-0-0-table-0-r1-c0',
+          text: 'LDL-C 3.8 mmol/L',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+          structure: { kind: 'table-cell', tableId: 'table-0', rowIndex: 1, columnIndex: 0 },
+        },
+      ],
+      {
+        aliases: [
+          {
+            id: 'biomarker.ldl_c',
+            aliases: ['LDL-C'],
+            specimens: ['blood', 'unknown'],
+            units: ['mmol/L'],
+          },
+        ],
+        collectionDate: { kind: 'known', value: '2026-08-22' },
+        specimenType: 'blood',
+      },
+    );
+    assert.ok(row);
+
+    const first = await repository.createExtractionDraft({
+      id: 'draft-repeated-a',
+      reportId: 'report-repeated-a',
+      collectionDate: { kind: 'known', value: '2026-08-22' },
+      rows: [row],
+    });
+    const second = await repository.createExtractionDraft({
+      id: 'draft-repeated-b',
+      reportId: 'report-repeated-b',
+      collectionDate: { kind: 'known', value: '2026-08-23' },
+      rows: [row],
+    });
+
+    assert.notEqual(first.rows[0]?.id, row.id);
+    assert.notEqual(second.rows[0]?.id, row.id);
+    assert.notEqual(first.rows[0]?.id, second.rows[0]?.id);
+    assert.deepEqual(first.rows[0]?.source.observationIds, [row.source.observationIds[0]]);
+    assert.deepEqual(second.rows[0]?.source.observationIds, [row.source.observationIds[0]]);
+    await repository.close();
+  });
+
   test('fails closed when stored extraction artifact provenance is malformed or inconsistent', async () => {
     const { repository, database } = createRepository();
     await repository.createReport({
