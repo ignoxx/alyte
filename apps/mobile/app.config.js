@@ -36,6 +36,7 @@ module.exports = ({ config }) => {
       bundleIdentifier: selected.bundleIdentifier,
       deploymentTarget: '26.0',
       supportsTablet: false,
+      usesAppleSignIn: true,
       // This native entitlement changes the fingerprint; release builds must be rebuilt and signed.
       entitlements: {
         ...config.ios?.entitlements,

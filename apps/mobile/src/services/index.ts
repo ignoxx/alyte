@@ -40,6 +40,8 @@ import {
   showcaseIntakeInputs,
 } from './showcase-seed';
 import { createSharedDatabaseRepositoryFactories } from './shared-database';
+import { createCloudAccountService, type CloudAccountService } from '../features/account/service';
+import { CloudApiClient } from '../features/account/cloud-api';
 
 export interface AlyteServices {
   readonly runtime: AlyteRuntime;
@@ -51,6 +53,7 @@ export interface AlyteServices {
   readonly export: LocalExportService;
   readonly controls: LocalControlsService;
   readonly models: LocalModelService;
+  readonly account: CloudAccountService;
 }
 
 export type ServicesCompositionOptions = {
@@ -60,6 +63,8 @@ export type ServicesCompositionOptions = {
   readonly openIntakeDatabase?: () => Promise<IntakeRepository>;
   /** Test seam for recovery reconciliation without touching device media. */
   readonly intakeMediaStore?: IntakeMediaStore;
+  /** Optional test seam for the account boundary; it never shares the local database. */
+  readonly account?: CloudAccountService;
 };
 
 export function runtimeVariant(): RuntimeVariant {
@@ -102,6 +107,14 @@ export function createServices(
     models,
     aliases: createDefaultExtractionAliases(),
   });
+  // Development and preview intentionally advertise no hosted API. A production URL cannot be
+  // reached accidentally from those builds; tests can inject a fake account service or a directly
+  // configured client at this boundary.
+  const account =
+    options.account ??
+    createCloudAccountService({
+      api: variant === 'production' ? new CloudApiClient() : new CloudApiClient({ baseUrl: null }),
+    });
 
   if (showcase !== null) {
     void seedShowcaseLabRecords(labs);
@@ -121,6 +134,7 @@ export function createServices(
     export: exportService,
     controls,
     models,
+    account,
   };
 }
 

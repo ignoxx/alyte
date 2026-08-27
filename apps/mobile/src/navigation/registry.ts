@@ -15,6 +15,7 @@ import { SupportFaqScreen } from '../features/settings/SupportFaqScreen';
 import { AppLockScreen } from '../features/app-lock/AppLockScreen';
 import { DiagnosticsScreen } from '../features/settings/DiagnosticsScreen';
 import { DeleteLocalDataScreen } from '../features/settings/DeleteLocalDataScreen';
+import { CloudAccountScreen } from '../features/settings/CloudAccountScreen';
 import {
   registerNavigationFeatures,
   type NavigationFeature,
@@ -79,6 +80,12 @@ const intakeFeatures: readonly NavigationFeature[] = [
 ];
 
 const settingsFeatures: readonly NavigationFeature[] = [
+  {
+    name: 'CloudAccount',
+    target: 'settings',
+    component: CloudAccountScreen,
+    titleKey: 'settings.cloudAccountTitle',
+  },
   {
     name: 'AppLock',
     target: 'settings',

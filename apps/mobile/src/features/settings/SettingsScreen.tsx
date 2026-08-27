@@ -16,7 +16,7 @@ function SettingsRow({
   subtitle,
   onPress,
 }: {
-  readonly icon: 'lockShield' | 'shield' | 'folder' | 'settings' | 'doc';
+  readonly icon: 'lockShield' | 'shield' | 'folder' | 'settings' | 'doc' | 'cloud';
   readonly title: string;
   readonly subtitle: string;
   readonly onPress: () => void;
@@ -53,6 +53,12 @@ export function SettingsScreen(_props: SettingsScreenProps) {
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
         <View style={styles.group}>
+          <SettingsRow
+            icon="cloud"
+            title={t('settings.cloudAccountTitle')}
+            subtitle={t('settings.cloudAccountSubtitle')}
+            onPress={() => navigation.navigate('CloudAccount')}
+          />
           <SettingsRow
             icon="lockShield"
             title={t('settings.appLockTitle')}
