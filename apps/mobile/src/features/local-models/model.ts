@@ -27,6 +27,7 @@ export const LOCAL_MODEL_FAILURES = [
   'runtime-failed',
   'storage-protection',
   'interrupted',
+  'verification-required',
   'unknown',
 ] as const;
 export type LocalModelFailure = (typeof LOCAL_MODEL_FAILURES)[number];

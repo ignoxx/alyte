@@ -57,6 +57,17 @@ final class AlyteLocalModelCore: @unchecked Sendable {
   private(set) var offset: Int64 = 0
   var stateObserver: (([String: Any]) -> Void)?
 
+  private struct VerificationReceipt: Codable {
+    let version: Int
+    let filename: String
+    let expectedBytes: Int64
+    let expectedDigest: String
+    let fileSize: Int64
+    let modificationTimeMilliseconds: Int64?
+  }
+
+  private let verificationReceiptVersion = 1
+
   init(
     directory: URL,
     expectedBytes: Int64,
@@ -85,6 +96,9 @@ final class AlyteLocalModelCore: @unchecked Sendable {
   var runtime: (any AlyteLocalModelRuntimeSession)? { loadedRuntime }
   var readyURL: URL { directory.appendingPathComponent(filename) }
   var partialURL: URL { directory.appendingPathComponent(".\(filename).partial") }
+  private var verificationReceiptURL: URL {
+    directory.appendingPathComponent(".\(filename).verification.json")
+  }
 
   func currentState() -> [String: Any] {
     stateDictionary()
@@ -95,19 +109,23 @@ final class AlyteLocalModelCore: @unchecked Sendable {
       try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
       try protectFileClosure(directory)
       if fileManager.fileExists(atPath: readyURL.path) {
-        guard try verifyReadyFile(at: readyURL) else {
-          try removeIfPresent(readyURL)
-          stateValue = .failed
-          failureValue = .checksumMismatch
+        // Startup must stay cheap even for a multi-gigabyte pack. The receipt is only a prior
+        // verification record; load/activation still performs the authoritative SHA-256 check.
+        if try verificationReceiptMatchesReadyFile() {
+          storageBytesValue = expectedBytes
+          bytesReceivedValue = expectedBytes
+          offset = expectedBytes
+          stateValue = .ready
+          failureValue = nil
+          try removeIfPresent(partialURL)
           emitState()
           return
         }
         storageBytesValue = expectedBytes
         bytesReceivedValue = expectedBytes
         offset = expectedBytes
-        stateValue = .ready
-        failureValue = nil
-        try removeIfPresent(partialURL)
+        stateValue = .failed
+        failureValue = .verificationRequired
         emitState()
         return
       }
@@ -133,13 +151,37 @@ final class AlyteLocalModelCore: @unchecked Sendable {
   }
 
   func verifyReady() throws -> Bool {
-    try verifyReadyFile(at: readyURL)
+    try verifyReadyFile(at: readyURL, writeReceipt: true)
   }
 
   /// Reconciles an existing final artifact before creating any partial download state.
   func admitDownload() throws -> AlyteLocalModelDownloadAdmission {
     if stateValue == .failed || stateValue == .notInstalled {
       reconcileInstalledPack()
+    }
+    // A legacy/receipt-missing final artifact is never trusted from startup. A user-triggered
+    // download action is the off-startup verification point where it may be recovered without
+    // spending bandwidth if the authoritative digest still matches.
+    if stateValue == .failed && fileManager.fileExists(atPath: readyURL.path) {
+      if try verifyReady() {
+        storageBytesValue = expectedBytes
+        bytesReceivedValue = expectedBytes
+        offset = expectedBytes
+        stateValue = .ready
+        failureValue = nil
+        try removeIfPresent(partialURL)
+        emitState()
+        return .ready(stateDictionary())
+      } else {
+        try removeIfPresent(readyURL)
+        try removeIfPresent(verificationReceiptURL)
+        storageBytesValue = 0
+        bytesReceivedValue = 0
+        offset = 0
+        stateValue = .notInstalled
+        failureValue = nil
+        emitState()
+      }
     }
     if stateValue == .ready || stateValue == .loaded {
       guard try verifyReady() else { throw AlyteLocalModelError.failed(.checksumMismatch) }
@@ -297,6 +339,7 @@ final class AlyteLocalModelCore: @unchecked Sendable {
       }
     }
     guard try verifyReady() else { throw AlyteLocalModelError.failed(.checksumMismatch) }
+    if stateValue == .failed { setState(.ready, failure: nil) }
     releaseLoadedModel()
     do {
       loadedRuntime = try runtimeFactory(readyURL)
@@ -365,6 +408,7 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     releaseLoadedModel()
     try removeIfPresent(readyURL)
     try removeIfPresent(partialURL)
+    try removeIfPresent(verificationReceiptURL)
     storageBytesValue = 0
     bytesReceivedValue = 0
     offset = 0
@@ -395,8 +439,13 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     }
     try protectFileClosure(partialURL)
     let backup = directory.appendingPathComponent(".\(filename).previous")
+    let receiptBackup = directory.appendingPathComponent(".\(filename).verification.previous")
     do {
       try removeIfPresent(backup)
+      try removeIfPresent(receiptBackup)
+      if fileManager.fileExists(atPath: verificationReceiptURL.path) {
+        try fileManager.copyItem(at: verificationReceiptURL, to: receiptBackup)
+      }
       if fileManager.fileExists(atPath: readyURL.path) {
         // Keep an explicit sibling backup because replaceItemAt's optional backup name is not
         // consistently materialized across iOS filesystem providers. The ready item remains in
@@ -408,8 +457,14 @@ final class AlyteLocalModelCore: @unchecked Sendable {
         try fileManager.moveItem(at: partialURL, to: readyURL)
       }
       try protectFileClosure(readyURL)
+      try writeVerificationReceipt(for: readyURL)
       try removeIfPresent(backup)
+      try removeIfPresent(receiptBackup)
     } catch {
+      try? removeIfPresent(verificationReceiptURL)
+      if fileManager.fileExists(atPath: receiptBackup.path) {
+        try? fileManager.moveItem(at: receiptBackup, to: verificationReceiptURL)
+      }
       if fileManager.fileExists(atPath: backup.path) {
         try? removeIfPresent(readyURL)
         try? fileManager.moveItem(at: backup, to: readyURL)
@@ -422,11 +477,75 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     return true
   }
 
-  private func verifyReadyFile(at url: URL) throws -> Bool {
+  private func verifyReadyFile(at url: URL, writeReceipt: Bool) throws -> Bool {
     guard fileManager.fileExists(atPath: url.path) else { return false }
     try protectFileClosure(url)
     guard try fileSize(url) == expectedBytes else { return false }
-    return try hashFileClosure(url) == expectedDigest
+    guard try hashFileClosure(url) == expectedDigest else { return false }
+    if writeReceipt { try writeVerificationReceipt(for: url) }
+    return true
+  }
+
+  private func verificationReceiptMatchesReadyFile() throws -> Bool {
+    guard fileManager.fileExists(atPath: verificationReceiptURL.path) else { return false }
+    guard let data = try? Data(contentsOf: verificationReceiptURL) else { return false }
+    guard let receipt = try? JSONDecoder().decode(VerificationReceipt.self, from: data) else {
+      return false
+    }
+    guard receipt.version == verificationReceiptVersion,
+      receipt.filename == filename,
+      receipt.expectedBytes == expectedBytes,
+      receipt.expectedDigest == expectedDigest,
+      let attributes = try? fileManager.attributesOfItem(atPath: readyURL.path),
+      let size = (attributes[.size] as? NSNumber)?.int64Value,
+      size == receipt.fileSize,
+      size == expectedBytes
+    else { return false }
+    let modificationTime = Self.milliseconds(from: attributes[.modificationDate])
+    return modificationTime == receipt.modificationTimeMilliseconds
+  }
+
+  private func writeVerificationReceipt(for url: URL) throws {
+    let attributes = try fileManager.attributesOfItem(atPath: url.path)
+    guard let size = (attributes[.size] as? NSNumber)?.int64Value, size == expectedBytes else {
+      throw AlyteLocalModelError.failed(.sizeMismatch)
+    }
+    let receipt = VerificationReceipt(
+      version: verificationReceiptVersion,
+      filename: filename,
+      expectedBytes: expectedBytes,
+      expectedDigest: expectedDigest,
+      fileSize: size,
+      modificationTimeMilliseconds: Self.milliseconds(from: attributes[.modificationDate])
+    )
+    let temporaryURL = directory.appendingPathComponent(".\(filename).verification.partial")
+    try removeIfPresent(temporaryURL)
+    do {
+      let data = try JSONEncoder().encode(receipt)
+      guard fileManager.createFile(atPath: temporaryURL.path, contents: data) else {
+        throw AlyteLocalModelError.failed(.runtimeFailed)
+      }
+      try protectFileClosure(temporaryURL)
+      if fileManager.fileExists(atPath: verificationReceiptURL.path) {
+        _ = try fileManager.replaceItemAt(
+          verificationReceiptURL,
+          withItemAt: temporaryURL,
+          backupItemName: nil,
+          options: []
+        )
+      } else {
+        try fileManager.moveItem(at: temporaryURL, to: verificationReceiptURL)
+      }
+      try protectFileClosure(verificationReceiptURL)
+    } catch {
+      try? removeIfPresent(temporaryURL)
+      throw error
+    }
+  }
+
+  private static func milliseconds(from value: Any?) -> Int64? {
+    guard let date = value as? Date else { return nil }
+    return Int64((date.timeIntervalSince1970 * 1_000).rounded())
   }
 
   private func fileSize(_ url: URL) throws -> Int64 {

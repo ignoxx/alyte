@@ -1896,37 +1896,60 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }
     const proposals: ExtractionSemanticProposal[] = [];
     onProgress?.(0, chunks.length);
-    for (const [chunkIndex, chunk] of chunks.entries()) {
-      if (isCancelled?.()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-      const locale = chunk.rows[0]?.observations[0]?.recognition.language ?? null;
-      try {
-        if (!semanticMapper.supports(locale)) {
-          onProgress?.(chunkIndex + 1, chunks.length);
-          continue;
-        }
-        const input = {
-          pageIndex: chunk.rows[0]?.observations[0]?.pageIndex ?? 0,
-          rows: chunk.rows,
-          headings: chunk.headings,
-        };
-        const mapped = await semanticMapper.map(input);
+    let preparationAttempted = false;
+    try {
+      for (const [chunkIndex, chunk] of chunks.entries()) {
         if (isCancelled?.())
           throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-        proposals.push(...validateSemanticProposals(mapped, chunk.rows, extractionAliases));
-      } catch (error) {
-        if (error instanceof LabReportExtractionError && error.reason === 'cancelled') throw error;
-        if (isSemanticModelUnavailable(error)) {
-          throw new LabReportExtractionError(
-            'model-unavailable',
-            'The verified on-device model pack became unavailable during extraction',
-            { cause: error },
-          );
+        const locale = chunk.rows[0]?.observations[0]?.recognition.language ?? null;
+        try {
+          if (!semanticMapper.supports(locale)) {
+            onProgress?.(chunkIndex + 1, chunks.length);
+            continue;
+          }
+          // Allocate the model immediately before the first supported semantic chunk. OCR and
+          // deterministic row filtering therefore complete without the multi-gigabyte runtime,
+          // and one loaded session is reused for every subsequent chunk in this stage.
+          if (preparationAttempted === false) {
+            preparationAttempted = true;
+            await semanticMapper.prepare?.();
+          }
+          const input = {
+            pageIndex: chunk.rows[0]?.observations[0]?.pageIndex ?? 0,
+            rows: chunk.rows,
+            headings: chunk.headings,
+          };
+          const mapped = await semanticMapper.map(input);
+          if (isCancelled?.())
+            throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
+          proposals.push(...validateSemanticProposals(mapped, chunk.rows, extractionAliases));
+        } catch (error) {
+          if (error instanceof LabReportExtractionError && error.reason === 'cancelled')
+            throw error;
+          if (isSemanticModelUnavailable(error)) {
+            throw new LabReportExtractionError(
+              'model-unavailable',
+              'The verified on-device model pack became unavailable during extraction',
+              { cause: error },
+            );
+          }
+          // Timeouts, runtime failures, and malformed output all preserve the deterministic rows.
+          // A later chunk is still allowed to complete independently; explicit cancellation aborts
+          // the operation before any draft can be written.
         }
-        // Timeouts, runtime failures, and malformed output all preserve the deterministic rows.
-        // A later chunk is still allowed to complete independently; explicit cancellation aborts
-        // the operation before any draft can be written.
+        onProgress?.(chunkIndex + 1, chunks.length);
       }
-      onProgress?.(chunkIndex + 1, chunks.length);
+    } finally {
+      // Cleanup is attempted for every semantic stage, including unsupported languages and an
+      // empty candidate set. This also clears a runtime left by a prior interrupted operation.
+      // A failed unload must not discard deterministic rows or turn a valid extraction into a
+      // misleading model error; native pressure/background callbacks still signal cancellation
+      // directly while the queue settles.
+      try {
+        await semanticMapper.release?.();
+      } catch {
+        // The next native lifecycle callback can still release an outstanding runtime.
+      }
     }
     return rows.map((row) => {
       const proposal = proposals.find(
@@ -2056,21 +2079,6 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
               isPdfPasswordFailure(error)
                 ? 'The PDF password was not accepted'
                 : 'Local document inspection failed',
-              { cause: error },
-            );
-          }
-        }
-
-        // The verified pack is a prerequisite for automated extraction. It is checked before
-        // Vision, but remains invisible in the calm user journey unless it is unavailable.
-        if (semanticMapper?.prepare !== undefined) {
-          try {
-            await semanticMapper.prepare();
-          } catch (error) {
-            extractionProgressEvent(id, 'model', 'failed', 0, 0, 'model-unavailable');
-            throw new LabReportExtractionError(
-              'model-unavailable',
-              'Install the verified on-device model pack to read this report',
               { cause: error },
             );
           }

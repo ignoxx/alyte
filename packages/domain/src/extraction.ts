@@ -240,6 +240,8 @@ export interface ExtractionSemanticMapper {
   readonly maxObservationsPerChunk?: number;
   /** Optional production gate. Test-only deterministic mappers may omit it. */
   readonly prepare?: () => Promise<void>;
+  /** Releases a runtime acquired by prepare after the semantic stage completes. */
+  readonly release?: () => Promise<void>;
   readonly provenance?: Readonly<
     Partial<
       Pick<

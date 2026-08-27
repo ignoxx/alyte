@@ -50,16 +50,33 @@ final class NativeModelHarnessTests: XCTestCase {
     return (core, root, { runtime })
   }
 
-  func testColdRelaunchDiscoversVerifiedReadyAndRejectsCorruptReady() throws {
+  func testColdRelaunchUsesReceiptAndDefersAuthoritativeHash() throws {
     let (core, root, _) = try makeCore()
-    let ready = root.appendingPathComponent("model.ready")
-    _ = FileManager.default.createFile(atPath: ready.path, contents: Data("valid".utf8))
+    _ = try core.prepareDownload()
+    try core.append(Data("valid".utf8))
+    guard case .succeeded = core.complete(transportFailure: nil) else {
+      return XCTFail("expected verified promotion")
+    }
+    XCTAssertEqual(core.state, .ready)
+
+    // The first verification happened during promotion. A cold-state reconciliation with a
+    // matching receipt must not hash the final artifact again.
     core.reconcileInstalledPack()
     XCTAssertEqual(core.state, .ready)
+
+    let ready = root.appendingPathComponent("model.ready")
     try Data("bad!!".utf8).write(to: ready)
     core.reconcileInstalledPack()
     XCTAssertEqual(core.state, .failed)
-    XCTAssertEqual(core.failure, .checksumMismatch)
+    XCTAssertEqual(core.failure, .verificationRequired)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: ready.path))
+
+    // A user-triggered retry is the authoritative verification boundary. A bad final artifact
+    // is discarded only there, and the network resumes from a fresh offset.
+    guard case .transfer(let offset) = try core.admitDownload() else {
+      return XCTFail("bad final artifact should enter a fresh transfer")
+    }
+    XCTAssertEqual(offset, 0)
     XCTAssertFalse(FileManager.default.fileExists(atPath: ready.path))
   }
 
@@ -108,9 +125,11 @@ final class NativeModelHarnessTests: XCTestCase {
     )
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-    _ = FileManager.default.createFile(atPath: core.readyURL.path, contents: Data("valid".utf8))
-    core.reconcileInstalledPack()
-
+    _ = try core.prepareDownload()
+    try core.append(Data("valid".utf8))
+    guard case .succeeded = core.complete(transportFailure: nil) else {
+      return XCTFail("expected verified promotion")
+    }
     XCTAssertEqual(core.state, .ready)
     XCTAssertThrowsError(try core.activateVerifiedPack())
     XCTAssertEqual(core.state, .ready)

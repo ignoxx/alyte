@@ -21,7 +21,6 @@ import { ModelProgress } from '../local-models/ModelProgress';
 import {
   isExpectedDownloadCancellation,
   modelFailureFromError,
-  modelFailureRecoveryAction,
   modelSetupFailureMessageKey,
   modelSetupFailureVisible,
   modelSetupPrimaryAction,
@@ -98,12 +97,10 @@ export function ModelSetupPanel({ model, onComplete, contextual = false }: Model
     setModelFailure(null);
     setBusy(true);
     try {
-      const installed = await model.startDownload();
-      // Verification and promotion happen in the native module. Loading is a separate step so
-      // setup never reports success for a merely downloaded or partially verified artifact.
-      if (canCompleteModelOnboarding(installed) && installed.state === 'ready') {
-        await model.load();
-      }
+      await model.startDownload();
+      // Verification and promotion happen in the native module. Loading is deliberately a
+      // separate extraction-scoped step; onboarding completes with the pack ready on disk and
+      // never allocates the multi-gigabyte runtime.
     } catch (error) {
       if (isExpectedDownloadCancellation(error, cancellationRequestedRef.current)) {
         setCancelled(true);
@@ -121,13 +118,14 @@ export function ModelSetupPanel({ model, onComplete, contextual = false }: Model
   }
 
   async function openAlyte() {
-    if (!ready && modelFailureRecoveryAction(snapshot) !== 'activate') return;
+    if (!ready) return;
     setBusy(true);
     setModelFailure(null);
     try {
-      let current = snapshot;
-      if (current?.state === 'ready') current = await model.load();
-      if (current !== null && canCompleteModelOnboarding(current)) onComplete();
+      // The setup gate only guarantees a verified artifact on disk. Runtime allocation belongs
+      // to the first extraction and must never make onboarding or cold launch pay the multi-GB
+      // memory cost.
+      onComplete();
     } catch (error) {
       setModelFailure(modelFailureFromError(error));
     } finally {
@@ -136,10 +134,6 @@ export function ModelSetupPanel({ model, onComplete, contextual = false }: Model
   }
 
   async function retryModelPreparation() {
-    if (modelFailureRecoveryAction(snapshot) === 'activate') {
-      await openAlyte();
-      return;
-    }
     await startDownload();
   }
 

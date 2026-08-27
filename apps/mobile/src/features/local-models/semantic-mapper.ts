@@ -89,6 +89,13 @@ export function createLocalSemanticMapper(
       }
       if (!state.loaded) await options.models.load();
     },
+    release: async () => {
+      // The pack is an extraction-scoped resource. Keep the verified bytes on disk, but release
+      // the llama model/context as soon as the semantic stage ends so the app stays responsive
+      // between imports and never pays the multi-gigabyte allocation at launch.
+      const state = await options.models.getState();
+      if (state.loaded) await options.models.unload();
+    },
     supports: (locale) => {
       const code = locale?.toLocaleLowerCase().split(/[-_]/u)[0];
       return (

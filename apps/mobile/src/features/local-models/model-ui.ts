@@ -172,6 +172,8 @@ export function modelFailureMessageKey(failure: LocalModelFailure | null): strin
     case 'checksum-mismatch':
     case 'size-mismatch':
       return 'onboarding.modelFailureChecksum';
+    case 'verification-required':
+      return 'onboarding.modelFailureVerificationRequired';
     case 'incompatible':
       return 'onboarding.modelFailureIncompatible';
     case 'interrupted':
@@ -203,6 +205,8 @@ export function modelSetupFailureMessageKey(failure: LocalModelFailure | null): 
     case 'checksum-mismatch':
     case 'size-mismatch':
       return 'onboarding.modelSetupFailureChecksum';
+    case 'verification-required':
+      return 'onboarding.modelSetupFailureVerificationRequired';
     case 'incompatible':
       return 'onboarding.modelSetupFailureIncompatible';
     case 'interrupted':

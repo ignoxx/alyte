@@ -198,6 +198,7 @@ enum AlyteLocalModelFailure: String {
   case runtimeFailed = "runtime-failed"
   case storageProtection = "storage-protection"
   case interrupted = "interrupted"
+  case verificationRequired = "verification-required"
   case unknown = "unknown"
 }
 

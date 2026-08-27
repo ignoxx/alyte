@@ -1550,7 +1550,7 @@ describe('protected Lab Report import lifecycle', () => {
     );
   });
 
-  test('gates missing packs before Vision while preserving a distinct runtime fallback path', async () => {
+  test('gates missing packs after OCR while preserving a distinct runtime fallback path', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
     let recognitionCalls = 0;
@@ -1578,11 +1578,11 @@ describe('protected Lab Report import lifecycle', () => {
     const mapper: ExtractionSemanticMapper = {
       adapterVersion: 'missing-pack.mapper.v1',
       schemaVersion: 'alyte.semantic-mapper.v1',
-      supports: () => {
-        throw new Error('unavailable mapper must not receive a chunk');
-      },
+      supports: () => true,
       prepare: async () => {
-        throw new Error('synthetic deleted pack');
+        throw Object.assign(new Error('synthetic deleted pack'), {
+          code: 'semantic-model-unavailable' as const,
+        });
       },
       async map() {
         throw new Error('unavailable mapper must not run');
@@ -1596,7 +1596,7 @@ describe('protected Lab Report import lifecycle', () => {
       (error: unknown) =>
         error instanceof LabReportExtractionError && error.reason === 'model-unavailable',
     );
-    assert.equal(recognitionCalls, 0);
+    assert.equal(recognitionCalls, 2);
   });
 
   test('routes typed mid-operation model loss while runtime failure keeps deterministic rows', async () => {
@@ -3035,9 +3035,11 @@ describe('protected Lab Report import lifecycle', () => {
     const files = new FakeFiles();
     const pdf = sanitizingPdf(files);
     let calls = 0;
+    const lifecycle: string[] = [];
     const ocr: VisionOCR = {
       async recognize(_path, pageIndex): Promise<VisionOCRResult> {
         calls += 1;
+        lifecycle.push(`ocr-${pageIndex}`);
         return decodeVisionOCRResult({
           contractVersion: 'alyte.vision.document.v2',
           pageIndex,
@@ -3060,9 +3062,16 @@ describe('protected Lab Report import lifecycle', () => {
       adapterVersion: 'progress.mapper.v1',
       schemaVersion: 'alyte.semantic-mapper.v1',
       maxRowsPerChunk: 1,
+      prepare: async () => {
+        lifecycle.push('prepare');
+      },
       supports: () => true,
       async map() {
+        lifecycle.push('map');
         return [];
+      },
+      release: async () => {
+        lifecycle.push('release');
       },
     };
     const service = createService(repository, files, pdf, ocr, mapper);
@@ -3076,6 +3085,7 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(draft.sourceArtifact?.id, null);
     assert.equal(draft.sourceArtifact?.hash, report.sourceHash);
     assert.equal(calls, 2);
+    assert.deepEqual(lifecycle, ['ocr-0', 'ocr-1', 'prepare', 'map', 'map', 'release']);
     assert.equal(pdf.sanitizedPaths.length, 0);
     assert.deepEqual(
       events.map((event) => event.stage).filter((stage, index, all) => stage !== all[index - 1]),

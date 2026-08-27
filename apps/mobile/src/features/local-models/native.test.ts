@@ -10,6 +10,7 @@ test('explicit simulator fake completes the same verified lifecycle without mode
   const ready = await service.startDownload();
   assert.equal(ready.state, 'ready');
   assert.equal(ready.progress, 1);
+  assert.equal(ready.loaded, false);
   assert.equal(states.includes('downloading'), true);
   assert.equal(states.includes('verifying'), true);
 
