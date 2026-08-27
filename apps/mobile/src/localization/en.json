@@ -218,7 +218,7 @@
     "reportRetainedBody": "This Original Report is immutable, protected, and excluded from iCloud Backup. Structured Measurements are separate from this source document.",
     "reportNoSourceRetryBody": "This import has no protected source to retry. Delete it, then choose the report again.",
     "reportPreview": "Open Original Report",
-    "reportPreviewBody": "Preview the protected source locally. PDF pages are rendered on this iPhone; the immutable source remains unchanged.",
+    "reportPreviewBody": "Preview the protected source locally.",
     "reportPreviewTitle": "Original Report preview",
     "reportPreviewClose": "Close preview",
     "reportPreviewImageLabel": "Original Report page",
