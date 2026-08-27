@@ -40,6 +40,7 @@ export function MeasurementCorrectionScreen() {
   const [draft, setDraft] = useState<MeasurementDraft | null>(null);
   const [initialDraft, setInitialDraft] = useState<MeasurementDraft | null>(null);
   const [measurement, setMeasurement] = useState<Measurement | null>(null);
+  const [reviewChoice, setReviewChoice] = useState<MeasurementDraft['reviewState'] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -76,9 +77,10 @@ export function MeasurementCorrectionScreen() {
         const found = detail?.measurements.find((item) => item.id === route.params.measurementId);
         if (found) {
           setMeasurement(found);
-          // Corrections are new review work. A confirmed source must be explicitly reviewed
-          // again before this edit can restore its canonical identity.
-          const nextDraft = { ...measurementDraft(found), reviewState: 'needs-review' as const };
+          // A needs-review Measurement must be actively resolved in this task. Confirmed data
+          // remains confirmed while ordinary corrections are edited.
+          setReviewChoice(found.reviewState === 'needs-review' ? null : found.reviewState);
+          const nextDraft = measurementDraft(found);
           setDraft(nextDraft);
           setInitialDraft(nextDraft);
         } else setError(t('labs.recordNotFound'));
@@ -88,17 +90,12 @@ export function MeasurementCorrectionScreen() {
   function updateDraft(patch: Partial<MeasurementDraft>) {
     setDraft((current) => {
       if (current === null) return current;
-      return {
-        ...current,
-        ...patch,
-        ...(patch.reviewState === undefined && current.reviewState === 'confirmed'
-          ? { reviewState: 'needs-review' as const }
-          : {}),
-      };
+      return { ...current, ...patch };
     });
   }
+  const reviewChoiceRequired = measurement?.reviewState === 'needs-review' && reviewChoice === null;
   async function save() {
-    if (!draft || !measurement || !dirty) return;
+    if (!draft || !measurement || !dirty || reviewChoiceRequired) return;
     const input = correctionInput(draft, measurement, t('labs.correctionReason'));
     if (!input) {
       setError(t('labs.detailCorrectionValidation'));
@@ -153,12 +150,15 @@ export function MeasurementCorrectionScreen() {
             <Picker
               appearance="menu"
               enabled={!busy}
-              selectedValue={draft.reviewState}
+              selectedValue={reviewChoice ?? ''}
               testID="measurement-review-state"
-              onValueChange={(value) =>
-                updateDraft({ reviewState: value as MeasurementDraft['reviewState'] })
-              }
+              onValueChange={(value) => {
+                if (value !== 'confirmed' && value !== 'needs-review') return;
+                setReviewChoice(value);
+                updateDraft({ reviewState: value });
+              }}
             >
+              {reviewChoice === null && <Picker.Item label={t('labs.reviewChoose')} value="" />}
               <Picker.Item label={t('labs.reviewConfirmed')} value="confirmed" />
               <Picker.Item label={t('labs.reviewNeedsReview')} value="needs-review" />
             </Picker>
@@ -214,7 +214,7 @@ export function MeasurementCorrectionScreen() {
           </AppText>
         )}
         <AppButton
-          disabled={busy || !dirty}
+          disabled={busy || !dirty || reviewChoiceRequired}
           label={busy ? t('labs.detailSaving') : t('labs.measurementSaveCorrection')}
           onPress={() => void save()}
         />

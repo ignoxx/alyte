@@ -586,16 +586,44 @@ describe('protected manual Lab Record persistence', () => {
     assert.equal(mapped?.original.label, 'Total cholesterol');
     assert.equal(mapped?.provenance, 'user-entered');
 
-    await labs.createRecord({
+    await repository.createReport({
+      id: 'report-extracted-correction',
+      sourceType: 'image',
+      originalFilename: 'synthetic-extracted.png',
+      mimeType: 'image/png',
+      originalPath: 'protected://original/synthetic-extracted.png',
+      sourceHash: 'synthetic-extracted-hash',
+      importState: 'imported',
+      pageCount: 1,
+    });
+    const extractedSource = {
+      pageIndex: 0,
+      boundingBox: { x: 0.1, y: 0.2, width: 0.3, height: 0.04 },
+      orientation: 0,
+      observationIds: ['extracted-observation'],
+      raw: {
+        label: 'CHOL',
+        value: '210',
+        unit: 'mg/dL',
+        referenceInterval: null,
+        flag: null,
+        collectionDate: '2026-08-20',
+      },
+    };
+    await repository.createRecord({
       id: 'lab-record-corrected-mapping',
+      labReportId: 'report-extracted-correction',
       collectionDate: { kind: 'known', value: '2026-08-20' },
       specimenType: 'unknown',
       measurements: [
         {
           id: 'measurement-preserved-then-corrected',
-          label: 'Home result',
+          label: 'CHOL',
           value: { kind: 'numeric', value: 210 },
-          unit: null,
+          unit: 'mg/dL',
+          provenance: 'extracted',
+          reviewState: 'needs-review',
+          source: extractedSource,
         },
       ],
     });
@@ -618,12 +646,35 @@ describe('protected manual Lab Record persistence', () => {
     });
     assert.equal(corrected.biomarkerId, canonicalId('biomarker.total_cholesterol'));
     assert.equal(corrected.reviewState, 'confirmed');
-    assert.equal(corrected.original.label, 'Home result');
+    assert.equal(corrected.original.label, 'CHOL');
+    assert.equal(corrected.original.valueString, '210');
+    assert.equal(corrected.original.unit, 'mg/dL');
     assert.equal(corrected.originalState.biomarkerId, null);
+    assert.equal(corrected.originalState.reviewState, 'needs-review');
+    assert.equal(corrected.originalState.provenance, 'extracted');
+    assert.deepEqual(corrected.originalState.source?.observationIds, ['extracted-observation']);
     assert.equal(corrected.provenance, 'user-corrected');
+    assert.deepEqual(corrected.source?.observationIds, ['extracted-observation']);
+    assert.deepEqual(corrected.source?.raw, extractedSource.raw);
+    assert.equal(corrected.corrections[0]?.previous.provenance, 'extracted');
+    assert.equal(corrected.corrections[0]?.previous.reviewState, 'needs-review');
+    assert.deepEqual(corrected.corrections[0]?.previous.source?.observationIds, [
+      'extracted-observation',
+    ]);
     assert.equal(corrected.corrections[0]?.next.reviewState, 'needs-review');
+    assert.equal(corrected.corrections[0]?.next.provenance, 'user-corrected');
+    assert.deepEqual(corrected.corrections[0]?.next.source?.observationIds, [
+      'extracted-observation',
+    ]);
     assert.equal(corrected.corrections[1]?.previous.reviewState, 'needs-review');
+    assert.equal(corrected.corrections[1]?.previous.provenance, 'user-corrected');
+    assert.deepEqual(corrected.corrections[1]?.previous.source?.observationIds, [
+      'extracted-observation',
+    ]);
     assert.equal(corrected.corrections[1]?.next.reviewState, 'confirmed');
+    assert.deepEqual(corrected.corrections[1]?.next.source?.observationIds, [
+      'extracted-observation',
+    ]);
     assert.equal(corrected.corrections[1]?.next.biomarkerId, corrected.biomarkerId);
 
     const detail = await labs.getRecordDetail('lab-record-safe-mapping');
