@@ -73,7 +73,32 @@ export type PasswordRequest = (context: {
 export type LabReportImportResult = {
   readonly report: LabReport;
   readonly duplicate: boolean;
+  /**
+   * The next local destination for this import. Duplicate sources resolve against the existing
+   * draft state so the UI never re-enters extraction just to discover that work already exists.
+   */
+  readonly destination: LabReportImportDestination;
 };
+
+export type LabReportImportDestination =
+  | { readonly kind: 'extraction-progress' }
+  | { readonly kind: 'extraction-draft'; readonly draftId: string }
+  | { readonly kind: 'report-detail' };
+
+/**
+ * Decide where an import should land without treating a confirmed draft as open review work.
+ * This is intentionally pure so the duplicate-source state boundary stays easy to verify.
+ */
+export function resolveLabReportImportDestination(
+  duplicate: boolean,
+  existingDraft: Pick<ExtractionDraft, 'id' | 'state'> | null,
+): LabReportImportDestination {
+  if (!duplicate) return { kind: 'extraction-progress' };
+  if (existingDraft?.state === 'draft') {
+    return { kind: 'extraction-draft', draftId: existingDraft.id };
+  }
+  return { kind: 'report-detail' };
+}
 
 export type LabReportPreview = {
   readonly sourceType: LabReport['sourceType'];
@@ -266,7 +291,7 @@ export function createDefaultExtractionAliases(): readonly ExtractionAliasEntry[
   }));
 }
 
-type ImportOutcome = { readonly report: LabReport; readonly duplicate: boolean };
+type ImportOutcome = LabReportImportResult;
 
 function isLabSourceSelection(value: unknown): value is LabSourceSelection {
   if (value === null || typeof value !== 'object') return false;
@@ -900,7 +925,15 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           importState: 'deleted',
           failureReason: 'duplicate-source',
         });
-        return { report: duplicate, duplicate: true };
+        const existingDraft = await repo.getExtractionDraftForReport(
+          duplicate.id,
+          extractionAliases,
+        );
+        return {
+          report: duplicate,
+          duplicate: true,
+          destination: resolveLabReportImportDestination(true, existingDraft),
+        };
       }
       promoted = await fileService.promote(staged, reportId, source);
       // Persist the protected promotion before inspection. If the process dies after this point,
@@ -945,7 +978,11 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         importedAt: now(),
         pages: pageInputs(inspection.inspection),
       });
-      return { report, duplicate: false };
+      return {
+        report,
+        duplicate: false,
+        destination: resolveLabReportImportDestination(false, null),
+      };
     } catch (error) {
       const reason = classifyFailure(error);
       const retained = promoted === null ? await cleanupUncommittedImport(reportId, source) : null;

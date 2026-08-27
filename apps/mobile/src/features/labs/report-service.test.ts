@@ -36,6 +36,7 @@ import {
   LabReportExtractionError,
   LabReportImportError,
   LabReportSelectionError,
+  resolveLabReportImportDestination,
   type LabReportsServiceOptions,
   type LabReportsService,
   type LabReportExtractionProgress,
@@ -647,6 +648,19 @@ function recordFromMeasurements(
     measurements,
   };
 }
+
+test('duplicate import destination resumes only an open draft and otherwise returns the report', () => {
+  assert.deepEqual(resolveLabReportImportDestination(false, null), { kind: 'extraction-progress' });
+  assert.deepEqual(resolveLabReportImportDestination(true, { id: 'draft-open', state: 'draft' }), {
+    kind: 'extraction-draft',
+    draftId: 'draft-open',
+  });
+  assert.deepEqual(
+    resolveLabReportImportDestination(true, { id: 'draft-confirmed', state: 'confirmed' }),
+    { kind: 'report-detail' },
+  );
+  assert.deepEqual(resolveLabReportImportDestination(true, null), { kind: 'report-detail' });
+});
 
 describe('protected Lab Report import lifecycle', () => {
   test('retries a failed report repository open on the next local read', async () => {
@@ -2062,11 +2076,60 @@ describe('protected Lab Report import lifecycle', () => {
     const second = await service.importPdf(source('same'));
     assert.equal(first?.duplicate, false);
     assert.equal(second?.duplicate, true);
+    assert.deepEqual(second?.destination, { kind: 'report-detail' });
     assert.equal(
       (await service.listReports()).filter((report) => report.importState !== 'deleted').length,
       1,
     );
     assert.equal(files.removed.filter((path) => path.includes('transient')).length, 2);
+  });
+
+  test('duplicate hashes carry an open draft destination without creating another source', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new FakePdf();
+    const service = createService(repository, files, pdf);
+    const first = (await service.importPdf(source('same-open-draft')))!;
+    assert.equal(pdf.inspectCalls, 1);
+    const rows = groupObservationsIntoRows(
+      [
+        {
+          id: 'duplicate-open-draft-row',
+          text: 'LDL-C 3.8 mmol/L',
+          alternatives: [],
+          pageIndex: 0,
+          orientation: 0,
+          boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+          recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+        },
+      ],
+      {
+        locale: 'en-US',
+        collectionDate: { kind: 'known', value: '2026-08-20' },
+        specimenType: 'blood',
+        aliases: createDefaultExtractionAliases(),
+        artifact: { kind: 'original', id: null, hash: first.report.sourceHash },
+      },
+    );
+    assert.equal(rows.length, 1);
+    const draft = await repository.createExtractionDraft({
+      reportId: first.report.id,
+      collectionDate: { kind: 'known', value: '2026-08-20' },
+      rows,
+      sourceArtifact: { kind: 'original', id: null, hash: first.report.sourceHash },
+    });
+
+    const duplicate = await service.importPdf(source('same-open-draft'));
+    assert.equal(duplicate?.duplicate, true);
+    assert.deepEqual(duplicate?.destination, {
+      kind: 'extraction-draft',
+      draftId: draft.id,
+    });
+    assert.equal(pdf.inspectCalls, 1);
+    assert.equal(
+      (await service.listReports()).filter((report) => report.importState !== 'deleted').length,
+      1,
+    );
   });
 
   test('does not treat a failed pathless import as a usable duplicate', async () => {

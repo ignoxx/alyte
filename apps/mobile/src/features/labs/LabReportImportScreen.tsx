@@ -11,6 +11,7 @@ import { colors, screenStyles, spacing } from '../../theme';
 import {
   LabReportImportError,
   LabReportSelectionError,
+  type LabReportImportDestination,
   type PasswordRequest,
 } from './report-service';
 
@@ -67,12 +68,26 @@ export function LabReportImportScreen() {
     });
   }, [busy, navigation]);
 
-  function showImportedReport(report: LabReport, openProgress: boolean) {
+  function showImportedReport(
+    report: LabReport,
+    destination: LabReportImportDestination = { kind: 'report-detail' },
+  ) {
+    if (destination.kind === 'extraction-draft') {
+      navigation.navigate('MainTabs', {
+        screen: 'Labs',
+        params: {
+          screen: 'ExtractionDraft',
+          params: { reportId: report.id, draftId: destination.draftId },
+          pop: true,
+        },
+      });
+      return;
+    }
     navigation.navigate('MainTabs', {
       screen: 'Labs',
-      params: { screen: 'LabReportDetail', params: { reportId: report.id } },
+      params: { screen: 'LabReportDetail', params: { reportId: report.id }, pop: true },
     });
-    if (openProgress) {
+    if (destination.kind === 'extraction-progress') {
       navigation.navigate('ExtractionProgress', { reportId: report.id });
     }
   }
@@ -84,7 +99,7 @@ export function LabReportImportScreen() {
       const result = await reports.importPdf(undefined, passwordRequest());
       if (result !== null) {
         setLastReport(result.report);
-        showImportedReport(result.report, true);
+        showImportedReport(result.report, result.destination);
       }
     } catch (caught) {
       setError(errorMessage(caught));
@@ -101,7 +116,7 @@ export function LabReportImportScreen() {
       const result = await reports.importImages(undefined, passwordRequest());
       if (result !== null) {
         setLastReport(result.report);
-        showImportedReport(result.report, true);
+        showImportedReport(result.report, result.destination);
       }
     } catch (caught) {
       setError(errorMessage(caught));
@@ -135,7 +150,7 @@ export function LabReportImportScreen() {
           {lastReport !== null && (
             <AppButton
               label={t('labs.reportViewFailed')}
-              onPress={() => showImportedReport(lastReport, false)}
+              onPress={() => showImportedReport(lastReport)}
               tone="secondary"
             />
           )}
