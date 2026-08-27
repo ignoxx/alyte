@@ -125,6 +125,7 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
           'req.headers.idempotency-key',
           'req.headers.x-apple-subject',
           'req.body.identityToken',
+          'req.body.rawNonce',
           'req.body.refreshToken',
           'req.body.accessToken',
           'req.body.idToken',
@@ -182,12 +183,19 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     const body = bodyObject(request) as Partial<AppleExchangeRequest>;
     return auth.exchangeApple(
       body.identityToken,
+      body.rawNonce,
       body.consentPolicyVersion,
       idempotencyKey(request),
     );
   };
-  server.post('/v1/auth/apple', exchange);
-  server.post('/v1/auth/apple/exchange', exchange);
+  // Apple nonce binding is a versioned protocol change. Keep the former routes fail-closed so an
+  // older client cannot silently obtain a session from a server that requires nonce verification.
+  const unsupportedAppleExchange = async (): Promise<never> => {
+    throw new AuthFailure(426, 'auth_contract_version_unsupported');
+  };
+  server.post('/v1/auth/apple', unsupportedAppleExchange);
+  server.post('/v1/auth/apple/exchange', unsupportedAppleExchange);
+  server.post('/v2/auth/apple/exchange', exchange);
 
   server.post('/v1/auth/refresh', async (request): Promise<SessionResponse> => {
     const body = bodyObject(request) as Partial<RefreshSessionRequest>;

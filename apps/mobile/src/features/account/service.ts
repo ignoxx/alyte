@@ -17,10 +17,11 @@ import {
   createProtectedReportFileService,
   type ProtectedReportFileService,
 } from '../labs/file-service';
+import { createAppleNonce, type AppleNonceGenerator } from './apple-nonce';
 
 export type AppleSignInProvider = {
   readonly isAvailable: () => Promise<boolean>;
-  readonly signIn: () => Promise<{ readonly identityToken: string | null }>;
+  readonly signIn: (hashedNonce: string) => Promise<{ readonly identityToken: string | null }>;
 };
 
 const productionAppleProvider: AppleSignInProvider = {
@@ -28,9 +29,9 @@ const productionAppleProvider: AppleSignInProvider = {
     const apple = await import('expo-apple-authentication');
     return apple.isAvailableAsync();
   },
-  async signIn() {
+  async signIn(hashedNonce: string) {
     const apple = await import('expo-apple-authentication');
-    const result = await apple.signInAsync({ requestedScopes: [] });
+    const result = await apple.signInAsync({ requestedScopes: [], nonce: hashedNonce });
     return { identityToken: result.identityToken };
   },
 };
@@ -69,6 +70,7 @@ export type CloudAccountServiceOptions = {
   readonly pendingOperations?: CloudPendingOperationRepository;
   readonly api?: CloudApi;
   readonly apple?: AppleSignInProvider;
+  readonly nonceGenerator?: AppleNonceGenerator;
   readonly exportFiles?: CloudAccountExportFiles;
   readonly now?: () => number;
 };
@@ -127,6 +129,7 @@ export function createCloudAccountService(
   const pendingOperations = options.pendingOperations ?? createCloudPendingOperationRepository();
   const api = options.api ?? new CloudApiClient({ requireHttps: true });
   const apple = options.apple ?? productionAppleProvider;
+  const nonceGenerator = options.nonceGenerator ?? createAppleNonce;
   const exportFiles: CloudAccountExportFiles =
     options.exportFiles ?? (createProtectedReportFileService() as CloudAccountExportFiles);
   const now = options.now ?? Date.now;
@@ -318,9 +321,15 @@ export function createCloudAccountService(
         throw new CloudApiError(0, 'api_unconfigured');
       }
       if (!(await isAppleSignInAvailable())) throw new CloudApiError(0, 'apple_unavailable');
+      let nonce;
+      try {
+        nonce = await nonceGenerator();
+      } catch {
+        throw new CloudApiError(0, 'nonce_unavailable');
+      }
       let result: { readonly identityToken: string | null };
       try {
-        result = await apple.signIn();
+        result = await apple.signIn(nonce.hashedNonce);
       } catch (error) {
         if (isCancellation(error)) throw new CloudApiError(400, 'identity_cancelled');
         throw error;
@@ -328,7 +337,11 @@ export function createCloudAccountService(
       if (result.identityToken === null || result.identityToken.length === 0) {
         throw new CloudApiError(400, 'identity_token_required');
       }
-      const response = await api.exchangeApple(result.identityToken, createIdempotencyKey());
+      const response = await api.exchangeApple(
+        result.identityToken,
+        nonce.rawNonce,
+        createIdempotencyKey(),
+      );
       const next = toStoredSession(response);
       await repository.write(next);
       session = next;

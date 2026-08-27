@@ -32,12 +32,16 @@ describe('cloud HTTP adapter', () => {
       },
     });
 
-    const result = await client.exchangeApple('synthetic-apple-token');
+    const result = await client.exchangeApple(
+      'synthetic-apple-token',
+      '0123456789ABCDEFGHIJKLMNOPQRSTUV',
+    );
     assert.equal(result.accountId, 'account-1');
-    assert.equal(requests[0]?.url, 'https://api.example.test/v1/auth/apple/exchange');
+    assert.equal(requests[0]?.url, 'https://api.example.test/v2/auth/apple/exchange');
     assert.equal(requests[0]?.init.headers instanceof Headers, false);
     assert.deepEqual(JSON.parse(String(requests[0]?.init.body)), {
       identityToken: 'synthetic-apple-token',
+      rawNonce: '0123456789ABCDEFGHIJKLMNOPQRSTUV',
       consentPolicyVersion: CONTRACT_VERSION,
     });
     assert.deepEqual(requests[0]?.init.headers, {
@@ -133,11 +137,14 @@ describe('cloud HTTP adapter', () => {
       requireHttps: true,
     });
     assert.equal(insecure.isConfigured(), false);
-    await assert.rejects(insecure.exchangeApple('synthetic-apple-token'), (error: unknown) => {
-      assert.ok(error instanceof CloudApiError);
-      assert.equal(error.code, 'api_unconfigured');
-      return true;
-    });
+    await assert.rejects(
+      insecure.exchangeApple('synthetic-apple-token', '0123456789ABCDEFGHIJKLMNOPQRSTUV'),
+      (error: unknown) => {
+        assert.ok(error instanceof CloudApiError);
+        assert.equal(error.code, 'api_unconfigured');
+        return true;
+      },
+    );
 
     const original = process.env.EXPO_PUBLIC_API_URL;
     process.env.EXPO_PUBLIC_API_URL = 'https://prod.example.test';

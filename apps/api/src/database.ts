@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 export const SESSION_RETENTION_MS = 24 * 60 * 60 * 1_000;
 export const OPERATION_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -47,10 +47,18 @@ export interface OperationRow {
   readonly operation: OperationName;
   readonly key_hash: string;
   readonly credential_hash: string;
+  readonly nonce_digest: string | null;
   readonly account_id: string | null;
   readonly response_status: number;
   readonly response_ciphertext: string;
   readonly created_at: string;
+  readonly expires_at: string;
+}
+
+/** Unlinkable Apple exchange replay marker retained after account deletion until expiry. */
+export interface AppleExchangeReplayTombstoneRow {
+  readonly credential_hash: string;
+  readonly nonce_digest: string;
   readonly expires_at: string;
 }
 
@@ -140,6 +148,27 @@ const migrations: readonly string[] = [
       PRIMARY KEY (operation, key_hash)
     );
     CREATE INDEX operation_idempotency_account_idx ON operation_idempotency(account_id, created_at);
+  `,
+  `
+    ALTER TABLE operation_idempotency ADD COLUMN nonce_digest TEXT;
+
+    CREATE INDEX operation_idempotency_credential_idx
+      ON operation_idempotency(operation, credential_hash);
+    CREATE UNIQUE INDEX operation_idempotency_apple_nonce_idx
+      ON operation_idempotency(operation, nonce_digest)
+      WHERE operation = 'auth.apple.exchange' AND nonce_digest IS NOT NULL;
+
+    -- v1 Apple exchanges predate nonce binding and must never be replayed by the v2 route.
+    DELETE FROM operation_idempotency WHERE operation = 'auth.apple.exchange';
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS apple_exchange_replay_tombstones (
+      nonce_digest TEXT PRIMARY KEY NOT NULL,
+      credential_hash TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS apple_exchange_replay_tombstones_credential_idx
+      ON apple_exchange_replay_tombstones(credential_hash);
   `,
 ];
 
@@ -345,10 +374,70 @@ export class AccountDatabase {
     return this.sqlite
       .prepare(
         `SELECT operation, key_hash, credential_hash, account_id, response_status,
-                response_ciphertext, created_at, expires_at
+                response_ciphertext, created_at, expires_at, nonce_digest
          FROM operation_idempotency WHERE operation = ? AND key_hash = ?`,
       )
       .get(operation, keyHash) as OperationRow | undefined;
+  }
+
+  findOperationByCredentialHash(
+    operation: OperationName,
+    credentialHash: string,
+  ): OperationRow | undefined {
+    return this.sqlite
+      .prepare(
+        `SELECT operation, key_hash, credential_hash, account_id, response_status,
+                response_ciphertext, created_at, expires_at, nonce_digest
+         FROM operation_idempotency
+         WHERE operation = ? AND credential_hash = ?
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .get(operation, credentialHash) as OperationRow | undefined;
+  }
+
+  findOperationByNonceDigest(
+    operation: OperationName,
+    nonceDigest: string,
+  ): OperationRow | undefined {
+    return this.sqlite
+      .prepare(
+        `SELECT operation, key_hash, credential_hash, account_id, response_status,
+                response_ciphertext, created_at, expires_at, nonce_digest
+         FROM operation_idempotency
+         WHERE operation = ? AND nonce_digest = ?
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .get(operation, nonceDigest) as OperationRow | undefined;
+  }
+
+  findAppleExchangeReplayTombstoneByCredentialHash(
+    credentialHash: string,
+  ): AppleExchangeReplayTombstoneRow | undefined {
+    return this.sqlite
+      .prepare(
+        `SELECT credential_hash, nonce_digest, expires_at
+         FROM apple_exchange_replay_tombstones WHERE credential_hash = ?`,
+      )
+      .get(credentialHash) as AppleExchangeReplayTombstoneRow | undefined;
+  }
+
+  findAppleExchangeReplayTombstoneByNonceDigest(
+    nonceDigest: string,
+  ): AppleExchangeReplayTombstoneRow | undefined {
+    return this.sqlite
+      .prepare(
+        `SELECT credential_hash, nonce_digest, expires_at
+         FROM apple_exchange_replay_tombstones WHERE nonce_digest = ?`,
+      )
+      .get(nonceDigest) as AppleExchangeReplayTombstoneRow | undefined;
+  }
+
+  deleteAppleExchangeReplayTombstone(nonceDigest: string): void {
+    this.sqlite
+      .prepare('DELETE FROM apple_exchange_replay_tombstones WHERE nonce_digest = ?')
+      .run(nonceDigest);
   }
 
   deleteOperation(operation: OperationName, keyHash: string): void {
@@ -361,6 +450,7 @@ export class AccountDatabase {
     operation: OperationName;
     keyHash: string;
     credentialHash: string;
+    nonceDigest?: string | null;
     accountId: string | null;
     responseStatus: number;
     responseCiphertext: string;
@@ -371,8 +461,8 @@ export class AccountDatabase {
       .prepare(
         `INSERT INTO operation_idempotency
           (operation, key_hash, credential_hash, account_id, response_status,
-           response_ciphertext, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           response_ciphertext, created_at, expires_at, nonce_digest)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         operation.operation,
@@ -383,6 +473,7 @@ export class AccountDatabase {
         operation.responseCiphertext,
         operation.createdAt,
         operation.expiresAt,
+        operation.nonceDigest ?? null,
       );
   }
 
@@ -395,14 +486,33 @@ export class AccountDatabase {
       .all(accountId) as OperationExportRow[];
   }
 
+  preserveAppleExchangeReplayMarkers(accountId: string): void {
+    this.sqlite
+      .prepare(
+        `INSERT INTO apple_exchange_replay_tombstones (nonce_digest, credential_hash, expires_at)
+         SELECT nonce_digest, credential_hash, expires_at
+         FROM operation_idempotency
+         WHERE operation = 'auth.apple.exchange' AND account_id = ? AND nonce_digest IS NOT NULL
+         ON CONFLICT(nonce_digest) DO NOTHING`,
+      )
+      .run(accountId);
+  }
+
   cleanupExpired(now: Date, limit = 100): { sessions: number; operations: number } {
     const nowIso = now.toISOString();
     const sessionCutoff = new Date(now.getTime() - SESSION_RETENTION_MS).toISOString();
     const cleanup = this.transaction(() => {
-      const operations = this.sqlite
+      const operationCount = this.sqlite
         .prepare(
           `DELETE FROM operation_idempotency WHERE rowid IN (
              SELECT rowid FROM operation_idempotency WHERE expires_at <= ? LIMIT ?
+           )`,
+        )
+        .run(nowIso, limit).changes;
+      const tombstones = this.sqlite
+        .prepare(
+          `DELETE FROM apple_exchange_replay_tombstones WHERE rowid IN (
+             SELECT rowid FROM apple_exchange_replay_tombstones WHERE expires_at <= ? LIMIT ?
            )`,
         )
         .run(nowIso, limit).changes;
@@ -416,7 +526,7 @@ export class AccountDatabase {
            )`,
         )
         .run(sessionCutoff, nowIso, nowIso, limit).changes;
-      return { sessions, operations };
+      return { sessions, operations: operationCount + tombstones };
     });
     return cleanup;
   }
@@ -452,6 +562,14 @@ export class AccountDatabase {
   }
 
   deleteAccountData(accountId: string): void {
+    // Account-linked operation responses are removed, but retain unlinkable Apple replay markers
+    // until their normal expiry so a captured token cannot recreate a deleted account.
+    this.preserveAppleExchangeReplayMarkers(accountId);
+    this.sqlite
+      .prepare(
+        "DELETE FROM operation_idempotency WHERE account_id = ? AND operation <> 'account.delete'",
+      )
+      .run(accountId);
     this.sqlite.prepare('DELETE FROM accounts WHERE id = ?').run(accountId);
   }
 }

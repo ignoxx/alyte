@@ -2,6 +2,9 @@ export const CONTRACT_VERSION = '2026-08-01';
 
 export const API_VERSION = 'v1';
 
+/** Number of printable random characters generated for each Apple authorization attempt. */
+export const APPLE_RAW_NONCE_LENGTH = 32;
+
 export interface HealthResponse {
   readonly status: 'ok';
   readonly contractVersion: typeof CONTRACT_VERSION;
@@ -15,6 +18,8 @@ export interface ShowcaseRequest {
 
 export interface AppleExchangeRequest {
   readonly identityToken?: string | null;
+  /** The one-time nonce generated on-device; Apple receives its SHA-256 digest. */
+  readonly rawNonce: string;
   readonly consentPolicyVersion: string;
 }
 

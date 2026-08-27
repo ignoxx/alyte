@@ -20,6 +20,11 @@ export type CloudApiFailureCode =
   | 'identity_cancelled'
   | 'apple_unavailable'
   | 'identity_token_required'
+  | 'nonce_required'
+  | 'nonce_invalid'
+  | 'nonce_replayed'
+  | 'nonce_unavailable'
+  | 'auth_contract_version_unsupported'
   | string;
 
 export class CloudApiError extends Error {
@@ -38,6 +43,7 @@ export type CloudApi = {
   readonly isConfigured?: () => boolean;
   readonly exchangeApple: (
     identityToken: string,
+    rawNonce: string,
     idempotencyKey?: string,
     signal?: AbortSignal,
   ) => Promise<SessionResponse>;
@@ -277,12 +283,21 @@ export class CloudApiClient implements CloudApi {
     return this.baseUrl !== null;
   }
 
-  exchangeApple(identityToken: string, idempotencyKey?: string, signal?: AbortSignal) {
+  exchangeApple(
+    identityToken: string,
+    rawNonce: string,
+    idempotencyKey?: string,
+    signal?: AbortSignal,
+  ) {
     return this.request(
-      '/v1/auth/apple/exchange',
+      '/v2/auth/apple/exchange',
       {
         method: 'POST',
-        body: JSON.stringify({ identityToken, consentPolicyVersion: CONTRACT_VERSION }),
+        body: JSON.stringify({
+          identityToken,
+          rawNonce,
+          consentPolicyVersion: CONTRACT_VERSION,
+        }),
         idempotencyKey: idempotencyKey ?? this.idempotencyKey(),
         signal,
       },

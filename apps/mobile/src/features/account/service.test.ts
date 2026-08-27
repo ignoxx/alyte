@@ -177,35 +177,45 @@ function api(overrides: Partial<CloudApi> = {}): CloudApi & {
   };
 }
 
-const apple: AppleSignInProvider = {
-  async isAvailable() {
-    return true;
-  },
-  async signIn() {
-    return { identityToken: 'synthetic-apple-token' };
-  },
-};
-
 describe('cloud account service', () => {
   it('stores only app session material after Apple exchange and never the Apple identity token', async () => {
     const sessions = repository();
     let exchangedToken: string | null = null;
+    let exchangedRawNonce: string | null = null;
+    let appleNonce: string | null = null;
+    const nonce = {
+      rawNonce: '0123456789ABCDEFGHIJKLMNOPQRSTUV',
+      hashedNonce: 'hashed-apple-nonce',
+    };
     const cloud = api({
-      async exchangeApple(identityToken) {
+      async exchangeApple(identityToken, rawNonce) {
         exchangedToken = identityToken;
+        exchangedRawNonce = rawNonce;
         return response();
       },
     });
+    const appleWithNonce: AppleSignInProvider = {
+      async isAvailable() {
+        return true;
+      },
+      async signIn(hashedNonce) {
+        appleNonce = hashedNonce;
+        return { identityToken: 'synthetic-apple-token' };
+      },
+    };
     const service = createCloudAccountService({
       repository: sessions.value,
       api: cloud,
-      apple,
+      apple: appleWithNonce,
+      nonceGenerator: async () => nonce,
       now: () => NOW,
     });
 
     await service.signInWithApple();
 
     assert.equal(exchangedToken, 'synthetic-apple-token');
+    assert.equal(appleNonce, nonce.hashedNonce);
+    assert.equal(exchangedRawNonce, nonce.rawNonce);
     assert.deepEqual(sessions.stored, {
       accessToken: 'access-token',
       refreshToken: 'refresh-token',
@@ -214,6 +224,36 @@ describe('cloud account service', () => {
     });
     assert.equal(JSON.stringify(sessions.stored).includes('synthetic-apple-token'), false);
     assert.equal(service.getSnapshot().signedIn, true);
+  });
+
+  it('fails closed before Apple authorization when secure nonce generation is unavailable', async () => {
+    const sessions = repository();
+    let signInAttempts = 0;
+    const service = createCloudAccountService({
+      repository: sessions.value,
+      api: api(),
+      apple: {
+        async isAvailable() {
+          return true;
+        },
+        async signIn() {
+          signInAttempts += 1;
+          return { identityToken: 'synthetic-apple-token' };
+        },
+      },
+      nonceGenerator: async () => {
+        throw new Error('secure_randomness_unavailable');
+      },
+      now: () => NOW,
+    });
+
+    await assert.rejects(service.signInWithApple(), (error: unknown) => {
+      assert.ok(error instanceof CloudApiError);
+      assert.equal(error.code, 'nonce_unavailable');
+      return true;
+    });
+    assert.equal(signInAttempts, 0);
+    assert.equal(service.getSnapshot().signedIn, false);
   });
 
   it('rotates an expired access session once and retries the account export with the new access token', async () => {
@@ -333,6 +373,10 @@ describe('cloud account service', () => {
       repository: sessions.value,
       api: api(),
       apple: cancelledApple,
+      nonceGenerator: async () => ({
+        rawNonce: '0123456789ABCDEFGHIJKLMNOPQRSTUV',
+        hashedNonce: 'hashed-apple-nonce',
+      }),
       now: () => NOW,
     });
 

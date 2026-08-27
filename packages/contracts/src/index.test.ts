@@ -12,11 +12,14 @@ describe('cloud contracts', () => {
   it('requires the disclosed consent policy in Apple exchange requests', () => {
     const consentPolicyIsRequired: RequiredProperty<AppleExchangeRequest, 'consentPolicyVersion'> =
       true;
+    const rawNonceIsRequired: RequiredProperty<AppleExchangeRequest, 'rawNonce'> = true;
     const request: AppleExchangeRequest = {
       identityToken: 'synthetic-token',
+      rawNonce: '0123456789ABCDEFGHIJKLMNOPQRSTUV',
       consentPolicyVersion: CONTRACT_VERSION,
     };
     assert.equal(consentPolicyIsRequired, true);
+    assert.equal(rawNonceIsRequired, true);
     assert.equal(request.consentPolicyVersion, CONTRACT_VERSION);
   });
 });

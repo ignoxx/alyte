@@ -7,8 +7,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   APPLE_ISSUER,
+  AppleNonceVerificationError,
   AppleTokenVerificationError,
   ProductionAppleIdentityVerifier,
+  hashAppleNonce,
   type AppleIdentityVerifier,
 } from './apple-verifier.js';
 import { AccountDatabase } from './database.js';
@@ -27,7 +29,7 @@ class TestClock {
 }
 
 class DeterministicAppleVerifier implements AppleIdentityVerifier {
-  async verify(identityToken: string): Promise<{ subject: string }> {
+  async verify(identityToken: string, _rawNonce: string): Promise<{ subject: string }> {
     if (identityToken === 'valid-alice') {
       return { subject: 'apple-subject-alice' };
     }
@@ -68,17 +70,19 @@ function makeServer(
 }
 
 let exchangeCounter = 0;
+const DEFAULT_RAW_NONCE = '0123456789ABCDEFGHIJKLMNOPQRSTUV';
 
 async function exchange(
   server: Awaited<ReturnType<typeof createServer>>,
   identityToken = 'valid-alice',
   key = `exchange-${++exchangeCounter}`,
+  rawNonce = DEFAULT_RAW_NONCE,
 ) {
   const response = await server.inject({
     method: 'POST',
-    url: '/v1/auth/apple/exchange',
+    url: '/v2/auth/apple/exchange',
     headers: { 'idempotency-key': key },
-    payload: { identityToken, consentPolicyVersion: '2026-08-01' },
+    payload: { identityToken, rawNonce, consentPolicyVersion: '2026-08-01' },
   });
   assert.equal(response.statusCode, 200);
   return response.json() as {
@@ -102,7 +106,7 @@ describe('cloud identity database migrations', () => {
             version: number;
           }
         ).version,
-        2,
+        4,
       );
       assert.deepEqual(
         first.sqlite
@@ -158,6 +162,22 @@ describe('cloud identity database migrations', () => {
           )
           .get(),
         { name: 'operation_idempotency' },
+      );
+      assert.deepEqual(
+        database.sqlite
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'apple_exchange_replay_tombstones'",
+          )
+          .get(),
+        { name: 'apple_exchange_replay_tombstones' },
+      );
+      assert.deepEqual(
+        database.sqlite
+          .prepare(
+            "SELECT name FROM pragma_table_info('operation_idempotency') WHERE name = 'nonce_digest'",
+          )
+          .get(),
+        { name: 'nonce_digest' },
       );
       database.close();
     } finally {
@@ -238,6 +258,56 @@ describe('runtime persistence and bounded cleanup', () => {
       database.close();
     }
   });
+
+  it('rejects a consumed Apple nonce under a new key after a server restart', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'alyte-api-nonce-restart-'));
+    const filename = join(directory, 'identity.sqlite');
+    const clock = new TestClock();
+    try {
+      const firstServer = createServer({
+        databasePath: filename,
+        runtimePath: directory,
+        appleVerifier: new DeterministicAppleVerifier(),
+        clock,
+      });
+      await exchange(firstServer, 'valid-alice', 'nonce-restart-first');
+      const sameProcessReplay = await firstServer.inject({
+        method: 'POST',
+        url: '/v2/auth/apple/exchange',
+        headers: { 'idempotency-key': 'nonce-restart-second' },
+        payload: {
+          identityToken: 'valid-alice',
+          rawNonce: DEFAULT_RAW_NONCE,
+          consentPolicyVersion: '2026-08-01',
+        },
+      });
+      assert.equal(sameProcessReplay.statusCode, 409);
+      assert.equal(sameProcessReplay.json().error.code, 'nonce_replayed');
+      await firstServer.close();
+
+      const secondServer = createServer({
+        databasePath: filename,
+        runtimePath: directory,
+        appleVerifier: new DeterministicAppleVerifier(),
+        clock,
+      });
+      const afterRestart = await secondServer.inject({
+        method: 'POST',
+        url: '/v2/auth/apple/exchange',
+        headers: { 'idempotency-key': 'nonce-restart-third' },
+        payload: {
+          identityToken: 'valid-alice',
+          rawNonce: DEFAULT_RAW_NONCE,
+          consentPolicyVersion: '2026-08-01',
+        },
+      });
+      assert.equal(afterRestart.statusCode, 409);
+      assert.equal(afterRestart.json().error.code, 'nonce_replayed');
+      await secondServer.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('production runtime configuration', () => {
@@ -273,6 +343,13 @@ describe('production runtime configuration', () => {
 });
 
 describe('production Apple identity verification', () => {
+  it('hashes the raw nonce as UTF-8 SHA-256 lowercase hex for Apple', () => {
+    assert.equal(
+      hashAppleNonce(DEFAULT_RAW_NONCE),
+      '41ba696bc2822924f7cba0ce211bfddfe653ceb3c981255a1775bebf110bf42d',
+    );
+  });
+
   it('rejects invalid issuer, audience, and expiry while accepting a valid signed subject', async () => {
     const { privateKey, publicKey } = await generateKeyPair('RS256');
     const secondKey = await generateKeyPair('RS256');
@@ -281,21 +358,37 @@ describe('production Apple identity verification', () => {
       keySet: async () => publicKey,
     });
     const { SignJWT } = await import('jose');
-    const sign = (issuer: string, audience: string, expirationTime: string, kid = 'test-key') =>
-      new SignJWT({ sub: 'apple-subject-signed' })
+    const sign = (
+      issuer: string,
+      audience: string,
+      expirationTime: string,
+      kid = 'test-key',
+      rawNonce = DEFAULT_RAW_NONCE,
+    ) =>
+      new SignJWT({ sub: 'apple-subject-signed', nonce: hashAppleNonce(rawNonce) })
         .setProtectedHeader({ alg: 'RS256', kid })
         .setIssuer(issuer)
         .setAudience(audience)
         .setExpirationTime(expirationTime)
         .sign(privateKey);
 
-    const valid = await verifier.verify(await sign(APPLE_ISSUER, 'com.alyte.app', '1h'));
+    const valid = await verifier.verify(
+      await sign(APPLE_ISSUER, 'com.alyte.app', '1h'),
+      DEFAULT_RAW_NONCE,
+    );
     assert.deepEqual(valid, { subject: 'apple-subject-signed' });
     await assert.rejects(
-      verifier.verify(await sign('https://attacker.invalid', 'com.alyte.app', '1h')),
+      verifier.verify(
+        await sign('https://attacker.invalid', 'com.alyte.app', '1h'),
+        DEFAULT_RAW_NONCE,
+      ),
     );
-    await assert.rejects(verifier.verify(await sign(APPLE_ISSUER, 'com.other.app', '1h')));
-    await assert.rejects(verifier.verify(await sign(APPLE_ISSUER, 'com.alyte.app', '0s')));
+    await assert.rejects(
+      verifier.verify(await sign(APPLE_ISSUER, 'com.other.app', '1h'), DEFAULT_RAW_NONCE),
+    );
+    await assert.rejects(
+      verifier.verify(await sign(APPLE_ISSUER, 'com.alyte.app', '0s'), DEFAULT_RAW_NONCE),
+    );
     await assert.rejects(
       new ProductionAppleIdentityVerifier({
         audience: 'com.alyte.app',
@@ -305,7 +398,7 @@ describe('production Apple identity verification', () => {
           }
           return publicKey;
         },
-      }).verify(await sign(APPLE_ISSUER, 'com.alyte.app', '1h', 'unknown-key')),
+      }).verify(await sign(APPLE_ISSUER, 'com.alyte.app', '1h', 'unknown-key'), DEFAULT_RAW_NONCE),
     );
     await assert.rejects(
       new ProductionAppleIdentityVerifier({
@@ -313,7 +406,48 @@ describe('production Apple identity verification', () => {
         keySet: async () => {
           throw new Error('malformed_jwks');
         },
-      }).verify(await sign(APPLE_ISSUER, 'com.alyte.app', '1h')),
+      }).verify(await sign(APPLE_ISSUER, 'com.alyte.app', '1h'), DEFAULT_RAW_NONCE),
+    );
+    await assert.rejects(
+      verifier.verify(
+        await new (await import('jose')).SignJWT({
+          sub: 'apple-subject-signed',
+          nonce: hashAppleNonce(DEFAULT_RAW_NONCE),
+        })
+          .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
+          .setIssuer(APPLE_ISSUER)
+          .setAudience('com.alyte.app')
+          .setExpirationTime('1h')
+          .sign(secondKey.privateKey),
+        DEFAULT_RAW_NONCE,
+      ),
+    );
+    await assert.rejects(
+      verifier.verify(
+        await new (await import('jose')).SignJWT({ nonce: hashAppleNonce(DEFAULT_RAW_NONCE) })
+          .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
+          .setIssuer(APPLE_ISSUER)
+          .setAudience('com.alyte.app')
+          .setExpirationTime('1h')
+          .sign(privateKey),
+        DEFAULT_RAW_NONCE,
+      ),
+    );
+    await assert.rejects(
+      verifier.verify(
+        await sign(
+          APPLE_ISSUER,
+          'com.alyte.app',
+          '1h',
+          'test-key',
+          'fedcba9876543210ZYXWVUTSRQPONMLK',
+        ),
+        DEFAULT_RAW_NONCE,
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof AppleNonceVerificationError);
+        return true;
+      },
     );
     await assert.rejects(
       verifier.verify(
@@ -322,27 +456,61 @@ describe('production Apple identity verification', () => {
           .setIssuer(APPLE_ISSUER)
           .setAudience('com.alyte.app')
           .setExpirationTime('1h')
-          .sign(secondKey.privateKey),
-      ),
-    );
-    await assert.rejects(
-      verifier.verify(
-        await new (await import('jose')).SignJWT({})
-          .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
-          .setIssuer(APPLE_ISSUER)
-          .setAudience('com.alyte.app')
-          .setExpirationTime('1h')
           .sign(privateKey),
+        DEFAULT_RAW_NONCE,
       ),
+      (error: unknown) => {
+        assert.ok(error instanceof AppleNonceVerificationError);
+        return true;
+      },
     );
   });
 });
 
 describe('optional cloud identity journey', () => {
+  it('requires the v2 nonce contract and rejects the legacy exchange routes', async () => {
+    const { database, server } = makeServer();
+    try {
+      const legacy = await server.inject({
+        method: 'POST',
+        url: '/v1/auth/apple/exchange',
+        headers: { 'idempotency-key': 'legacy-exchange' },
+        payload: { identityToken: 'valid-alice', consentPolicyVersion: '2026-08-01' },
+      });
+      assert.equal(legacy.statusCode, 426);
+      assert.equal(legacy.json().error.code, 'auth_contract_version_unsupported');
+
+      const missing = await server.inject({
+        method: 'POST',
+        url: '/v2/auth/apple/exchange',
+        headers: { 'idempotency-key': 'missing-nonce' },
+        payload: { identityToken: 'valid-alice', consentPolicyVersion: '2026-08-01' },
+      });
+      assert.equal(missing.statusCode, 400);
+      assert.equal(missing.json().error.code, 'nonce_required');
+
+      const malformed = await server.inject({
+        method: 'POST',
+        url: '/v2/auth/apple/exchange',
+        headers: { 'idempotency-key': 'malformed-nonce' },
+        payload: {
+          identityToken: 'valid-alice',
+          rawNonce: `${DEFAULT_RAW_NONCE.slice(0, -1)}!`,
+          consentPolicyVersion: '2026-08-01',
+        },
+      });
+      assert.equal(malformed.statusCode, 400);
+      assert.equal(malformed.json().error.code, 'nonce_invalid');
+    } finally {
+      await server.close();
+      database.close();
+    }
+  });
+
   it('replays an Apple exchange without re-verifying the already accepted token', async () => {
     let verificationAttempts = 0;
     const verifier: AppleIdentityVerifier = {
-      async verify(): Promise<{ subject: string }> {
+      async verify(_identityToken, _rawNonce): Promise<{ subject: string }> {
         verificationAttempts += 1;
         if (verificationAttempts > 1) {
           throw new AppleTokenVerificationError();
@@ -356,6 +524,52 @@ describe('optional cloud identity journey', () => {
       const replayed = await exchange(server, 'valid-alice', 'exchange-replay-without-provider');
       assert.deepEqual(replayed, first);
       assert.equal(verificationAttempts, 1);
+      const changedCredential = await server.inject({
+        method: 'POST',
+        url: '/v2/auth/apple/exchange',
+        headers: { 'idempotency-key': 'exchange-replay-without-provider' },
+        payload: {
+          identityToken: 'valid-bob',
+          rawNonce: DEFAULT_RAW_NONCE,
+          consentPolicyVersion: '2026-08-01',
+        },
+      });
+      assert.equal(changedCredential.statusCode, 409);
+      assert.equal(changedCredential.json().error.code, 'idempotency_key_conflict');
+    } finally {
+      await server.close();
+      database.close();
+    }
+  });
+
+  it('allows one concurrent exchange per nonce and rejects the other key', async () => {
+    const { database, server } = makeServer();
+    try {
+      const responses = await Promise.all(
+        ['concurrent-exchange-a', 'concurrent-exchange-b'].map((key) =>
+          server.inject({
+            method: 'POST',
+            url: '/v2/auth/apple/exchange',
+            headers: { 'idempotency-key': key },
+            payload: {
+              identityToken: 'valid-alice',
+              rawNonce: DEFAULT_RAW_NONCE,
+              consentPolicyVersion: '2026-08-01',
+            },
+          }),
+        ),
+      );
+      assert.deepEqual(responses.map((response) => response.statusCode).sort(), [200, 409]);
+      assert.equal(
+        (
+          database.sqlite
+            .prepare(
+              "SELECT COUNT(*) AS count FROM operation_idempotency WHERE operation = 'auth.apple.exchange'",
+            )
+            .get() as { count: number }
+        ).count,
+        1,
+      );
     } finally {
       await server.close();
       database.close();
@@ -366,7 +580,12 @@ describe('optional cloud identity journey', () => {
     const { database, server } = makeServer();
     try {
       const first = await exchange(server, 'valid-alice', 'exchange-first');
-      const second = await exchange(server, 'valid-alice-second-device', 'exchange-second');
+      const second = await exchange(
+        server,
+        'valid-alice-second-device',
+        'exchange-second',
+        'fedcba9876543210ZYXWVUTSRQPONMLK',
+      );
       const replayed = await exchange(server, 'valid-alice', 'exchange-first');
       assert.equal(first.accountId, second.accountId);
       assert.notEqual(first.accessToken, second.accessToken);
@@ -416,7 +635,7 @@ describe('optional cloud identity journey', () => {
     try {
       const cancelled = await server.inject({
         method: 'POST',
-        url: '/v1/auth/apple',
+        url: '/v2/auth/apple/exchange',
         headers: { 'idempotency-key': 'exchange-cancelled' },
         payload: { identityToken: null },
       });
@@ -425,9 +644,9 @@ describe('optional cloud identity journey', () => {
 
       const missingConsent = await server.inject({
         method: 'POST',
-        url: '/v1/auth/apple',
+        url: '/v2/auth/apple/exchange',
         headers: { 'idempotency-key': 'exchange-missing-consent' },
-        payload: { identityToken: 'valid-alice' },
+        payload: { identityToken: 'valid-alice', rawNonce: DEFAULT_RAW_NONCE },
       });
       assert.equal(missingConsent.statusCode, 400);
       assert.equal(missingConsent.json().error.code, 'consent_policy_version_required');
@@ -435,9 +654,13 @@ describe('optional cloud identity journey', () => {
       const invalidToken = 'invalid-token-secret';
       const invalid = await server.inject({
         method: 'POST',
-        url: '/v1/auth/apple',
+        url: '/v2/auth/apple/exchange',
         headers: { 'idempotency-key': 'exchange-invalid' },
-        payload: { identityToken: invalidToken, consentPolicyVersion: '2026-08-01' },
+        payload: {
+          identityToken: invalidToken,
+          rawNonce: DEFAULT_RAW_NONCE,
+          consentPolicyVersion: '2026-08-01',
+        },
       });
       assert.equal(invalid.statusCode, 401);
       assert.equal(JSON.stringify(invalid.json()).includes(invalidToken), false);
@@ -505,7 +728,12 @@ describe('optional cloud identity journey', () => {
       assert.equal(familyRevoked.statusCode, 401);
       assert.equal(familyRevoked.json().error.code, 'refresh_token_reused');
 
-      const fresh = await exchange(server);
+      const fresh = await exchange(
+        server,
+        'valid-alice',
+        'exchange-fresh',
+        'fedcba9876543210ZYXWVUTSRQPONMLK',
+      );
       const signedOut = await server.inject({
         method: 'POST',
         url: '/v1/auth/sign-out',
@@ -618,7 +846,12 @@ describe('optional cloud identity journey', () => {
       });
       assert.equal(repeated.statusCode, 200);
       assert.deepEqual(repeated.json(), { deleted: true });
-      const anotherAccount = await exchange(server, 'valid-bob', 'exchange-bob-for-delete');
+      const anotherAccount = await exchange(
+        server,
+        'valid-bob',
+        'exchange-bob-for-delete',
+        'fedcba9876543210ZYXWVUTSRQPONMLK',
+      );
       const crossAccountReplay = await server.inject({
         method: 'DELETE',
         url: '/v1/account',
@@ -669,6 +902,74 @@ describe('optional cloud identity journey', () => {
           }
         ).count,
         1,
+      );
+    } finally {
+      await server.close();
+      database.close();
+    }
+  });
+
+  it('retains only an unlinkable Apple replay marker after account deletion', async () => {
+    const { clock, database, server } = makeServer();
+    try {
+      const session = await exchange(server, 'valid-alice', 'delete-nonce-source');
+      const deleted = await server.inject({
+        method: 'DELETE',
+        url: '/v1/account',
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+          'idempotency-key': 'delete-nonce-account',
+        },
+      });
+      assert.equal(deleted.statusCode, 200);
+      assert.equal(
+        (
+          database.sqlite
+            .prepare(
+              "SELECT COUNT(*) AS count FROM operation_idempotency WHERE operation = 'auth.apple.exchange'",
+            )
+            .get() as { count: number }
+        ).count,
+        0,
+      );
+      assert.equal(
+        (
+          database.sqlite
+            .prepare('SELECT COUNT(*) AS count FROM apple_exchange_replay_tombstones')
+            .get() as { count: number }
+        ).count,
+        1,
+      );
+
+      const replay = await server.inject({
+        method: 'POST',
+        url: '/v2/auth/apple/exchange',
+        headers: { 'idempotency-key': 'delete-nonce-replay' },
+        payload: {
+          identityToken: 'valid-alice',
+          rawNonce: DEFAULT_RAW_NONCE,
+          consentPolicyVersion: '2026-08-01',
+        },
+      });
+      assert.equal(replay.statusCode, 409);
+      assert.equal(replay.json().error.code, 'nonce_replayed');
+      assert.equal(
+        (
+          database.sqlite.prepare('SELECT COUNT(*) AS count FROM accounts').get() as {
+            count: number;
+          }
+        ).count,
+        0,
+      );
+      clock.advance(2 * 24 * 60 * 60);
+      assert.equal(database.cleanupExpired(clock.now()).operations >= 1, true);
+      assert.equal(
+        (
+          database.sqlite
+            .prepare('SELECT COUNT(*) AS count FROM apple_exchange_replay_tombstones')
+            .get() as { count: number }
+        ).count,
+        0,
       );
     } finally {
       await server.close();

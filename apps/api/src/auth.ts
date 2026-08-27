@@ -16,7 +16,12 @@ import type {
   SessionResponse,
   SignOutResponse,
 } from '@alyte/contracts';
-import { AppleTokenVerificationError, type AppleIdentityVerifier } from './apple-verifier.js';
+import {
+  AppleNonceVerificationError,
+  AppleTokenVerificationError,
+  isValidAppleRawNonce,
+  type AppleIdentityVerifier,
+} from './apple-verifier.js';
 import {
   OPERATION_IDEMPOTENCY_RETENTION_MS,
   type AccountDatabase,
@@ -119,6 +124,7 @@ export class AuthService {
 
   async exchangeApple(
     identityToken: unknown,
+    rawNonce: unknown,
     consentPolicyVersion: unknown,
     idempotencyKey: unknown,
   ): Promise<SessionResponse> {
@@ -131,31 +137,45 @@ export class AuthService {
     if (!validText(identityToken, 16_384)) {
       throw new AuthFailure(400, 'identity_token_invalid');
     }
+    if (rawNonce === undefined || rawNonce === null || rawNonce === '') {
+      throw new AuthFailure(400, 'nonce_required');
+    }
+    if (!isValidAppleRawNonce(rawNonce)) {
+      throw new AuthFailure(400, 'nonce_invalid');
+    }
     const key = this.parseIdempotencyKey(idempotencyKey);
     const now = this.clock.now();
     const keyHash = this.hash(key);
-    const credentialHash = this.hash(identityToken);
+    const nonceDigest = this.hash(rawNonce);
+    const credentialHash = this.hash(`${identityToken}\u0000${rawNonce}`);
     const replay = this.replayOperation<SessionResponse>(
       'auth.apple.exchange',
       keyHash,
       credentialHash,
       now,
+      nonceDigest,
     );
     if (replay !== undefined) {
       this.logger.info('auth.apple_exchange_replayed', { outcome: 'replayed' });
       return replay;
     }
+    this.assertAppleExchangeNotReplayed(credentialHash, nonceDigest, keyHash, now);
     const policyVersion = this.parsePolicyVersion(consentPolicyVersion);
     let identity;
     try {
-      identity = await this.appleVerifier.verify(identityToken);
+      identity = await this.appleVerifier.verify(identityToken, rawNonce);
     } catch (error) {
       this.logger.warn('auth.apple_exchange_rejected', {
         outcome:
-          error instanceof AppleTokenVerificationError
-            ? 'invalid_identity'
-            : 'verification_failure',
+          error instanceof AppleNonceVerificationError
+            ? 'invalid_nonce'
+            : error instanceof AppleTokenVerificationError
+              ? 'invalid_identity'
+              : 'verification_failure',
       });
+      if (error instanceof AppleNonceVerificationError) {
+        throw new AuthFailure(401, 'nonce_invalid');
+      }
       throw new AuthFailure(401, 'identity_token_invalid');
     }
     if (!validText(identity.subject, 512)) {
@@ -163,28 +183,70 @@ export class AuthService {
       throw new AuthFailure(401, 'identity_token_invalid');
     }
 
-    const { mapped, result } = this.database.transaction(() => {
-      const account = this.database.createAccountForAppleSubject(
-        identity.subject,
-        randomUUID(),
-        asIso(now),
-      );
-      if (policyVersion !== undefined) {
-        this.database.recordConsent(account.account.id, policyVersion, asIso(now));
-      }
-      const session = this.createSession(account.account.id, now);
-      this.database.createOperation({
-        operation: 'auth.apple.exchange',
-        keyHash,
-        credentialHash,
-        accountId: account.account.id,
-        responseStatus: 200,
-        responseCiphertext: this.encryptResponse(session),
-        createdAt: asIso(now),
-        expiresAt: asIso(addSeconds(now, OPERATION_IDEMPOTENCY_RETENTION_MS / 1_000)),
+    let transactionResult: {
+      mapped: ReturnType<AccountDatabase['createAccountForAppleSubject']>;
+      result: SessionResponse;
+    };
+    try {
+      transactionResult = this.database.transaction(() => {
+        // Re-check inside the write transaction so a second process cannot race the preflight
+        // replay check. The partial unique nonce index is the final guard for concurrent writers.
+        this.assertAppleExchangeNotReplayed(credentialHash, nonceDigest, keyHash, now);
+        const existing = this.database.findOperation('auth.apple.exchange', keyHash);
+        if (existing !== undefined) {
+          const replayed = this.replayOperation<SessionResponse>(
+            'auth.apple.exchange',
+            keyHash,
+            credentialHash,
+            now,
+            nonceDigest,
+          );
+          const existingAccount =
+            existing.account_id === null
+              ? undefined
+              : this.database.findAccount(existing.account_id);
+          if (replayed === undefined || existingAccount === undefined) {
+            throw new Error('apple_exchange_replay_record_invalid');
+          }
+          return {
+            mapped: { account: existingAccount, created: false },
+            result: replayed,
+          };
+        }
+        const account = this.database.createAccountForAppleSubject(
+          identity.subject,
+          randomUUID(),
+          asIso(now),
+        );
+        if (policyVersion !== undefined) {
+          this.database.recordConsent(account.account.id, policyVersion, asIso(now));
+        }
+        const session = this.createSession(account.account.id, now);
+        this.database.createOperation({
+          operation: 'auth.apple.exchange',
+          keyHash,
+          credentialHash,
+          nonceDigest,
+          accountId: account.account.id,
+          responseStatus: 200,
+          responseCiphertext: this.encryptResponse(session),
+          createdAt: asIso(now),
+          expiresAt: asIso(addSeconds(now, OPERATION_IDEMPOTENCY_RETENTION_MS / 1_000)),
+        });
+        return { mapped: account, result: session };
       });
-      return { mapped: account, result: session };
-    });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes(
+          'operation_idempotency.operation, operation_idempotency.nonce_digest',
+        )
+      ) {
+        throw new AuthFailure(409, 'nonce_replayed');
+      }
+      throw error;
+    }
+    const { mapped, result } = transactionResult;
     this.logger.info('auth.apple_exchange_succeeded', {
       outcome: mapped.created ? 'created' : 'existing',
     });
@@ -235,6 +297,7 @@ export class AuthService {
         operation: 'auth.refresh',
         keyHash,
         credentialHash,
+        nonceDigest: null,
         accountId: oldSession.account_id,
         responseStatus: 200,
         responseCiphertext: this.encryptResponse(next.response),
@@ -272,6 +335,7 @@ export class AuthService {
         operation: 'auth.sign-out',
         keyHash,
         credentialHash,
+        nonceDigest: null,
         accountId: authenticated.accountId,
         responseStatus: 200,
         responseCiphertext: this.encryptResponse(response),
@@ -375,6 +439,7 @@ export class AuthService {
         operation: 'account.delete',
         keyHash,
         credentialHash,
+        nonceDigest: null,
         accountId: authenticated.accountId,
         responseStatus: 200,
         responseCiphertext: this.encryptResponse(response),
@@ -477,17 +542,60 @@ export class AuthService {
     return value;
   }
 
+  private assertAppleExchangeNotReplayed(
+    credentialHash: string,
+    nonceDigest: string,
+    keyHash: string,
+    now: Date,
+  ): void {
+    const credentialRecord = this.database.findOperationByCredentialHash(
+      'auth.apple.exchange',
+      credentialHash,
+    );
+    const nonceRecord = this.database.findOperationByNonceDigest(
+      'auth.apple.exchange',
+      nonceDigest,
+    );
+    for (const record of [credentialRecord, nonceRecord]) {
+      if (record === undefined) continue;
+      if (isExpired(record.expires_at, now)) {
+        this.database.deleteOperation(record.operation, record.key_hash);
+        continue;
+      }
+      if (record.key_hash !== keyHash) {
+        // This intentionally covers both a captured token replay and a fresh token reusing a
+        // consumed nonce. The caller receives only a bounded code, never the digest or token.
+        throw new AuthFailure(409, 'nonce_replayed');
+      }
+    }
+    const credentialTombstone =
+      this.database.findAppleExchangeReplayTombstoneByCredentialHash(credentialHash);
+    const nonceTombstone = this.database.findAppleExchangeReplayTombstoneByNonceDigest(nonceDigest);
+    for (const tombstone of [credentialTombstone, nonceTombstone]) {
+      if (tombstone === undefined) continue;
+      if (isExpired(tombstone.expires_at, now)) {
+        this.database.deleteAppleExchangeReplayTombstone(tombstone.nonce_digest);
+        continue;
+      }
+      throw new AuthFailure(409, 'nonce_replayed');
+    }
+  }
+
   private replayOperation<T>(
     operation: OperationName,
     keyHash: string,
     credentialHash: string,
     now: Date,
+    nonceDigest: string | null = null,
   ): T | undefined {
     const record = this.database.findOperation(operation, keyHash);
     if (record === undefined) {
       return undefined;
     }
     if (record.credential_hash !== credentialHash) {
+      throw new AuthFailure(409, 'idempotency_key_conflict');
+    }
+    if (operation === 'auth.apple.exchange' && record.nonce_digest !== nonceDigest) {
       throw new AuthFailure(409, 'idempotency_key_conflict');
     }
     if (
