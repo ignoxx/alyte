@@ -4,7 +4,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { LabsStackParamList } from '../../navigation/types';
 import { t } from '../../localization';
-import { colors, spacing } from '../../theme';
+import { colors, radii, spacing } from '../../theme';
 import { AppText } from '../../ui/primitives';
 import type {
   ExtractionConfirmationAction,
@@ -132,7 +132,7 @@ const styles = StyleSheet.create({
   action: {
     alignItems: 'center',
     borderCurve: 'continuous',
-    borderRadius: 12,
+    borderRadius: radii.sm,
     justifyContent: 'center',
     minHeight: 44,
     paddingHorizontal: spacing.md,

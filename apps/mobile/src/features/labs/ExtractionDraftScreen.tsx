@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { Pressable, SectionList, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -88,19 +88,18 @@ export function ExtractionDraftScreen() {
   const [filter, setFilter] = useState<ExtractionReviewFilter>('all');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
-  const [reviewFocusRequest, setReviewFocusRequest] = useState(0);
-  const listRef = useRef<SectionList<ExtractionDraftRow, ListSection> | null>(null);
-  const pendingReviewRowId = useRef<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [saveError, setSaveError] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const next = await reports.getExtractionDraft(route.params.draftId);
       if (next === null) throw new Error('Extraction Draft unavailable');
       setDraft(next);
-      setError(false);
+      setLoadError(false);
+      setSaveError(false);
     } catch {
-      setError(true);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -137,40 +136,34 @@ export function ExtractionDraftScreen() {
   const canConfirm = draft !== null && confirmation.canConfirm;
   const hasBottomAccessory = confirmation.included > 0;
 
-  useEffect(() => {
-    const rowId = pendingReviewRowId.current;
-    if (rowId === null || filter !== 'needs-review' || search !== '') return;
-
-    const sectionIndex = sections.findIndex((section) =>
-      section.data.some((row) => row.id === rowId),
-    );
-    if (sectionIndex < 0) return;
-    const itemIndex = sections[sectionIndex]!.data.findIndex((row) => row.id === rowId);
-    if (itemIndex < 0) return;
-
-    pendingReviewRowId.current = null;
-    requestAnimationFrame(() => {
-      listRef.current?.scrollToLocation({
-        animated: true,
-        itemIndex,
-        sectionIndex,
-        viewPosition: 0.2,
-      });
-    });
-  }, [filter, reviewFocusRequest, search, sections]);
+  const openRow = useCallback(
+    (rowId: string, selectNeedsReview = false) => {
+      if (draft === null) return;
+      if (selectNeedsReview) {
+        setSearch('');
+        setFilter('needs-review');
+      }
+      navigation
+        .getParent()
+        ?.getParent<NativeStackNavigationProp<RootStackParamList>>()
+        ?.navigate('ExtractionMeasurementEditor', {
+          reportId: route.params.reportId,
+          draftId: draft.id,
+          rowId,
+        });
+    },
+    [draft, navigation, route.params.reportId],
+  );
 
   const reviewRemaining = useCallback(() => {
     const nextBlockingRow = draft?.rows.find(extractionReviewBlocksConfirmation);
     if (nextBlockingRow === undefined) return;
-    pendingReviewRowId.current = nextBlockingRow.id;
-    setSearch('');
-    setFilter('needs-review');
-    setReviewFocusRequest((request) => request + 1);
-  }, [draft?.rows]);
+    openRow(nextBlockingRow.id, true);
+  }, [draft?.rows, openRow]);
 
   const confirm = useCallback(async () => {
     if (busy || draft === null || !canConfirmExtraction(draft.rows)) return;
-    setError(false);
+    setSaveError(false);
     setBusy(true);
     try {
       const records = await reports.confirmExtraction(draft.id);
@@ -181,7 +174,7 @@ export function ExtractionDraftScreen() {
         navigation.popToTop();
       }
     } catch {
-      setError(true);
+      setSaveError(true);
     } finally {
       setBusy(false);
     }
@@ -202,7 +195,6 @@ export function ExtractionDraftScreen() {
       <SectionList
         contentContainerStyle={[styles.content, hasBottomAccessory && styles.contentWithAccessory]}
         contentInsetAdjustmentBehavior="automatic"
-        ref={listRef}
         sections={sections}
         keyExtractor={(row) => row.id}
         keyboardDismissMode="interactive"
@@ -220,6 +212,11 @@ export function ExtractionDraftScreen() {
               )}`}
             </AppText>
             <AppText style={styles.intro}>{t('labs.extractionCompactIntro')}</AppText>
+            {loadError && (
+              <AppText selectable style={styles.loadError}>
+                {t('labs.extractionLoadError')}
+              </AppText>
+            )}
             <View accessibilityRole="tablist" style={styles.filters}>
               <FilterButton
                 active={filter === 'all'}
@@ -267,16 +264,7 @@ export function ExtractionDraftScreen() {
           <Pressable
             accessibilityLabel={rowAccessibilityLabel(row)}
             accessibilityRole="button"
-            onPress={() =>
-              navigation
-                .getParent()
-                ?.getParent<NativeStackNavigationProp<RootStackParamList>>()
-                ?.navigate('ExtractionMeasurementEditor', {
-                  reportId: route.params.reportId,
-                  draftId: draft.id,
-                  rowId: row.id,
-                })
-            }
+            onPress={() => openRow(row.id)}
             style={({ pressed }) => [
               styles.row,
               largeType && styles.rowLarge,
@@ -328,7 +316,7 @@ export function ExtractionDraftScreen() {
       <ExtractionConfirmation
         busy={busy}
         canConfirm={canConfirm}
-        failure={error}
+        failure={saveError}
         included={included}
         needsReview={needsReview}
         remainingBlockers={confirmation.remainingBlockers}
@@ -390,6 +378,7 @@ const styles = StyleSheet.create({
   },
   summary: { flexShrink: 1, fontVariant: ['tabular-nums'], width: '100%' },
   intro: { color: colors.mutedInk, flexShrink: 1, width: '100%' },
+  loadError: { color: colors.danger },
   muted: { color: colors.mutedInk },
   filters: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingTop: spacing.xs },
   filter: {
