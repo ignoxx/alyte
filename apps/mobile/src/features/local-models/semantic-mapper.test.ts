@@ -172,6 +172,7 @@ test('rejects invented root keys before semantic validation', async () => {
 test('rejects a partial envelope and times out without retaining model output', async () => {
   let calls = 0;
   let cancelled = 0;
+  let finishSecondInference: (() => void) | undefined;
   const mapper = createLocalSemanticMapper({
     timeoutMs: 5,
     models: models(
@@ -196,11 +197,15 @@ test('rejects a partial envelope and times out without retaining model output', 
             ],
           });
         }
-        return new Promise<string>(() => {});
+        return new Promise<string>((resolve) => {
+          finishSecondInference = () =>
+            resolve('{"schemaVersion":"alyte.semantic-mapper.v1","proposals":[]}');
+        });
       },
       loadedState,
       () => {
         cancelled += 1;
+        finishSecondInference?.();
       },
     ),
     aliases,
@@ -212,6 +217,46 @@ test('rejects a partial envelope and times out without retaining model output', 
   );
   // The timeout is a cooperative native cancellation request, not only a JS race.
   assert.equal(cancelled, 1);
+});
+
+test('waits for the active inference before releasing the last runtime lease', async () => {
+  let resolveInference!: (value: string) => void;
+  let inferenceStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    inferenceStarted = resolve;
+  });
+  const inference = new Promise<string>((resolve) => {
+    resolveInference = resolve;
+  });
+  let unloadCalls = 0;
+  const runtimeModels = {
+    ...models(async () => {
+      inferenceStarted();
+      return inference;
+    }),
+    unload: async () => {
+      unloadCalls += 1;
+      return { ...loadedState, state: 'ready' as const, loaded: false };
+    },
+  } as LocalModelService;
+  const mapper = createLocalSemanticMapper({ models: runtimeModels, aliases });
+  const lease = await mapper.prepare!();
+  const mapped = mapper.map({ pageIndex: 0, rows: [candidateRow] });
+  await started;
+
+  let released = false;
+  const release = lease.release().then(() => {
+    released = true;
+  });
+  await Promise.resolve();
+  assert.equal(released, false);
+  assert.equal(unloadCalls, 0);
+
+  resolveInference('{"schemaVersion":"alyte.semantic-mapper.v1","proposals":[]}');
+  await mapped;
+  await release;
+  assert.equal(released, true);
+  assert.equal(unloadCalls, 1);
 });
 
 test('uses the production Gemma turn template and reviewed row instruction', () => {

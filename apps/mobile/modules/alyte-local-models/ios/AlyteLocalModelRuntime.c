@@ -4,6 +4,25 @@
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdint.h>
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#include <os/proc.h>
+#endif
+#endif
+
+uint64_t alyte_local_model_runtime_available_memory(void) {
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    return (uint64_t) os_proc_available_memory();
+#else
+    // The simulator/fake runtime does not own production model memory. Native production code
+    // supplies the iOS value above; returning an unconstrained value keeps the transport/core
+    // harness platform-independent without weakening the device admission gate.
+    return UINT64_MAX;
+#endif
+}
 
 #if defined(ALYTE_LLAMA_RUNTIME)
 #include <llama.h>
@@ -22,6 +41,12 @@ enum {
     ALYTE_LOCAL_MODEL_STATUS_TOKEN_DECODE_FAILED = -6,
     ALYTE_LOCAL_MODEL_STATUS_CANCELLED = -7,
 };
+
+// GPU activation can create Metal allocations before llama.cpp reports a context failure. Keep
+// a conservative amount of live headroom so iOS can fall back to CPU before that allocation
+// becomes a Jetsam event. The Swift admission gate still enforces the manifest's minimum.
+static const uint64_t ALYTE_LOCAL_MODEL_MIN_GPU_HEADROOM_BYTES = 5ULL * 1000ULL * 1000ULL * 1000ULL;
+static const int32_t ALYTE_LOCAL_MODEL_GPU_LAYER_LIMIT = 16;
 
 struct AlyteLocalModelRuntime {
     struct llama_model *model;
@@ -111,7 +136,13 @@ static struct llama_model *alyte_local_model_load(
     const char *model_path,
     AlyteLocalModelBackendMode backend_mode) {
     struct llama_model_params model_params = llama_model_default_params();
-    model_params.n_gpu_layers = backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY ? 0 : -1;
+#if defined(ALYTE_LOCAL_MODEL_CPU_ONLY)
+    model_params.n_gpu_layers = 0;
+#else
+    model_params.n_gpu_layers = backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY
+        ? 0
+        : ALYTE_LOCAL_MODEL_GPU_LAYER_LIMIT;
+#endif
     model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
     if (backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY) {
         // A NULL device list means "all available devices" in llama.cpp. That is not a CPU
@@ -203,7 +234,21 @@ void *alyte_local_model_runtime_create(
         .record_attempt = alyte_local_model_record_activation_attempt,
     };
     AlyteLocalModelActivation activation;
-    if (!alyte_local_model_activate_with_fallback(model_path, &hooks, &activation)) {
+    AlyteLocalModelBackendMode preferred_backend_mode = ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED;
+#if defined(ALYTE_LOCAL_MODEL_CPU_ONLY)
+    preferred_backend_mode = ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY;
+#else
+    // Select the backend before activation. GPU-first fallback is too late when Metal's initial
+    // mapping itself crosses the process's current iOS memory budget.
+    if (alyte_local_model_runtime_available_memory() < ALYTE_LOCAL_MODEL_MIN_GPU_HEADROOM_BYTES) {
+        preferred_backend_mode = ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY;
+    }
+#endif
+    if (!alyte_local_model_activate_with_preferred_backend(
+            model_path,
+            preferred_backend_mode,
+            &hooks,
+            &activation)) {
         alyte_local_model_set_failure_stage(
             failure_stage_out,
             activation.failure_stage == ALYTE_LOCAL_MODEL_ACTIVATION_FAILURE_CONTEXT

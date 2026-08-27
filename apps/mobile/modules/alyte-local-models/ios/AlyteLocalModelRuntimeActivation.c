@@ -42,28 +42,31 @@ static bool alyte_local_model_create_context(
     return false;
 }
 
-bool alyte_local_model_activate_with_fallback(
+bool alyte_local_model_activate_with_preferred_backend(
     const char *model_path,
+    AlyteLocalModelBackendMode preferred_backend_mode,
     const AlyteLocalModelActivationHooks *hooks,
     AlyteLocalModelActivation *activation) {
     if (model_path == NULL || hooks == NULL || activation == NULL || hooks->load_model == NULL ||
-        hooks->create_context == NULL || hooks->free_model == NULL) {
+        hooks->create_context == NULL || hooks->free_model == NULL ||
+        (preferred_backend_mode != ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED &&
+         preferred_backend_mode != ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY)) {
         return false;
     }
 
     activation->model = NULL;
     activation->context = NULL;
     activation->batch_tokens = 0;
-    activation->backend_mode = ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED;
+    activation->backend_mode = preferred_backend_mode;
     activation->failure_stage = ALYTE_LOCAL_MODEL_ACTIVATION_FAILURE_NONE;
 
     alyte_local_model_record_attempt(
         hooks,
         ALYTE_LOCAL_MODEL_ACTIVATION_ATTEMPT_MODEL_LOAD,
-        ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED,
+        preferred_backend_mode,
         ALYTE_LOCAL_MODEL_ACTIVATION_BATCH_NONE);
-    void *model = hooks->load_model(model_path, ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED);
-    if (model == NULL) {
+    void *model = hooks->load_model(model_path, preferred_backend_mode);
+    if (model == NULL && preferred_backend_mode != ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY) {
         activation->backend_mode = ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY;
         alyte_local_model_record_attempt(
             hooks,
@@ -117,4 +120,20 @@ bool alyte_local_model_activate_with_fallback(
     activation->context = context;
     activation->batch_tokens = batch_tokens;
     return true;
+}
+
+bool alyte_local_model_activate_with_fallback(
+    const char *model_path,
+    const AlyteLocalModelActivationHooks *hooks,
+    AlyteLocalModelActivation *activation) {
+#if defined(ALYTE_LOCAL_MODEL_CPU_ONLY)
+    const AlyteLocalModelBackendMode preferred_backend_mode = ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY;
+#else
+    const AlyteLocalModelBackendMode preferred_backend_mode = ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED;
+#endif
+    return alyte_local_model_activate_with_preferred_backend(
+        model_path,
+        preferred_backend_mode,
+        hooks,
+        activation);
 }

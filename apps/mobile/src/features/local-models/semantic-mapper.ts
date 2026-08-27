@@ -47,14 +47,20 @@ function languageCode(value: string | null): SupportedLanguage | null {
 
 function withTimeout<T>(work: Promise<T>, milliseconds: number, onTimeout: () => void): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
+      timedOut = true;
       onTimeout();
       reject(new Error('semantic-inference-timeout'));
     }, milliseconds);
   });
-  return Promise.race([work, timeout]).finally(() => {
+  return Promise.race([work, timeout]).finally(async () => {
     if (timer !== undefined) clearTimeout(timer);
+    // llama.rn's stopCompletion is a signal; it does not mean the native completion has
+    // finished. Keep the operation owner alive until that promise settles so a queued request
+    // or release can never reuse/free the context while native decoding is still in flight.
+    if (timedOut) await work.catch(() => undefined);
   });
 }
 
@@ -72,10 +78,20 @@ export function createLocalSemanticMapper(
   const timeoutMs = options.timeoutMs ?? INFERENCE_TIMEOUT_MS;
   let activeLeases = 0;
   let lifecycleQueue: Promise<void> = Promise.resolve();
+  let inferenceQueue: Promise<void> = Promise.resolve();
 
   function enqueueLifecycle<T>(work: () => Promise<T>): Promise<T> {
     const next = lifecycleQueue.then(work, work);
     lifecycleQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  function enqueueInference<T>(work: () => Promise<T>): Promise<T> {
+    const next = inferenceQueue.then(work, work);
+    inferenceQueue = next.then(
       () => undefined,
       () => undefined,
     );
@@ -109,6 +125,10 @@ export function createLocalSemanticMapper(
             if (released) return Promise.resolve();
             released = true;
             return enqueueLifecycle(async () => {
+              // Match llama.rn's stop → await completion → release discipline. The native
+              // store is serialized too, but awaiting this JS owner makes that contract true
+              // even when a caller races release with a direct mapper invocation.
+              await inferenceQueue;
               activeLeases = Math.max(0, activeLeases - 1);
               if (activeLeases !== 0) return;
               // The pack is an extraction-scoped resource. Keep verified bytes on disk, but
@@ -126,42 +146,43 @@ export function createLocalSemanticMapper(
         productionLocalModelManifest.compatibility.languages.includes(code as SupportedLanguage)
       );
     },
-    map: async ({ rows, headings }) => {
-      const observations = rows.flatMap((row) => row.observations);
-      const locale =
-        observations[0] === undefined
-          ? 'en'
-          : (languageCode(observations[0].recognition.language) ?? 'en');
-      const serialized = serializeSemanticMapperChunk(rows, locale, headings ?? []);
-      const prompt = createSemanticMapperPrompt(locale, serialized);
-      if (new TextEncoder().encode(prompt).byteLength > SEMANTIC_MAPPER_LIMITS.maxInputBytes) {
-        throw new Error('semantic-inference-input-too-large');
-      }
-      let raw: string;
-      try {
-        raw = await withTimeout(
-          options.models.infer(prompt),
-          timeoutMs,
-          options.models.cancelInference,
-        );
-      } catch (error) {
-        // Only the native typed missing/unloaded contract returns to model setup. Timeouts,
-        // malformed output, and runtime failures remain ordinary per-chunk deterministic fallback.
-        if (localModelFailureCategory(error) === 'unavailable') {
-          throw new SemanticModelUnavailableError(
-            'The verified Gemma model pack became unavailable during extraction',
-          );
+    map: ({ rows, headings }) =>
+      enqueueInference(async () => {
+        const observations = rows.flatMap((row) => row.observations);
+        const locale =
+          observations[0] === undefined
+            ? 'en'
+            : (languageCode(observations[0].recognition.language) ?? 'en');
+        const serialized = serializeSemanticMapperChunk(rows, locale, headings ?? []);
+        const prompt = createSemanticMapperPrompt(locale, serialized);
+        if (new TextEncoder().encode(prompt).byteLength > SEMANTIC_MAPPER_LIMITS.maxInputBytes) {
+          throw new Error('semantic-inference-input-too-large');
         }
-        throw error;
-      }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(raw) as unknown;
-      } catch {
-        return [];
-      }
-      return validateSemanticMapperOutput(parsed, rows, options.aliases);
-    },
+        let raw: string;
+        try {
+          raw = await withTimeout(
+            options.models.infer(prompt),
+            timeoutMs,
+            options.models.cancelInference,
+          );
+        } catch (error) {
+          // Only the native typed missing/unloaded contract returns to model setup. Timeouts,
+          // malformed output, and runtime failures remain ordinary per-chunk deterministic fallback.
+          if (localModelFailureCategory(error) === 'unavailable') {
+            throw new SemanticModelUnavailableError(
+              'The verified Gemma model pack became unavailable during extraction',
+            );
+          }
+          throw error;
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw) as unknown;
+        } catch {
+          return [];
+        }
+        return validateSemanticMapperOutput(parsed, rows, options.aliases);
+      }),
   };
 }
 

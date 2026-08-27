@@ -56,10 +56,16 @@ Pod::Spec.new do |s|
     raise 'AlyteLocalModels staged runtime path must be relative' if Pathname.new(staged_relative_framework).absolute?
     raise 'AlyteLocalModels staged runtime path is missing' unless File.directory?(staged_framework)
     s.vendored_frameworks = staged_relative_framework
+    runtime_conditions = '$(inherited) ALYTE_LLAMA_RUNTIME'
+    runtime_cflags = '$(inherited) -DALYTE_LLAMA_RUNTIME'
+    if ENV['APP_VARIANT'] == 'development'
+      runtime_conditions += ' ALYTE_LOCAL_MODEL_CPU_ONLY'
+      runtime_cflags += ' -DALYTE_LOCAL_MODEL_CPU_ONLY'
+    end
     s.pod_target_xcconfig = {
       'DEFINES_MODULE' => 'YES',
-      'SWIFT_ACTIVE_COMPILATION_CONDITIONS' => '$(inherited) ALYTE_LLAMA_RUNTIME',
-      'OTHER_CFLAGS' => '$(inherited) -DALYTE_LLAMA_RUNTIME',
+      'SWIFT_ACTIVE_COMPILATION_CONDITIONS' => runtime_conditions,
+      'OTHER_CFLAGS' => runtime_cflags,
       'HEADER_SEARCH_PATHS' => "$(inherited) $(PODS_TARGET_SRCROOT)/#{File.basename(staged_runtime_root)}/llama.framework/Headers",
       'FRAMEWORK_SEARCH_PATHS' => "$(inherited) $(PODS_TARGET_SRCROOT)/#{File.basename(staged_runtime_root)}",
     }

@@ -27,7 +27,11 @@ final class NativeModelHarnessTests: XCTestCase {
 
   private func makeCore(
     allowedHosts: Set<String> = ["huggingface.co", "cdn-lfs.huggingface.co"],
-    protect: @escaping AlyteLocalModelCore.ProtectFile = { _ in }
+    protect: @escaping AlyteLocalModelCore.ProtectFile = { _ in },
+    hashFile: @escaping AlyteLocalModelCore.HashFile = { url in
+      String(data: try Data(contentsOf: url), encoding: .utf8) ?? ""
+    },
+    availableMemory: @escaping AlyteLocalModelCore.AvailableMemory = { Int64.max }
   ) throws -> (AlyteLocalModelCore, URL, () -> SyntheticRuntime?) {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("alyte-local-model-native-\(UUID().uuidString)")
     var runtime: SyntheticRuntime?
@@ -37,8 +41,9 @@ final class NativeModelHarnessTests: XCTestCase {
       expectedDigest: "valid",
       filename: "model.ready",
       allowedHosts: allowedHosts,
-      hashFile: { url in String(data: try Data(contentsOf: url), encoding: .utf8) ?? "" },
+      hashFile: hashFile,
       protectFile: protect,
+      availableMemory: availableMemory,
       runtimeFactory: { _ in
         let next = SyntheticRuntime()
         runtime = next
@@ -51,18 +56,29 @@ final class NativeModelHarnessTests: XCTestCase {
   }
 
   func testColdRelaunchUsesReceiptAndDefersAuthoritativeHash() throws {
-    let (core, root, _) = try makeCore()
+    var hashCalls = 0
+    let (core, root, _) = try makeCore(hashFile: { url in
+      hashCalls += 1
+      return String(data: try Data(contentsOf: url), encoding: .utf8) ?? ""
+    })
     _ = try core.prepareDownload()
     try core.append(Data("valid".utf8))
     guard case .succeeded = core.complete(transportFailure: nil) else {
       return XCTFail("expected verified promotion")
     }
     XCTAssertEqual(core.state, .ready)
+    XCTAssertEqual(hashCalls, 1)
 
     // The first verification happened during promotion. A cold-state reconciliation with a
     // matching receipt must not hash the final artifact again.
     core.reconcileInstalledPack()
     XCTAssertEqual(core.state, .ready)
+    XCTAssertEqual(hashCalls, 1)
+
+    // Ordinary activation trusts only the protected receipt identity, so a verified relaunch
+    // remains cheap even when it immediately loads the runtime.
+    _ = try core.load()
+    XCTAssertEqual(hashCalls, 1)
 
     let ready = root.appendingPathComponent("model.ready")
     try Data("bad!!".utf8).write(to: ready)
@@ -78,6 +94,32 @@ final class NativeModelHarnessTests: XCTestCase {
     }
     XCTAssertEqual(offset, 0)
     XCTAssertFalse(FileManager.default.fileExists(atPath: ready.path))
+  }
+
+  func testCurrentAvailableMemoryAdmissionFailsClosedBeforeRuntimeActivation() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "alyte-local-model-memory-admission-\(UUID().uuidString)"
+    )
+    let core = AlyteLocalModelCore(
+      directory: root,
+      expectedBytes: AlyteLocalModelManifest.bytes,
+      expectedDigest: AlyteLocalModelManifest.sha256,
+      filename: AlyteLocalModelManifest.filename,
+      allowedHosts: Set(AlyteLocalModelManifest.allowedHosts),
+      hashFile: { _ in XCTFail("memory admission must precede verification"); return "" },
+      protectFile: { _ in },
+      availableMemory: { 1 },
+      runtimeFactory: { _ in XCTFail("memory admission must precede runtime activation"); return SyntheticRuntime() }
+    )
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+
+    XCTAssertThrowsError(try core.load()) { error in
+      guard case .failed(let failure) = error as? AlyteLocalModelError else {
+        return XCTFail("expected typed incompatibility")
+      }
+      XCTAssertEqual(failure, .incompatible)
+    }
   }
 
   func testColdRelaunchRestoresPartialAndResumesAtExactRangeOffset() throws {
@@ -422,6 +464,7 @@ final class NativeModelHarnessTests: XCTestCase {
     try Data("health".utf8).write(to: root.appendingPathComponent("health.sqlite"))
     _ = FileManager.default.createFile(atPath: core.readyURL.path, contents: Data("valid".utf8))
     core.reconcileInstalledPack()
+    XCTAssertTrue(try core.verifyReady())
     _ = try core.load()
     let loaded = try XCTUnwrap(runtime())
     core.releaseForPressure()
@@ -441,6 +484,7 @@ final class NativeModelHarnessTests: XCTestCase {
 
     _ = FileManager.default.createFile(atPath: core.readyURL.path, contents: Data("valid".utf8))
     core.reconcileInstalledPack()
+    XCTAssertTrue(try core.verifyReady())
     _ = try core.load()
     XCTAssertEqual(
       try core.infer(prompt: "synthetic", maxOutputTokens: 1, outputCapacity: 128),
@@ -464,6 +508,7 @@ final class NativeModelHarnessTests: XCTestCase {
     let (core, _, runtime) = try makeCore()
     _ = FileManager.default.createFile(atPath: core.readyURL.path, contents: Data("valid".utf8))
     core.reconcileInstalledPack()
+    XCTAssertTrue(try core.verifyReady())
     _ = try core.load()
     let loaded = try XCTUnwrap(runtime())
 

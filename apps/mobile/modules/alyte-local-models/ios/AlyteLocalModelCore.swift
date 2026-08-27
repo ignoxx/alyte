@@ -35,6 +35,7 @@ enum AlyteLocalModelDownloadAdmission {
 final class AlyteLocalModelCore: @unchecked Sendable {
   typealias HashFile = (URL) throws -> String
   typealias ProtectFile = (URL) throws -> Void
+  typealias AvailableMemory = () -> Int64
   typealias RuntimeFactory = (URL) throws -> any AlyteLocalModelRuntimeSession
 
   let directory: URL
@@ -46,7 +47,12 @@ final class AlyteLocalModelCore: @unchecked Sendable {
   private let fileManager: FileManager
   private let hashFileClosure: HashFile
   private let protectFileClosure: ProtectFile
+  private let availableMemoryClosure: AvailableMemory
   private let runtimeFactory: RuntimeFactory
+  // Cancellation is intentionally callable from UIKit/OS callbacks while the serialized store
+  // queue is decoding. Keep pointer access separate from lifecycle work so a pressure callback
+  // cannot race a runtime close and signal a stale runtime.
+  private let runtimeAccessLock = NSLock()
   private var loadedRuntime: (any AlyteLocalModelRuntimeSession)?
   private var forcedFailure: AlyteLocalModelFailure?
   private var cancellationRequested = false
@@ -64,6 +70,7 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     let expectedDigest: String
     let fileSize: Int64
     let modificationTimeMilliseconds: Int64?
+    let fileSystemIdentifier: Int64?
   }
 
   private let verificationReceiptVersion = 1
@@ -77,6 +84,7 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     fileManager: FileManager = .default,
     hashFile: @escaping HashFile,
     protectFile: @escaping ProtectFile,
+    availableMemory: @escaping AvailableMemory = { Int64.max },
     runtimeFactory: @escaping RuntimeFactory
   ) {
     self.directory = directory
@@ -87,13 +95,18 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     self.fileManager = fileManager
     self.hashFileClosure = hashFile
     self.protectFileClosure = protectFile
+    self.availableMemoryClosure = availableMemory
     self.runtimeFactory = runtimeFactory
   }
 
   var state: AlyteLocalModelState { stateValue }
   var failure: AlyteLocalModelFailure? { failureValue }
   var bytesReceived: Int64 { bytesReceivedValue }
-  var runtime: (any AlyteLocalModelRuntimeSession)? { loadedRuntime }
+  var runtime: (any AlyteLocalModelRuntimeSession)? {
+    runtimeAccessLock.lock()
+    defer { runtimeAccessLock.unlock() }
+    return loadedRuntime
+  }
   var readyURL: URL { directory.appendingPathComponent(filename) }
   var partialURL: URL { directory.appendingPathComponent(".\(filename).partial") }
   private var verificationReceiptURL: URL {
@@ -109,8 +122,8 @@ final class AlyteLocalModelCore: @unchecked Sendable {
       try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
       try protectFileClosure(directory)
       if fileManager.fileExists(atPath: readyURL.path) {
-        // Startup must stay cheap even for a multi-gigabyte pack. The receipt is only a prior
-        // verification record; load/activation still performs the authoritative SHA-256 check.
+        // Startup must stay cheap even for a multi-gigabyte pack. The receipt is a protected
+        // verification record; an explicit download/recovery action is the SHA-256 boundary.
         if try verificationReceiptMatchesReadyFile() {
           storageBytesValue = expectedBytes
           bytesReceivedValue = expectedBytes
@@ -337,12 +350,27 @@ final class AlyteLocalModelCore: @unchecked Sendable {
       guard ProcessInfo.processInfo.physicalMemory >= AlyteLocalModelManifest.minimumMemoryBytes else {
         throw AlyteLocalModelError.failed(.incompatible)
       }
+      // `physicalMemory` is a device-class signal, not an admission decision. The process may
+      // already be close to its iOS dirty-memory limit after OCR or PDF work. This current,
+      // uncached sample prevents a model allocation from becoming the next Jetsam victim.
+      guard availableMemoryClosure() >= AlyteLocalModelManifest.minimumMemoryBytes else {
+        throw AlyteLocalModelError.failed(.incompatible)
+      }
     }
-    guard try verifyReady() else { throw AlyteLocalModelError.failed(.checksumMismatch) }
+    // Ordinary extraction activation uses the cheap protected receipt identity check. A missing
+    // or changed receipt is a closed gate; an explicit retry/download action is the only path
+    // that performs the authoritative SHA-256 re-verification of the multi-gigabyte artifact.
+    try protectFileClosure(readyURL)
+    guard try verificationReceiptMatchesReadyFile() else {
+      throw AlyteLocalModelError.failed(.verificationRequired)
+    }
     if stateValue == .failed { setState(.ready, failure: nil) }
     releaseLoadedModel()
     do {
-      loadedRuntime = try runtimeFactory(readyURL)
+      let runtime = try runtimeFactory(readyURL)
+      runtimeAccessLock.lock()
+      loadedRuntime = runtime
+      runtimeAccessLock.unlock()
     } catch let error as AlyteLocalModelRuntimeError {
       switch error {
       case .unavailable: throw AlyteLocalModelError.unavailable(.unavailable)
@@ -390,7 +418,9 @@ final class AlyteLocalModelCore: @unchecked Sendable {
   /// Signals the C generation loop directly. It intentionally does not touch lifecycle state or
   /// wait for the store queue, so memory/thermal callbacks can interrupt an in-flight decode.
   func requestInferenceCancellation() {
+    runtimeAccessLock.lock()
     loadedRuntime?.cancelInference()
+    runtimeAccessLock.unlock()
   }
 
   func unload() -> [String: Any] {
@@ -499,7 +529,8 @@ final class AlyteLocalModelCore: @unchecked Sendable {
       let attributes = try? fileManager.attributesOfItem(atPath: readyURL.path),
       let size = (attributes[.size] as? NSNumber)?.int64Value,
       size == receipt.fileSize,
-      size == expectedBytes
+      size == expectedBytes,
+      Self.int64(from: attributes[.systemFileNumber]) == receipt.fileSystemIdentifier
     else { return false }
     let modificationTime = Self.milliseconds(from: attributes[.modificationDate])
     return modificationTime == receipt.modificationTimeMilliseconds
@@ -516,7 +547,8 @@ final class AlyteLocalModelCore: @unchecked Sendable {
       expectedBytes: expectedBytes,
       expectedDigest: expectedDigest,
       fileSize: size,
-      modificationTimeMilliseconds: Self.milliseconds(from: attributes[.modificationDate])
+      modificationTimeMilliseconds: Self.milliseconds(from: attributes[.modificationDate]),
+      fileSystemIdentifier: Self.int64(from: attributes[.systemFileNumber])
     )
     let temporaryURL = directory.appendingPathComponent(".\(filename).verification.partial")
     try removeIfPresent(temporaryURL)
@@ -548,6 +580,10 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     return Int64((date.timeIntervalSince1970 * 1_000).rounded())
   }
 
+  private static func int64(from value: Any?) -> Int64? {
+    (value as? NSNumber)?.int64Value
+  }
+
   private func fileSize(_ url: URL) throws -> Int64 {
     (try fileManager.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? -1
   }
@@ -567,8 +603,11 @@ final class AlyteLocalModelCore: @unchecked Sendable {
   }
 
   private func releaseLoadedModel() {
-    loadedRuntime?.close()
+    runtimeAccessLock.lock()
+    let runtime = loadedRuntime
     loadedRuntime = nil
+    runtimeAccessLock.unlock()
+    runtime?.close()
     if stateValue == .loaded { setState(.ready, failure: nil) }
   }
 

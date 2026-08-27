@@ -4,6 +4,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Advisory current headroom supplied by iOS. A caller must sample this immediately before
+// activation; it is deliberately not persisted or included in diagnostics.
+uint64_t alyte_local_model_runtime_available_memory(void);
+
 typedef enum AlyteLocalModelRuntimeFailureStage {
     ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_NONE = 0,
     ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_MODEL_LOAD = 1,

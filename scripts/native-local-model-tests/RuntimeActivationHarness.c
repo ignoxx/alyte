@@ -119,5 +119,26 @@ int main(void) {
     free_model(activation.model);
     assert(free_count == 2);
     assert(freed_models[1] == &cpu_model);
+
+    // Production selects this mode before activation when current headroom is below the Metal
+    // threshold. The helper must not probe GPU first in that case.
+    load_count = 0;
+    context_count = 0;
+    attempt_count = 0;
+    free_count = 0;
+    assert(alyte_local_model_activate_with_preferred_backend(
+        "synthetic",
+        ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY,
+        &hooks,
+        &activation));
+    assert(activation.backend_mode == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY);
+    assert(activation.batch_tokens == 32);
+    assert(load_count == 1);
+    assert(load_modes[0] == ALYTE_LOCAL_MODEL_BACKEND_CPU_ONLY);
+    assert(context_count == 4);
+    assert(attempt_count == 5);
+    free_model(activation.model);
+    assert(free_count == 1);
+    assert(freed_models[0] == &cpu_model);
     return 0;
 }

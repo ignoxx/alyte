@@ -54,6 +54,10 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
       fileManager: fileManager,
       hashFile: { try Self.hashFile(at: $0) },
       protectFile: { try Self.protect(fileManager: fileManager, at: $0) },
+      availableMemory: {
+        let available = alyte_local_model_runtime_available_memory()
+        return available > UInt64(Int64.max) ? Int64.max : Int64(available)
+      },
       runtimeFactory: runtimeFactory
     )
     super.init()
