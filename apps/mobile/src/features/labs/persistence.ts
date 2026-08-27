@@ -442,16 +442,6 @@ function parseJson(value: unknown, field: string): unknown {
   }
 }
 
-function serializedSourceContainsObservation(value: unknown, observationId: string): boolean {
-  if (typeof value !== 'string') return false;
-  try {
-    const parsed = JSON.parse(value) as { readonly observationIds?: unknown };
-    return Array.isArray(parsed.observationIds) && parsed.observationIds.includes(observationId);
-  } catch {
-    return false;
-  }
-}
-
 function draftDate(value: unknown, state: unknown): LabRecord['collectionDate'] {
   const dateState = enumValue(state, ['known', 'missing'] as const, 'extraction date state');
   const date = nullableString(value, 'extraction collection date');
@@ -1708,22 +1698,7 @@ export function createLabRepository(
         `SELECT ${extractionRowColumns} FROM extraction_draft_rows WHERE id = ?;`,
         id,
       );
-      let row = rows[0];
-      if (row === undefined) {
-        // Rows created before storage identities were separated may still be held by a caller as
-        // their source observation ID. Resolve that compatibility case only when unambiguous;
-        // repeated observations across reports must never update the wrong draft row.
-        const candidates = (
-          await database.getAllAsync<ExtractionDraftRowDb>(
-            `SELECT ${extractionRowColumns} FROM extraction_draft_rows;`,
-          )
-        ).filter((candidate) =>
-          serializedSourceContainsObservation(candidate.source_bbox_json, id),
-        );
-        if (candidates.length === 1) {
-          row = candidates[0];
-        }
-      }
+      const row = rows[0];
       if (row === undefined) throw new Error('Extraction Draft row was not found');
       const draftRows = await database.getAllAsync<{ state: unknown }>(
         'SELECT state FROM extraction_drafts WHERE id = ?;',
