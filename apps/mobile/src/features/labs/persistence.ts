@@ -1631,9 +1631,9 @@ export function createLabRepository(
       // Vision observation IDs identify source evidence and can repeat across reports. Allocate a
       // separate storage identity for each persisted row so a later report cannot collide with an
       // earlier draft while source.observationIds and source.observations retain that provenance.
-      const persistedRows = canonical.rows.map((row, index) => ({
+      const persistedRows = canonical.rows.map((row) => ({
         ...row,
-        id: `${makeId('extraction-draft-row')}-${draftId}-${index}`,
+        id: makeId('extraction-draft-row'),
       }));
       for (const row of persistedRows) {
         await database.runAsync(

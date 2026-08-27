@@ -553,13 +553,13 @@ describe('protected manual Lab Record persistence', () => {
     });
     assert.equal(draft.rows[0]?.decision, 'resolve');
     const invalidReference = await repository.updateExtractionDraftRow(
-      rows[0]!.id,
+      draft.rows[0]!.id,
       { proposedReferenceInterval: 'not-a-range' },
       aliases,
     );
     assert.ok(invalidReference.reviewReasons.includes('unparseable-reference-interval'));
     const corrected = await repository.updateExtractionDraftRow(
-      rows[0]!.id,
+      draft.rows[0]!.id,
       {
         proposedValue: { kind: 'numeric', value: 4.2 },
         proposedReferenceInterval: null,

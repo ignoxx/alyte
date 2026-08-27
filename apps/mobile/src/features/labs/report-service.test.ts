@@ -3391,6 +3391,66 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(calls, 3);
   });
 
+  test('classifies draft persistence failure and retries without losing the Original Report', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const createDraft = repository.createExtractionDraft;
+    let failPersistence = true;
+    repository.createExtractionDraft = async (input) => {
+      if (failPersistence) {
+        failPersistence = false;
+        throw new Error('synthetic draft persistence failure');
+      }
+      return createDraft(input);
+    };
+    let calls = 0;
+    const service = createService(repository, files, new FakePdf(), {
+      async recognize(_path, pageIndex): Promise<VisionOCRResult> {
+        calls += 1;
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex,
+          orientation: 0,
+          observations: [
+            {
+              id: 'persistence-recovery-row',
+              text: 'LDL-C 3.8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+              pageIndex,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        });
+      },
+    });
+    const report = (await service.importImages(source('persistence-recovery', 'image')))!.report;
+
+    await assert.rejects(
+      service.startExtraction(report.id),
+      (error: unknown) =>
+        error instanceof LabReportExtractionError &&
+        error.reason === 'persistence' &&
+        error.message === 'The local extraction draft could not be saved',
+    );
+    const failedOperation = await repository.getExtractionOperation(report.id);
+    assert.equal(failedOperation?.reportId, report.id);
+    assert.equal(failedOperation?.state, 'failed');
+    assert.equal(failedOperation?.stage, 'review');
+    assert.equal(failedOperation?.completed, 0);
+    assert.equal(failedOperation?.total, 1);
+    assert.equal(failedOperation?.error, 'persistence');
+    assert.equal(await repository.getExtractionDraftForReport(report.id), null);
+    assert.equal((await service.getReport(report.id))?.originalPath, report.originalPath);
+
+    const draft = await service.startExtraction(report.id);
+    assert.equal(draft.sourceArtifact?.kind, 'original');
+    assert.equal(await repository.countOpenExtractionDrafts(), 1);
+    assert.equal((await repository.getExtractionDraftForReport(report.id))?.id, draft.id);
+    assert.equal(calls, 2);
+  });
+
   test('unlocks a protected Original only for Vision and never persists the password', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
