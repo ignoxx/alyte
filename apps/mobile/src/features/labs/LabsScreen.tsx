@@ -145,27 +145,32 @@ export function LabsScreen() {
                 <AppText variant="label" style={styles.sectionLabel}>
                   {t('labs.reportsSection')}
                 </AppText>
-                {reports.map((report) => (
-                  <Pressable
-                    accessibilityHint={t('labs.reportRowHint')}
-                    accessibilityLabel={`${t('labs.reportTitle')}: ${report.originalFilename}`}
-                    accessibilityRole="button"
-                    key={report.id}
-                    onPress={() => navigation.navigate('LabReportDetail', { reportId: report.id })}
-                    style={({ pressed }) => [styles.listRow, pressed && styles.rowPressed]}
-                  >
-                    <AppIcon color={colors.accent} name="doc" size={22} />
-                    <View style={styles.rowBody}>
-                      <AppText numberOfLines={2} selectable variant="heading">
-                        {report.originalFilename}
-                      </AppText>
-                      <AppText numberOfLines={2} selectable style={styles.muted}>
-                        {`${reportDetail(report, records, locale)} · ${reportStateLabel(report)}`}
-                      </AppText>
-                    </View>
-                    <AppIcon name="chevronRight" size={16} />
-                  </Pressable>
-                ))}
+                {reports.map((report) => {
+                  const detail = reportDetail(report, records, locale);
+                  return (
+                    <Pressable
+                      accessibilityHint={t('labs.reportRowHint')}
+                      accessibilityLabel={`${t('labs.reportTitle')}: ${report.originalFilename}, ${detail}`}
+                      accessibilityRole="button"
+                      key={report.id}
+                      onPress={() =>
+                        navigation.navigate('LabReportDetail', { reportId: report.id })
+                      }
+                      style={({ pressed }) => [styles.listRow, pressed && styles.rowPressed]}
+                    >
+                      <AppIcon color={colors.accent} name="doc" size={22} />
+                      <View style={styles.rowBody}>
+                        <AppText numberOfLines={2} selectable variant="heading">
+                          {report.originalFilename}
+                        </AppText>
+                        <AppText numberOfLines={2} selectable style={styles.muted}>
+                          {`${detail} · ${reportStateLabel(report)}`}
+                        </AppText>
+                      </View>
+                      <AppIcon name="chevronRight" size={16} />
+                    </Pressable>
+                  );
+                })}
               </View>
             )}
             {records.length > 0 && (
@@ -178,10 +183,11 @@ export function LabsScreen() {
                     record.collectionDate.kind === 'known'
                       ? formatLocaleDate(record.collectionDate.value, locale)
                       : t('labs.recordDateMissing');
+                  const measurementSummary = measurementCount(record.measurements.length);
                   return (
                     <Pressable
                       accessibilityHint={t('labs.recordRowHint')}
-                      accessibilityLabel={`${t('labs.recordTitle')}: ${date}`}
+                      accessibilityLabel={`${t('labs.recordTitle')}: ${date}, ${measurementSummary}`}
                       accessibilityRole="button"
                       key={record.id}
                       onPress={() =>
@@ -195,7 +201,7 @@ export function LabsScreen() {
                           {date}
                         </AppText>
                         <AppText selectable style={styles.muted}>
-                          {`${record.laboratoryName ?? t('labs.recordTitle')} · ${specimenLabel(record.specimenType)} · ${measurementCount(record.measurements.length)}`}
+                          {`${record.laboratoryName ?? t('labs.recordTitle')} · ${specimenLabel(record.specimenType)} · ${measurementSummary}`}
                         </AppText>
                       </View>
                       <AppIcon name="chevronRight" size={16} />
