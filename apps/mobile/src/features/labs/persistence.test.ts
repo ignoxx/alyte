@@ -563,7 +563,7 @@ describe('protected manual Lab Record persistence', () => {
     await repository.close();
   });
 
-  test('LabsService safely maps manual labels into a compatible trend without rewriting provenance', async () => {
+  test('LabsService maps manual labels after explicit confirmation without rewriting provenance', async () => {
     const { repository } = createRepository();
     const labs = createLabsService({ repositoryFactory: async () => repository });
     const created = await labs.createRecord({
@@ -599,17 +599,32 @@ describe('protected manual Lab Record persistence', () => {
         },
       ],
     });
+    const needsReview = await labs.correctMeasurement('measurement-preserved-then-corrected', {
+      label: 'Total cholesterol',
+      unit: 'mg/dL',
+      specimenType: 'unknown',
+      reviewState: 'needs-review',
+      reason: 'Review mapped label',
+    });
+    assert.equal(needsReview.biomarkerId, null);
+    assert.equal(needsReview.reviewState, 'needs-review');
+
     const corrected = await labs.correctMeasurement('measurement-preserved-then-corrected', {
       label: 'Total cholesterol',
       unit: 'mg/dL',
       specimenType: 'unknown',
-      reason: 'Mapped reviewed label',
+      reviewState: 'confirmed',
+      reason: 'Confirm mapped label',
     });
     assert.equal(corrected.biomarkerId, canonicalId('biomarker.total_cholesterol'));
+    assert.equal(corrected.reviewState, 'confirmed');
     assert.equal(corrected.original.label, 'Home result');
     assert.equal(corrected.originalState.biomarkerId, null);
     assert.equal(corrected.provenance, 'user-corrected');
-    assert.equal(corrected.corrections[0]?.next.biomarkerId, corrected.biomarkerId);
+    assert.equal(corrected.corrections[0]?.next.reviewState, 'needs-review');
+    assert.equal(corrected.corrections[1]?.previous.reviewState, 'needs-review');
+    assert.equal(corrected.corrections[1]?.next.reviewState, 'confirmed');
+    assert.equal(corrected.corrections[1]?.next.biomarkerId, corrected.biomarkerId);
 
     const detail = await labs.getRecordDetail('lab-record-safe-mapping');
     assert.equal(detail?.measurements[0]?.canonicalLabel, 'Total cholesterol');

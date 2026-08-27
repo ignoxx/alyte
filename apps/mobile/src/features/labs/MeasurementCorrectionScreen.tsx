@@ -8,6 +8,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Host, Picker } from '@expo/ui';
 import {
   useNavigation,
   usePreventRemove,
@@ -75,15 +76,29 @@ export function MeasurementCorrectionScreen() {
         const found = detail?.measurements.find((item) => item.id === route.params.measurementId);
         if (found) {
           setMeasurement(found);
-          const nextDraft = measurementDraft(found);
+          // Corrections are new review work. A confirmed source must be explicitly reviewed
+          // again before this edit can restore its canonical identity.
+          const nextDraft = { ...measurementDraft(found), reviewState: 'needs-review' as const };
           setDraft(nextDraft);
           setInitialDraft(nextDraft);
         } else setError(t('labs.recordNotFound'));
       })
       .catch(() => setError(t('labs.recordLoadError')));
   }, [labs, route.params]);
+  function updateDraft(patch: Partial<MeasurementDraft>) {
+    setDraft((current) => {
+      if (current === null) return current;
+      return {
+        ...current,
+        ...patch,
+        ...(patch.reviewState === undefined && current.reviewState === 'confirmed'
+          ? { reviewState: 'needs-review' as const }
+          : {}),
+      };
+    });
+  }
   async function save() {
-    if (!draft || !measurement) return;
+    if (!draft || !measurement || !dirty) return;
     const input = correctionInput(draft, measurement, t('labs.correctionReason'));
     if (!input) {
       setError(t('labs.detailCorrectionValidation'));
@@ -130,50 +145,65 @@ export function MeasurementCorrectionScreen() {
         <Field
           label={t('labs.measurementLabel')}
           value={draft.label}
-          onChange={(label) => setDraft({ ...draft, label })}
+          onChange={(label) => updateDraft({ label })}
         />
+        <View style={styles.reviewField}>
+          <AppText variant="label">{t('labs.measurementReviewState')}</AppText>
+          <Host matchContents>
+            <Picker
+              appearance="menu"
+              enabled={!busy}
+              selectedValue={draft.reviewState}
+              testID="measurement-review-state"
+              onValueChange={(value) =>
+                updateDraft({ reviewState: value as MeasurementDraft['reviewState'] })
+              }
+            >
+              <Picker.Item label={t('labs.reviewConfirmed')} value="confirmed" />
+              <Picker.Item label={t('labs.reviewNeedsReview')} value="needs-review" />
+            </Picker>
+          </Host>
+        </View>
         <AppButton
           label={`${t('labs.measurementType')}: ${draft.kind}`}
           onPress={() =>
-            choose(t('labs.measurementType'), kinds, draft.kind, (kind) =>
-              setDraft({ ...draft, kind }),
-            )
+            choose(t('labs.measurementType'), kinds, draft.kind, (kind) => updateDraft({ kind }))
           }
           tone="secondary"
         />
         {draft.kind === 'bounded' && (
           <AppButton
             label={`${t('labs.measurementComparator')}: ${draft.comparator}`}
-            onPress={() => setDraft({ ...draft, comparator: draft.comparator === '<' ? '>' : '<' })}
+            onPress={() => updateDraft({ comparator: draft.comparator === '<' ? '>' : '<' })}
             tone="secondary"
           />
         )}
         <Field
           label={t('labs.measurementValue')}
           value={draft.value}
-          onChange={(value) => setDraft({ ...draft, value })}
+          onChange={(value) => updateDraft({ value })}
           keyboard={draft.kind === 'numeric' || draft.kind === 'bounded'}
         />
         <Field
           label={t('labs.measurementUnit')}
           value={draft.unit}
-          onChange={(unit) => setDraft({ ...draft, unit })}
+          onChange={(unit) => updateDraft({ unit })}
         />
         <Field
           label={t('labs.measurementReference')}
           value={draft.referenceInterval}
-          onChange={(referenceInterval) => setDraft({ ...draft, referenceInterval })}
+          onChange={(referenceInterval) => updateDraft({ referenceInterval })}
         />
         <Field
           label={t('labs.measurementFlag')}
           value={draft.flag}
-          onChange={(flag) => setDraft({ ...draft, flag })}
+          onChange={(flag) => updateDraft({ flag })}
         />
         <AppButton
           label={`${t('labs.measurementSpecimen')}: ${draft.specimenType}`}
           onPress={() =>
             choose(t('labs.measurementSpecimen'), specimens, draft.specimenType, (specimenType) =>
-              setDraft({ ...draft, specimenType }),
+              updateDraft({ specimenType }),
             )
           }
           tone="secondary"
@@ -184,7 +214,7 @@ export function MeasurementCorrectionScreen() {
           </AppText>
         )}
         <AppButton
-          disabled={busy}
+          disabled={busy || !dirty}
           label={busy ? t('labs.detailSaving') : t('labs.measurementSaveCorrection')}
           onPress={() => void save()}
         />
@@ -222,6 +252,7 @@ const styles = StyleSheet.create({
   content: { gap: spacing.md, padding: spacing.lg, paddingBottom: spacing.xxl },
   center: { flex: 1, justifyContent: 'center', padding: spacing.lg },
   field: { gap: spacing.xs },
+  reviewField: { gap: spacing.xs },
   input: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
