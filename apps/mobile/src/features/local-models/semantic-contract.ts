@@ -1,5 +1,6 @@
 import { CATALOGUE_VERSION, comparableBiomarkers } from '@alyte/catalogue';
 import {
+  mapExtractionSemanticWireRows,
   validateSemanticProposals,
   type ExtractionAliasEntry,
   type ExtractionSemanticProposal,
@@ -27,6 +28,7 @@ export const SEMANTIC_MAPPER_LIMITS = Object.freeze({
   maxProposals: 4,
   maxOutputBytes: 8_192,
   maxInputBytes: 8_192,
+  maxPromptBytes: 7_168,
   outputTokenLimit: 192,
 });
 
@@ -78,15 +80,6 @@ function observationForWire(
   };
 }
 
-function wireRows(
-  candidateRows: readonly ExtractionSemanticCandidateRow[],
-): readonly { readonly row: ExtractionSemanticCandidateRow; readonly key: string }[] {
-  return candidateRows
-    .slice()
-    .sort((left, right) => left.rowId.localeCompare(right.rowId))
-    .map((row, index) => ({ row, key: `r${index}` }));
-}
-
 export function serializeSemanticMapperChunk(
   candidateRows: readonly ExtractionSemanticCandidateRow[],
   locale: string,
@@ -101,8 +94,8 @@ export function serializeSemanticMapperChunk(
   const seenRows = new Set<string>();
   const seenObservations = new Set<string>();
   let observationCount = 0;
-  const serializedRows = wireRows(candidateRows).map(
-    ({ row, key: rowKey }): SerializedCandidateRow => {
+  const serializedRows = mapExtractionSemanticWireRows(candidateRows).map(
+    ({ row, rowKey }): SerializedCandidateRow => {
       if (
         row.rowId.length === 0 ||
         row.rowId.length > 96 ||
@@ -165,7 +158,7 @@ export function createSemanticMapperPrompt(locale: string, serializedChunk: stri
   const prompt = `<bos><|turn>system
 You are an offline semantic mapper. Return only the JSON object required by the grammar.
 Do not provide values, units, intervals, translations, explanations or medical copy.
-Each row has compact row and cell keys. For each unambiguous candidate row, emit at most one proposal. Select label, value, unit, reference interval, and optional flag cell keys only from that same row. Never invent, reorder, duplicate, or cross rows. Choose biomarkerId only from the checked-in catalogue map. Use preserve with null biomarkerId for a credible unsupported row, and ignore only a genuine non-measurement row. Omit ambiguous rows.
+Each row has compact row and cell keys. For each unambiguous candidate row, emit at most one proposal. Select label, value, unit, reference interval, and optional flag cell keys only from that same row. Never invent, reorder, duplicate, or cross rows. Choose biomarkerId only from the checked-in catalogue map. Use preserve with null biomarkerId for a credible unsupported row. Do not use ignore: only deterministic local evidence can exclude a row, and unresolved rows must remain reviewable. Omit ambiguous rows.
 <turn|>
 <|turn>user
 Schema version: ${SEMANTIC_MAPPER_SCHEMA_VERSION}. Locale: ${locale}.
@@ -175,17 +168,38 @@ Select only bounded row/cell keys and semantic roles.
 <turn|>
 <|turn>model
 `;
-  const promptBytes = new TextEncoder().encode(prompt).byteLength;
-  // The native runtime rejects prompt+generation that reaches its context boundary. Reserve a
-  // conservative four bytes per output token so a complete JSON envelope cannot be truncated.
   if (
-    promptBytes + SEMANTIC_MAPPER_LIMITS.outputTokenLimit * 4 >
-    SEMANTIC_MAPPER_LIMITS.maxInputBytes
+    new TextEncoder().encode(prompt).byteLength > SEMANTIC_MAPPER_LIMITS.maxPromptBytes ||
+    estimateSemanticMapperTokens(prompt) + SEMANTIC_MAPPER_LIMITS.outputTokenLimit >
+      SEMANTIC_MAPPER_CONTEXT.maxTokens
   ) {
     throw new Error('semantic-inference-input-too-large');
   }
   return prompt;
 }
+
+/**
+ * The native runtime has an exact 2,048-token llama context, but the JS seam cannot use the
+ * model's tokenizer before inference. This lexical bound intentionally counts punctuation,
+ * whitespace runs, non-ASCII scalars, and short alphanumeric pieces; it is not a byte-to-token
+ * conversion. A reserved output margin and native tokenization remain the final hard gate and
+ * typed fallback.
+ */
+export function estimateSemanticMapperTokens(input: string): number {
+  const segments = input.match(/[A-Za-z0-9]+|\s+|[^A-Za-z0-9\s]+/gu) ?? [];
+  return segments.reduce((total, segment) => {
+    if (/^[A-Za-z0-9]+$/u.test(segment)) return total + Math.max(1, Math.ceil(segment.length / 6));
+    if (/^\s+$/u.test(segment)) return total + 1;
+    return total + Math.max(1, Math.ceil([...segment].length / 5));
+  }, 0);
+}
+
+export const SEMANTIC_MAPPER_CONTEXT = Object.freeze({
+  version: 'alyte.semantic-mapper.context.v1',
+  maxTokens: 2_048,
+  reservedOutputTokens: SEMANTIC_MAPPER_LIMITS.outputTokenLimit,
+  maxPromptTokens: 2_048 - SEMANTIC_MAPPER_LIMITS.outputTokenLimit,
+});
 
 export function validateSemanticMapperOutput(
   raw: unknown,
@@ -217,4 +231,5 @@ export const localSemanticContractMetadata = Object.freeze({
   chunkVersion: SEMANTIC_OCR_CHUNK_VERSION,
   catalogueVersion: CATALOGUE_VERSION,
   limits: SEMANTIC_MAPPER_LIMITS,
+  context: SEMANTIC_MAPPER_CONTEXT,
 });

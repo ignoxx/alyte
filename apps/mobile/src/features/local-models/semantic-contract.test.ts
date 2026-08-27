@@ -229,6 +229,40 @@ test('rejects partial, cross-row, reordered, and extra-ID proposals individually
   }
 });
 
+test('does not let model-only ignore remove a candidate row', () => {
+  const candidate = row('ignore-candidate', 'en', ['LDL-C', '3.8', 'mmol/L']);
+  assert.deepEqual(
+    validateSemanticMapperOutput(
+      {
+        schemaVersion: SEMANTIC_MAPPER_SCHEMA_VERSION,
+        proposals: [
+          {
+            rowKey: 'r0',
+            labelKey: 'c0',
+            valueKey: 'c1',
+            unitKey: 'c2',
+            referenceIntervalKey: null,
+            flagKey: null,
+            role: 'ignore',
+            specimenType: 'unknown',
+            biomarkerId: null,
+          },
+        ],
+      },
+      [candidate],
+      [
+        {
+          id: 'biomarker.ldl_c',
+          aliases: ['LDL-C'],
+          specimens: ['serum'],
+          units: ['mmol/L'],
+        },
+      ],
+    ),
+    [],
+  );
+});
+
 test('bounds candidate rows, cells, headings, and the complete UTF-8 input', () => {
   const candidate = row('bound', 'en', ['Ferritin', '42', 'ng/mL', '15–150']);
   assert.throws(
@@ -270,7 +304,7 @@ test('bounds candidate rows, cells, headings, and the complete UTF-8 input', () 
 
 test('keeps production prompt, chunk, and manifest versions aligned', () => {
   assert.equal(SEMANTIC_MAPPER_SCHEMA_VERSION, 'alyte.semantic-mapper.v2');
-  assert.equal(SEMANTIC_MAPPER_PROMPT_VERSION, 'alyte.semantic-mapper.prompt.v3');
+  assert.equal(SEMANTIC_MAPPER_PROMPT_VERSION, 'alyte.semantic-mapper.prompt.v4');
   assert.equal(SEMANTIC_OCR_CHUNK_VERSION, 'alyte.semantic-ocr-chunk.v3');
   assert.equal(
     SEMANTIC_MAPPER_PROMPT_VERSION,

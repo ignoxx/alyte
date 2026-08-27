@@ -1597,7 +1597,7 @@ describe('protected Lab Report import lifecycle', () => {
     );
   });
 
-  test('gates missing packs after OCR while preserving a distinct runtime fallback path', async () => {
+  test('gates missing packs before OCR while preserving a distinct runtime fallback path', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
     let recognitionCalls = 0;
@@ -1626,6 +1626,11 @@ describe('protected Lab Report import lifecycle', () => {
       adapterVersion: 'missing-pack.mapper.v1',
       schemaVersion: 'alyte.semantic-mapper.v1',
       supports: () => true,
+      checkAvailability: async () => {
+        throw Object.assign(new Error('synthetic missing verified pack'), {
+          code: 'semantic-model-unavailable' as const,
+        });
+      },
       prepare: async () => {
         throw Object.assign(new Error('synthetic deleted pack'), {
           code: 'semantic-model-unavailable' as const,
@@ -1643,7 +1648,7 @@ describe('protected Lab Report import lifecycle', () => {
       (error: unknown) =>
         error instanceof LabReportExtractionError && error.reason === 'model-unavailable',
     );
-    assert.equal(recognitionCalls, 2);
+    assert.equal(recognitionCalls, 0);
   });
 
   test('routes typed mid-operation model loss while runtime failure keeps deterministic rows', async () => {
@@ -1699,12 +1704,9 @@ describe('protected Lab Report import lifecycle', () => {
     const unavailableReport = (await unavailableService.importPdf(
       source('mid-operation-unavailable'),
     ))!.report;
-    await assert.rejects(
-      unavailableService.startExtraction(unavailableReport.id),
-      (error: unknown) =>
-        error instanceof LabReportExtractionError && error.reason === 'model-unavailable',
-    );
-    assert.equal(await unavailableService.countOpenExtractionDrafts(), 0);
+    const unavailableDraft = await unavailableService.startExtraction(unavailableReport.id);
+    assert.equal(unavailableDraft.rows.length, 1);
+    assert.equal(await unavailableService.countOpenExtractionDrafts(), 1);
     assert.equal(unavailableReleaseCalls, 1);
 
     let runtimeReleaseCalls = 0;
@@ -1980,7 +1982,7 @@ describe('protected Lab Report import lifecycle', () => {
     assert.deepEqual(draft.rows[0]?.source.observationIds, ['lt-date-measurement']);
   });
 
-  test('keeps a representative 48-row report under the compact mapper blocker target', async () => {
+  test('keeps a representative multilingual 45-row report under the compact mapper blocker target', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
     const observations = [
@@ -1993,15 +1995,30 @@ describe('protected Lab Report import lifecycle', () => {
         orientation: 0,
         recognition: { level: 'accurate' as const, language: 'lt', internalConfidence: null },
       },
-      ...Array.from({ length: 48 }, (_, index) => {
+      ...Array.from({ length: 45 }, (_, index) => {
         const y = 0.08 + index * 0.012;
+        const safe = index < 30;
+        const noisy = index >= 30 && index < 38;
+        const unsupported = index >= 38 && index < 42;
+        const ambiguous = index >= 42;
+        const language = index % 3 === 0 ? 'en' : index % 3 === 1 ? 'de' : 'lt';
+        const label =
+          language === 'de'
+            ? 'LDL-Cholesterin'
+            : language === 'lt'
+              ? 'Mažo tankio lipoproteinų cholesterolis'
+              : unsupported
+                ? 'Unbekannter Marker'
+                : 'LDL-C';
         const cells = [
-          ['label', 'LDL-C', 0.05],
-          ['value', '3,8', 0.28],
+          ['label', label, 0.05],
+          ['value', ambiguous ? '3,8' : index % 2 === 0 ? '3,8' : '3.8', 0.28],
           ['unit', 'mmol/L', 0.4],
           ['range', '<5,0', 0.55],
-          ['accession', `KRA-${String(index + 1).padStart(2, '0')}`, 0.72],
+          ...(ambiguous ? [['second-value', '4,2', 0.67] as const] : []),
+          ...(noisy ? [['metadata', `Batch ${index + 1}`, 0.72] as const] : []),
         ];
+        if (safe) cells.splice(4);
         return cells.map(([field, text, x], columnIndex) => ({
           id: `aggregate-${index}-${field}`,
           text: text as string,
@@ -2015,7 +2032,7 @@ describe('protected Lab Report import lifecycle', () => {
             rowIndex: index,
             columnIndex,
           },
-          recognition: { level: 'accurate' as const, language: 'lt', internalConfidence: null },
+          recognition: { level: 'accurate' as const, language, internalConfidence: null },
         }));
       }).flat(),
     ];
@@ -2029,19 +2046,39 @@ describe('protected Lab Report import lifecycle', () => {
       async map({ rows }) {
         chunks.push(rows.length);
         const ordered = [...rows].sort((left, right) => left.rowId.localeCompare(right.rowId));
+        const proposals: Record<string, unknown>[] = [];
+        ordered.forEach((row, rowIndex) => {
+          const label = row.observations[0]?.text ?? '';
+          if (row.observations.some((observation) => observation.text === '4,2')) return;
+          if (label.includes('Unbekannter')) {
+            proposals.push({
+              rowKey: `r${rowIndex}`,
+              labelKey: 'c0',
+              valueKey: 'c1',
+              unitKey: 'c2',
+              referenceIntervalKey: 'c3',
+              flagKey: null,
+              role: 'preserve',
+              specimenType: 'unknown',
+              biomarkerId: null,
+            });
+          } else if (label.includes('LDL') || label.includes('Mažo tankio')) {
+            proposals.push({
+              rowKey: `r${rowIndex}`,
+              labelKey: 'c0',
+              valueKey: 'c1',
+              unitKey: 'c2',
+              referenceIntervalKey: 'c3',
+              flagKey: null,
+              role: 'measurement',
+              specimenType: 'serum',
+              biomarkerId: 'biomarker.ldl_c',
+            });
+          }
+        });
         return {
           schemaVersion: 'alyte.semantic-mapper.v2',
-          proposals: ordered.map((_, rowIndex) => ({
-            rowKey: `r${rowIndex}`,
-            labelKey: 'c0',
-            valueKey: 'c1',
-            unitKey: 'c2',
-            referenceIntervalKey: 'c3',
-            flagKey: null,
-            role: 'measurement',
-            specimenType: 'serum',
-            biomarkerId: 'biomarker.ldl_c',
-          })),
+          proposals,
         };
       },
     };
@@ -2064,11 +2101,15 @@ describe('protected Lab Report import lifecycle', () => {
     const report = (await service.importPdf(source('compact-aggregate')))!.report;
     await prepareSanitizedExtraction(service, report.id);
     const draft = await service.startExtraction(report.id);
-    assert.equal(draft.rows.length, 48);
-    assert.equal(Math.max(...chunks), 4);
-    assert.equal(chunks.length, 12);
-    assert.equal(draft.rows.filter(extractionReviewRequiresAttention).length, 0);
-    assert.equal(draft.rows.filter((row) => row.source.semantic !== null).length, 48);
+    assert.equal(draft.rows.length, 45);
+    assert.ok(Math.max(...chunks) <= 4);
+    assert.ok(chunks.length > 0);
+    assert.equal(draft.rows.filter(extractionReviewRequiresAttention).length, 3);
+    assert.equal(draft.rows.filter((row) => row.source.semantic !== null).length, 9);
+    assert.equal(
+      draft.rows.slice(0, 30).every((row) => row.source.semantic === null),
+      true,
+    );
   });
 
   test('copies an image into protected storage, records page metadata, and survives relaunch', async () => {

@@ -1883,14 +1883,23 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       onProgress?.(0, 0);
       return rows;
     }
+    // Deterministically complete rows do not benefit from semantic mapping. Keep them out of the
+    // request entirely; unresolved, ambiguous, and unsupported rows remain eligible for refinement.
+    const candidateRowsForMapping = rows.filter(
+      (row) => row.proposedBiomarkerId === null || row.reviewReasons.length > 0,
+    );
+    if (candidateRowsForMapping.length === 0) {
+      onProgress?.(0, 0);
+      return rows;
+    }
     // A model request is a bounded set of already-filtered candidate rows. Never send the whole
     // page or a raw OCR wall: unrelated headers, addresses, and footers are not model input.
     const observationById = new Map(
       observations.map((observation) => [observation.id, observation]),
     );
     const rowGroups = new Map<string, ExtractionDraftRow[]>();
-    const candidateSourceIds = new Set(rows.flatMap((row) => row.source.observationIds));
-    for (const row of rows) {
+    const allRowSourceIds = new Set(rows.flatMap((row) => row.source.observationIds));
+    for (const row of candidateRowsForMapping) {
       const first = row.source.observations?.[0];
       const table = first?.structure?.tableId ?? 'page';
       const key = `${first?.pageIndex ?? row.source.pageIndex}:${table}`;
@@ -1934,7 +1943,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const anchorTableId = anchor?.structure?.tableId ?? null;
       return observations.filter((observation) => {
         const structure = observation.structure;
-        if (candidateSourceIds.has(observation.id) || observation.pageIndex !== anchor?.pageIndex)
+        if (allRowSourceIds.has(observation.id) || observation.pageIndex !== anchor?.pageIndex)
           return false;
         if (structure?.kind === 'table-cell' && structure.tableId === anchorTableId) return true;
         const specimenHeading = specimenTypeFromText(observation.text) !== null;
@@ -2000,8 +2009,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     const proposals: ExtractionSemanticProposal[] = [];
     onProgress?.(0, chunks.length);
     let preparationAttempted = false;
+    let preparationFailed = false;
     let semanticLease: ExtractionSemanticLease | null = null;
     let semanticStageError: unknown = null;
+    let semanticModelUnavailable = false;
     try {
       for (const [chunkIndex, chunk] of chunks.entries()) {
         if (cancellation?.isCancelled())
@@ -2017,7 +2028,12 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           // and one loaded session is reused for every subsequent chunk in this stage.
           if (preparationAttempted === false) {
             preparationAttempted = true;
-            semanticLease = (await semanticMapper.prepare?.()) ?? null;
+            try {
+              semanticLease = (await semanticMapper.prepare?.()) ?? null;
+            } catch (error) {
+              preparationFailed = true;
+              throw error;
+            }
           }
           const input = {
             pageIndex: chunk.rows[0]?.observations[0]?.pageIndex ?? 0,
@@ -2033,17 +2049,21 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           if (error instanceof LabReportExtractionError && error.reason === 'cancelled')
             throw error;
           if (isSemanticModelUnavailable(error)) {
-            throw new LabReportExtractionError(
-              'model-unavailable',
-              'The verified on-device model pack became unavailable during extraction',
-              { cause: error },
-            );
+            // OCR has already produced a deterministic draft. A pack disappearing during this
+            // optional refinement stage must not erase that work or block Review.
+            semanticModelUnavailable = true;
           }
+          if (preparationFailed) semanticModelUnavailable = true;
           // Timeouts, runtime failures, and malformed output all preserve the deterministic rows.
           // A later chunk is still allowed to complete independently; explicit cancellation aborts
           // the operation before any draft can be written.
         }
         onProgress?.(chunkIndex + 1, chunks.length);
+        if (semanticModelUnavailable) {
+          for (let remaining = chunkIndex + 1; remaining < chunks.length; remaining += 1)
+            onProgress?.(remaining + 1, chunks.length);
+          break;
+        }
       }
     } catch (error) {
       semanticStageError = error;
@@ -2199,6 +2219,21 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           // v11 drafts have no trustworthy artifact identity. They are explicitly invalidated by
           // migration and are removed only when a user requests regeneration.
           await repo.discardLegacyExtractionDraft(id);
+        }
+
+        // The verified-pack gate is the only model condition allowed to block a new automated
+        // extraction. Once OCR starts, mapper preparation/inference failures fall back to Review.
+        try {
+          await semanticMapper?.checkAvailability?.();
+        } catch (error) {
+          if (isSemanticModelUnavailable(error)) {
+            throw new LabReportExtractionError(
+              'model-unavailable',
+              'The verified on-device model pack is not available for extraction',
+              { cause: error },
+            );
+          }
+          throw error;
         }
 
         const sourcePath = await openOriginal(id);

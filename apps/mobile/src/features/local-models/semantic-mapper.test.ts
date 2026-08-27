@@ -204,7 +204,7 @@ test('accepts only validated source selections and preserves versioned provenanc
       role: 'measurement',
     },
   ]);
-  assert.equal(mapper.provenance?.promptVersion, 'alyte.semantic-mapper.prompt.v3');
+  assert.equal(mapper.provenance?.promptVersion, 'alyte.semantic-mapper.prompt.v4');
   assert.equal(mapper.maxRowsPerChunk, 4);
 });
 

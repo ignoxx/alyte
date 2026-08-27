@@ -882,5 +882,72 @@ describe('local extraction domain', () => {
     assert.equal(reparsed.proposedReferenceInterval, '<3,0');
     assert.equal(reparsed.proposedFlag, 'H');
     assert.equal(reparsed.reviewReasons.includes('unsupported-layout'), false);
+    const semanticRow = {
+      ...reparsed,
+      source: {
+        ...reparsed.source,
+        semantic: {
+          adapterVersion: 'synthetic.mapper.v2',
+          schemaVersion: 'alyte.semantic-mapper.v2' as const,
+          sourceObservationIds: observations.map((observation) => observation.id),
+          sourceFieldObservationIds: {
+            label: 'lt-label',
+            value: 'lt-value',
+            unit: 'lt-unit',
+            referenceInterval: 'lt-range',
+            flag: 'lt-flag',
+          },
+        },
+      },
+    };
+    const confirmation = buildExtractionConfirmationPlan(
+      {
+        id: 'semantic-confirmation',
+        reportId: 'synthetic-report',
+        state: 'draft',
+        ocrContractVersion: 'alyte.vision.document.v2',
+        parserVersion: EXTRACTION_PARSER_VERSION,
+        collectionDate: { kind: 'known', value: '2026-08-22' },
+        rows: [semanticRow],
+        createdAt: '2026-08-22T00:00:00.000Z',
+        updatedAt: '2026-08-22T00:00:00.000Z',
+        confirmedAt: null,
+      },
+      { record: () => 'record', measurement: () => 'measurement' },
+    );
+    const confirmedMeasurement = confirmation.records[0]?.measurements[0];
+    assert.equal(confirmedMeasurement?.original.valueString, '3,8');
+    assert.equal(confirmedMeasurement?.provenance, 'extracted');
+    assert.equal(confirmedMeasurement?.source.observations?.length, observations.length);
+    assert.throws(
+      () =>
+        reparseExtractionRowFromSemanticFields(
+          row,
+          {
+            label: 'lt-label',
+            value: 'lt-unit',
+            unit: null,
+            referenceInterval: null,
+            flag: null,
+          },
+          aliases,
+        ),
+      /semantic-source-value-unparseable/,
+    );
+    assert.throws(
+      () =>
+        reparseExtractionRowFromSemanticFields(
+          row,
+          {
+            label: 'lt-label',
+            value: 'lt-noisy-value',
+            unit: 'lt-unit',
+            referenceInterval: 'lt-range',
+            flag: null,
+          },
+          aliases,
+        ),
+      /semantic-source-field-order-invalid/,
+    );
   });
 });

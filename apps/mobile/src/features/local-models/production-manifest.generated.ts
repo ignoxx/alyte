@@ -27,7 +27,7 @@ export const productionLocalModelManifest = Object.freeze({
   },
   compatibility: {
     languages: ['en', 'de', 'lt', 'fr', 'es', 'it', 'pt', 'nl', 'pl'],
-    promptBundle: 'alyte.semantic-mapper.prompt.v3',
+    promptBundle: 'alyte.semantic-mapper.prompt.v4',
     ocrChunk: 'alyte.semantic-ocr-chunk.v3',
     semanticSchema: 'alyte.semantic-mapper.v2',
   },

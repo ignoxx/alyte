@@ -315,21 +315,46 @@ describe('protected manual Lab Record persistence', () => {
       pageCount: 1,
     });
     const artifact = { kind: 'original' as const, id: null, hash: 'original-artifact-hash' };
-    const [row] = groupObservationsIntoRows(
-      [
-        {
-          id: 'provenance-row',
-          text: 'LDL-C 3.8 mmol/L',
-          alternatives: [],
-          boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
-          pageIndex: 0,
-          orientation: 0,
-          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
-        },
-      ],
-      { aliases: [], artifact },
-    );
+    const provenanceObservations = [
+      ['provenance-label', 'LDL-C', 0.1],
+      ['provenance-value', '3.8', 0.25],
+      ['provenance-unit', 'mmol/L', 0.4],
+      ['provenance-range', '<5.0', 0.55],
+    ].map(([id, text, x], columnIndex) => ({
+      id: id as string,
+      text: text as string,
+      alternatives: [],
+      boundingBox: { x: x as number, y: 0.2, width: 0.1, height: 0.04 },
+      pageIndex: 0,
+      orientation: 0,
+      structure: {
+        kind: 'table-cell' as const,
+        tableId: 'provenance-table',
+        rowIndex: 0,
+        columnIndex,
+      },
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    }));
+    const [row] = groupObservationsIntoRows(provenanceObservations, { aliases: [], artifact });
     assert.ok(row);
+    const semanticRow = {
+      ...row,
+      source: {
+        ...row.source,
+        semantic: {
+          adapterVersion: 'synthetic.mapper.v2',
+          schemaVersion: 'alyte.semantic-mapper.v2' as const,
+          sourceObservationIds: provenanceObservations.map((observation) => observation.id),
+          sourceFieldObservationIds: {
+            label: 'provenance-label',
+            value: 'provenance-value',
+            unit: 'provenance-unit',
+            referenceInterval: 'provenance-range',
+            flag: null,
+          },
+        },
+      },
+    };
     await assert.rejects(
       repository.createExtractionDraft({
         id: 'provenance-mismatch-before-write',
@@ -361,7 +386,7 @@ describe('protected manual Lab Record persistence', () => {
       id: 'provenance-draft',
       reportId: 'report-artifact-provenance',
       collectionDate: { kind: 'missing' },
-      rows: [row],
+      rows: [semanticRow],
       sourceArtifact: artifact,
     });
 
@@ -399,6 +424,70 @@ describe('protected manual Lab Record persistence', () => {
     await assert.rejects(
       repository.getExtractionDraft(draft.id),
       /source artifact provenance does not match/,
+    );
+
+    const semanticStored = (
+      await database.getAllAsync<{ source_bbox_json: string }>(
+        'SELECT source_bbox_json FROM extraction_draft_rows WHERE draft_id = ?;',
+        draft.id,
+      )
+    )[0];
+    assert.ok(semanticStored);
+    const semanticBox = JSON.parse(semanticStored.source_bbox_json) as Record<string, any>;
+    semanticBox.artifact = artifact;
+    semanticBox.semantic.sourceFieldObservationIds.value = 'not-in-row';
+    await database.runAsync(
+      'UPDATE extraction_draft_rows SET source_bbox_json = ? WHERE draft_id = ?;',
+      JSON.stringify(semanticBox),
+      draft.id,
+    );
+    await assert.rejects(
+      repository.getExtractionDraft(draft.id),
+      /Invalid extraction semantic provenance/,
+    );
+
+    semanticBox.semantic.sourceFieldObservationIds.value = 'provenance-value';
+    semanticBox.semantic.sourceFieldObservationIds.label = 'provenance-value';
+    await database.runAsync(
+      'UPDATE extraction_draft_rows SET source_bbox_json = ? WHERE draft_id = ?;',
+      JSON.stringify(semanticBox),
+      draft.id,
+    );
+    await assert.rejects(
+      repository.getExtractionDraft(draft.id),
+      /Invalid extraction semantic provenance/,
+    );
+
+    semanticBox.semantic = {
+      adapterVersion: 'legacy.mapper.v1',
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      sourceObservationIds: ['provenance-value'],
+    };
+    await database.runAsync(
+      'UPDATE extraction_draft_rows SET source_bbox_json = ? WHERE draft_id = ?;',
+      JSON.stringify(semanticBox),
+      draft.id,
+    );
+    semanticBox.semantic.sourceObservationIds = ['invented-legacy-source'];
+    await database.runAsync(
+      'UPDATE extraction_draft_rows SET source_bbox_json = ? WHERE draft_id = ?;',
+      JSON.stringify(semanticBox),
+      draft.id,
+    );
+    await assert.rejects(
+      repository.getExtractionDraft(draft.id),
+      /Invalid extraction semantic provenance/,
+    );
+
+    semanticBox.semantic.sourceObservationIds = ['provenance-value'];
+    await database.runAsync(
+      'UPDATE extraction_draft_rows SET source_bbox_json = ? WHERE draft_id = ?;',
+      JSON.stringify(semanticBox),
+      draft.id,
+    );
+    assert.equal(
+      (await repository.getExtractionDraft(draft.id))?.rows[0]?.source.semantic?.schemaVersion,
+      'alyte.semantic-mapper.v1',
     );
     await repository.close();
   });

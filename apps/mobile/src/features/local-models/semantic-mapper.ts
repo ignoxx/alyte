@@ -215,6 +215,13 @@ export function createLocalSemanticMapper(
       parserVersion: EXTRACTION_PARSER_VERSION,
       catalogueVersion: CATALOGUE_VERSION,
     },
+    checkAvailability: () =>
+      enqueueLifecycle(async () => {
+        const state = await options.models.getState();
+        if (!canStartAutomatedExtraction(state)) {
+          throw new SemanticModelUnavailableError('The verified Gemma model pack is not installed');
+        }
+      }),
     prepare: () =>
       enqueueLifecycle(async (): Promise<ExtractionSemanticLease> => {
         const state = await options.models.getState();

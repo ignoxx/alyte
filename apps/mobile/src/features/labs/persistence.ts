@@ -324,7 +324,7 @@ function sourceLocationFromUnknown(row: {
     observationIds,
     observations,
     raw: decodeStoredRawSource(box.raw) ?? emptyRawSource,
-    semantic: decodeStoredSemantic(box.semantic),
+    semantic: decodeStoredSemantic(box.semantic, observationIds, observations),
   };
 }
 
@@ -387,16 +387,44 @@ function decodeStoredObservations(value: unknown, pageIndex: number, orientation
 
 function decodeStoredSemantic(
   value: unknown,
+  sourceObservationIds: readonly string[],
+  observations: readonly { readonly id: string }[],
 ): NonNullable<ExtractionDraftRow['source']['semantic']> | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'object') throw new Error('Invalid extraction semantic provenance');
   const item = value as Record<string, unknown>;
+  const schemaVersion = item.schemaVersion;
+  const storedIds = new Set(sourceObservationIds);
+  const observedIds = new Set(observations.map((observation) => observation.id));
   if (
     typeof item.adapterVersion !== 'string' ||
-    (item.schemaVersion !== 'alyte.semantic-mapper.v1' &&
-      item.schemaVersion !== 'alyte.semantic-mapper.v2') ||
+    (schemaVersion !== 'alyte.semantic-mapper.v1' &&
+      schemaVersion !== 'alyte.semantic-mapper.v2') ||
     !Array.isArray(item.sourceObservationIds) ||
-    item.sourceObservationIds.some((id) => typeof id !== 'string')
+    item.sourceObservationIds.length === 0 ||
+    item.sourceObservationIds.length > 24 ||
+    item.sourceObservationIds.some(
+      (id) => typeof id !== 'string' || id.length === 0 || id.length > 96,
+    ) ||
+    new Set(item.sourceObservationIds).size !== item.sourceObservationIds.length
+  )
+    throw new Error('Invalid extraction semantic provenance');
+  if (schemaVersion === 'alyte.semantic-mapper.v1' && item.sourceFieldObservationIds !== undefined)
+    throw new Error('Invalid extraction semantic provenance');
+  if (
+    schemaVersion === 'alyte.semantic-mapper.v2' &&
+    (observations.length === 0 ||
+      item.sourceObservationIds.some(
+        (id) => !storedIds.has(id as string) || !observedIds.has(id as string),
+      ))
+  )
+    throw new Error('Invalid extraction semantic provenance');
+  // v1 has no selected-field contract, but its row provenance still cannot point outside the
+  // persisted source row. Keep older rows readable when observations were not retained, while
+  // rejecting invented IDs at the same database boundary.
+  if (
+    schemaVersion === 'alyte.semantic-mapper.v1' &&
+    item.sourceObservationIds.some((id) => !storedIds.has(id as string))
   )
     throw new Error('Invalid extraction semantic provenance');
   const rawFields = item.sourceFieldObservationIds;
@@ -413,6 +441,8 @@ function decodeStoredSemantic(
     });
   if (rawFields !== undefined && !validSourceFields)
     throw new Error('Invalid extraction semantic provenance');
+  if (schemaVersion === 'alyte.semantic-mapper.v2' && !validSourceFields)
+    throw new Error('Invalid extraction semantic provenance');
   const sourceFieldObservationIds = validSourceFields
     ? (rawFields as {
         readonly label: string;
@@ -422,9 +452,23 @@ function decodeStoredSemantic(
         readonly flag: string | null;
       })
     : undefined;
+  if (sourceFieldObservationIds !== undefined) {
+    const selectedIds = [
+      sourceFieldObservationIds.label,
+      sourceFieldObservationIds.value,
+      sourceFieldObservationIds.unit,
+      sourceFieldObservationIds.referenceInterval,
+      sourceFieldObservationIds.flag,
+    ].filter((id): id is string => id !== null);
+    if (
+      new Set(selectedIds).size !== selectedIds.length ||
+      selectedIds.some((id) => !storedIds.has(id) || !observedIds.has(id))
+    )
+      throw new Error('Invalid extraction semantic provenance');
+  }
   return {
     adapterVersion: item.adapterVersion,
-    schemaVersion: item.schemaVersion,
+    schemaVersion,
     sourceObservationIds: item.sourceObservationIds as string[],
     ...(sourceFieldObservationIds === undefined ? {} : { sourceFieldObservationIds }),
     ...(typeof item.modelVersion === 'string' ? { modelVersion: item.modelVersion } : {}),
@@ -547,7 +591,7 @@ function extractionRowFromDb(row: ExtractionDraftRowDb): ExtractionDraftRow {
       observationIds,
       observations,
       raw: decodeStoredRawSource(sourceBox.raw) ?? emptyRawSource,
-      semantic: decodeStoredSemantic(sourceBox.semantic),
+      semantic: decodeStoredSemantic(sourceBox.semantic, observationIds, observations),
     },
     collectionDateContext: dateContext,
     proposedLabel: requiredString(row.proposed_label, 'extraction proposed label'),
@@ -1735,7 +1779,19 @@ export function createLabRepository(
         patch.proposedLabel !== undefined && patch.proposedBiomarkerId === undefined
           ? { ...patch, proposedBiomarkerId: proposeBiomarkerId(patch.proposedLabel, aliases) }
           : patch;
-      updated = revalidateExtractionRow(current, resolvedPatch, aliases);
+      const userEditedSemanticFields = [
+        resolvedPatch.proposedLabel,
+        resolvedPatch.proposedValue,
+        resolvedPatch.proposedUnit,
+        resolvedPatch.proposedReferenceInterval,
+        resolvedPatch.proposedFlag,
+        resolvedPatch.proposedBiomarkerId,
+        resolvedPatch.proposedSpecimenType,
+      ].some((value) => value !== undefined);
+      const revalidated = revalidateExtractionRow(current, resolvedPatch, aliases);
+      updated = userEditedSemanticFields
+        ? { ...revalidated, source: { ...revalidated.source, semantic: null } }
+        : revalidated;
       const next = updated;
       await database.runAsync(
         `UPDATE extraction_draft_rows SET proposed_label = ?, proposed_value_json = ?,
@@ -1756,6 +1812,20 @@ export function createLabRepository(
         next.decision,
         row.id,
       );
+      if (userEditedSemanticFields) {
+        await database.runAsync(
+          'UPDATE extraction_draft_rows SET source_bbox_json = ? WHERE id = ?;',
+          JSON.stringify({
+            ...next.source.boundingBox,
+            observationIds: next.source.observationIds,
+            observations: next.source.observations ?? [],
+            raw: next.source.raw ?? null,
+            artifact: next.source.artifact ?? null,
+            semantic: null,
+          }),
+          row.id,
+        );
+      }
       await database.runAsync(
         'UPDATE extraction_drafts SET updated_at = ? WHERE id = ?;',
         now(),

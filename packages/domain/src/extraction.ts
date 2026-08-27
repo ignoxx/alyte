@@ -1,12 +1,18 @@
 import type { CanonicalId } from './index';
 import { parseLocaleDecimal } from './labs';
-import type { LabSourceArtifact, MeasurementValue, SpecimenType, LabDateState } from './labs';
+import type {
+  LabSourceArtifact,
+  MeasurementSnapshot,
+  MeasurementValue,
+  SpecimenType,
+  LabDateState,
+} from './labs';
 import { normalizeAlias } from './text';
 
 export { normalizeAlias } from './text';
 
 export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.document.v2' as const;
-export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v3' as const;
+export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v4' as const;
 
 const NUMERIC_TOKEN_PATTERN =
   '[<>≤≥]?\\s*[+-]?(?:(?:\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)|(?:\\d+(?:[.,]\\d+)?)|(?:\\.\\d+))';
@@ -249,6 +255,30 @@ export type ExtractionSemanticCandidateRow = {
   readonly observations: readonly VisionTextObservation[];
 };
 
+/**
+ * The one compact key mapping shared by the production serializer and response validator. The
+ * row sort and observation order are deterministic so a response cannot address a different
+ * physical cell merely because one side of the contract assigned keys differently.
+ */
+export type ExtractionSemanticWireRow = {
+  readonly row: ExtractionSemanticCandidateRow;
+  readonly rowKey: string;
+  readonly cellIds: ReadonlyMap<string, string>;
+};
+
+export function mapExtractionSemanticWireRows(
+  candidateRows: readonly ExtractionSemanticCandidateRow[],
+): readonly ExtractionSemanticWireRow[] {
+  return candidateRows
+    .slice()
+    .sort((left, right) => left.rowId.localeCompare(right.rowId))
+    .map((row, rowIndex) => ({
+      row,
+      rowKey: `r${rowIndex}`,
+      cellIds: new Map(row.observations.map((observation, index) => [`c${index}`, observation.id])),
+    }));
+}
+
 export type ExtractionSemanticProvenance = NonNullable<ExtractionSourceLocation['semantic']>;
 
 /**
@@ -276,6 +306,8 @@ export interface ExtractionSemanticMapper {
   readonly maxRowsPerChunk?: number;
   /** Maximum OCR observations in one model request, including every cell in those rows. */
   readonly maxObservationsPerChunk?: number;
+  /** Checks the verified pack before OCR. Post-OCR failures must fall back to deterministic rows. */
+  readonly checkAvailability?: () => Promise<void>;
   /** Optional production gate. A successful prepare returns an extraction-scoped runtime lease. */
   readonly prepare?: () => Promise<ExtractionSemanticLease>;
   readonly provenance?: Readonly<
@@ -333,25 +365,6 @@ function candidateRowsFromInput(
   return input as readonly ExtractionSemanticCandidateRow[];
 }
 
-type SemanticWireRow = {
-  readonly row: ExtractionSemanticCandidateRow;
-  readonly rowKey: string;
-  readonly cellIds: ReadonlyMap<string, string>;
-};
-
-function semanticWireRows(
-  candidateRows: readonly ExtractionSemanticCandidateRow[],
-): readonly SemanticWireRow[] {
-  return candidateRows
-    .slice()
-    .sort((left, right) => left.rowId.localeCompare(right.rowId))
-    .map((row, rowIndex) => ({
-      row,
-      rowKey: `r${rowIndex}`,
-      cellIds: new Map(row.observations.map((observation, index) => [`c${index}`, observation.id])),
-    }));
-}
-
 /** Rejects model output unless it refers only to exact local rows and known catalogue IDs. */
 export function validateSemanticProposals(
   input: unknown,
@@ -394,7 +407,7 @@ export function validateSemanticProposals(
     rowBySourceIds.set(JSON.stringify(row.sourceObservationIds), row);
   }
   const biomarkerIds = new Set(aliases.map((item) => item.id));
-  const wireRows = semanticWireRows(candidateRows);
+  const wireRows = mapExtractionSemanticWireRows(candidateRows);
   const wireRowsByKey = new Map(wireRows.map((item) => [item.rowKey, item]));
   const parsed = proposals.flatMap((item) => {
     if (typeof item !== 'object' || item === null) return [];
@@ -524,6 +537,9 @@ export function validateSemanticProposals(
           ? value.role
           : null;
     if (role === null) return [];
+    // A model cannot prove that a physical OCR row is not a Measurement. Keep this role in the
+    // legacy decoder for compatibility, but make production semantics an explicit no-op.
+    if (role === 'ignore') return [];
     if (role === 'measurement' && proposedBiomarkerId === null) return [];
     if (role !== undefined && role !== 'measurement' && proposedBiomarkerId !== null) return [];
     if (compact && (role === 'measurement' || role === 'preserve') && sourceFields === undefined)
@@ -1386,6 +1402,19 @@ function selectedObservationText(row: ExtractionDraftRow, id: string | null): st
   return row.source.observations?.find((observation) => observation.id === id)?.text.trim() ?? null;
 }
 
+const CATEGORICAL_VALUE_PATTERN =
+  /^(?:not detected|positive|negative|detected|normal|abnormal|teigiamas|neigiamas|aptikta|neaptikta|positiv|negativ)$/iu;
+
+function parseSelectedMeasurementValue(input: string): MeasurementValue | null {
+  const value = input.trim();
+  if (CATEGORICAL_VALUE_PATTERN.test(value)) return { kind: 'categorical', value };
+  // A selected value must be a complete scalar cell. In particular, do not accept a numeric
+  // prefix from a cell that also contains a unit, reference range, date, or metadata text.
+  if (!new RegExp(`^${NUMERIC_TOKEN_PATTERN}\\s*$`, 'u').test(value)) return null;
+  const parsed = parseComparatorValue(value);
+  return parsed?.kind === 'numeric' || parsed?.kind === 'bounded' ? parsed : null;
+}
+
 /**
  * Rebuilds source-shaped fields from the exact OCR cells selected by the semantic mapper. The
  * complete source row, raw fields, and every OCR observation remain untouched; only the proposed
@@ -1403,24 +1432,54 @@ export function reparseExtractionRowFromSemanticFields(
   const referenceInterval = selectedObservationText(row, sourceFields.referenceInterval);
   const flag = selectedObservationText(row, sourceFields.flag);
   if (label === null || value === null) throw new Error('semantic-source-field-missing');
-  const parsedValue =
-    parseComparatorValue(value) ??
-    (/^(?:not detected|positive|negative|detected|normal|abnormal|teigiamas|neigiamas|aptikta|neaptikta|positiv|negativ)$/iu.test(
-      value,
-    )
-      ? { kind: 'categorical' as const, value }
-      : { kind: 'free_text' as const, value });
+  const sourceCellIndex = (id: string | null): number | null => {
+    if (id === null) return null;
+    const index = row.source.observations?.findIndex((observation) => observation.id === id) ?? -1;
+    return index < 0 ? null : index;
+  };
+  const labelIndex = sourceCellIndex(sourceFields.label);
+  const valueIndex = sourceCellIndex(sourceFields.value);
+  const unitIndex = sourceCellIndex(sourceFields.unit);
+  const referenceIndex = sourceCellIndex(sourceFields.referenceInterval);
+  if (
+    labelIndex === null ||
+    valueIndex === null ||
+    valueIndex <= labelIndex ||
+    (unitIndex !== null && valueIndex >= unitIndex) ||
+    (referenceIndex !== null && valueIndex >= referenceIndex)
+  )
+    throw new Error('semantic-source-field-order-invalid');
+  const parsedValue = parseSelectedMeasurementValue(value);
+  if (parsedValue === null) throw new Error('semantic-source-value-unparseable');
+  if (referenceInterval !== null && parseReferenceInterval(referenceInterval) === null)
+    throw new Error('semantic-source-reference-unparseable');
   const next: ExtractionDraftRow = {
     ...row,
     proposedLabel: label,
     proposedValue: parsedValue,
     proposedUnit: normalizeUnit(unit),
-    // Keep the exact selected text so revalidation can surface an invalid interval instead of
-    // silently converting it to null.
     proposedReferenceInterval: referenceInterval,
     proposedFlag: flag,
   };
   return revalidateExtractionRow(next, {}, aliases, { sourceFields });
+}
+
+function extractedSnapshotFromSemanticRow(row: ExtractionDraftRow): MeasurementSnapshot | null {
+  const fields = row.source.semantic?.sourceFieldObservationIds;
+  if (fields === undefined) return null;
+  const value = selectedObservationText(row, fields.value);
+  const label = selectedObservationText(row, fields.label);
+  if (value === null || label === null) return null;
+  const parsedValue = parseSelectedMeasurementValue(value);
+  if (parsedValue === null) return null;
+  return {
+    label,
+    value: parsedValue,
+    valueString: value,
+    unit: row.proposedUnit,
+    referenceInterval: row.proposedReferenceInterval,
+    flag: row.proposedFlag,
+  };
 }
 
 export function revalidateExtractionRow(
@@ -1500,7 +1559,8 @@ export function revalidateExtractionRow(
       reasons.add('unparseable-reference-interval');
   }
   const reviewReasons = [...reasons];
-  const wasExplicitlySkipped = row.decision === 'skip' && patch.decision === undefined;
+  const wasExplicitlySkipped =
+    options.sourceFields === undefined && row.decision === 'skip' && patch.decision === undefined;
   return {
     ...next,
     proposedBiomarkerId: id,
@@ -1541,6 +1601,15 @@ export function buildExtractionConfirmationPlan(
       };
       groups.set(key, group);
     }
+    const semanticSnapshot = extractedSnapshotFromSemanticRow(row);
+    const original = semanticSnapshot ?? {
+      label: row.sourceLabel,
+      value: row.sourceValue,
+      valueString: row.sourceValueString,
+      unit: row.sourceUnit,
+      referenceInterval: row.sourceReferenceInterval,
+      flag: row.sourceFlag,
+    };
     group.measurements.push({
       id: ids.measurement(row.id),
       biomarkerId: row.proposedBiomarkerId,
@@ -1557,22 +1626,16 @@ export function buildExtractionConfirmationPlan(
       referenceInterval: row.proposedReferenceInterval,
       flag: row.proposedFlag,
       source: row.source,
-      original: {
-        label: row.sourceLabel,
-        value: row.sourceValue,
-        valueString: row.sourceValueString,
-        unit: row.sourceUnit,
-        referenceInterval: row.sourceReferenceInterval,
-        flag: row.sourceFlag,
-      },
+      original,
       sourceRowId: row.id,
       reviewState: row.reviewState === 'ready' ? 'confirmed' : 'needs-review',
       provenance:
-        row.proposedLabel !== row.sourceLabel ||
-        JSON.stringify(row.proposedValue) !== JSON.stringify(row.sourceValue) ||
-        row.proposedUnit !== row.sourceUnit ||
-        row.proposedReferenceInterval !== row.sourceReferenceInterval ||
-        row.proposedFlag !== row.sourceFlag
+        semanticSnapshot === null &&
+        (row.proposedLabel !== row.sourceLabel ||
+          JSON.stringify(row.proposedValue) !== JSON.stringify(row.sourceValue) ||
+          row.proposedUnit !== row.sourceUnit ||
+          row.proposedReferenceInterval !== row.sourceReferenceInterval ||
+          row.proposedFlag !== row.sourceFlag)
           ? 'user-corrected'
           : 'extracted',
     });
