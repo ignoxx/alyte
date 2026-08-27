@@ -42,6 +42,10 @@ import {
 import { createSharedDatabaseRepositoryFactories } from './shared-database';
 import { createCloudAccountService, type CloudAccountService } from '../features/account/service';
 import { CloudApiClient } from '../features/account/cloud-api';
+import {
+  createCloudCommerceService,
+  type CloudCommerceService,
+} from '../features/commerce/service';
 
 export interface AlyteServices {
   readonly runtime: AlyteRuntime;
@@ -54,6 +58,7 @@ export interface AlyteServices {
   readonly controls: LocalControlsService;
   readonly models: LocalModelService;
   readonly account: CloudAccountService;
+  readonly commerce: CloudCommerceService;
 }
 
 export type ServicesCompositionOptions = {
@@ -65,6 +70,8 @@ export type ServicesCompositionOptions = {
   readonly intakeMediaStore?: IntakeMediaStore;
   /** Optional test seam for the account boundary; it never shares the local database. */
   readonly account?: CloudAccountService;
+  /** Optional test seam for the explicit cloud commerce surface. */
+  readonly commerce?: CloudCommerceService;
 };
 
 export function runtimeVariant(): RuntimeVariant {
@@ -118,6 +125,11 @@ export function createServices(
           ? new CloudApiClient({ requireHttps: true })
           : new CloudApiClient({ baseUrl: null }),
     });
+  const commerce =
+    options.commerce ??
+    createCloudCommerceService({
+      account,
+    });
 
   if (showcase !== null) {
     void seedShowcaseLabRecords(labs);
@@ -138,6 +150,7 @@ export function createServices(
     controls,
     models,
     account,
+    commerce,
   };
 }
 

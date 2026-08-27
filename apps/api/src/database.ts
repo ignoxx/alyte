@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 export const SESSION_RETENTION_MS = 24 * 60 * 60 * 1_000;
 export const OPERATION_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -60,6 +60,54 @@ export interface AppleExchangeReplayTombstoneRow {
   readonly credential_hash: string;
   readonly nonce_digest: string;
   readonly expires_at: string;
+}
+
+export type CommercePlanId = 'starter_pack' | 'cloud_plus' | 'cloud_max';
+export type CommerceAllowanceKind = 'snap' | 'report';
+export type CommerceEntitlementStatus = 'pending' | 'active' | 'exhausted' | 'expired' | 'revoked';
+export type CommerceLedgerEntryType = 'grant' | 'reserve' | 'release' | 'consume';
+
+export interface CommerceEntitlementRow {
+  readonly account_id: string;
+  readonly plan_id: CommercePlanId;
+  readonly product_id: string;
+  readonly status: CommerceEntitlementStatus;
+  readonly will_renew: number;
+  readonly period_start: string | null;
+  readonly period_end: string | null;
+  readonly management_url: string | null;
+  readonly updated_at: string;
+}
+
+export interface CommercePurchaseRow {
+  readonly account_id: string;
+  readonly transaction_id: string;
+  readonly product_id: string;
+  readonly plan_id: CommercePlanId;
+  readonly purchase_type: 'starter' | 'subscription';
+  readonly purchased_at: string;
+  readonly period_start: string | null;
+  readonly period_end: string | null;
+  readonly created_at: string;
+}
+
+export interface CommerceWebhookEventRow {
+  readonly event_id: string;
+  readonly event_type: string;
+  readonly received_at: string;
+  readonly processed_at: string | null;
+  readonly outcome: 'processed' | 'ignored' | 'rejected';
+}
+
+export interface AllowanceLedgerRow {
+  readonly id: string;
+  readonly account_id: string;
+  readonly kind: CommerceAllowanceKind;
+  readonly entry_type: CommerceLedgerEntryType;
+  readonly units: number;
+  readonly source_id: string;
+  readonly period_end: string | null;
+  readonly created_at: string;
 }
 
 export interface SessionExportRow {
@@ -169,6 +217,65 @@ const migrations: readonly string[] = [
     );
     CREATE UNIQUE INDEX IF NOT EXISTS apple_exchange_replay_tombstones_credential_idx
       ON apple_exchange_replay_tombstones(credential_hash);
+  `,
+  `
+    CREATE TABLE commerce_entitlements (
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      plan_id TEXT NOT NULL CHECK (plan_id IN ('starter_pack', 'cloud_plus', 'cloud_max')),
+      product_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'active', 'exhausted', 'expired', 'revoked')),
+      will_renew INTEGER NOT NULL CHECK (will_renew IN (0, 1)),
+      period_start TEXT,
+      period_end TEXT,
+      management_url TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (account_id, plan_id)
+    );
+    CREATE INDEX commerce_entitlements_active_idx
+      ON commerce_entitlements(account_id, status, period_end);
+
+    CREATE TABLE commerce_purchase_claims (
+      transaction_id TEXT PRIMARY KEY NOT NULL,
+      product_id TEXT NOT NULL,
+      claimed_at TEXT NOT NULL
+    );
+
+    CREATE TABLE commerce_purchases (
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      transaction_id TEXT NOT NULL UNIQUE,
+      product_id TEXT NOT NULL,
+      plan_id TEXT NOT NULL CHECK (plan_id IN ('starter_pack', 'cloud_plus', 'cloud_max')),
+      purchase_type TEXT NOT NULL CHECK (purchase_type IN ('starter', 'subscription')),
+      purchased_at TEXT NOT NULL,
+      period_start TEXT,
+      period_end TEXT,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (account_id, transaction_id)
+    );
+    CREATE INDEX commerce_purchases_account_idx ON commerce_purchases(account_id, purchased_at);
+
+    CREATE TABLE commerce_webhook_events (
+      event_id TEXT PRIMARY KEY NOT NULL,
+      event_type TEXT NOT NULL,
+      received_at TEXT NOT NULL,
+      processed_at TEXT,
+      outcome TEXT NOT NULL CHECK (outcome IN ('processed', 'ignored', 'rejected'))
+    );
+
+    CREATE TABLE allowance_ledger (
+      id TEXT PRIMARY KEY NOT NULL,
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('snap', 'report')),
+      entry_type TEXT NOT NULL CHECK (entry_type IN ('grant', 'reserve', 'release', 'consume')),
+      units INTEGER NOT NULL CHECK (units > 0),
+      source_id TEXT NOT NULL,
+      period_end TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX allowance_ledger_source_idx
+      ON allowance_ledger(account_id, kind, entry_type, source_id);
+    CREATE INDEX allowance_ledger_account_idx
+      ON allowance_ledger(account_id, kind, created_at);
   `,
 ];
 
@@ -571,5 +678,196 @@ export class AccountDatabase {
       )
       .run(accountId);
     this.sqlite.prepare('DELETE FROM accounts WHERE id = ?').run(accountId);
+  }
+
+  listCommerceEntitlements(accountId: string): readonly CommerceEntitlementRow[] {
+    return this.sqlite
+      .prepare(
+        `SELECT account_id, plan_id, product_id, status, will_renew, period_start, period_end,
+                management_url, updated_at
+         FROM commerce_entitlements WHERE account_id = ? ORDER BY plan_id ASC`,
+      )
+      .all(accountId) as CommerceEntitlementRow[];
+  }
+
+  upsertCommerceEntitlement(entitlement: CommerceEntitlementRow): void {
+    this.sqlite
+      .prepare(
+        `INSERT INTO commerce_entitlements
+          (account_id, plan_id, product_id, status, will_renew, period_start, period_end,
+           management_url, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(account_id, plan_id) DO UPDATE SET
+           product_id = excluded.product_id,
+           status = excluded.status,
+           will_renew = excluded.will_renew,
+           period_start = excluded.period_start,
+           period_end = excluded.period_end,
+           management_url = excluded.management_url,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        entitlement.account_id,
+        entitlement.plan_id,
+        entitlement.product_id,
+        entitlement.status,
+        entitlement.will_renew,
+        entitlement.period_start,
+        entitlement.period_end,
+        entitlement.management_url,
+        entitlement.updated_at,
+      );
+  }
+
+  expireCommerceSubscriptions(
+    accountId: string,
+    keepProductIds: readonly string[],
+    now: string,
+  ): void {
+    const keep =
+      keepProductIds.length > 0
+        ? ` AND product_id NOT IN (${keepProductIds.map(() => '?').join(', ')})`
+        : '';
+    this.sqlite
+      .prepare(
+        `UPDATE commerce_entitlements
+         SET status = 'expired', will_renew = 0, updated_at = ?
+         WHERE account_id = ? AND plan_id <> 'starter_pack' AND status IN ('active', 'pending')${keep}`,
+      )
+      .run(now, accountId, ...keepProductIds);
+  }
+
+  recordCommercePurchase(purchase: CommercePurchaseRow): void {
+    this.sqlite
+      .prepare(
+        `INSERT INTO commerce_purchases
+          (account_id, transaction_id, product_id, plan_id, purchase_type, purchased_at,
+           period_start, period_end, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(transaction_id) DO NOTHING`,
+      )
+      .run(
+        purchase.account_id,
+        purchase.transaction_id,
+        purchase.product_id,
+        purchase.plan_id,
+        purchase.purchase_type,
+        purchase.purchased_at,
+        purchase.period_start,
+        purchase.period_end,
+        purchase.created_at,
+      );
+  }
+
+  listCommercePurchases(accountId: string): readonly CommercePurchaseRow[] {
+    return this.sqlite
+      .prepare(
+        'SELECT * FROM commerce_purchases WHERE account_id = ? ORDER BY purchased_at ASC, transaction_id ASC',
+      )
+      .all(accountId) as CommercePurchaseRow[];
+  }
+
+  claimCommercePurchase(transactionId: string, productId: string, claimedAt: string): boolean {
+    return (
+      this.sqlite
+        .prepare(
+          `INSERT INTO commerce_purchase_claims (transaction_id, product_id, claimed_at)
+           VALUES (?, ?, ?) ON CONFLICT(transaction_id) DO NOTHING`,
+        )
+        .run(transactionId, productId, claimedAt).changes > 0
+    );
+  }
+
+  findCommerceWebhookEvent(eventId: string): CommerceWebhookEventRow | undefined {
+    return this.sqlite
+      .prepare('SELECT * FROM commerce_webhook_events WHERE event_id = ?')
+      .get(eventId) as CommerceWebhookEventRow | undefined;
+  }
+
+  recordCommerceWebhookEvent(event: CommerceWebhookEventRow): void {
+    this.sqlite
+      .prepare(
+        `INSERT INTO commerce_webhook_events
+          (event_id, event_type, received_at, processed_at, outcome)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(event_id) DO NOTHING`,
+      )
+      .run(event.event_id, event.event_type, event.received_at, event.processed_at, event.outcome);
+  }
+
+  updateCommerceWebhookEvent(
+    eventId: string,
+    processedAt: string,
+    outcome: CommerceWebhookEventRow['outcome'],
+  ): void {
+    this.sqlite
+      .prepare(
+        'UPDATE commerce_webhook_events SET processed_at = ?, outcome = ? WHERE event_id = ?',
+      )
+      .run(processedAt, outcome, eventId);
+  }
+
+  listAllowanceLedger(
+    accountId: string,
+    kind?: CommerceAllowanceKind,
+  ): readonly AllowanceLedgerRow[] {
+    if (kind === undefined) {
+      return this.sqlite
+        .prepare(
+          'SELECT * FROM allowance_ledger WHERE account_id = ? ORDER BY created_at ASC, id ASC',
+        )
+        .all(accountId) as AllowanceLedgerRow[];
+    }
+    return this.sqlite
+      .prepare(
+        'SELECT * FROM allowance_ledger WHERE account_id = ? AND kind = ? ORDER BY created_at ASC, id ASC',
+      )
+      .all(accountId, kind) as AllowanceLedgerRow[];
+  }
+
+  findAllowanceLedgerEntry(
+    accountId: string,
+    kind: CommerceAllowanceKind,
+    entryType: CommerceLedgerEntryType,
+    sourceId: string,
+  ): AllowanceLedgerRow | undefined {
+    return this.sqlite
+      .prepare(
+        `SELECT * FROM allowance_ledger
+         WHERE account_id = ? AND kind = ? AND entry_type = ? AND source_id = ?`,
+      )
+      .get(accountId, kind, entryType, sourceId) as AllowanceLedgerRow | undefined;
+  }
+
+  findAllowanceReservation(requestId: string): AllowanceLedgerRow | undefined {
+    return this.sqlite
+      .prepare(
+        `SELECT * FROM allowance_ledger
+         WHERE entry_type = 'reserve' AND source_id = ?
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(requestId) as AllowanceLedgerRow | undefined;
+  }
+
+  addAllowanceLedgerEntry(entry: AllowanceLedgerRow): boolean {
+    return (
+      this.sqlite
+        .prepare(
+          `INSERT INTO allowance_ledger
+            (id, account_id, kind, entry_type, units, source_id, period_end, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account_id, kind, entry_type, source_id)
+           DO NOTHING`,
+        )
+        .run(
+          entry.id,
+          entry.account_id,
+          entry.kind,
+          entry.entry_type,
+          entry.units,
+          entry.source_id,
+          entry.period_end,
+          entry.created_at,
+        ).changes > 0
+    );
   }
 }

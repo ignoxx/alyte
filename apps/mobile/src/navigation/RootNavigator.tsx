@@ -30,6 +30,7 @@ import { ExtractionProgressScreen } from '../features/labs/ExtractionProgressScr
 import { FullExportScreen } from '../features/settings/FullExportScreen';
 import { LocalModelInstallScreen } from '../features/onboarding/LocalModelInstallScreen';
 import { LabRecordFormRoute } from '../features/labs/LabRecordFormRoute';
+import { CloudPaywallScreen } from '../features/commerce/CloudPaywallScreen';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 type ExtractionEditorStackParamList = Pick<
@@ -238,6 +239,16 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
         <RootStack.Screen name="MainTabs">
           {() => <MainTabNavigator extensions={extensions} services={services} />}
         </RootStack.Screen>
+        <RootStack.Screen
+          name="CloudPaywall"
+          component={CloudPaywallScreen}
+          options={{
+            presentation: 'fullScreenModal',
+            headerShown: true,
+            title: t('settings.cloudPlans'),
+            headerLargeTitle: false,
+          }}
+        />
         <RootStack.Screen
           name="ModelInstall"
           component={LocalModelInstallScreen}

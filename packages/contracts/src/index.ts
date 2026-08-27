@@ -12,6 +12,99 @@ export const APPLE_RAW_NONCE_LENGTH = 32;
 /** Breaking nonce-bound Apple exchange protocol; shared by the mobile and backend adapters. */
 export const APPLE_EXCHANGE_PATH = '/v2/auth/apple/exchange';
 
+/** Cloud commerce routes are versioned separately from the identity exchange. */
+export const CLOUD_ALLOWANCES_PATH = '/v1/cloud/allowances';
+export const CLOUD_ALLOWANCES_RECONCILE_PATH = '/v1/cloud/allowances/reconcile';
+export const REVENUECAT_WEBHOOK_PATH = '/v1/webhooks/revenuecat';
+
+export const CLOUD_PRODUCT_IDS = {
+  starterPack: 'alyte_starter_pack',
+  cloudPlusMonthly: 'alyte_cloud_plus_monthly',
+  cloudPlusAnnual: 'alyte_cloud_plus_annual',
+  cloudMaxMonthly: 'alyte_cloud_max_monthly',
+  cloudMaxAnnual: 'alyte_cloud_max_annual',
+} as const;
+
+export const CLOUD_ENTITLEMENT_IDS = {
+  cloudPlus: 'alyte_cloud_plus',
+  cloudMax: 'alyte_cloud_max',
+} as const;
+
+/** Provisional launch offers. StoreKit supplies the localized display price at runtime. */
+export const CLOUD_PLAN_OFFERS = [
+  {
+    planId: 'starter_pack',
+    productId: CLOUD_PRODUCT_IDS.starterPack,
+    price: 'EUR 0.99',
+    snapAllowance: 5,
+    reportAllowance: 1,
+    recurring: false,
+  },
+  {
+    planId: 'cloud_plus',
+    productId: CLOUD_PRODUCT_IDS.cloudPlusMonthly,
+    annualProductId: CLOUD_PRODUCT_IDS.cloudPlusAnnual,
+    price: 'EUR 6.99/month',
+    annualPrice: 'EUR 59.99/year',
+    snapAllowance: 500,
+    reportAllowance: 4,
+    recurring: true,
+  },
+  {
+    planId: 'cloud_max',
+    productId: CLOUD_PRODUCT_IDS.cloudMaxMonthly,
+    annualProductId: CLOUD_PRODUCT_IDS.cloudMaxAnnual,
+    price: 'EUR 12.99/month',
+    annualPrice: 'EUR 109.99/year',
+    snapAllowance: 1_500,
+    reportAllowance: 12,
+    recurring: true,
+  },
+] as const;
+
+export type CloudProductId = (typeof CLOUD_PRODUCT_IDS)[keyof typeof CLOUD_PRODUCT_IDS];
+export type CloudPlanId = 'starter_pack' | 'cloud_plus' | 'cloud_max';
+export type CloudAllowanceKind = 'snap' | 'report';
+export type CloudEntitlementStatus = 'pending' | 'active' | 'exhausted' | 'expired' | 'revoked';
+export type CloudAllowanceWarning = 'normal' | 'near-limit' | 'critical' | 'exhausted';
+
+export interface CloudAllowanceSummary {
+  readonly kind: CloudAllowanceKind;
+  readonly included: number;
+  readonly consumed: number;
+  readonly reserved: number;
+  readonly remaining: number;
+  readonly warning: CloudAllowanceWarning;
+  /** Null for non-expiring Starter Pack units. */
+  readonly resetAt: string | null;
+}
+
+export interface CloudEntitlementSummary {
+  readonly planId: CloudPlanId;
+  readonly productId: CloudProductId;
+  readonly status: CloudEntitlementStatus;
+  readonly willRenew: boolean;
+  readonly periodStart: string | null;
+  readonly periodEnd: string | null;
+}
+
+export interface CloudAllowanceResponse {
+  readonly accountId: string;
+  readonly entitlements: readonly CloudEntitlementSummary[];
+  readonly allowances: readonly CloudAllowanceSummary[];
+  readonly managementUrl: string | null;
+  readonly generatedAt: string;
+}
+
+export interface CloudReconcileResponse extends CloudAllowanceResponse {
+  readonly reconciled: boolean;
+}
+
+export interface RevenueCatWebhookResponse {
+  readonly accepted: true;
+  readonly processed: boolean;
+}
+
 export function isValidAppleRawNonce(value: unknown): value is string {
   return (
     typeof value === 'string' &&

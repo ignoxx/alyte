@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { APPLE_EXCHANGE_PATH, CONSENT_POLICY_VERSION } from '@alyte/contracts';
+import {
+  APPLE_EXCHANGE_PATH,
+  CLOUD_ALLOWANCES_PATH,
+  CLOUD_ALLOWANCES_RECONCILE_PATH,
+  CLOUD_PRODUCT_IDS,
+  CONSENT_POLICY_VERSION,
+} from '@alyte/contracts';
 import {
   CloudApiClient,
   CloudApiError,
   MAX_ACCOUNT_EXPORT_ITEMS,
   MAX_RESPONSE_BODY_BYTES,
   decodeAccountExport,
+  decodeCloudAllowanceResponse,
 } from './cloud-api';
 
 function sessionResponse() {
@@ -175,5 +182,71 @@ describe('cloud HTTP adapter', () => {
       assert.equal(error.code, 'request_timeout');
       return true;
     });
+  });
+
+  it('decodes separate cloud allowances and keeps malformed commerce data bounded', async () => {
+    const payload = {
+      accountId: 'account-1',
+      entitlements: [
+        {
+          planId: 'cloud_plus',
+          productId: CLOUD_PRODUCT_IDS.cloudPlusMonthly,
+          status: 'active',
+          willRenew: true,
+          periodStart: '2026-08-01T00:00:00.000Z',
+          periodEnd: '2026-09-01T00:00:00.000Z',
+        },
+      ],
+      allowances: [
+        {
+          kind: 'snap',
+          included: 500,
+          consumed: 2,
+          reserved: 1,
+          remaining: 497,
+          warning: 'normal',
+          resetAt: '2026-09-01T00:00:00.000Z',
+        },
+        {
+          kind: 'report',
+          included: 4,
+          consumed: 0,
+          reserved: 0,
+          remaining: 4,
+          warning: 'normal',
+          resetAt: '2026-09-01T00:00:00.000Z',
+        },
+      ],
+      managementUrl: null,
+      generatedAt: '2026-08-27T12:00:00.000Z',
+      reconciled: true,
+    };
+    const decoded = decodeCloudAllowanceResponse(payload, true);
+    assert.equal(decoded.allowances.find((item) => item.kind === 'snap')?.remaining, 497);
+    assert.equal('reconciled' in decoded && decoded.reconciled, true);
+    assert.throws(
+      () =>
+        decodeCloudAllowanceResponse(
+          { ...payload, allowances: [{ ...payload.allowances[0], remaining: -1 }] },
+          false,
+        ),
+      (error: unknown) =>
+        error instanceof CloudApiError && error.code === 'invalid_allowance_remaining',
+    );
+
+    const requests: string[] = [];
+    const client = new CloudApiClient({
+      baseUrl: 'https://api.example.test',
+      fetchImpl: async (input) => {
+        requests.push(String(input));
+        return new Response(JSON.stringify(payload), { status: 200 });
+      },
+    });
+    await client.getAllowanceSummary?.('access-token');
+    await client.reconcileAllowances?.('access-token');
+    assert.deepEqual(requests, [
+      `https://api.example.test${CLOUD_ALLOWANCES_PATH}`,
+      `https://api.example.test${CLOUD_ALLOWANCES_RECONCILE_PATH}`,
+    ]);
   });
 });

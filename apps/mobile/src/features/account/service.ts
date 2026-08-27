@@ -1,5 +1,7 @@
 import {
   CONTRACT_VERSION,
+  type CloudAllowanceResponse,
+  type CloudReconcileResponse,
   type AccountExportResponse,
   type SessionResponse,
 } from '@alyte/contracts';
@@ -63,6 +65,8 @@ export type CloudAccountService = {
   readonly prepareAccountExport: (signal?: AbortSignal) => Promise<PreparedCloudAccountExport>;
   readonly signOut: () => Promise<void>;
   readonly deleteAccount: (idempotencyKey?: string) => Promise<void>;
+  readonly getAllowanceSummary: () => Promise<CloudAllowanceResponse>;
+  readonly reconcileAllowances: () => Promise<CloudReconcileResponse>;
 };
 
 export type CloudAccountServiceOptions = {
@@ -366,6 +370,26 @@ export function createCloudAccountService(
     return result;
   }
 
+  async function getAllowanceSummary(): Promise<CloudAllowanceResponse> {
+    if (api.getAllowanceSummary === undefined) {
+      throw new CloudApiError(503, 'cloud_allowances_unavailable');
+    }
+    const result = await withAccess((accessToken) => api.getAllowanceSummary!(accessToken));
+    accountId = result.accountId;
+    publish('active', null);
+    return result;
+  }
+
+  async function reconcileAllowances(): Promise<CloudReconcileResponse> {
+    if (api.reconcileAllowances === undefined) {
+      throw new CloudApiError(503, 'cloud_allowances_unavailable');
+    }
+    const result = await withAccess((accessToken) => api.reconcileAllowances!(accessToken));
+    accountId = result.accountId;
+    publish('active', null);
+    return result;
+  }
+
   async function prepareAccountExport(signal?: AbortSignal): Promise<PreparedCloudAccountExport> {
     const account = await exportAccount(signal);
     const serialized = JSON.stringify({ contractVersion: CONTRACT_VERSION, account });
@@ -469,6 +493,8 @@ export function createCloudAccountService(
     prepareAccountExport,
     signOut,
     deleteAccount,
+    getAllowanceSummary,
+    reconcileAllowances,
   };
 }
 

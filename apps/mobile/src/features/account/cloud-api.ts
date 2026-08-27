@@ -1,6 +1,15 @@
 import {
   APPLE_EXCHANGE_PATH,
+  CLOUD_ALLOWANCES_PATH,
+  CLOUD_ALLOWANCES_RECONCILE_PATH,
   CONSENT_POLICY_VERSION,
+  CLOUD_PRODUCT_IDS,
+  type CloudAllowanceKind,
+  type CloudAllowanceResponse,
+  type CloudAllowanceWarning,
+  type CloudEntitlementStatus,
+  type CloudPlanId,
+  type CloudReconcileResponse,
   type AccountAuditEvent,
   type AccountConsent,
   type AccountDeletionResponse,
@@ -67,6 +76,14 @@ export type CloudApi = {
     idempotencyKey?: string,
     signal?: AbortSignal,
   ) => Promise<AccountDeletionResponse>;
+  readonly getAllowanceSummary?: (
+    accessToken: string,
+    signal?: AbortSignal,
+  ) => Promise<CloudAllowanceResponse>;
+  readonly reconcileAllowances?: (
+    accessToken: string,
+    signal?: AbortSignal,
+  ) => Promise<CloudReconcileResponse>;
 };
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -82,6 +99,7 @@ export type CloudApiClientOptions = {
 const defaultFetch: FetchLike = (input, init) => fetch(input, init);
 export const MAX_RESPONSE_BODY_BYTES = 256 * 1024;
 export const MAX_ACCOUNT_EXPORT_ITEMS = 512;
+export const MAX_CLOUD_ALLOWANCE_ITEMS = 32;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_REQUEST_TIMEOUT_MS = 120_000;
 
@@ -249,6 +267,106 @@ export function decodeAccountExport(value: unknown): AccountExportResponse {
   };
 }
 
+function decodeAllowanceKind(value: unknown): CloudAllowanceKind {
+  if (value === 'snap' || value === 'report') return value;
+  throw new CloudApiError(502, 'invalid_allowance_kind');
+}
+
+function decodeWarning(value: unknown): CloudAllowanceWarning {
+  if (
+    value === 'normal' ||
+    value === 'near-limit' ||
+    value === 'critical' ||
+    value === 'exhausted'
+  ) {
+    return value;
+  }
+  throw new CloudApiError(502, 'invalid_allowance_warning');
+}
+
+function decodeEntitlementStatus(value: unknown): CloudEntitlementStatus {
+  if (
+    value === 'pending' ||
+    value === 'active' ||
+    value === 'exhausted' ||
+    value === 'expired' ||
+    value === 'revoked'
+  ) {
+    return value;
+  }
+  throw new CloudApiError(502, 'invalid_entitlement_status');
+}
+
+function decodeCount(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 1_000_000) {
+    throw new CloudApiError(502, `invalid_${field}`);
+  }
+  return value;
+}
+
+function decodeCloudAllowance(value: unknown): CloudAllowanceResponse['allowances'][number] {
+  if (!isRecord(value)) throw new CloudApiError(502, 'invalid_allowance');
+  return {
+    kind: decodeAllowanceKind(value.kind),
+    included: decodeCount(value.included, 'allowance_included'),
+    consumed: decodeCount(value.consumed, 'allowance_consumed'),
+    reserved: decodeCount(value.reserved, 'allowance_reserved'),
+    remaining: decodeCount(value.remaining, 'allowance_remaining'),
+    warning: decodeWarning(value.warning),
+    resetAt: value.resetAt === null ? null : iso(value.resetAt, 'allowance_reset'),
+  };
+}
+
+export function decodeCloudAllowanceResponse(
+  value: unknown,
+  reconciled: boolean,
+): CloudAllowanceResponse | CloudReconcileResponse {
+  if (!isRecord(value)) throw new CloudApiError(502, 'invalid_response');
+  const entitlements = boundedArray(value.entitlements, 'cloud_entitlements');
+  const allowances = boundedArray(value.allowances, 'cloud_allowances');
+  const knownProducts = new Set(Object.values(CLOUD_PRODUCT_IDS));
+  const decodedEntitlements = entitlements.map((item) => {
+    if (!isRecord(item) || !knownProducts.has(item.productId as never)) {
+      throw new CloudApiError(502, 'invalid_cloud_entitlement');
+    }
+    const expectedPlan: CloudPlanId =
+      item.productId === CLOUD_PRODUCT_IDS.starterPack
+        ? 'starter_pack'
+        : item.productId === CLOUD_PRODUCT_IDS.cloudPlusMonthly ||
+            item.productId === CLOUD_PRODUCT_IDS.cloudPlusAnnual
+          ? 'cloud_plus'
+          : 'cloud_max';
+    if (item.planId !== expectedPlan || typeof item.willRenew !== 'boolean') {
+      throw new CloudApiError(502, 'invalid_cloud_entitlement');
+    }
+    return {
+      planId: expectedPlan,
+      productId: item.productId as CloudAllowanceResponse['entitlements'][number]['productId'],
+      status: decodeEntitlementStatus(item.status),
+      willRenew: item.willRenew,
+      periodStart: item.periodStart === null ? null : iso(item.periodStart, 'period_start'),
+      periodEnd: item.periodEnd === null ? null : iso(item.periodEnd, 'period_end'),
+    };
+  });
+  if (
+    allowances.length > MAX_CLOUD_ALLOWANCE_ITEMS ||
+    entitlements.length > MAX_CLOUD_ALLOWANCE_ITEMS
+  ) {
+    throw new CloudApiError(502, 'invalid_cloud_allowances');
+  }
+  const result: CloudAllowanceResponse = {
+    accountId: text(value.accountId, 'account_id', 256),
+    entitlements: decodedEntitlements,
+    allowances: allowances.map(decodeCloudAllowance),
+    managementUrl:
+      value.managementUrl === null ? null : text(value.managementUrl, 'management_url', 2_048),
+    generatedAt: iso(value.generatedAt, 'generated_at'),
+  };
+  if (reconciled && value.reconciled !== true)
+    throw new CloudApiError(502, 'invalid_reconciliation');
+  return reconciled ? { ...result, reconciled: true } : result;
+}
+
 function decodeApiError(value: unknown): string | null {
   if (!isRecord(value) || !isRecord(value.error)) return null;
   const error = value as Partial<ApiErrorResponse>;
@@ -350,6 +468,22 @@ export class CloudApiClient implements CloudApi {
         signal,
       },
       decodeDelete,
+    );
+  }
+
+  getAllowanceSummary(accessToken: string, signal?: AbortSignal) {
+    return this.request(
+      CLOUD_ALLOWANCES_PATH,
+      { method: 'GET', accessToken, signal },
+      (value) => decodeCloudAllowanceResponse(value, false) as CloudAllowanceResponse,
+    );
+  }
+
+  reconcileAllowances(accessToken: string, signal?: AbortSignal) {
+    return this.request(
+      CLOUD_ALLOWANCES_RECONCILE_PATH,
+      { method: 'POST', accessToken, signal },
+      (value) => decodeCloudAllowanceResponse(value, true) as CloudReconcileResponse,
     );
   }
 

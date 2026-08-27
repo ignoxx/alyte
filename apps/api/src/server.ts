@@ -3,7 +3,10 @@ import { dirname, join } from 'node:path';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import {
   APPLE_EXCHANGE_PATH,
+  CLOUD_ALLOWANCES_PATH,
+  CLOUD_ALLOWANCES_RECONCILE_PATH,
   CONTRACT_VERSION,
+  REVENUECAT_WEBHOOK_PATH,
   type AccountDeletionResponse,
   type AccountDeletionRequest,
   type AccountExportResponse,
@@ -21,6 +24,8 @@ import {
 } from './apple-verifier.js';
 import { AuthFailure, AuthService, type AuthLogger, type Clock } from './auth.js';
 import { AccountDatabase } from './database.js';
+import { CommerceFailure, CommerceService, cloudMaxEnabledFromEnvironment } from './commerce.js';
+import { createRevenueCatAuthority, type RevenueCatAuthority } from './revenuecat.js';
 import {
   DEFAULT_LOCAL_RUNTIME_PATH,
   loadSessionHashSecret,
@@ -38,6 +43,9 @@ export interface ServerOptions {
   readonly refreshLifetimeSeconds?: number;
   readonly authLogger?: AuthLogger;
   readonly cleanupIntervalMs?: number;
+  readonly revenueCatAuthority?: RevenueCatAuthority;
+  readonly revenueCatWebhookSecret?: string;
+  readonly cloudMaxEnabled?: boolean;
 }
 
 function bodyObject(request: FastifyRequest): Record<string, unknown> {
@@ -117,6 +125,7 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     configured: options.hashSecret,
   });
   const server = Fastify({
+    bodyLimit: 512 * 1024,
     logger: {
       level: 'info',
       redact: {
@@ -140,6 +149,21 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
       },
     },
   });
+  // The RevenueCat signature covers the exact incoming bytes. Parse JSON ourselves so the
+  // webhook route receives those bytes while ordinary API routes retain their object body shape.
+  server.removeContentTypeParser('application/json');
+  server.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body, done) => {
+    const bytes = body as Buffer;
+    if (request.url.split('?')[0] === REVENUECAT_WEBHOOK_PATH) {
+      done(null, bytes);
+      return;
+    }
+    try {
+      done(null, JSON.parse(bytes.toString('utf8')) as unknown);
+    } catch {
+      done(new Error('invalid_json'));
+    }
+  });
   const authLogger: AuthLogger = options.authLogger ?? {
     info(event, attributes) {
       server.log.info({ event, outcome: attributes.outcome }, 'auth operation');
@@ -157,6 +181,17 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     refreshLifetimeSeconds: options.refreshLifetimeSeconds,
     logger: authLogger,
   });
+  const revenueCatApiKey = process.env.REVENUECAT_SECRET_API_KEY;
+  const revenueCatWebhookSecret =
+    options.revenueCatWebhookSecret ?? process.env.REVENUECAT_WEBHOOK_SECRET;
+  const commerce = new CommerceService({
+    database,
+    authority:
+      options.revenueCatAuthority ??
+      createRevenueCatAuthority(revenueCatApiKey ? { apiKey: revenueCatApiKey } : {}),
+    cloudMaxEnabled: options.cloudMaxEnabled ?? cloudMaxEnabledFromEnvironment(),
+    ...(revenueCatWebhookSecret === undefined ? {} : { webhookSecret: revenueCatWebhookSecret }),
+  });
   database.cleanupExpired(options.clock?.now() ?? new Date());
   const cleanupInterval = setInterval(
     () => database.cleanupExpired(options.clock?.now() ?? new Date()),
@@ -166,6 +201,11 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
 
   server.setErrorHandler((error, _request, reply) => {
     if (error instanceof AuthFailure) {
+      server.log.warn({ event: 'api.request_rejected', outcome: error.code }, 'request rejected');
+      void reply.status(error.statusCode).send(errorResponse(error.code, error.code));
+      return;
+    }
+    if (error instanceof CommerceFailure) {
       server.log.warn({ event: 'api.request_rejected', outcome: error.code }, 'request rejected');
       void reply.status(error.statusCode).send(errorResponse(error.code, error.code));
       return;
@@ -214,6 +254,27 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
   server.delete('/v1/account', async (request): Promise<AccountDeletionResponse> =>
     auth.deleteAccount(bearerToken(request), idempotencyKey(request)),
   );
+
+  server.get(CLOUD_ALLOWANCES_PATH, async (request) => {
+    const authenticated = auth.authenticateAccess(bearerToken(request));
+    return commerce.getAllowanceSummary(authenticated.accountId);
+  });
+
+  server.post(CLOUD_ALLOWANCES_RECONCILE_PATH, async (request) => {
+    const authenticated = auth.authenticateAccess(bearerToken(request));
+    return commerce.reconcile(authenticated.accountId);
+  });
+
+  server.post(REVENUECAT_WEBHOOK_PATH, async (request) => {
+    const signature = request.headers['x-revenuecat-webhook-signature'];
+    const body = Buffer.isBuffer(request.body)
+      ? request.body
+      : Buffer.from(JSON.stringify(request.body ?? {}), 'utf8');
+    return commerce.handleRevenueCatWebhook(
+      body,
+      typeof signature === 'string' ? signature : undefined,
+    );
+  });
 
   server.addHook('onClose', async () => {
     clearInterval(cleanupInterval);

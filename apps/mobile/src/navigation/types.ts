@@ -42,6 +42,7 @@ export type LogStackParamList = {
 
 export type RootStackParamList = {
   MainTabs: NavigatorScreenParams<MainTabParamList> | undefined;
+  CloudPaywall: { readonly operation: 'snap' | 'report' | 'settings' };
   ModelInstall: undefined;
   ReportImport: undefined;
   SnapCapture: undefined;

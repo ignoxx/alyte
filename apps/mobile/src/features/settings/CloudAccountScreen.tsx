@@ -89,6 +89,7 @@ export function CloudAccountScreen() {
   const services = useServices();
   const navigation = useNavigation<any>();
   const account = services.account;
+  const commerce = services.commerce;
   const [snapshot, setSnapshot] = useState(() => account.getSnapshot());
   const [exportResult, setExportResult] = useState<Awaited<
     ReturnType<typeof account.exportAccount>
@@ -101,6 +102,7 @@ export function CloudAccountScreen() {
   const [exportBusy, setExportBusy] = useState(false);
   const [exportFailed, setExportFailed] = useState(false);
   const [exportCancelled, setExportCancelled] = useState(false);
+  const [commerceSnapshot, setCommerceSnapshot] = useState(() => commerce.getSnapshot());
   const pendingExportCleanup = useRef<(() => Promise<void>) | null>(null);
   const exportShareInFlight = useRef(false);
   const isWorking = snapshot.status === 'working';
@@ -111,6 +113,15 @@ export function CloudAccountScreen() {
     void account.bootstrap();
     return unsubscribe;
   }, [account]);
+
+  useEffect(() => {
+    const unsubscribe = commerce.subscribe(() => setCommerceSnapshot(commerce.getSnapshot()));
+    return unsubscribe;
+  }, [commerce]);
+
+  useEffect(() => {
+    if (snapshot.signedIn && commerceSnapshot.status === 'idle') void commerce.load();
+  }, [commerce, commerceSnapshot.status, snapshot.signedIn]);
 
   useEffect(() => {
     let active = true;
@@ -187,6 +198,20 @@ export function CloudAccountScreen() {
       await account.signOut();
     } catch {
       // Sign-out clears the device session even when the best-effort server revoke is offline.
+    }
+  }
+
+  function openCloudPlans() {
+    navigation.getParent()?.getParent()?.navigate('CloudPaywall', {
+      operation: 'settings',
+    });
+  }
+
+  async function restorePurchases() {
+    try {
+      await commerce.restore();
+    } catch {
+      // The commerce service publishes a bounded state for this screen.
     }
   }
 
@@ -297,6 +322,28 @@ export function CloudAccountScreen() {
             </AppSurface>
             <View style={styles.group}>
               <SettingsActionRow
+                icon="cloud"
+                title={t('settings.cloudPlans')}
+                subtitle={t('settings.cloudPlansSubtitle')}
+                onPress={openCloudPlans}
+                disabled={
+                  isWorking ||
+                  commerceSnapshot.status === 'purchasing' ||
+                  commerceSnapshot.status === 'restoring'
+                }
+              />
+              <SettingsActionRow
+                icon="cloud"
+                title={t('settings.cloudRestore')}
+                subtitle={t('settings.cloudPlansSubtitle')}
+                onPress={() => void restorePurchases()}
+                disabled={
+                  isWorking ||
+                  commerceSnapshot.status === 'purchasing' ||
+                  commerceSnapshot.status === 'restoring'
+                }
+              />
+              <SettingsActionRow
                 icon="doc"
                 title={
                   isWorking ? t('settings.cloudAccountExporting') : t('settings.cloudAccountExport')
@@ -325,6 +372,24 @@ export function CloudAccountScreen() {
                 destructive
               />
             </View>
+            {commerceSnapshot.allowance !== null && (
+              <AppSurface tone="soft" style={styles.statusSurface}>
+                <AppText variant="label">{t('settings.cloudAllowanceSummary')}</AppText>
+                {commerceSnapshot.allowance.allowances.map((allowance) => (
+                  <AppText key={allowance.kind} style={styles.body}>
+                    {allowance.kind === 'snap'
+                      ? t('settings.cloudSnapRemaining').replace(
+                          '{count}',
+                          String(allowance.remaining),
+                        )
+                      : t('settings.cloudReportRemaining').replace(
+                          '{count}',
+                          String(allowance.remaining),
+                        )}
+                  </AppText>
+                ))}
+              </AppSurface>
+            )}
           </>
         )}
 
