@@ -15,6 +15,15 @@ import { deletionFacts } from './record-detail-model';
 import type { LabDeletionScope } from './service';
 
 type Route = RouteProp<RootStackParamList, 'LabDeletion'>;
+
+function deletedMeasurementCopy(count: number): string {
+  return t(
+    count === 1
+      ? 'labs.deletionFact.measurement_deleted'
+      : 'labs.deletionFact.measurements_deleted',
+  ).replace('{count}', String(count));
+}
+
 export function LabDeletionScreen() {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const route = useRoute<Route>();
@@ -114,7 +123,7 @@ export function LabDeletionScreen() {
           deletionFacts(plan).map((fact) => (
             <AppText key={fact.kind} selectable>
               {fact.kind === 'measurements-deleted'
-                ? t('labs.deletionFact.measurements_deleted').replace('{count}', String(fact.count))
+                ? deletedMeasurementCopy(fact.count)
                 : fact.kind === 'linked-records-source-deleted'
                   ? t('labs.deletionFact.linked_records').replace('{count}', String(fact.count))
                   : t(`labs.deletionFact.${fact.kind.replaceAll('-', '_')}`)}

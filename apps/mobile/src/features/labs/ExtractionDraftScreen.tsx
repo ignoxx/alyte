@@ -41,6 +41,10 @@ function valueText(row: ExtractionDraftRow): string {
       : value.value;
 }
 
+function countCopy(count: number, singularKey: string, pluralKey: string): string {
+  return t(count === 1 ? singularKey : pluralKey).replace('{count}', String(count));
+}
+
 function flattenSections(rows: readonly ExtractionDraftRow[]): readonly ListSection[] {
   return buildExtractionReviewSections(rows).flatMap((record) =>
     record.panels.map((panel, index) => ({
@@ -164,9 +168,15 @@ export function ExtractionDraftScreen() {
         ListHeaderComponent={
           <View style={styles.header}>
             <AppText selectable variant="heading" style={styles.summary}>
-              {t('labs.extractionSummary')
-                .replace('{count}', String(draft.rows.length))
-                .replace('{review}', String(needsReview))}
+              {`${countCopy(
+                draft.rows.length,
+                'labs.extractionMeasurementFound',
+                'labs.extractionMeasurementsFound',
+              )} · ${countCopy(
+                needsReview,
+                'labs.extractionMeasurementNeedsReview',
+                'labs.extractionMeasurementsNeedReview',
+              )}`}
             </AppText>
             <AppText style={styles.intro}>{t('labs.extractionCompactIntro')}</AppText>
             {error && (

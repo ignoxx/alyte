@@ -30,7 +30,7 @@ function measuredValue(change: HomeMeasuredChange, latest: boolean, locale: stri
 
 function reportDetail(row: HomeReportRow, locale: string): string {
   const date = dateLabel(row.date, locale);
-  const count = t('home.measurementsCount').replace('{count}', String(row.measurementCount));
+  const count = measurementCount(row.measurementCount);
   return `${date} · ${count}`;
 }
 
@@ -90,6 +90,10 @@ function EmptyHome({ onImport }: { readonly onImport: () => void }) {
 
 function countCopy(count: number, singularKey: string, pluralKey: string): string {
   return t(count === 1 ? singularKey : pluralKey).replace('{count}', String(count));
+}
+
+function measurementCount(count: number): string {
+  return countCopy(count, 'home.measurementCount', 'home.measurementsCount');
 }
 
 function PendingWork({ model }: { readonly model: HomeLabViewModel }) {
@@ -190,7 +194,7 @@ function PopulatedHome({
             {title}
           </AppText>
           <AppText selectable style={styles.muted}>
-            {t('home.measurementsCount').replace('{count}', String(latestItem.measurementCount))}
+            {measurementCount(latestItem.measurementCount)}
           </AppText>
         </View>
         <AppIcon name="chevronRight" size={18} />

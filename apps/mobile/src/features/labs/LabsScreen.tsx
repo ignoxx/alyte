@@ -45,13 +45,25 @@ function reportStateLabel(report: LabReport): string {
   );
 }
 
+function countCopy(count: number, singularKey: string, pluralKey: string): string {
+  return t(count === 1 ? singularKey : pluralKey).replace('{count}', String(count));
+}
+
+function measurementCount(count: number): string {
+  return countCopy(count, 'labs.recordMeasurement', 'labs.recordMeasurements');
+}
+
+function historyMeasurementCount(count: number): string {
+  return countCopy(count, 'labs.historyEntrySubtitleSingular', 'labs.historyEntrySubtitle');
+}
+
 function reportDetail(report: LabReport, records: readonly LabRecord[], locale: string): string {
   const summary = summarizeLabReport(report, records);
   const dateLabel =
     summary.collectionDate.kind === 'known'
       ? formatLocaleDate(summary.collectionDate.value, locale)
       : t('labs.recordDateMissing');
-  return `${dateLabel} · ${reportSourceLabel(report)} · ${t('labs.recordMeasurements').replace('{count}', String(summary.measurementCount))}`;
+  return `${dateLabel} · ${reportSourceLabel(report)} · ${measurementCount(summary.measurementCount)}`;
 }
 
 export function LabsScreen() {
@@ -183,7 +195,7 @@ export function LabsScreen() {
                           {date}
                         </AppText>
                         <AppText selectable style={styles.muted}>
-                          {`${record.laboratoryName ?? t('labs.recordTitle')} · ${specimenLabel(record.specimenType)} · ${t('labs.recordMeasurements').replace('{count}', String(record.measurements.length))}`}
+                          {`${record.laboratoryName ?? t('labs.recordTitle')} · ${specimenLabel(record.specimenType)} · ${measurementCount(record.measurements.length)}`}
                         </AppText>
                       </View>
                       <AppIcon name="chevronRight" size={16} />
@@ -200,7 +212,7 @@ export function LabsScreen() {
                 {historyEntries.map((entry) => (
                   <Pressable
                     accessibilityHint={t('labs.historyRowHint')}
-                    accessibilityLabel={`${entry.canonicalLabel}, ${t('labs.historyEntrySubtitle').replace('{count}', String(entry.measurementCount))}`}
+                    accessibilityLabel={`${entry.canonicalLabel}, ${historyMeasurementCount(entry.measurementCount)}`}
                     accessibilityRole="button"
                     key={entry.biomarkerId}
                     onPress={() =>
@@ -214,10 +226,7 @@ export function LabsScreen() {
                         {entry.canonicalLabel}
                       </AppText>
                       <AppText selectable style={styles.muted}>
-                        {t('labs.historyEntrySubtitle').replace(
-                          '{count}',
-                          String(entry.measurementCount),
-                        )}
+                        {historyMeasurementCount(entry.measurementCount)}
                       </AppText>
                     </View>
                     <AppIcon name="chevronRight" size={16} />

@@ -28,6 +28,10 @@ const supportReason = (item: Detail['measurements'][number]) =>
 const sourceLabel = (detail: Detail) =>
   t(`labs.sourceState.${detail.source.kind.replaceAll('-', '_')}`);
 
+function countCopy(count: number, singularKey: string, pluralKey: string): string {
+  return t(count === 1 ? singularKey : pluralKey).replace('{count}', String(count));
+}
+
 export function LabRecordDetail({
   detail,
   onCorrect,
@@ -59,13 +63,18 @@ export function LabRecordDetail({
           <AppSurface style={styles.summary}>
             <AppText variant="heading">{t('labs.detailSummaryTitle')}</AppText>
             <AppText selectable>
-              {t('labs.detailSummaryMeasurements').replace(
-                '{count}',
-                String(detail.summary.measurementCount),
+              {countCopy(
+                detail.summary.measurementCount,
+                'labs.detailSummaryMeasurement',
+                'labs.detailSummaryMeasurements',
               )}
             </AppText>
             <AppText selectable>
-              {t('labs.detailSummaryFlags').replace('{count}', String(detail.summary.flaggedCount))}
+              {countCopy(
+                detail.summary.flaggedCount,
+                'labs.detailSummaryFlag',
+                'labs.detailSummaryFlags',
+              )}
             </AppText>
             <AppText selectable>
               {t('labs.detailSummarySupport')
