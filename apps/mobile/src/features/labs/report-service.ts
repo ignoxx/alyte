@@ -24,6 +24,7 @@ import {
   type ExtractionDraftRowPatch,
   type ExtractionDateContext,
   type ExtractionSemanticCandidateRow,
+  type ExtractionSemanticCancellation,
   type ExtractionSemanticLease,
   type ExtractionSemanticMapper,
   type ExtractionSemanticProposal,
@@ -69,6 +70,26 @@ export type PasswordRequest = (context: {
   readonly report: LabReport;
   readonly attempt: number;
 }) => Promise<string | null>;
+
+type ExtractionOperationToken = {
+  readonly generation: number;
+  cancelled: boolean;
+  readonly cancellationListeners: Set<() => void>;
+};
+
+function cancelExtractionOperation(token: ExtractionOperationToken): void {
+  if (token.cancelled) return;
+  token.cancelled = true;
+  const listeners = [...token.cancellationListeners];
+  token.cancellationListeners.clear();
+  for (const listener of listeners) {
+    try {
+      listener();
+    } catch {
+      // Cancellation is best-effort; the extraction still observes the token at its next seam.
+    }
+  }
+}
 
 export type LabReportImportResult = {
   readonly report: LabReport;
@@ -491,10 +512,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   const extractionProgress = new Map<string, LabReportExtractionProgress>();
   const extractionProgressListeners = new Set<(progress: LabReportExtractionProgress) => void>();
   let nextExtractionOperation = 0;
-  const extractionOperations = new Map<
-    string,
-    { readonly generation: number; cancelled: boolean }
-  >();
+  const extractionOperations = new Map<string, ExtractionOperationToken>();
   const now = options.now ?? isoNow;
   const makeId = options.idGenerator ?? ((prefix: string) => createSortableOpaqueId(prefix));
   const sanitizationSessions = new Map<string, Awaited<ReturnType<PdfInspector['unlock']>>>();
@@ -1650,7 +1668,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
 
   async function cancelExtraction(id: string): Promise<void> {
     const operationToken = extractionOperations.get(id);
-    if (operationToken !== undefined) operationToken.cancelled = true;
+    if (operationToken !== undefined) cancelExtractionOperation(operationToken);
   }
 
   async function deleteSanitizedReport(id: string): Promise<void> {
@@ -1853,7 +1871,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     rows: readonly ExtractionDraftRow[],
     observations: readonly VisionTextObservation[],
     onProgress?: (completed: number, total: number) => void,
-    isCancelled?: () => boolean,
+    cancellation?: ExtractionSemanticCancellation,
   ): Promise<readonly ExtractionDraftRow[]> {
     if (semanticMapper === undefined) {
       onProgress?.(0, 0);
@@ -1947,7 +1965,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     let semanticStageError: unknown = null;
     try {
       for (const [chunkIndex, chunk] of chunks.entries()) {
-        if (isCancelled?.())
+        if (cancellation?.isCancelled())
           throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         const locale = chunk.rows[0]?.observations[0]?.recognition.language ?? null;
         try {
@@ -1966,9 +1984,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             pageIndex: chunk.rows[0]?.observations[0]?.pageIndex ?? 0,
             rows: chunk.rows,
             headings: chunk.headings,
+            ...(cancellation === undefined ? {} : { cancellation }),
           };
           const mapped = await semanticMapper.map(input);
-          if (isCancelled?.())
+          if (cancellation?.isCancelled())
             throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
           proposals.push(...validateSemanticProposals(mapped, chunk.rows, extractionAliases));
         } catch (error) {
@@ -2065,7 +2084,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     id: string,
     passwordRequest?: PasswordRequest,
   ): Promise<ExtractionDraft> {
-    const operationToken = { generation: ++nextExtractionOperation, cancelled: false };
+    const previousOperation = extractionOperations.get(id);
+    if (previousOperation !== undefined) cancelExtractionOperation(previousOperation);
+    const operationToken: ExtractionOperationToken = {
+      generation: ++nextExtractionOperation,
+      cancelled: false,
+      cancellationListeners: new Set(),
+    };
     extractionOperations.set(id, operationToken);
     return serialized(async () => {
       let password = '';
@@ -2073,6 +2098,17 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       let activeRepo: LabRepository | null = null;
       const isCancelled = () =>
         extractionOperations.get(id) !== operationToken || operationToken.cancelled;
+      const cancellation: ExtractionSemanticCancellation = {
+        isCancelled,
+        subscribe: (listener) => {
+          if (isCancelled()) {
+            listener();
+            return () => undefined;
+          }
+          operationToken.cancellationListeners.add(listener);
+          return () => operationToken.cancellationListeners.delete(listener);
+        },
+      };
       try {
         await ensureInitialized();
         const repo = await repository();
@@ -2240,7 +2276,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           deterministicRows,
           observations,
           (completed, total) => extractionProgressEvent(id, 'model', 'active', completed, total),
-          isCancelled,
+          cancellation,
         );
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         const modelTotal = extractionProgress.get(id)?.total ?? 0;
@@ -2343,6 +2379,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         throw extractionError;
       } finally {
         password = '';
+        operationToken.cancellationListeners.clear();
         if (extractionOperations.get(id) === operationToken) extractionOperations.delete(id);
       }
     });

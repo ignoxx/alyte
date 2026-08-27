@@ -58,7 +58,9 @@ Pod::Spec.new do |s|
     s.vendored_frameworks = staged_relative_framework
     runtime_conditions = '$(inherited) ALYTE_LLAMA_RUNTIME'
     runtime_cflags = '$(inherited) -DALYTE_LLAMA_RUNTIME'
-    if ENV['APP_VARIANT'] == 'development'
+    # Expo resolves an omitted APP_VARIANT to development. Keep that same safe default here;
+    # only the explicitly named distribution variants may opt into the bounded Metal path.
+    unless ['preview', 'production'].include?(ENV['APP_VARIANT'])
       runtime_conditions += ' ALYTE_LOCAL_MODEL_CPU_ONLY'
       runtime_cflags += ' -DALYTE_LOCAL_MODEL_CPU_ONLY'
     end

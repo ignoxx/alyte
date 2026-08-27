@@ -2,6 +2,7 @@ import { CATALOGUE_VERSION } from '@alyte/catalogue';
 import {
   EXTRACTION_PARSER_VERSION,
   type ExtractionAliasEntry,
+  type ExtractionSemanticCancellation,
   type ExtractionSemanticLease,
   type ExtractionSemanticMapper,
 } from '@alyte/domain';
@@ -20,6 +21,7 @@ import {
 
 const PROMPT_VERSION = SEMANTIC_MAPPER_PROMPT_VERSION;
 const INFERENCE_TIMEOUT_MS = 15_000;
+const INFERENCE_DRAIN_TIMEOUT_MS = 1_000;
 
 export class SemanticModelUnavailableError extends Error {
   readonly code = 'semantic-model-unavailable' as const;
@@ -45,24 +47,76 @@ function languageCode(value: string | null): SupportedLanguage | null {
     : null;
 }
 
-function withTimeout<T>(work: Promise<T>, milliseconds: number, onTimeout: () => void): Promise<T> {
+function waitForSettlement(work: Promise<unknown>, milliseconds: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = work.then(
+    () => true,
+    () => true,
+  );
+  const timeout = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), milliseconds);
+  });
+  return Promise.race([settled, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
+function withTimeout<T>(
+  work: Promise<T>,
+  milliseconds: number,
+  onCancel: () => void,
+  cancellation?: ExtractionSemanticCancellation,
+  onDrainComplete?: (settled: boolean) => void,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
+  let cancelled = false;
+  let unsubscribe: () => void = () => undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       timedOut = true;
-      onTimeout();
+      try {
+        onCancel();
+      } catch {
+        // A failed cancellation signal must not prevent deterministic timeout fallback.
+      }
       reject(new Error('semantic-inference-timeout'));
     }, milliseconds);
   });
-  return Promise.race([work, timeout]).finally(async () => {
+  const cancellationPromise =
+    cancellation === undefined
+      ? null
+      : new Promise<never>((_, reject) => {
+          unsubscribe = cancellation.subscribe(() => {
+            if (timedOut || cancelled) return;
+            cancelled = true;
+            try {
+              onCancel();
+            } catch {
+              // The extraction still observes the operation token below.
+            }
+            reject(new Error('semantic-inference-cancelled'));
+          });
+        });
+  const raced =
+    cancellationPromise === null
+      ? Promise.race([work, timeout])
+      : Promise.race([work, timeout, cancellationPromise]);
+  return raced.finally(async () => {
     if (timer !== undefined) clearTimeout(timer);
-    // llama.rn's stopCompletion is a signal; it does not mean the native completion has
-    // finished. Keep the operation owner alive until that promise settles so a queued request
-    // or release can never reuse/free the context while native decoding is still in flight.
-    if (timedOut) await work.catch(() => undefined);
+    unsubscribe();
+    if (timedOut || cancelled) {
+      // stopCompletion is a signal, not a completion barrier. Drain briefly so normal native
+      // cancellation releases promptly; a non-settling bridge is quarantined by the caller.
+      onDrainComplete?.(await waitForSettlement(work, INFERENCE_DRAIN_TIMEOUT_MS));
+    }
   });
 }
+
+type ActiveInference = {
+  readonly generation: number;
+  readonly settled: Promise<void>;
+};
 
 export type LocalSemanticMapperOptions = {
   readonly models: LocalModelService;
@@ -79,6 +133,10 @@ export function createLocalSemanticMapper(
   let activeLeases = 0;
   let lifecycleQueue: Promise<void> = Promise.resolve();
   let inferenceQueue: Promise<void> = Promise.resolve();
+  let nextInferenceGeneration = 0;
+  let activeInference: ActiveInference | null = null;
+  let runtimeQuarantined = false;
+  let deferredReleaseGeneration: number | null = null;
 
   function enqueueLifecycle<T>(work: () => Promise<T>): Promise<T> {
     const next = lifecycleQueue.then(work, work);
@@ -96,6 +154,52 @@ export function createLocalSemanticMapper(
       () => undefined,
     );
     return next;
+  }
+
+  function deferRuntimeRelease(inference: ActiveInference): void {
+    if (deferredReleaseGeneration === inference.generation) return;
+    deferredReleaseGeneration = inference.generation;
+    void inference.settled.then(() => {
+      if (deferredReleaseGeneration !== inference.generation) return;
+      deferredReleaseGeneration = null;
+      if (activeLeases !== 0 || activeInference !== null) return;
+      void enqueueLifecycle(async () => {
+        if (activeLeases !== 0 || activeInference !== null || runtimeQuarantined) return;
+        const current = await options.models.getState();
+        if (current.loaded) await options.models.unload();
+      }).catch(() => undefined);
+    });
+  }
+
+  async function releaseRuntime(): Promise<void> {
+    // A last-lease release is also a stop request. Like llama.rn's stopCompletion, this signal is
+    // issued before awaiting the serialized operation; it never targets a runtime owned by a
+    // different active lease.
+    if (activeLeases === 1 && activeInference !== null) {
+      try {
+        options.models.cancelInference();
+      } catch {
+        // The bounded drain/quarantine path below still protects the native context.
+      }
+    }
+    await inferenceQueue;
+    activeLeases = Math.max(0, activeLeases - 1);
+    if (activeLeases !== 0) return;
+
+    const inference = activeInference;
+    if (inference !== null) {
+      const settled = await waitForSettlement(inference.settled, INFERENCE_DRAIN_TIMEOUT_MS);
+      if (!settled || activeInference !== null) {
+        // The JS operation must return, but the native context cannot be reused or released
+        // until its call settles. A late settlement schedules cleanup without blocking the user.
+        runtimeQuarantined = true;
+        deferRuntimeRelease(inference);
+        return;
+      }
+    }
+    if (runtimeQuarantined || activeInference !== null) return;
+    const current = await options.models.getState();
+    if (current.loaded) await options.models.unload();
   }
 
   return {
@@ -124,18 +228,7 @@ export function createLocalSemanticMapper(
           release: () => {
             if (released) return Promise.resolve();
             released = true;
-            return enqueueLifecycle(async () => {
-              // Match llama.rn's stop → await completion → release discipline. The native
-              // store is serialized too, but awaiting this JS owner makes that contract true
-              // even when a caller races release with a direct mapper invocation.
-              await inferenceQueue;
-              activeLeases = Math.max(0, activeLeases - 1);
-              if (activeLeases !== 0) return;
-              // The pack is an extraction-scoped resource. Keep verified bytes on disk, but
-              // release the llama model/context as soon as the last extraction finishes.
-              const current = await options.models.getState();
-              if (current.loaded) await options.models.unload();
-            });
+            return enqueueLifecycle(releaseRuntime);
           },
         };
       }),
@@ -146,8 +239,12 @@ export function createLocalSemanticMapper(
         productionLocalModelManifest.compatibility.languages.includes(code as SupportedLanguage)
       );
     },
-    map: ({ rows, headings }) =>
+    map: ({ rows, headings, cancellation }) =>
       enqueueInference(async () => {
+        if (cancellation?.isCancelled()) throw new Error('semantic-inference-cancelled');
+        if (runtimeQuarantined || activeInference !== null) {
+          throw new Error('semantic-inference-runtime-quarantined');
+        }
         const observations = rows.flatMap((row) => row.observations);
         const locale =
           observations[0] === undefined
@@ -158,13 +255,34 @@ export function createLocalSemanticMapper(
         if (new TextEncoder().encode(prompt).byteLength > SEMANTIC_MAPPER_LIMITS.maxInputBytes) {
           throw new Error('semantic-inference-input-too-large');
         }
+        const generation = ++nextInferenceGeneration;
+        const nativeWork = Promise.resolve().then(() => options.models.infer(prompt));
+        const inference: ActiveInference = {
+          generation,
+          settled: nativeWork.then(
+            () => undefined,
+            () => undefined,
+          ),
+        };
+        activeInference = inference;
+        void inference.settled.then(() => {
+          if (activeInference !== inference) return;
+          activeInference = null;
+          runtimeQuarantined = false;
+        });
+        const cancelNative = () => {
+          if (activeInference?.generation !== generation) return;
+          try {
+            options.models.cancelInference();
+          } catch {
+            // A cancellation callback is advisory; timeout/quarantine still protects the context.
+          }
+        };
         let raw: string;
         try {
-          raw = await withTimeout(
-            options.models.infer(prompt),
-            timeoutMs,
-            options.models.cancelInference,
-          );
+          raw = await withTimeout(nativeWork, timeoutMs, cancelNative, cancellation, (settled) => {
+            if (!settled && activeInference === inference) runtimeQuarantined = true;
+          });
         } catch (error) {
           // Only the native typed missing/unloaded contract returns to model setup. Timeouts,
           // malformed output, and runtime failures remain ordinary per-chunk deterministic fallback.

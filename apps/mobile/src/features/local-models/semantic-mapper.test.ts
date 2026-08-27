@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { LocalModelService } from './native';
 import type { LocalModelSnapshot } from './model';
+import type { ExtractionSemanticCancellation } from '@alyte/domain';
 import { productionLocalModelManifest } from './manifest';
 import { createLocalSemanticMapper, SemanticModelUnavailableError } from './semantic-mapper';
 import { createSemanticMapperPrompt } from './semantic-contract';
@@ -50,6 +51,32 @@ function models(
 const aliases = [
   { id: 'biomarker.ldl_c', aliases: ['LDL-C'], specimens: ['serum'], units: ['mmol/L'] },
 ] as const;
+
+function cancellationController(): {
+  readonly cancellation: ExtractionSemanticCancellation;
+  readonly cancel: () => void;
+} {
+  let cancelled = false;
+  const listeners = new Set<() => void>();
+  return {
+    cancellation: {
+      isCancelled: () => cancelled,
+      subscribe: (listener) => {
+        if (cancelled) {
+          listener();
+          return () => undefined;
+        }
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    cancel: () => {
+      if (cancelled) return;
+      cancelled = true;
+      for (const listener of listeners) listener();
+    },
+  };
+}
 
 test('routes missing packs before Vision/model inference', async () => {
   const mapper = createLocalSemanticMapper({
@@ -256,6 +283,65 @@ test('waits for the active inference before releasing the last runtime lease', a
   await mapped;
   await release;
   assert.equal(released, true);
+  assert.equal(unloadCalls, 1);
+});
+
+test('signals the active generation and quarantines a non-settling native call', async () => {
+  const controller = cancellationController();
+  let cancelCalls = 0;
+  let resolveInference!: (value: string) => void;
+  let inferenceStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    inferenceStarted = resolve;
+  });
+  const inference = new Promise<string>((resolve) => {
+    resolveInference = resolve;
+  });
+  let unloadCalls = 0;
+  const runtimeModels = {
+    ...models(
+      async () => {
+        inferenceStarted();
+        return inference;
+      },
+      loadedState,
+      () => {
+        cancelCalls += 1;
+      },
+    ),
+    unload: async () => {
+      unloadCalls += 1;
+      return { ...loadedState, state: 'ready' as const, loaded: false };
+    },
+  } as LocalModelService;
+  const mapper = createLocalSemanticMapper({
+    models: runtimeModels,
+    aliases,
+    timeoutMs: 5_000,
+  });
+  const lease = await mapper.prepare!();
+  const mapped = mapper.map({
+    pageIndex: 0,
+    rows: [candidateRow],
+    cancellation: controller.cancellation,
+  });
+  await started;
+  controller.cancel();
+  await assert.rejects(mapped, /semantic-inference-cancelled/);
+  assert.equal(cancelCalls, 1);
+
+  const releaseStarted = Date.now();
+  await lease.release();
+  assert.ok(Date.now() - releaseStarted < 1_500);
+  assert.equal(unloadCalls, 0);
+  await assert.rejects(
+    mapper.map({ pageIndex: 0, rows: [candidateRow] }),
+    /semantic-inference-runtime-quarantined/,
+  );
+
+  resolveInference('{"schemaVersion":"alyte.semantic-mapper.v1","proposals":[]}');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(unloadCalls, 1);
 });
 

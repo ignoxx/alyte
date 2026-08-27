@@ -243,6 +243,15 @@ export type ExtractionSemanticLease = {
   readonly release: () => Promise<void>;
 };
 
+/**
+ * Cancellation owned by one extraction operation. Subscribers are removed when their model
+ * request settles, so a late cancellation from an older operation cannot reach a later request.
+ */
+export type ExtractionSemanticCancellation = {
+  readonly isCancelled: () => boolean;
+  readonly subscribe: (listener: () => void) => () => void;
+};
+
 export interface ExtractionSemanticMapper {
   readonly adapterVersion: string;
   readonly schemaVersion: 'alyte.semantic-mapper.v1';
@@ -270,6 +279,7 @@ export interface ExtractionSemanticMapper {
     readonly pageIndex: number;
     readonly rows: readonly ExtractionSemanticCandidateRow[];
     readonly headings?: readonly VisionTextObservation[];
+    readonly cancellation?: ExtractionSemanticCancellation;
   }): Promise<unknown>;
 }
 
