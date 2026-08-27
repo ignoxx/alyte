@@ -11,6 +11,56 @@ enum AlyteLocalModelState: String {
   case deleting
 }
 
+/// Identity for one URLSession transfer. A generation alone makes operation lifetimes explicit;
+/// the session/task identities make delegate callbacks self-authenticating at the store boundary.
+struct AlyteLocalModelDownloadOperationIdentity: Equatable {
+  let generation: UInt64
+  private let sessionID: ObjectIdentifier
+  private let taskID: ObjectIdentifier
+
+  init(generation: UInt64, session: AnyObject, task: AnyObject) {
+    self.generation = generation
+    self.sessionID = ObjectIdentifier(session)
+    self.taskID = ObjectIdentifier(task)
+  }
+
+  func matches(session: AnyObject, task: AnyObject) -> Bool {
+    sessionID == ObjectIdentifier(session) && taskID == ObjectIdentifier(task)
+  }
+}
+
+/// Queue-owned callback gate used by the URLSession adapter and deterministic native tests.
+/// Invalidating an operation removes its identity before its task/session is cancelled, so late
+/// callbacks can only be ignored and can never reach the active lifecycle core.
+struct AlyteLocalModelDownloadCallbackGate {
+  private var nextGeneration: UInt64 = 0
+  private(set) var activeIdentity: AlyteLocalModelDownloadOperationIdentity?
+
+  mutating func begin(session: AnyObject, task: AnyObject) -> AlyteLocalModelDownloadOperationIdentity {
+    nextGeneration &+= 1
+    let identity = AlyteLocalModelDownloadOperationIdentity(
+      generation: nextGeneration,
+      session: session,
+      task: task
+    )
+    activeIdentity = identity
+    return identity
+  }
+
+  mutating func invalidate(_ identity: AlyteLocalModelDownloadOperationIdentity) {
+    guard activeIdentity == identity else { return }
+    activeIdentity = nil
+  }
+
+  func accepts(_ identity: AlyteLocalModelDownloadOperationIdentity) -> Bool {
+    activeIdentity == identity
+  }
+
+  func accepts(session: AnyObject, task: AnyObject) -> Bool {
+    activeIdentity?.matches(session: session, task: task) == true
+  }
+}
+
 /// Pure lifecycle policy for the iOS idle timer. A model transfer is deliberately a foreground
 /// concern: only its active download and verification states keep the screen awake, and app
 /// backgrounding always wins over the model state until the app returns to the foreground.

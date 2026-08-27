@@ -205,6 +205,10 @@ final class AlyteLocalModelCore: @unchecked Sendable {
 
   @discardableResult
   func prepareDownload() throws -> Int64 {
+    // A fresh admission is a new transfer boundary. Delete/cancel callbacks from a previous
+    // operation must not carry cancellation or response-policy failure into its replacement.
+    cancellationRequested = false
+    forcedFailure = nil
     try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
     try protectFileClosure(directory)
     let capacity = try directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage ?? 0
@@ -435,6 +439,8 @@ final class AlyteLocalModelCore: @unchecked Sendable {
   }
 
   func delete() throws -> [String: Any] {
+    cancellationRequested = false
+    forcedFailure = nil
     releaseLoadedModel()
     try removeIfPresent(readyURL)
     try removeIfPresent(partialURL)

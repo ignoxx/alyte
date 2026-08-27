@@ -16,7 +16,31 @@ private final class SyntheticRuntime: AlyteLocalModelRuntimeSession {
   func close() { isClosed = true }
 }
 
+private final class CallbackToken: NSObject {}
+
 final class NativeModelHarnessTests: XCTestCase {
+  func testDownloadCallbackGateRejectsStaleCallbacksAfterReplacement() {
+    var gate = AlyteLocalModelDownloadCallbackGate()
+    let oldSession = CallbackToken()
+    let oldTask = CallbackToken()
+    let old = gate.begin(session: oldSession, task: oldTask)
+    XCTAssertTrue(gate.accepts(old))
+
+    gate.invalidate(old)
+    let currentSession = CallbackToken()
+    let current = gate.begin(session: currentSession, task: oldTask)
+
+    XCTAssertEqual(current.generation, old.generation + 1)
+    XCTAssertFalse(gate.accepts(old))
+    XCTAssertFalse(gate.accepts(session: oldSession, task: oldTask))
+    XCTAssertTrue(gate.accepts(current))
+    XCTAssertTrue(gate.accepts(session: currentSession, task: oldTask))
+
+    // A late old invalidation cannot clear the replacement identity.
+    gate.invalidate(old)
+    XCTAssertTrue(gate.accepts(current))
+  }
+
   func testSwiftManifestDecodesExactlyFromAuthoritativeProductionSource() throws {
     var sourceURL = URL(fileURLWithPath: #filePath)
     for _ in 0..<5 { sourceURL.deleteLastPathComponent() }
@@ -348,6 +372,28 @@ final class NativeModelHarnessTests: XCTestCase {
     XCTAssertEqual(core.state, .notInstalled)
     XCTAssertTrue(FileManager.default.fileExists(atPath: core.partialURL.path))
     XCTAssertFalse(FileManager.default.fileExists(atPath: core.readyURL.path))
+  }
+
+  func testDeleteClearsTransferFlagsBeforeReplacementAdmission() throws {
+    let (core, _, _) = try makeCore()
+    _ = try core.prepareDownload()
+    XCTAssertThrowsError(try core.acceptResponse(
+      status: 404,
+      contentRange: nil,
+      url: URL(string: "https://huggingface.co/file")!
+    ))
+    core.requestCancellation()
+    _ = try core.delete()
+
+    guard case .transfer(let offset) = try core.admitDownload() else {
+      return XCTFail("delete must permit a fresh replacement transfer")
+    }
+    XCTAssertEqual(offset, 0)
+    try core.append(Data("valid".utf8))
+    guard case .succeeded = core.complete(transportFailure: nil) else {
+      return XCTFail("replacement transfer should not inherit cancellation or response failure")
+    }
+    XCTAssertEqual(core.state, .ready)
   }
 
   func testCompleteInvalidPartialRestartsAndRangeFailuresAreDeterministic() throws {

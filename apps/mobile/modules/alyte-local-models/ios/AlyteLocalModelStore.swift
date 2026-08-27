@@ -14,11 +14,29 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
   private let queue = DispatchQueue(label: "com.alyte.local-models", qos: .utility)
   private let core: AlyteLocalModelCore
   private let idleTimerCoordinator: AlyteLocalModelIdleTimerCoordinator
-  private var session: URLSession?
-  private var downloadTask: URLSessionDataTask?
-  private var downloadCompletion: ((Result<[String: Any], Error>) -> Void)?
-  private var cancelCompletion: ((Result<[String: Any], Error>) -> Void)?
+  private var callbackGate = AlyteLocalModelDownloadCallbackGate()
+  private var downloadOperation: DownloadOperation?
   var stateObserver: StateObserver?
+
+  private final class DownloadOperation {
+    let identity: AlyteLocalModelDownloadOperationIdentity
+    let session: URLSession
+    let task: URLSessionDataTask
+    var downloadCompletion: ((Result<[String: Any], Error>) -> Void)?
+    var cancelCompletions: [((Result<[String: Any], Error>) -> Void)] = []
+
+    init(
+      identity: AlyteLocalModelDownloadOperationIdentity,
+      session: URLSession,
+      task: URLSessionDataTask,
+      downloadCompletion: @escaping (Result<[String: Any], Error>) -> Void
+    ) {
+      self.identity = identity
+      self.session = session
+      self.task = task
+      self.downloadCompletion = downloadCompletion
+    }
+  }
 
   init(
     fileManager: FileManager = .default,
@@ -82,7 +100,7 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
     idleTimerCoordinator.teardown()
     core.requestInferenceCancellation()
     queue.sync { core.releaseForPressure() }
-    session?.invalidateAndCancel()
+    downloadOperation?.session.invalidateAndCancel()
   }
 
   func currentState() -> [String: Any] { queue.sync { core.currentState() } }
@@ -92,7 +110,7 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
     return try await withCheckedThrowingContinuation { continuation in
       queue.async {
         do {
-          if self.downloadTask != nil {
+          if self.downloadOperation != nil {
             continuation.resume(returning: self.core.currentState())
             return
           }
@@ -114,12 +132,13 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
   func cancelDownload() async throws -> [String: Any] {
     try await withCheckedThrowingContinuation { continuation in
       queue.async {
-        guard self.downloadTask != nil else {
+        guard let operation = self.downloadOperation else {
           continuation.resume(returning: self.core.currentState())
           return
         }
         self.core.requestCancellation()
-        self.cancelCompletion = { result in
+        operation.cancelCompletions.append { [weak self] result in
+          guard let self else { return }
           switch result {
           case .success(let state): continuation.resume(returning: state)
           case .failure:
@@ -127,7 +146,7 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
             continuation.resume(returning: self.core.currentState())
           }
         }
-        self.downloadTask?.cancel()
+        operation.task?.cancel()
       }
     }
   }
@@ -176,20 +195,34 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
     guard packID == AlyteLocalModelManifest.packID else { throw AlyteLocalModelError.unsupportedPack }
     return try await withCheckedThrowingContinuation { continuation in
       queue.async {
-        let pendingDownload = self.downloadCompletion
-        self.downloadCompletion = nil
+        let operation = self.downloadOperation
+        let operationSession = operation?.session
+        let operationTask = operation?.task
+        // Invalidate before asking URLSession to cancel. The cancellation callback is allowed to
+        // arrive after a replacement transfer starts, but it no longer matches this gate.
+        if let operation {
+          self.invalidate(operation, teardownSession: false)
+        }
         self.core.requestCancellation()
-        self.downloadTask?.cancel()
-        self.downloadTask = nil
-        self.cancelCompletion = nil
+        operationTask?.cancel()
         do {
           let state = try self.core.delete()
-          pendingDownload?(.failure(AlyteLocalModelError.failed(.cancelled)))
+          self.resolve(
+            operation,
+            download: .failure(AlyteLocalModelError.failed(.cancelled)),
+            cancellation: .success(state)
+          )
+          operationSession?.invalidateAndCancel()
           continuation.resume(returning: state)
         } catch {
           let localError = (error as? AlyteLocalModelError) ?? AlyteLocalModelError.failed(.runtimeFailed)
           self.fail(localError)
-          pendingDownload?(.failure(localError))
+          self.resolve(
+            operation,
+            download: .failure(localError),
+            cancellation: .failure(localError)
+          )
+          operationSession?.invalidateAndCancel()
           continuation.resume(throwing: localError)
         }
       }
@@ -221,7 +254,6 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
   }
 
   private func beginDownload(offset: Int64, completion: @escaping (Result<[String: Any], Error>) -> Void) {
-    downloadCompletion = completion
     var request = URLRequest(url: AlyteLocalModelManifest.expectedURL)
     request.httpMethod = "GET"
     request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -234,9 +266,15 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
     configuration.httpShouldSetCookies = false
     configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
     let urlSession = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-    session = urlSession
     let task = urlSession.dataTask(with: request)
-    downloadTask = task
+    let identity = callbackGate.begin(session: urlSession, task: task)
+    let operation = DownloadOperation(
+      identity: identity,
+      session: urlSession,
+      task: task,
+      downloadCompletion: completion
+    )
+    downloadOperation = operation
     task.resume()
   }
 
@@ -247,18 +285,22 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
     newRequest request: URLRequest,
     completionHandler: @escaping (URLRequest?) -> Void
   ) {
-    do {
-      try core.acceptRedirect(request.url ?? URL(fileURLWithPath: ""))
-      var next = request
-      next.setValue(nil, forHTTPHeaderField: "Authorization")
-      next.setValue(nil, forHTTPHeaderField: "Cookie")
-      completionHandler(next)
-    } catch {
-      completionHandler(nil)
+    queue.sync {
+      guard self.callbackGate.accepts(session: session, task: task) else {
+        completionHandler(nil)
+        return
+      }
+      do {
+        try self.core.acceptRedirect(request.url ?? URL(fileURLWithPath: ""))
+        var next = request
+        next.setValue(nil, forHTTPHeaderField: "Authorization")
+        next.setValue(nil, forHTTPHeaderField: "Cookie")
+        completionHandler(next)
+      } catch {
+        completionHandler(nil)
+      }
+      _ = response
     }
-    _ = session
-    _ = task
-    _ = response
   }
 
   func urlSession(
@@ -267,23 +309,28 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
     didReceive response: URLResponse,
     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
   ) {
-    do {
-      guard let http = response as? HTTPURLResponse else { throw AlyteLocalModelError.failed(.httpFailed) }
-      try core.acceptResponse(
-        status: http.statusCode,
-        contentRange: http.value(forHTTPHeaderField: "Content-Range"),
-        url: http.url ?? AlyteLocalModelManifest.expectedURL
-      )
-      completionHandler(.allow)
-    } catch {
-      completionHandler(.cancel)
+    queue.sync {
+      guard self.callbackGate.accepts(session: session, task: dataTask) else {
+        completionHandler(.cancel)
+        return
+      }
+      do {
+        guard let http = response as? HTTPURLResponse else { throw AlyteLocalModelError.failed(.httpFailed) }
+        try self.core.acceptResponse(
+          status: http.statusCode,
+          contentRange: http.value(forHTTPHeaderField: "Content-Range"),
+          url: http.url ?? AlyteLocalModelManifest.expectedURL
+        )
+        completionHandler(.allow)
+      } catch {
+        completionHandler(.cancel)
+      }
     }
-    _ = session
-    _ = dataTask
   }
 
   func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
     queue.async {
+      guard self.callbackGate.accepts(session: session, task: dataTask) else { return }
       do {
         try self.core.append(data)
       } catch {
@@ -295,28 +342,50 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
 
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
     queue.async {
-      self.downloadTask = nil
-      self.session?.invalidateAndCancel()
-      self.session = nil
-      let completion = self.downloadCompletion
-      self.downloadCompletion = nil
-      let cancelCompletion = self.cancelCompletion
-      self.cancelCompletion = nil
+      guard let operation = self.currentOperation(session: session, task: task) else { return }
+      self.invalidate(operation, teardownSession: false)
       let transportFailure = error.map { self.networkFailure($0) }
       switch self.core.complete(transportFailure: transportFailure) {
       case .succeeded(let state):
-        completion?(.success(state))
-        cancelCompletion?(.success(state))
+        self.resolve(operation, download: .success(state), cancellation: .success(state))
       case .cancelled(let state):
-        completion?(.failure(AlyteLocalModelError.failed(.cancelled)))
-        cancelCompletion?(.success(state))
+        self.resolve(
+          operation,
+          download: .failure(AlyteLocalModelError.failed(.cancelled)),
+          cancellation: .success(state)
+        )
       case .failed(let localError):
-        completion?(.failure(localError))
-        cancelCompletion?(.failure(localError))
+        self.resolve(operation, download: .failure(localError), cancellation: .failure(localError))
       }
+      operation.session.invalidateAndCancel()
     }
-    _ = session
-    _ = task
+  }
+
+  private func currentOperation(session: URLSession, task: URLSessionTask) -> DownloadOperation? {
+    guard let operation = downloadOperation,
+      callbackGate.accepts(session: session, task: task)
+    else { return nil }
+    return operation
+  }
+
+  private func invalidate(_ operation: DownloadOperation, teardownSession: Bool = true) {
+    callbackGate.invalidate(operation.identity)
+    if teardownSession { operation.session.invalidateAndCancel() }
+    if downloadOperation === operation { downloadOperation = nil }
+  }
+
+  private func resolve(
+    _ operation: DownloadOperation?,
+    download: Result<[String: Any], Error>,
+    cancellation: Result<[String: Any], Error>
+  ) {
+    guard let operation else { return }
+    let downloadCompletion = operation.downloadCompletion
+    operation.downloadCompletion = nil
+    let cancelCompletions = operation.cancelCompletions
+    operation.cancelCompletions.removeAll()
+    downloadCompletion?(download)
+    cancelCompletions.forEach { $0(cancellation) }
   }
 
   private func fail(_ error: AlyteLocalModelError) {
