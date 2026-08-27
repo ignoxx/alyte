@@ -16,10 +16,10 @@ import type {
   SessionResponse,
   SignOutResponse,
 } from '@alyte/contracts';
+import { isValidAppleRawNonce } from '@alyte/contracts';
 import {
   AppleNonceVerificationError,
   AppleTokenVerificationError,
-  isValidAppleRawNonce,
   type AppleIdentityVerifier,
 } from './apple-verifier.js';
 import {

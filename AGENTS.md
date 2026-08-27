@@ -54,7 +54,9 @@ source of truth rather than repeating the same rule here.
 6. **Cloud exposure is explicit and minimal.** Show the exact artifact and purpose before first
    upload. Send only what the selected operation requires and keep no durable cloud health record.
 7. **The user controls the record.** Corrections preserve source provenance. Inclusion is reversible.
-   Local and cloud deletion are independent. Full Export is available.
+   Local and cloud deletion are independent; apply the short-lived unlinkable replay-marker boundary
+   recorded in [ADR 0010](docs/adr/0010-account-deletion-and-auth-replay-markers.md). Full Export is
+   available.
 8. **Ambiguity is honest.** Unsupported mapping, incompatible units, missing dates, mixed evidence,
    and unknown amount/dose remain visible instead of being guessed away.
 9. **Health facts are reviewed content.** Runtime models structure observations and propose
@@ -166,8 +168,8 @@ Use fixtures and wording guards to keep the hard-guardrail patterns out of user-
   domain changes.
 - Cloud uploads delete immediately after provider use and defensively expire. Completed readable
   output becomes a device-encrypted result envelope that expires within 24 hours or after retrieval.
-- Account deletion removes cloud-controlled state and preserves local records. Local deletion
-  removes database rows and referenced files and verifies cleanup.
+- Account deletion preserves local records. Local deletion removes database rows and referenced files
+  and verifies cleanup.
 
 ## UX behavior
 

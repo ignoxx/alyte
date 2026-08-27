@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { CONTRACT_VERSION } from '@alyte/contracts';
+import { APPLE_EXCHANGE_PATH, CONSENT_POLICY_VERSION } from '@alyte/contracts';
 import {
   CloudApiClient,
   CloudApiError,
@@ -37,12 +37,12 @@ describe('cloud HTTP adapter', () => {
       '0123456789ABCDEFGHIJKLMNOPQRSTUV',
     );
     assert.equal(result.accountId, 'account-1');
-    assert.equal(requests[0]?.url, 'https://api.example.test/v2/auth/apple/exchange');
+    assert.equal(requests[0]?.url, `https://api.example.test${APPLE_EXCHANGE_PATH}`);
     assert.equal(requests[0]?.init.headers instanceof Headers, false);
     assert.deepEqual(JSON.parse(String(requests[0]?.init.body)), {
       identityToken: 'synthetic-apple-token',
       rawNonce: '0123456789ABCDEFGHIJKLMNOPQRSTUV',
-      consentPolicyVersion: CONTRACT_VERSION,
+      consentPolicyVersion: CONSENT_POLICY_VERSION,
     });
     assert.deepEqual(requests[0]?.init.headers, {
       Accept: 'application/json',

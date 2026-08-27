@@ -1,5 +1,6 @@
 import {
-  CONTRACT_VERSION,
+  APPLE_EXCHANGE_PATH,
+  CONSENT_POLICY_VERSION,
   type AccountAuditEvent,
   type AccountConsent,
   type AccountDeletionResponse,
@@ -290,13 +291,13 @@ export class CloudApiClient implements CloudApi {
     signal?: AbortSignal,
   ) {
     return this.request(
-      '/v2/auth/apple/exchange',
+      APPLE_EXCHANGE_PATH,
       {
         method: 'POST',
         body: JSON.stringify({
           identityToken,
           rawNonce,
-          consentPolicyVersion: CONTRACT_VERSION,
+          consentPolicyVersion: CONSENT_POLICY_VERSION,
         }),
         idempotencyKey: idempotencyKey ?? this.idempotencyKey(),
         signal,

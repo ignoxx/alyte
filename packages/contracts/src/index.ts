@@ -1,9 +1,24 @@
-export const CONTRACT_VERSION = '2026-08-01';
+/** Version of the shared API/contract artifact. */
+export const CONTRACT_VERSION = '2026-08-27';
+
+/** Consent copy remains independently versioned from transport/schema compatibility. */
+export const CONSENT_POLICY_VERSION = '2026-08-01';
 
 export const API_VERSION = 'v1';
 
 /** Number of printable random characters generated for each Apple authorization attempt. */
 export const APPLE_RAW_NONCE_LENGTH = 32;
+
+/** Breaking nonce-bound Apple exchange protocol; shared by the mobile and backend adapters. */
+export const APPLE_EXCHANGE_PATH = '/v2/auth/apple/exchange';
+
+export function isValidAppleRawNonce(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length === APPLE_RAW_NONCE_LENGTH &&
+    /^[A-Za-z0-9._~-]+$/.test(value)
+  );
+}
 
 export interface HealthResponse {
   readonly status: 'ok';

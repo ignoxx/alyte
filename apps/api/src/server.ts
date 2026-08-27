@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import {
+  APPLE_EXCHANGE_PATH,
   CONTRACT_VERSION,
   type AccountDeletionResponse,
   type AccountDeletionRequest,
@@ -195,7 +196,7 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
   };
   server.post('/v1/auth/apple', unsupportedAppleExchange);
   server.post('/v1/auth/apple/exchange', unsupportedAppleExchange);
-  server.post('/v2/auth/apple/exchange', exchange);
+  server.post(APPLE_EXCHANGE_PATH, exchange);
 
   server.post('/v1/auth/refresh', async (request): Promise<SessionResponse> => {
     const body = bodyObject(request) as Partial<RefreshSessionRequest>;

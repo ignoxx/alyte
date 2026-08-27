@@ -932,14 +932,14 @@ describe('optional cloud identity journey', () => {
         ).count,
         0,
       );
-      assert.equal(
-        (
-          database.sqlite
-            .prepare('SELECT COUNT(*) AS count FROM apple_exchange_replay_tombstones')
-            .get() as { count: number }
-        ).count,
-        1,
-      );
+      const marker = database.sqlite
+        .prepare('SELECT * FROM apple_exchange_replay_tombstones')
+        .get() as Record<string, unknown>;
+      assert.equal(typeof marker.nonce_digest, 'string');
+      assert.equal(typeof marker.credential_hash, 'string');
+      assert.equal(typeof marker.expires_at, 'string');
+      assert.equal('account_id' in marker, false);
+      assert.equal('response_json' in marker, false);
 
       const replay = await server.inject({
         method: 'POST',
@@ -953,14 +953,7 @@ describe('optional cloud identity journey', () => {
       });
       assert.equal(replay.statusCode, 409);
       assert.equal(replay.json().error.code, 'nonce_replayed');
-      assert.equal(
-        (
-          database.sqlite.prepare('SELECT COUNT(*) AS count FROM accounts').get() as {
-            count: number;
-          }
-        ).count,
-        0,
-      );
+      assert.equal(database.findAccount(session.accountId), undefined);
       clock.advance(2 * 24 * 60 * 60);
       assert.equal(database.cleanupExpired(clock.now()).operations >= 1, true);
       assert.equal(

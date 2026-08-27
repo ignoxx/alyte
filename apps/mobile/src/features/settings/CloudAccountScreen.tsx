@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, Share, StyleSheet, View } from 'react-native';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { CONTRACT_VERSION } from '@alyte/contracts';
+import { CONSENT_POLICY_VERSION } from '@alyte/contracts';
 import { t } from '../../localization';
 import { useServices } from '../../services';
 import { AppButton, AppIcon, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
@@ -234,7 +234,7 @@ export function CloudAccountScreen() {
               </View>
               <AppText style={styles.body}>{t('settings.cloudAccountProcessor')}</AppText>
               <AppText variant="caption" style={styles.policy}>
-                {t('settings.cloudAccountPolicy').replace('{version}', CONTRACT_VERSION)}
+                {t('settings.cloudAccountPolicy').replace('{version}', CONSENT_POLICY_VERSION)}
               </AppText>
               {!disclosureAccepted ? (
                 <AppButton

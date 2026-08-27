@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose';
-import { APPLE_RAW_NONCE_LENGTH } from '@alyte/contracts';
+import { isValidAppleRawNonce } from '@alyte/contracts';
 
 export const APPLE_ISSUER = 'https://appleid.apple.com';
 export const APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys';
@@ -31,14 +31,6 @@ export class AppleNonceVerificationError extends AppleTokenVerificationError {
     super();
     this.name = 'AppleNonceVerificationError';
   }
-}
-
-export function isValidAppleRawNonce(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    value.length === APPLE_RAW_NONCE_LENGTH &&
-    /^[A-Za-z0-9._~-]+$/.test(value)
-  );
 }
 
 /** Apple receives this lowercase SHA-256 digest; the raw nonce is sent only to Alyte over TLS. */

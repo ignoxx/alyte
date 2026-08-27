@@ -1,4 +1,4 @@
-import { APPLE_RAW_NONCE_LENGTH } from '@alyte/contracts';
+import { APPLE_RAW_NONCE_LENGTH, isValidAppleRawNonce } from '@alyte/contracts';
 
 export type AppleNonce = {
   readonly rawNonce: string;
@@ -9,14 +9,6 @@ export type AppleNonceGenerator = () => Promise<AppleNonce>;
 
 const NONCE_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._';
 const RANDOM_BYTE_BUCKET = Math.floor(256 / NONCE_ALPHABET.length) * NONCE_ALPHABET.length;
-
-function isValidAppleRawNonce(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    value.length === APPLE_RAW_NONCE_LENGTH &&
-    /^[A-Za-z0-9._~-]+$/.test(value)
-  );
-}
 
 function encodeRandomNonce(bytes: Uint8Array): string {
   let rawNonce = '';

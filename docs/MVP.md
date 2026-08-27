@@ -269,8 +269,10 @@ provenance, and correction controls.
   for local storage.
 - If a document must leave the device, the app sends a Sanitized Report or a smaller extracted-data
   payload rather than the Original Report whenever the operation permits it.
-- Cloud account deletion removes the account and all app-controlled server data without deleting
-  local records or making local mode unusable.
+- Cloud account deletion removes the account and app-controlled server data without deleting local
+  records or making local mode unusable. A maximum-24-hour unlinkable HMAC credential/nonce replay
+  marker may remain solely to reject captured authentication replay; it contains no account ID,
+  token, response, health data, or exportable user content and then expires.
 - Data export covers both the complete local dataset and any app-controlled cloud account data.
 
 The first-release backend performs only:
@@ -368,7 +370,8 @@ relationship between them. Alyte cannot determine why your result changed.`
 - The export flow makes inclusion of sensitive source media explicit and warns that the exported
   archive leaves Alyte protection.
 - Users can export all app-controlled data held for their cloud account.
-- Deleting a cloud account deletes its app-controlled cloud data but leaves local records intact.
+- Deleting a cloud account deletes its app-controlled cloud data but leaves local records intact,
+  subject only to the short-lived unlinkable replay-marker boundary above.
 - Signing out or deleting the cloud account returns the app to fully usable local mode.
 - Personal health records, reports, Intake Images, and their encryption keys are excluded from
   iCloud storage and iCloud Backup for the first release because current App Review rules prohibit

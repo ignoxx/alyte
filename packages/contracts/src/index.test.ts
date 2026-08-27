@@ -1,12 +1,19 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { CONTRACT_VERSION, type AppleExchangeRequest } from './index.js';
+import {
+  APPLE_EXCHANGE_PATH,
+  CONSENT_POLICY_VERSION,
+  CONTRACT_VERSION,
+  type AppleExchangeRequest,
+} from './index.js';
 
 type RequiredProperty<T, K extends keyof T> = {} extends Pick<T, K> ? never : true;
 
 describe('cloud contracts', () => {
   it('has an explicit version', () => {
     assert.match(CONTRACT_VERSION, /^\d{4}-\d{2}-\d{2}$/);
+    assert.equal(CONTRACT_VERSION, '2026-08-27');
+    assert.equal(APPLE_EXCHANGE_PATH, '/v2/auth/apple/exchange');
   });
 
   it('requires the disclosed consent policy in Apple exchange requests', () => {
@@ -16,10 +23,10 @@ describe('cloud contracts', () => {
     const request: AppleExchangeRequest = {
       identityToken: 'synthetic-token',
       rawNonce: '0123456789ABCDEFGHIJKLMNOPQRSTUV',
-      consentPolicyVersion: CONTRACT_VERSION,
+      consentPolicyVersion: CONSENT_POLICY_VERSION,
     };
     assert.equal(consentPolicyIsRequired, true);
     assert.equal(rawNonceIsRequired, true);
-    assert.equal(request.consentPolicyVersion, CONTRACT_VERSION);
+    assert.equal(request.consentPolicyVersion, CONSENT_POLICY_VERSION);
   });
 });

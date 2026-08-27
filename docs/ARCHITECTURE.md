@@ -560,9 +560,10 @@ AI provider never saw the submitted content.
   billing-period boundary and do not roll over.
 - Home does not show a permanent meter. The backend returns coarse warning state around 80%, 95%,
   and exhaustion.
-- Account deletion revokes sessions and deletes account, purchase-linked app data where legally
+- Account deletion revokes sessions and deletes the account, purchase-linked app data where legally
   permitted, usage/request metadata, pending uploads, and cached results. It leaves local records
-  untouched.
+  untouched; the only server-side exception is the maximum-24-hour unlinkable HMAC
+  credential/nonce replay marker described in [ADR 0010](adr/0010-account-deletion-and-auth-replay-markers.md).
 
 ## Cloud model boundary
 
@@ -615,7 +616,8 @@ remain launch requirements.
 
 Deletion is implemented as a domain operation that removes dependent database rows and referenced
 files transactionally as far as the platform permits, then verifies no orphaned app-controlled file
-remains.
+remains. Cloud-account deletion follows [ADR 0010](adr/0010-account-deletion-and-auth-replay-markers.md):
+only a bounded, unlinkable HMAC replay marker may remain temporarily.
 
 ## Failure model
 
