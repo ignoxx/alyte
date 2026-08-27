@@ -146,7 +146,7 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
             continuation.resume(returning: self.core.currentState())
           }
         }
-        operation.task?.cancel()
+        operation.task.cancel()
       }
     }
   }
