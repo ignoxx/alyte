@@ -160,12 +160,19 @@ export function extractionReviewBlocksConfirmation(
   return row.decision !== 'skip' && extractionReviewRequiresAttention(row);
 }
 
+/** A defaulted local collection day is useful for grouping but does not require correction. */
+export function extractionReviewHasOnlyNonBlockingReasons(
+  reasons: readonly ExtractionReviewReason[],
+): boolean {
+  return reasons.length === 0 || reasons.every((reason) => reason === 'defaulted-collection-date');
+}
+
 function defaultExtractionDecision(
   reasons: readonly ExtractionReviewReason[],
 ): ExtractionRowDecision {
   return reasons.some((reason) => AUTO_EXCLUDED_EXTRACTION_REVIEW_REASONS.has(reason))
     ? 'skip'
-    : reasons.length === 0 || reasons.every((reason) => reason === 'defaulted-collection-date')
+    : extractionReviewHasOnlyNonBlockingReasons(reasons)
       ? 'resolve'
       : 'preserve';
 }
@@ -1086,12 +1093,68 @@ function findAliasMatches(
   return matches;
 }
 
-function measurementValueText(value: MeasurementValue): string {
-  return value.kind === 'numeric'
-    ? String(value.value)
-    : value.kind === 'bounded'
-      ? `${value.comparator}${value.value}`
-      : value.value;
+type DisplaySuffixPart = {
+  readonly kind: 'value' | 'unit' | 'reference' | 'flag';
+  readonly expected: MeasurementValue | string | null;
+};
+
+function measurementValuesMatch(left: MeasurementValue, right: MeasurementValue): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'numeric' && right.kind === 'numeric') return left.value === right.value;
+  if (left.kind === 'bounded' && right.kind === 'bounded') {
+    return left.comparator === right.comparator && left.value === right.value;
+  }
+  return left.kind === 'categorical' && right.kind === 'categorical'
+    ? normalizeAlias(left.value) === normalizeAlias(right.value)
+    : left.kind === 'free_text' && right.kind === 'free_text'
+      ? left.value === right.value
+      : false;
+}
+
+function numericParts(input: string): readonly MeasurementValue[] {
+  return [...input.matchAll(new RegExp(NUMERIC_TOKEN_PATTERN, 'gu'))]
+    .map((match) => parseComparatorValue(match[0]?.trim() ?? ''))
+    .filter((value): value is MeasurementValue => value !== null);
+}
+
+function displaySuffixPartMatches(part: DisplaySuffixPart, actual: string): boolean {
+  if (part.kind === 'value' && typeof part.expected !== 'string' && part.expected !== null) {
+    const parsed = parseComparatorValue(actual);
+    return parsed !== null && measurementValuesMatch(parsed, part.expected);
+  }
+  if (part.kind === 'reference' && typeof part.expected === 'string') {
+    const expected = numericParts(part.expected);
+    const actualParts = numericParts(actual);
+    return (
+      parseReferenceInterval(actual) !== null &&
+      expected.length === actualParts.length &&
+      expected.every((value, index) => measurementValuesMatch(value, actualParts[index]!))
+    );
+  }
+  if (part.kind === 'unit' && typeof part.expected === 'string') {
+    return normalizeUnit(actual) === normalizeUnit(part.expected);
+  }
+  if (part.kind === 'flag' && typeof part.expected === 'string') {
+    return normalizeAlias(actual) === normalizeAlias(part.expected);
+  }
+  return false;
+}
+
+function displaySuffixPrefix(label: string, suffix: readonly DisplaySuffixPart[]): string | null {
+  const trimmed = label.trim();
+  const consume = (partIndex: number, end: number): string | null => {
+    if (partIndex < 0) return trimmed.slice(0, end).trim() || null;
+    for (let boundary = end - 1; boundary >= 0; boundary -= 1) {
+      if (!/\s/u.test(trimmed[boundary] ?? '')) continue;
+      const actual = trimmed.slice(boundary + 1, end).trim();
+      if (actual.length > 0 && displaySuffixPartMatches(suffix[partIndex]!, actual)) {
+        const prefix = consume(partIndex - 1, boundary + 1);
+        if (prefix !== null) return prefix;
+      }
+    }
+    return null;
+  };
+  return consume(suffix.length - 1, trimmed.length);
 }
 
 /**
@@ -1112,13 +1175,11 @@ export function cleanProposedDisplayLabel(
   const label = input.trim();
   if (label.length === 0) return label;
   const parts = [
-    { kind: 'value', text: measurementValueText(fields.value) },
-    { kind: 'unit', text: fields.unit },
-    { kind: 'reference', text: fields.referenceInterval },
-    { kind: 'flag', text: fields.flag ?? null },
-  ].filter(
-    (part): part is { kind: string; text: string } => part.text !== null && part.text !== '',
-  );
+    { kind: 'value' as const, expected: fields.value },
+    { kind: 'unit' as const, expected: fields.unit },
+    { kind: 'reference' as const, expected: fields.referenceInterval },
+    { kind: 'flag' as const, expected: fields.flag ?? null },
+  ].filter((part) => part.expected !== null && part.expected !== '');
   if (
     parts.length === 0 ||
     parts.every((part) => part.kind !== 'value' && part.kind !== 'reference')
@@ -1126,22 +1187,25 @@ export function cleanProposedDisplayLabel(
     return label;
 
   const candidates = new Map<string, string>();
-  const visit = (remaining: readonly (typeof parts)[number][], suffix: readonly string[]) => {
-    if (suffix.length > 0 && suffix.some((text) => text !== '') && suffix.length <= parts.length) {
-      const pattern = suffix
-        .map((text) => escapeRegExp(text.trim()).replace(/\s+/gu, '\\s+'))
-        .join('\\s+');
+  let longestSuffix = 0;
+  const visit = (remaining: readonly DisplaySuffixPart[], suffix: readonly DisplaySuffixPart[]) => {
+    if (suffix.length > 0 && suffix.length <= parts.length) {
       // A separator is intentionally limited to whitespace. Punctuation embedded in a source
       // value/range is part of that exact selected cell and must not be guessed away.
-      const match = new RegExp(`\\s+${pattern}\\s*$`, 'u').exec(label);
-      if (match !== null) {
-        const prefix = label.slice(0, match.index).trim();
+      const prefix = displaySuffixPrefix(label, suffix);
+      if (prefix !== null) {
         const aliasIds = new Set(findAliasMatches(prefix, aliases).map((item) => item.id));
-        if (aliasIds.size === 1) candidates.set(prefix, prefix);
+        if (aliasIds.size === 1) {
+          if (suffix.length > longestSuffix) {
+            candidates.clear();
+            longestSuffix = suffix.length;
+          }
+          if (suffix.length === longestSuffix) candidates.set(prefix, prefix);
+        }
       }
     }
     for (const [index, part] of remaining.entries()) {
-      visit([...remaining.slice(0, index), ...remaining.slice(index + 1)], [...suffix, part.text]);
+      visit([...remaining.slice(0, index), ...remaining.slice(index + 1)], [...suffix, part]);
     }
   };
   visit(parts, []);
@@ -1464,10 +1528,7 @@ function parseSourceRow(
     proposedSpecimenType: specimenType,
     collectionDate: effectiveDate,
     reviewReasons: [...new Set(reasons)],
-    reviewState:
-      reasons.length === 0 || reasons.every((reason) => reason === 'defaulted-collection-date')
-        ? 'ready'
-        : 'needs-review',
+    reviewState: extractionReviewHasOnlyNonBlockingReasons(reasons) ? 'ready' : 'needs-review',
     decision: defaultExtractionDecision([...new Set(reasons)]),
   };
 }
@@ -1669,11 +1730,9 @@ export function revalidateExtractionRow(
     ...next,
     proposedBiomarkerId: id,
     reviewReasons,
-    reviewState:
-      reviewReasons.length === 0 ||
-      reviewReasons.every((reason) => reason === 'defaulted-collection-date')
-        ? 'ready'
-        : 'needs-review',
+    reviewState: extractionReviewHasOnlyNonBlockingReasons(reviewReasons)
+      ? 'ready'
+      : 'needs-review',
     decision:
       patch.decision ?? (wasExplicitlySkipped ? 'skip' : defaultExtractionDecision(reviewReasons)),
   };

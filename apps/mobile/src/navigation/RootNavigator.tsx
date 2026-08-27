@@ -340,7 +340,7 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
           options={{
             presentation: extractionEditorDestination.presentation,
             sheetAllowedDetents: [0.92],
-            sheetInitialDetentIndex: 1,
+            sheetInitialDetentIndex: 0,
             sheetGrabberVisible: true,
             headerLargeTitle: false,
             headerShown: false,

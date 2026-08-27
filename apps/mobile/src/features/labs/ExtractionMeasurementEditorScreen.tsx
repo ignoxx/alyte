@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   useNavigation,
@@ -17,7 +17,7 @@ import {
 import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppSurface, AppText, StatusPill } from '../../ui/primitives';
+import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import { colors, spacing } from '../../theme';
 import {
   extractionSourcePresentation,
@@ -56,6 +56,15 @@ function editFrom(row: ExtractionDraftRow): RowEdit {
   };
 }
 
+function secondaryFieldsNeedReview(row: Pick<ExtractionDraftRow, 'reviewReasons'>): boolean {
+  return row.reviewReasons.some(
+    (reason) =>
+      reason === 'missing-unit' ||
+      reason === 'incompatible-unit' ||
+      reason === 'unparseable-reference-interval',
+  );
+}
+
 export function ExtractionMeasurementEditorScreen() {
   const navigation = useNavigation<EditorNavigation>();
   const route = useRoute<EditorRoute>();
@@ -66,6 +75,7 @@ export function ExtractionMeasurementEditorScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [allowRemove, setAllowRemove] = useState(false);
+  const [secondaryExpanded, setSecondaryExpanded] = useState(false);
   const previewRequestPending = useRef(false);
   const [previewOpening, setPreviewOpening] = useState(false);
   const initialEdit = useMemo(() => (row === null ? null : editFrom(row)), [row]);
@@ -80,6 +90,7 @@ export function ExtractionMeasurementEditorScreen() {
       if (next === null) throw new Error('Extraction row unavailable');
       setRow(next);
       setEdit(editFrom(next));
+      setSecondaryExpanded(secondaryFieldsNeedReview(next));
       setError(false);
     } catch {
       setError(true);
@@ -282,19 +293,50 @@ export function ExtractionMeasurementEditorScreen() {
               onChangeText={(value) => setEdit({ ...edit, value })}
             />
           </View>
-          <AppText variant="label">{t('labs.extractionSecondaryFields')}</AppText>
-          <View style={styles.fieldGroup}>
-            <Field
-              label={t('labs.measurementUnit')}
-              value={edit.unit}
-              onChangeText={(unit) => setEdit({ ...edit, unit })}
+          <Pressable
+            accessibilityLabel={t(
+              secondaryExpanded
+                ? 'labs.extractionHideSecondaryFields'
+                : 'labs.extractionShowSecondaryFields',
+            )}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: secondaryExpanded }}
+            onPress={() => setSecondaryExpanded((expanded) => !expanded)}
+            style={({ pressed }) => [styles.disclosure, pressed && styles.disclosurePressed]}
+          >
+            <View style={styles.disclosureCopy}>
+              <AppText variant="label">{t('labs.extractionSecondaryFields')}</AppText>
+              <AppText variant="caption" style={styles.muted}>
+                {t(
+                  secondaryExpanded
+                    ? 'labs.extractionHideSecondaryFields'
+                    : secondaryFieldsNeedReview(row)
+                      ? 'labs.extractionSecondaryFieldsNeedsReview'
+                      : 'labs.extractionSecondaryFieldsOptional',
+                )}
+              </AppText>
+            </View>
+            <AppIcon
+              name="chevronRight"
+              size={16}
+              color={colors.mutedInk}
+              style={{ transform: [{ rotate: secondaryExpanded ? '90deg' : '0deg' }] }}
             />
-            <Field
-              label={t('labs.measurementReference')}
-              value={edit.reference}
-              onChangeText={(reference) => setEdit({ ...edit, reference })}
-            />
-          </View>
+          </Pressable>
+          {secondaryExpanded && (
+            <View style={styles.fieldGroup}>
+              <Field
+                label={t('labs.measurementUnit')}
+                value={edit.unit}
+                onChangeText={(unit) => setEdit({ ...edit, unit })}
+              />
+              <Field
+                label={t('labs.measurementReference')}
+                value={edit.reference}
+                onChangeText={(reference) => setEdit({ ...edit, reference })}
+              />
+            </View>
+          )}
         </View>
       </ScrollView>
       <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
@@ -364,6 +406,15 @@ const styles = StyleSheet.create({
   error: { color: colors.danger },
   form: { gap: spacing.md },
   fieldGroup: { gap: spacing.md },
+  disclosure: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: 56,
+    paddingVertical: spacing.sm,
+  },
+  disclosureCopy: { flex: 1, gap: spacing.xs },
+  disclosurePressed: { opacity: 0.55 },
   field: { gap: spacing.xs },
   fieldLabel: { color: colors.mutedInk },
   input: {

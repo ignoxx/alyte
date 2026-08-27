@@ -948,4 +948,79 @@ describe('local extraction domain', () => {
     );
     assert.deepEqual(resultFirst.proposedValue, { kind: 'numeric', value: 1.2 });
   });
+
+  it('cleans locale-formatted noisy labels only when the remaining alias is unique', () => {
+    const observations = [
+      ['de-label', 'LDL-Cholesterin 3,8 mmol/L', 0.05],
+      ['de-value', '3,8', 0.42],
+      ['de-unit', 'mmol/L', 0.56],
+      ['de-range', '1,0–4,0', 0.7],
+    ].map(([id, text, x]) => ({
+      id: id as string,
+      text: text as string,
+      alternatives: [],
+      pageIndex: 0,
+      orientation: 0,
+      boundingBox: { x: x as number, y: 0.2, width: 0.1, height: 0.03 },
+      structure: {
+        kind: 'table-cell' as const,
+        tableId: 'de-results',
+        rowIndex: 2,
+        columnIndex: Math.round((x as number) * 10),
+      },
+      recognition: { level: 'accurate' as const, language: 'de', internalConfidence: null },
+    }));
+    const aliases: readonly ExtractionAliasEntry[] = [
+      {
+        id: 'biomarker.ldl_c',
+        aliases: ['LDL-Cholesterin'],
+        specimens: ['serum'],
+        units: ['mmol/L'],
+      },
+    ];
+    const row = groupObservationsIntoRows(observations, {
+      aliases,
+      locale: 'de-DE',
+      specimenType: 'serum',
+      collectionDate: { kind: 'known', value: '2026-08-22' },
+    })[0];
+    assert.ok(row);
+    const sourceText = row.sourceText;
+    const sourceRaw = row.source.raw;
+    const cleaned = reparseExtractionRowFromSemanticFields(
+      row,
+      {
+        label: 'de-label',
+        value: 'de-value',
+        unit: 'de-unit',
+        referenceInterval: 'de-range',
+        flag: null,
+      },
+      aliases,
+    );
+    assert.equal(cleaned.proposedLabel, 'LDL-Cholesterin');
+    assert.equal(cleaned.sourceText, sourceText);
+    assert.deepEqual(cleaned.source.raw, sourceRaw);
+
+    const ambiguous = reparseExtractionRowFromSemanticFields(
+      row,
+      {
+        label: 'de-label',
+        value: 'de-value',
+        unit: 'de-unit',
+        referenceInterval: 'de-range',
+        flag: null,
+      },
+      [
+        ...aliases,
+        {
+          id: 'biomarker.hdl_c',
+          aliases: ['LDL-Cholesterin'],
+          specimens: ['serum'],
+          units: ['mmol/L'],
+        },
+      ],
+    );
+    assert.equal(ambiguous.proposedLabel, 'LDL-Cholesterin 3,8 mmol/L');
+  });
 });
