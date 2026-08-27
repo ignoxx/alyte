@@ -113,7 +113,10 @@ export function createServices(
   const account =
     options.account ??
     createCloudAccountService({
-      api: variant === 'production' ? new CloudApiClient() : new CloudApiClient({ baseUrl: null }),
+      api:
+        variant === 'production'
+          ? new CloudApiClient({ requireHttps: true })
+          : new CloudApiClient({ baseUrl: null }),
     });
 
   if (showcase !== null) {

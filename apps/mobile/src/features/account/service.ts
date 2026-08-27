@@ -6,10 +6,17 @@ import {
 import { CloudApiClient, CloudApiError, createIdempotencyKey, type CloudApi } from './cloud-api';
 import {
   createCloudSessionRepository,
+  createCloudPendingOperationRepository,
   storedSessionFromResponse,
+  type CloudPendingOperation,
+  type CloudPendingOperationRepository,
   type CloudSessionRepository,
   type StoredCloudSession,
 } from './session';
+import {
+  createProtectedReportFileService,
+  type ProtectedReportFileService,
+} from '../labs/file-service';
 
 export type AppleSignInProvider = {
   readonly isAvailable: () => Promise<boolean>;
@@ -35,33 +42,56 @@ export type CloudAccountSnapshot = {
   readonly signedIn: boolean;
   readonly accountId: string | null;
   readonly lastErrorCode: string | null;
+  readonly pendingDeletion: boolean;
+};
+
+export type PreparedCloudAccountExport = {
+  readonly account: AccountExportResponse;
+  /** A protected, backup-excluded temporary file URL for the native share controller. */
+  readonly path: string;
+  readonly cleanup: () => Promise<void>;
 };
 
 export type CloudAccountService = {
   readonly bootstrap: () => Promise<void>;
   readonly getSnapshot: () => CloudAccountSnapshot;
   readonly subscribe: (listener: () => void) => () => void;
+  readonly isAppleSignInAvailable: () => Promise<boolean>;
   readonly signInWithApple: () => Promise<void>;
   readonly exportAccount: (signal?: AbortSignal) => Promise<AccountExportResponse>;
+  readonly prepareAccountExport: (signal?: AbortSignal) => Promise<PreparedCloudAccountExport>;
   readonly signOut: () => Promise<void>;
   readonly deleteAccount: (idempotencyKey?: string) => Promise<void>;
 };
 
 export type CloudAccountServiceOptions = {
   readonly repository?: CloudSessionRepository;
+  readonly pendingOperations?: CloudPendingOperationRepository;
   readonly api?: CloudApi;
   readonly apple?: AppleSignInProvider;
+  readonly exportFiles?: CloudAccountExportFiles;
   readonly now?: () => number;
 };
 
+export type CloudAccountExportFiles = Pick<
+  Required<ProtectedReportFileService>,
+  'createExportWorkspace' | 'writeExportFile' | 'removeExportArtifacts'
+>;
+
 const ACCESS_REFRESH_SKEW_MS = 30_000;
+const MAX_CLOUD_EXPORT_BYTES = 256 * 1024;
 
 function isCloudApiError(error: unknown): error is CloudApiError {
   return error instanceof CloudApiError;
 }
 
 function isOfflineError(error: unknown): boolean {
-  return isCloudApiError(error) && (error.code === 'offline' || error.code === 'api_unconfigured');
+  return (
+    isCloudApiError(error) &&
+    (error.code === 'offline' ||
+      error.code === 'api_unconfigured' ||
+      error.code === 'request_timeout')
+  );
 }
 
 function isCancellation(error: unknown): boolean {
@@ -94,17 +124,22 @@ export function createCloudAccountService(
   options: CloudAccountServiceOptions = {},
 ): CloudAccountService {
   const repository = options.repository ?? createCloudSessionRepository();
-  const api = options.api ?? new CloudApiClient();
+  const pendingOperations = options.pendingOperations ?? createCloudPendingOperationRepository();
+  const api = options.api ?? new CloudApiClient({ requireHttps: true });
   const apple = options.apple ?? productionAppleProvider;
+  const exportFiles: CloudAccountExportFiles =
+    options.exportFiles ?? (createProtectedReportFileService() as CloudAccountExportFiles);
   const now = options.now ?? Date.now;
   const listeners = new Set<() => void>();
   let session: StoredCloudSession | null = null;
   let accountId: string | null = null;
+  let pendingDeletion: CloudPendingOperation | null = null;
   let snapshot: CloudAccountSnapshot = {
     status: 'signed-out',
     signedIn: false,
     accountId: null,
     lastErrorCode: null,
+    pendingDeletion: false,
   };
   let bootstrapPromise: Promise<void> | null = null;
   let refreshPromise: Promise<string> | null = null;
@@ -113,7 +148,13 @@ export function createCloudAccountService(
     status: CloudAccountStatus,
     lastErrorCode: string | null = snapshot.lastErrorCode,
   ): void {
-    snapshot = { status, signedIn: session !== null, accountId, lastErrorCode };
+    snapshot = {
+      status,
+      signedIn: session !== null,
+      accountId,
+      lastErrorCode,
+      pendingDeletion: pendingDeletion !== null,
+    };
     listeners.forEach((listener) => listener());
   }
 
@@ -155,11 +196,13 @@ export function createCloudAccountService(
         return next.accessToken;
       } catch (error) {
         if (!isOfflineError(error) && !isCancellation(error)) {
+          const code = errorCode(error);
           try {
             await clearDeviceSession();
           } catch {
             // The original authentication error remains the useful service result.
           }
+          publish('signed-out', code);
         } else if (isCancellation(error)) {
           publish(session === null ? 'signed-out' : 'active', errorCode(error));
         } else {
@@ -195,11 +238,17 @@ export function createCloudAccountService(
       if (
         isCloudApiError(error) &&
         error.status === 401 &&
+        error.code === 'session_invalid' &&
         session !== null &&
         session.accessToken === accessToken
       ) {
         accessToken = await refreshStoredSession();
-        return operation(accessToken);
+        try {
+          return await operation(accessToken);
+        } catch (retryError) {
+          if (isOfflineError(retryError)) publish('offline', errorCode(retryError));
+          throw retryError;
+        }
       }
       if (isOfflineError(error)) publish('offline', errorCode(error));
       throw error;
@@ -213,6 +262,13 @@ export function createCloudAccountService(
     const operation = (async () => {
       try {
         const stored = await repository.read();
+        try {
+          pendingDeletion = await pendingOperations.read();
+        } catch {
+          // A pending retry marker is advisory recovery state. A SecureStore read failure must
+          // never prevent the account-free local app from opening.
+          pendingDeletion = null;
+        }
         if (stored === null) {
           publish('signed-out', null);
           return;
@@ -225,17 +281,16 @@ export function createCloudAccountService(
           publish('active', null);
         }
       } catch (error) {
+        const code = errorCode(error);
         if (isOfflineError(error) || isCancellation(error)) {
-          publish('offline', errorCode(error));
-        } else if (session !== null) {
+          publish('offline', code);
+        } else {
           try {
-            await clearDeviceSession();
+            if (session !== null) await clearDeviceSession();
           } catch {
             // Keep local mode usable even when credential cleanup cannot be completed now.
           }
-          publish('signed-out', errorCode(error));
-        } else {
-          publish('signed-out', 'session_storage_unavailable');
+          publish('signed-out', code === 'unknown' ? 'session_storage_unavailable' : code);
         }
       }
     })();
@@ -248,10 +303,21 @@ export function createCloudAccountService(
     return operation;
   }
 
+  async function isAppleSignInAvailable(): Promise<boolean> {
+    try {
+      return await apple.isAvailable();
+    } catch {
+      return false;
+    }
+  }
+
   async function signInWithApple(): Promise<void> {
     publish('working', null);
     try {
-      if (!(await apple.isAvailable())) throw new CloudApiError(0, 'apple_unavailable');
+      if (api.isConfigured !== undefined && !api.isConfigured()) {
+        throw new CloudApiError(0, 'api_unconfigured');
+      }
+      if (!(await isAppleSignInAvailable())) throw new CloudApiError(0, 'apple_unavailable');
       let result: { readonly identityToken: string | null };
       try {
         result = await apple.signIn();
@@ -287,6 +353,35 @@ export function createCloudAccountService(
     return result;
   }
 
+  async function prepareAccountExport(signal?: AbortSignal): Promise<PreparedCloudAccountExport> {
+    const account = await exportAccount(signal);
+    const serialized = JSON.stringify({ contractVersion: CONTRACT_VERSION, account });
+    if (serialized === undefined) throw new CloudApiError(502, 'invalid_response');
+    if (new TextEncoder().encode(serialized).byteLength > MAX_CLOUD_EXPORT_BYTES) {
+      throw new CloudApiError(502, 'export_too_large');
+    }
+
+    const workspace = await exportFiles.createExportWorkspace(
+      `cloud-account-${createIdempotencyKey()}`,
+    );
+    try {
+      const artifact = await exportFiles.writeExportFile(
+        workspace,
+        'account-metadata.json',
+        serialized,
+      );
+      let cleanupPromise: Promise<void> | null = null;
+      const cleanup = (): Promise<void> => {
+        cleanupPromise ??= exportFiles.removeExportArtifacts(workspace);
+        return cleanupPromise;
+      };
+      return { account, path: artifact.path, cleanup };
+    } catch (error) {
+      await exportFiles.removeExportArtifacts(workspace).catch(() => undefined);
+      throw error;
+    }
+  }
+
   async function signOut(): Promise<void> {
     const current = session;
     if (current === null) {
@@ -310,14 +405,40 @@ export function createCloudAccountService(
     if (failure !== undefined) throw failure;
   }
 
-  async function deleteAccount(idempotencyKey = createIdempotencyKey()): Promise<void> {
+  async function deleteAccount(idempotencyKey?: string): Promise<void> {
     if (session === null) throw new CloudApiError(401, 'session_required');
+    const operationKey =
+      pendingDeletion?.idempotencyKey ?? idempotencyKey ?? createIdempotencyKey();
+    const nextPending: CloudPendingOperation = {
+      kind: 'account-delete',
+      idempotencyKey: operationKey,
+      createdAt: new Date(now()).toISOString(),
+    };
+    try {
+      await pendingOperations.write(nextPending);
+      pendingDeletion = nextPending;
+    } catch (error) {
+      publish('active', 'session_storage_unavailable');
+      throw error;
+    }
     publish('working', null);
     try {
-      await withAccess((accessToken) => api.deleteAccount(accessToken, idempotencyKey));
-      await clearDeviceSession();
+      const response = await withAccess((accessToken) =>
+        api.deleteAccount(accessToken, operationKey),
+      );
+      if (response.deleted !== true) throw new CloudApiError(502, 'invalid_response');
+      try {
+        await clearDeviceSession();
+      } finally {
+        pendingDeletion = null;
+        await pendingOperations.clear();
+        publish('signed-out', null);
+      }
     } catch (error) {
-      publish(isOfflineError(error) ? 'offline' : 'active', errorCode(error));
+      publish(
+        session === null ? 'signed-out' : isOfflineError(error) ? 'offline' : 'active',
+        errorCode(error),
+      );
       throw error;
     }
   }
@@ -330,7 +451,9 @@ export function createCloudAccountService(
       return () => listeners.delete(listener);
     },
     signInWithApple,
+    isAppleSignInAvailable,
     exportAccount,
+    prepareAccountExport,
     signOut,
     deleteAccount,
   };

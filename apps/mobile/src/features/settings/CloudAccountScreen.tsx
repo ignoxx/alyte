@@ -1,5 +1,10 @@
-import { useEffect, useState } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import {
+  AppleAuthenticationButton,
+  AppleAuthenticationButtonStyle,
+  AppleAuthenticationButtonType,
+} from 'expo-apple-authentication';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Pressable, Share, StyleSheet, View } from 'react-native';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CONTRACT_VERSION } from '@alyte/contracts';
@@ -16,6 +21,7 @@ function errorCopy(code: string | null): string | null {
       return t('settings.cloudAccountAppleUnavailable');
     case 'offline':
     case 'api_unconfigured':
+    case 'request_timeout':
       return t('settings.cloudAccountOffline');
     case 'refresh_token_expired':
     case 'refresh_token_invalid':
@@ -90,13 +96,33 @@ export function CloudAccountScreen() {
   const [deletionKey, setDeletionKey] = useState<string | null>(null);
   const [deletionAttempted, setDeletionAttempted] = useState(false);
   const [deletionComplete, setDeletionComplete] = useState(false);
+  const [appleAvailable, setAppleAvailable] = useState<boolean | null>(null);
+  const [disclosureAccepted, setDisclosureAccepted] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportFailed, setExportFailed] = useState(false);
+  const [exportCancelled, setExportCancelled] = useState(false);
+  const pendingExportCleanup = useRef<(() => Promise<void>) | null>(null);
+  const exportShareInFlight = useRef(false);
   const isWorking = snapshot.status === 'working';
-  const deletionWorking = isWorking && deletionKey !== null;
+  const deletionWorking = isWorking && (deletionKey !== null || snapshot.pendingDeletion);
 
   useEffect(() => {
     const unsubscribe = account.subscribe(() => setSnapshot(account.getSnapshot()));
     void account.bootstrap();
     return unsubscribe;
+  }, [account]);
+
+  useEffect(() => {
+    let active = true;
+    void account.isAppleSignInAvailable().then((available) => {
+      if (active) setAppleAvailable(available);
+    });
+    return () => {
+      active = false;
+      const cleanup = pendingExportCleanup.current;
+      pendingExportCleanup.current = null;
+      if (cleanup !== null && !exportShareInFlight.current) void cleanup();
+    };
   }, [account]);
 
   usePreventRemove(deletionWorking, ({ data }) => {
@@ -109,6 +135,7 @@ export function CloudAccountScreen() {
   const error = errorCopy(snapshot.lastErrorCode);
 
   async function signIn() {
+    if (!disclosureAccepted) return;
     setExportResult(null);
     try {
       await account.signInWithApple();
@@ -120,10 +147,37 @@ export function CloudAccountScreen() {
 
   async function exportAccount() {
     setExportResult(null);
+    setExportFailed(false);
+    setExportCancelled(false);
+    setExportBusy(true);
+    let cleanup: (() => Promise<void>) | null = null;
     try {
-      setExportResult(await account.exportAccount());
+      const prepared = await account.prepareAccountExport();
+      cleanup = prepared.cleanup;
+      pendingExportCleanup.current = cleanup;
+      exportShareInFlight.current = true;
+      const shareResult = await Share.share({
+        url: prepared.path,
+        title: t('settings.cloudAccountExport'),
+      });
+      if (shareResult.action === Share.dismissedAction) {
+        setExportCancelled(true);
+      } else {
+        setExportResult(prepared.account);
+      }
     } catch {
-      // Snapshot error state keeps the account and local mode observable.
+      setExportFailed(true);
+    } finally {
+      exportShareInFlight.current = false;
+      if (cleanup !== null) {
+        try {
+          await cleanup();
+        } catch {
+          setExportFailed(true);
+        }
+        if (pendingExportCleanup.current === cleanup) pendingExportCleanup.current = null;
+      }
+      setExportBusy(false);
     }
   }
 
@@ -141,7 +195,11 @@ export function CloudAccountScreen() {
     const nextKey = deletionKey ?? `delete-${Date.now().toString(36)}`;
     setDeletionKey(nextKey);
     Alert.alert(t('settings.cloudAccountDeleteTitle'), t('settings.cloudAccountDeleteBody'), [
-      { text: t('settings.cloudAccountDeleteCancel'), style: 'cancel' },
+      {
+        text: t('settings.cloudAccountDeleteCancel'),
+        style: 'cancel',
+        onPress: () => setDeletionKey(null),
+      },
       {
         text: t('settings.cloudAccountDeleteConfirm'),
         style: 'destructive',
@@ -150,7 +208,7 @@ export function CloudAccountScreen() {
     ]);
   }
 
-  async function deleteAccount(key: string) {
+  async function deleteAccount(key?: string) {
     setDeletionAttempted(true);
     try {
       await account.deleteAccount(key);
@@ -178,11 +236,38 @@ export function CloudAccountScreen() {
               <AppText variant="caption" style={styles.policy}>
                 {t('settings.cloudAccountPolicy').replace('{version}', CONTRACT_VERSION)}
               </AppText>
-              <AppButton
-                label={t('settings.cloudAccountSignIn')}
-                onPress={() => void signIn()}
-                disabled={isWorking || snapshot.status === 'restoring'}
-              />
+              {!disclosureAccepted ? (
+                <AppButton
+                  label={t('settings.cloudAccountDisclosureContinue')}
+                  tone="secondary"
+                  onPress={() => setDisclosureAccepted(true)}
+                />
+              ) : appleAvailable === true ? (
+                <AppleAuthenticationButton
+                  buttonType={AppleAuthenticationButtonType.SIGN_IN}
+                  buttonStyle={AppleAuthenticationButtonStyle.BLACK}
+                  cornerRadius={10}
+                  accessibilityState={{
+                    disabled: isWorking || snapshot.status === 'restoring',
+                  }}
+                  onPress={() => {
+                    if (isWorking || snapshot.status === 'restoring') return;
+                    void signIn();
+                  }}
+                  style={[
+                    styles.appleButton,
+                    (isWorking || snapshot.status === 'restoring') && styles.appleButtonDisabled,
+                  ]}
+                />
+              ) : appleAvailable === false ? (
+                <AppText style={styles.body}>{t('settings.cloudAccountAppleUnavailable')}</AppText>
+              ) : (
+                <AppButton
+                  label={t('settings.cloudAccountSignIn')}
+                  onPress={() => void signIn()}
+                  disabled={isWorking || snapshot.status === 'restoring'}
+                />
+              )}
             </AppSurface>
           </>
         )}
@@ -193,7 +278,7 @@ export function CloudAccountScreen() {
           </AppSurface>
         )}
 
-        {error !== null && !deletionComplete && (
+        {error !== null && !deletionComplete && !snapshot.pendingDeletion && (
           <AppSurface tone="soft" style={styles.statusSurface}>
             <AppText style={styles.body}>{error}</AppText>
           </AppSurface>
@@ -218,7 +303,7 @@ export function CloudAccountScreen() {
                 }
                 subtitle={t('settings.cloudAccountExportSubtitle')}
                 onPress={() => void exportAccount()}
-                disabled={isWorking || restoredOffline}
+                disabled={isWorking || exportBusy}
               />
               <SettingsActionRow
                 icon="lockShield"
@@ -229,10 +314,14 @@ export function CloudAccountScreen() {
               />
               <SettingsActionRow
                 icon="trash"
-                title={t('settings.cloudAccountDelete')}
+                title={
+                  snapshot.pendingDeletion
+                    ? t('settings.cloudAccountDeleteRetry')
+                    : t('settings.cloudAccountDelete')
+                }
                 subtitle={t('settings.cloudAccountDeleteSubtitle')}
-                onPress={confirmDelete}
-                disabled={isWorking || restoredOffline}
+                onPress={snapshot.pendingDeletion ? () => void deleteAccount() : confirmDelete}
+                disabled={isWorking}
                 destructive
               />
             </View>
@@ -249,6 +338,18 @@ export function CloudAccountScreen() {
           </AppSurface>
         )}
 
+        {exportCancelled && (
+          <AppSurface tone="soft" style={styles.statusSurface}>
+            <AppText style={styles.body}>{t('settings.cloudAccountExportCancelled')}</AppText>
+          </AppSurface>
+        )}
+
+        {exportFailed && (
+          <AppSurface tone="soft" style={styles.statusSurface}>
+            <AppText style={styles.body}>{t('settings.cloudAccountExportFailed')}</AppText>
+          </AppSurface>
+        )}
+
         {deletionComplete && (
           <AppSurface tone="soft" style={styles.statusSurface}>
             <AppText variant="heading">{t('settings.cloudAccountDeleted')}</AppText>
@@ -257,11 +358,18 @@ export function CloudAccountScreen() {
           </AppSurface>
         )}
 
-        {deletionAttempted &&
-          snapshot.lastErrorCode !== null &&
+        {(deletionAttempted || snapshot.pendingDeletion) &&
           snapshot.signedIn &&
           !deletionComplete && (
-            <AppText style={styles.failure}>{t('settings.cloudAccountDeleteFailed')}</AppText>
+            <AppSurface tone="soft" style={styles.failureSurface}>
+              <AppText style={styles.failure}>{t('settings.cloudAccountDeleteFailed')}</AppText>
+              <AppButton
+                label={t('settings.cloudAccountDeleteRetry')}
+                tone="secondary"
+                onPress={() => void deleteAccount()}
+                disabled={isWorking}
+              />
+            </AppSurface>
           )}
       </ScreenScrollView>
     </SafeAreaView>
@@ -270,6 +378,8 @@ export function CloudAccountScreen() {
 
 const styles = StyleSheet.create({
   intro: { color: colors.mutedInk, lineHeight: 22, marginBottom: spacing.lg },
+  appleButton: { height: 50, width: '100%' },
+  appleButtonDisabled: { opacity: 0.5 },
   body: { color: colors.mutedInk, lineHeight: 22 },
   disclosure: { gap: spacing.md, marginBottom: spacing.lg },
   disclosureHeading: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
@@ -301,4 +411,5 @@ const styles = StyleSheet.create({
   rowPressed: { backgroundColor: colors.accentSoft },
   destructive: { color: colors.danger },
   failure: { color: colors.danger, lineHeight: 22 },
+  failureSurface: { gap: spacing.md, marginBottom: spacing.lg },
 });

@@ -15,6 +15,7 @@ export type CloudApiFailureCode =
   | 'api_unconfigured'
   | 'offline'
   | 'request_cancelled'
+  | 'request_timeout'
   | 'invalid_response'
   | 'identity_cancelled'
   | 'apple_unavailable'
@@ -34,6 +35,7 @@ export class CloudApiError extends Error {
 }
 
 export type CloudApi = {
+  readonly isConfigured?: () => boolean;
   readonly exchangeApple: (
     identityToken: string,
     idempotencyKey?: string,
@@ -66,17 +68,37 @@ export type CloudApiClientOptions = {
   readonly baseUrl?: string | null;
   readonly fetchImpl?: FetchLike;
   readonly idempotencyKey?: () => string;
+  readonly requireHttps?: boolean;
+  readonly requestTimeoutMs?: number;
 };
 
 const defaultFetch: FetchLike = (input, init) => fetch(input, init);
+export const MAX_RESPONSE_BODY_BYTES = 256 * 1024;
+export const MAX_ACCOUNT_EXPORT_ITEMS = 512;
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+const MAX_REQUEST_TIMEOUT_MS = 120_000;
 
-function configuredUrl(value: string | null | undefined): string | null {
+function configuredUrl(value: string | null | undefined, requireHttps = false): string | null {
   const url = value?.trim();
-  return url === undefined || url.length === 0 ? null : url.replace(/\/+$/, '');
+  if (url === undefined || url.length === 0) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.username.length > 0 || parsed.password.length > 0 || parsed.hostname.length === 0) {
+      return null;
+    }
+    if (requireHttps && parsed.protocol !== 'https:') return null;
+    return parsed.toString().replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
 }
 
 export function cloudApiUrl(): string | null {
   return configuredUrl(process.env.EXPO_PUBLIC_API_URL);
+}
+
+export function productionCloudApiUrl(): string | null {
+  return configuredUrl(process.env.EXPO_PUBLIC_API_URL, true);
 }
 
 export function createIdempotencyKey(): string {
@@ -87,6 +109,13 @@ export function createIdempotencyKey(): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function boundedArray(value: unknown, field: string): readonly unknown[] {
+  if (!Array.isArray(value) || value.length > MAX_ACCOUNT_EXPORT_ITEMS) {
+    throw new CloudApiError(502, `invalid_${field}`);
+  }
+  return value;
 }
 
 function text(value: unknown, field: string, maxLength = 16_384): string {
@@ -196,16 +225,20 @@ export function decodeAccountExport(value: unknown): AccountExportResponse {
   if (!Array.isArray(value.operations) || !Array.isArray(value.auditEvents)) {
     throw new CloudApiError(502, 'invalid_response');
   }
+  const consents = boundedArray(value.consents, 'consents');
+  const sessions = boundedArray(value.sessions, 'sessions');
+  const operations = boundedArray(value.operations, 'operations');
+  const auditEvents = boundedArray(value.auditEvents, 'audit_events');
   return {
     accountId: text(value.accountId, 'account_id', 256),
     createdAt: iso(value.createdAt, 'account_created_at'),
     // The Apple subject is decoded for the typed contract but is intentionally never rendered by
     // the mobile UI. It is an opaque server-side identity, not a profile field.
     appleSubject: text(value.appleSubject, 'apple_subject', 512),
-    consents: value.consents.map(decodeConsent),
-    sessions: value.sessions.map(decodeSessionMetadata),
-    operations: value.operations.map(decodeOperation),
-    auditEvents: value.auditEvents.map(decodeAuditEvent),
+    consents: consents.map(decodeConsent),
+    sessions: sessions.map(decodeSessionMetadata),
+    operations: operations.map(decodeOperation),
+    auditEvents: auditEvents.map(decodeAuditEvent),
   };
 }
 
@@ -224,11 +257,24 @@ export class CloudApiClient implements CloudApi {
   private readonly baseUrl: string | null;
   private readonly fetchImpl: FetchLike;
   private readonly idempotencyKey: () => string;
+  private readonly requestTimeoutMs: number;
 
   constructor(options: CloudApiClientOptions = {}) {
-    this.baseUrl = configuredUrl(options.baseUrl ?? cloudApiUrl());
+    const hasBaseUrlOverride = Object.prototype.hasOwnProperty.call(options, 'baseUrl');
+    const baseUrl = hasBaseUrlOverride ? options.baseUrl : cloudApiUrl();
+    this.baseUrl = configuredUrl(baseUrl, options.requireHttps === true);
     this.fetchImpl = options.fetchImpl ?? defaultFetch;
     this.idempotencyKey = options.idempotencyKey ?? createIdempotencyKey;
+    this.requestTimeoutMs =
+      typeof options.requestTimeoutMs === 'number' &&
+      Number.isFinite(options.requestTimeoutMs) &&
+      options.requestTimeoutMs > 0
+        ? Math.min(options.requestTimeoutMs, MAX_REQUEST_TIMEOUT_MS)
+        : DEFAULT_REQUEST_TIMEOUT_MS;
+  }
+
+  isConfigured(): boolean {
+    return this.baseUrl !== null;
   }
 
   exchangeApple(identityToken: string, idempotencyKey?: string, signal?: AbortSignal) {
@@ -303,33 +349,101 @@ export class CloudApiClient implements CloudApi {
     decode: (value: unknown) => T,
   ): Promise<T> {
     if (this.baseUrl === null) throw new CloudApiError(0, 'api_unconfigured');
+    if (options.signal?.aborted === true) throw new CloudApiError(0, 'request_cancelled');
+    const abortCode = () =>
+      options.signal?.aborted === true
+        ? ('request_cancelled' as const)
+        : ('request_timeout' as const);
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (options.body !== undefined) headers['Content-Type'] = 'application/json';
     if (options.accessToken !== undefined) headers.Authorization = `Bearer ${options.accessToken}`;
     if (options.idempotencyKey !== undefined) headers['Idempotency-Key'] = options.idempotencyKey;
 
-    const init: RequestInit = { method: options.method, headers };
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => timeoutController.abort(), this.requestTimeoutMs);
+    let removeCallerAbortListener: (() => void) | null = null;
+    if (options.signal !== undefined) {
+      const abortCaller = () => timeoutController.abort();
+      options.signal.addEventListener('abort', abortCaller, { once: true });
+      removeCallerAbortListener = () => options.signal?.removeEventListener('abort', abortCaller);
+    }
+    const init: RequestInit = { method: options.method, headers, signal: timeoutController.signal };
     if (options.body !== undefined) init.body = options.body;
-    if (options.signal !== undefined) init.signal = options.signal;
 
-    let response: Response;
-    try {
-      response = await this.fetchImpl(`${this.baseUrl}${path}`, init);
-    } catch (error) {
-      if (error instanceof CloudApiError) throw error;
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new CloudApiError(0, 'request_cancelled');
-      }
-      throw new CloudApiError(0, 'offline');
-    }
-
-    const payload = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new CloudApiError(
-        response.status,
-        decodeApiError(payload) ?? `http_${response.status}`,
+    const abortPromise = new Promise<never>((_, reject) => {
+      timeoutController.signal.addEventListener(
+        'abort',
+        () => {
+          const error = new Error('The cloud request was aborted');
+          error.name = 'AbortError';
+          reject(error);
+        },
+        { once: true },
       );
+    });
+
+    try {
+      const fetchPromise = this.fetchImpl(`${this.baseUrl}${path}`, init);
+      void fetchPromise.catch(() => undefined);
+      const response = await Promise.race([fetchPromise, abortPromise]).catch((error: unknown) => {
+        if (error instanceof CloudApiError) throw error;
+        if (error instanceof Error && error.name === 'AbortError') {
+          throw new CloudApiError(0, abortCode());
+        }
+        throw new CloudApiError(0, 'offline');
+      });
+
+      let payload: unknown = null;
+      try {
+        const bodyPromise = boundedResponseText(response);
+        void bodyPromise.catch(() => undefined);
+        const body = await Promise.race([bodyPromise, abortPromise]);
+        if (body.trim().length > 0) payload = JSON.parse(body) as unknown;
+      } catch (error) {
+        if (error instanceof CloudApiError) throw error;
+        if (error instanceof Error && error.name === 'AbortError') {
+          throw new CloudApiError(0, abortCode());
+        }
+        // An invalid error body remains a bounded HTTP error; an invalid success body is decoded as
+        // null below and receives the same stable invalid_response category.
+        payload = null;
+      }
+      if (!response.ok) {
+        throw new CloudApiError(
+          response.status,
+          decodeApiError(payload) ?? `http_${response.status}`,
+        );
+      }
+      return decode(payload);
+    } finally {
+      clearTimeout(timeoutId);
+      removeCallerAbortListener?.();
     }
-    return decode(payload);
   }
+}
+
+async function boundedResponseText(response: Response): Promise<string> {
+  const reader = response.body?.getReader?.();
+  if (reader === undefined) {
+    const body = await response.text();
+    if (new TextEncoder().encode(body).byteLength > MAX_RESPONSE_BODY_BYTES) {
+      throw new CloudApiError(502, 'invalid_response');
+    }
+    return body;
+  }
+
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let body = '';
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    bytes += chunk.value.byteLength;
+    if (bytes > MAX_RESPONSE_BODY_BYTES) {
+      await reader.cancel();
+      throw new CloudApiError(502, 'invalid_response');
+    }
+    body += decoder.decode(chunk.value, { stream: true });
+  }
+  return body + decoder.decode();
 }

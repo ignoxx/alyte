@@ -1,6 +1,7 @@
 import type { SessionResponse } from '@alyte/contracts';
 
 export const CLOUD_SESSION_STORAGE_KEY = 'alyte.cloud.session.v1';
+export const CLOUD_PENDING_OPERATION_STORAGE_KEY = 'alyte.cloud.pending-operation.v1';
 
 export type StoredCloudSession = Pick<
   SessionResponse,
@@ -19,6 +20,18 @@ export type CloudSessionRepository = {
   readonly clear: () => Promise<void>;
 };
 
+export type CloudPendingOperation = {
+  readonly kind: 'account-delete';
+  readonly idempotencyKey: string;
+  readonly createdAt: string;
+};
+
+export type CloudPendingOperationRepository = {
+  readonly read: () => Promise<CloudPendingOperation | null>;
+  readonly write: (operation: CloudPendingOperation) => Promise<void>;
+  readonly clear: () => Promise<void>;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -34,6 +47,38 @@ function sessionDate(value: unknown, field: string): string {
   const result = sessionText(value, field);
   if (!Number.isFinite(Date.parse(result))) throw new Error(`Invalid cloud session ${field}`);
   return result;
+}
+
+function operationKey(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 256) {
+    throw new Error('Invalid pending cloud operation key');
+  }
+  return value;
+}
+
+function decodePendingOperation(value: string): CloudPendingOperation {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new Error('Invalid pending cloud operation');
+  }
+  if (!isRecord(parsed) || parsed.kind !== 'account-delete') {
+    throw new Error('Invalid pending cloud operation');
+  }
+  return {
+    kind: 'account-delete',
+    idempotencyKey: operationKey(parsed.idempotencyKey),
+    createdAt: sessionDate(parsed.createdAt, 'created date'),
+  };
+}
+
+function encodePendingOperation(operation: CloudPendingOperation): string {
+  return JSON.stringify({
+    kind: operation.kind,
+    idempotencyKey: operation.idempotencyKey,
+    createdAt: operation.createdAt,
+  });
 }
 
 export function decodeStoredCloudSession(value: string): StoredCloudSession {
@@ -101,6 +146,32 @@ export function createCloudSessionRepository(
     },
     clear() {
       return secureStore.deleteItemAsync(CLOUD_SESSION_STORAGE_KEY);
+    },
+  };
+}
+
+export function createCloudPendingOperationRepository(
+  secureStore: SecureStoreAdapter = productionSecureStore,
+): CloudPendingOperationRepository {
+  return {
+    async read() {
+      const value = await secureStore.getItemAsync(CLOUD_PENDING_OPERATION_STORAGE_KEY);
+      if (value === null) return null;
+      try {
+        return decodePendingOperation(value);
+      } catch {
+        await secureStore.deleteItemAsync(CLOUD_PENDING_OPERATION_STORAGE_KEY);
+        return null;
+      }
+    },
+    write(operation) {
+      return secureStore.setItemAsync(
+        CLOUD_PENDING_OPERATION_STORAGE_KEY,
+        encodePendingOperation(operation),
+      );
+    },
+    clear() {
+      return secureStore.deleteItemAsync(CLOUD_PENDING_OPERATION_STORAGE_KEY);
     },
   };
 }

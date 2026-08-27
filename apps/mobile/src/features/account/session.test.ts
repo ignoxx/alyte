@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createCloudSessionRepository, decodeStoredCloudSession } from './session';
+import {
+  createCloudPendingOperationRepository,
+  createCloudSessionRepository,
+  decodeStoredCloudSession,
+} from './session';
 
 const session = {
   accessToken: 'access-token',
@@ -54,5 +58,38 @@ describe('SecureStore cloud session repository', () => {
       () => decodeStoredCloudSession('{"refreshToken":"only"}'),
       /Invalid cloud session/,
     );
+  });
+
+  it('keeps only the minimal pending deletion marker in SecureStore', async () => {
+    const values = new Map<string, string>();
+    const repository = createCloudPendingOperationRepository({
+      async getItemAsync(key) {
+        return values.get(key) ?? null;
+      },
+      async setItemAsync(key, value) {
+        values.set(key, value);
+      },
+      async deleteItemAsync(key) {
+        values.delete(key);
+      },
+    });
+
+    await repository.write({
+      kind: 'account-delete',
+      idempotencyKey: 'stable-delete-key',
+      createdAt: '2026-08-27T12:00:00.000Z',
+    });
+    assert.deepEqual(JSON.parse(values.get('alyte.cloud.pending-operation.v1') as string), {
+      kind: 'account-delete',
+      idempotencyKey: 'stable-delete-key',
+      createdAt: '2026-08-27T12:00:00.000Z',
+    });
+    assert.deepEqual(await repository.read(), {
+      kind: 'account-delete',
+      idempotencyKey: 'stable-delete-key',
+      createdAt: '2026-08-27T12:00:00.000Z',
+    });
+    await repository.clear();
+    assert.equal(await repository.read(), null);
   });
 });

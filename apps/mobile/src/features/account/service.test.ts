@@ -7,8 +7,18 @@ import type {
   SignOutResponse,
 } from '@alyte/contracts';
 import { CloudApiError, type CloudApi } from './cloud-api';
-import { createCloudAccountService, type AppleSignInProvider } from './service';
-import type { CloudSessionRepository, StoredCloudSession } from './session';
+import {
+  createCloudAccountService,
+  type AppleSignInProvider,
+  type CloudAccountExportFiles,
+} from './service';
+import type {
+  CloudPendingOperation,
+  CloudPendingOperationRepository,
+  CloudSessionRepository,
+  StoredCloudSession,
+} from './session';
+import type { ProtectedExportWorkspace } from '../labs/file-service';
 
 const NOW = Date.parse('2026-08-27T12:00:00.000Z');
 
@@ -64,6 +74,71 @@ function repository(initial: StoredCloudSession | null = null) {
     writes,
     get clears() {
       return clears;
+    },
+  };
+}
+
+function pendingRepository(initial: CloudPendingOperation | null = null) {
+  let stored = initial;
+  const writes: CloudPendingOperation[] = [];
+  let clears = 0;
+  const value: CloudPendingOperationRepository = {
+    async read() {
+      return stored;
+    },
+    async write(next) {
+      stored = next;
+      writes.push(next);
+    },
+    async clear() {
+      stored = null;
+      clears += 1;
+    },
+  };
+  return {
+    value,
+    get stored() {
+      return stored;
+    },
+    writes,
+    get clears() {
+      return clears;
+    },
+  };
+}
+
+function exportFiles() {
+  const workspace: ProtectedExportWorkspace = {
+    stagingPath: '/protected/exports/cloud-account.partial',
+    portableStagingReference: 'protected://exports/cloud-account.partial',
+    archivePartialPath: '/protected/exports/cloud-account.zip.partial',
+    archivePath: '/protected/exports/cloud-account.zip',
+    portableArchiveReference: 'protected://exports/cloud-account.zip',
+  };
+  const writes: string[] = [];
+  let cleanups = 0;
+  const value: CloudAccountExportFiles = {
+    async createExportWorkspace() {
+      return workspace;
+    },
+    async writeExportFile(_workspace, _relativePath, contents) {
+      writes.push(contents);
+      return {
+        path: 'file:///protected/exports/cloud-account.partial/account-metadata.json',
+        relativePath: 'account-metadata.json',
+        sourceHash: 'hash',
+        byteSize: contents.length,
+      };
+    },
+    async removeExportArtifacts() {
+      cleanups += 1;
+    },
+  };
+  return {
+    value,
+    writes,
+    get cleanups() {
+      return cleanups;
     },
   };
 }
@@ -163,6 +238,29 @@ describe('cloud account service', () => {
     assert.equal(sessions.stored?.accessToken, 'rotated-access');
   });
 
+  it('prepares the complete account export as a protected temporary artifact and cleans it once', async () => {
+    const sessions = repository({
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      accessTokenExpiresAt: '2026-08-27T12:15:00.000Z',
+      refreshTokenExpiresAt: '2026-09-26T12:00:00.000Z',
+    });
+    const files = exportFiles();
+    const service = createCloudAccountService({
+      repository: sessions.value,
+      api: api(),
+      exportFiles: files.value,
+      now: () => NOW,
+    });
+
+    await service.bootstrap();
+    const prepared = await service.prepareAccountExport();
+    assert.equal(prepared.path.startsWith('file:///protected/'), true);
+    assert.equal(files.writes[0]?.includes('opaque-apple-subject'), true);
+    await Promise.all([prepared.cleanup(), prepared.cleanup()]);
+    assert.equal(files.cleanups, 1);
+  });
+
   it('keeps the local mode boundary usable when a restored session cannot refresh offline', async () => {
     const sessions = repository({
       accessToken: 'expired-access',
@@ -205,6 +303,7 @@ describe('cloud account service', () => {
     });
     const service = createCloudAccountService({
       repository: sessions.value,
+      pendingOperations: pendingRepository().value,
       api: cloud,
       now: () => NOW,
     });
@@ -287,6 +386,7 @@ describe('cloud account service', () => {
     });
     const service = createCloudAccountService({
       repository: sessions.value,
+      pendingOperations: pendingRepository().value,
       api: cloud,
       now: () => NOW,
     });
@@ -299,5 +399,42 @@ describe('cloud account service', () => {
     await service.deleteAccount('stable-delete-key');
     assert.equal(service.getSnapshot().signedIn, false);
     assert.equal(sessions.clears, 1);
+  });
+
+  it('restores a pending deletion key across service recreation and clears it only after confirmation', async () => {
+    const sessions = repository({
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      accessTokenExpiresAt: '2026-08-27T12:15:00.000Z',
+      refreshTokenExpiresAt: '2026-09-26T12:00:00.000Z',
+    });
+    const pending = pendingRepository();
+    const firstApi = api({
+      async deleteAccount() {
+        throw new CloudApiError(0, 'offline');
+      },
+    });
+    const first = createCloudAccountService({
+      repository: sessions.value,
+      pendingOperations: pending.value,
+      api: firstApi,
+      now: () => NOW,
+    });
+    await first.bootstrap();
+    await assert.rejects(first.deleteAccount('stable-delete-key'), /offline/);
+    assert.equal(pending.stored?.idempotencyKey, 'stable-delete-key');
+
+    const secondApi = api();
+    const second = createCloudAccountService({
+      repository: sessions.value,
+      pendingOperations: pending.value,
+      api: secondApi,
+      now: () => NOW,
+    });
+    await second.bootstrap();
+    await second.deleteAccount();
+    assert.equal(secondApi.deleteCalls[0]?.endsWith(':stable-delete-key'), true);
+    assert.equal(pending.stored, null);
+    assert.equal(pending.clears, 1);
   });
 });

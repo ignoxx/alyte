@@ -43,7 +43,8 @@ function AppContent({ services }: { readonly services: AlyteServices }) {
 
   const resumeCloudIfUnlocked = useCallback(() => {
     if (AppState.currentState !== 'active' || controller.getSnapshot().phase !== 'unlocked') return;
-    if (!services.account.getSnapshot().signedIn) return;
+    const accountSnapshot = services.account.getSnapshot();
+    if (!accountSnapshot.signedIn || accountSnapshot.status !== 'active') return;
     if (cloudResumeHandledForActiveCycle.current) return;
     cloudResumeHandledForActiveCycle.current = true;
     if (cloudResumeInFlight.current !== null) return;
@@ -64,6 +65,16 @@ function AppContent({ services }: { readonly services: AlyteServices }) {
   useEffect(() => {
     if (appLockState.phase !== 'unlocked') return;
     void services.account.bootstrap().then(resumeCloudIfUnlocked);
+  }, [appLockState.phase, resumeCloudIfUnlocked, services.account]);
+
+  useEffect(() => {
+    if (appLockState.phase !== 'unlocked') return;
+    return services.account.subscribe(() => {
+      const accountSnapshot = services.account.getSnapshot();
+      if (accountSnapshot.signedIn && accountSnapshot.status === 'active') {
+        resumeCloudIfUnlocked();
+      }
+    });
   }, [appLockState.phase, resumeCloudIfUnlocked, services.account]);
 
   useEffect(() => {
