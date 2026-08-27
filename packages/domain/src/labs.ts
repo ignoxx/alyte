@@ -1,4 +1,5 @@
 import type { CanonicalId } from './index';
+import { normalizeAlias } from './text';
 
 export type LabDateState =
   { readonly kind: 'known'; readonly value: string } | { readonly kind: 'missing' };
@@ -146,6 +147,7 @@ export type ComparableBiomarkerConstraint = {
   /** Reviewed aliases are optional for consumers that only need comparison constraints. */
   readonly aliases?: readonly string[];
   readonly unsafeAliases?: readonly string[];
+  readonly canonicalLabel?: string;
   readonly catalogueVersion?: string;
   readonly specimens: readonly SpecimenType[];
   readonly units: readonly string[];
@@ -256,7 +258,10 @@ export type LabRecordDetail = {
     readonly comparableCount: number;
     readonly preservedOnlyCount: number;
   };
-  readonly measurements: readonly (Measurement & { readonly support: MeasurementSupportState })[];
+  readonly measurements: readonly (Measurement & {
+    readonly canonicalLabel: string | null;
+    readonly support: MeasurementSupportState;
+  })[];
 };
 
 export function measurementSupportState(
@@ -300,17 +305,6 @@ export type UserMeasurementBiomarkerResolution =
       >['reason'];
     };
 
-function normalizeBiomarkerAlias(value: string): string {
-  return value
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLocaleLowerCase()
-    .replace(/[‐‑‒–—−]/g, '-')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .replace(/\s+/g, ' ');
-}
-
 /**
  * Resolve a manual or corrected label only when the reviewed alias and the complete measurement
  * compatibility contract agree. The resolver never changes the user's label or any value.
@@ -319,20 +313,15 @@ export function resolveUserMeasurementBiomarker(
   input: UserMeasurementBiomarkerInput,
   catalogue: readonly ComparableBiomarkerConstraint[],
 ): UserMeasurementBiomarkerResolution {
-  const normalizedLabel = normalizeBiomarkerAlias(input.label);
+  const normalizedLabel = normalizeAlias(input.label);
   if (normalizedLabel.length === 0) return { kind: 'preserved-only', reason: 'unmapped' };
 
   const matches = catalogue.filter(
-    (entry) =>
-      entry.aliases?.some((alias) => normalizeBiomarkerAlias(alias) === normalizedLabel) ?? false,
+    (entry) => entry.aliases?.some((alias) => normalizeAlias(alias) === normalizedLabel) ?? false,
   );
   if (matches.length !== 1) return { kind: 'preserved-only', reason: 'unmapped' };
   const entry = matches[0]!;
-  if (
-    entry.unsafeAliases?.some(
-      (unsafeAlias) => normalizeBiomarkerAlias(unsafeAlias) === normalizedLabel,
-    )
-  ) {
+  if (entry.unsafeAliases?.some((unsafeAlias) => normalizeAlias(unsafeAlias) === normalizedLabel)) {
     return { kind: 'preserved-only', reason: 'unmapped' };
   }
 
@@ -389,10 +378,17 @@ export function buildLabRecordDetail(
   ) {
     throw new Error('Lab Record source provenance does not match its report');
   }
-  const measurements = record.measurements.map((measurement) => ({
-    ...measurement,
-    support: measurementSupportState(measurement, catalogue),
-  }));
+  const measurements = record.measurements.map((measurement) => {
+    const support = measurementSupportState(measurement, catalogue);
+    return {
+      ...measurement,
+      canonicalLabel:
+        support.kind === 'comparable-supported'
+          ? (catalogue.find((entry) => entry.id === support.canonicalId)?.canonicalLabel ?? null)
+          : null,
+      support,
+    };
+  });
   const comparableCount = measurements.filter(
     (measurement) => measurement.support.kind === 'comparable-supported',
   ).length;
@@ -706,13 +702,7 @@ function specimenPairCompatible(
 }
 
 function normalizeMethodText(value: string): string {
-  return value
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLocaleLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim()
-    .replace(/\s+/g, ' ');
+  return normalizeAlias(value);
 }
 
 function methodPolicyCompatible(

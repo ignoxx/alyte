@@ -1,6 +1,9 @@
 import type { CanonicalId } from './index';
 import { parseLocaleDecimal } from './labs';
 import type { LabSourceArtifact, MeasurementValue, SpecimenType, LabDateState } from './labs';
+import { normalizeAlias } from './text';
+
+export { normalizeAlias } from './text';
 
 export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.document.v2' as const;
 export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v3' as const;
@@ -679,17 +682,6 @@ function decodeObservationStructure(
   if (kind === 'table-cell' && (tableId === null || rowIndex === null || columnIndex === null))
     throw new Error(`Vision OCR observation ${index} has incomplete table structure`);
   return { kind, tableId, rowIndex, columnIndex };
-}
-
-export function normalizeAlias(value: string): string {
-  return value
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLocaleLowerCase()
-    .replace(/[‐‑‒–—−]/g, '-')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .replace(/\s+/g, ' ');
 }
 
 export function proposeBiomarkerId(

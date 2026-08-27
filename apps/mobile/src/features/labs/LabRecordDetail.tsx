@@ -107,12 +107,13 @@ export function LabRecordDetail({
       renderItem={({ item }) => {
         const open = expanded.has(item.id);
         const value = measurementValue(item, locale);
+        const displayLabel = item.canonicalLabel ?? item.current.label;
         return (
           <View style={styles.row}>
             <Pressable
               accessibilityRole="button"
               accessibilityState={{ expanded: open }}
-              accessibilityLabel={`${item.current.label}, ${value}${item.current.unit ? ` ${item.current.unit}` : ''}`}
+              accessibilityLabel={`${displayLabel}, ${value}${item.current.unit ? ` ${item.current.unit}` : ''}`}
               onPress={() =>
                 setExpanded((current) => {
                   const next = new Set(current);
@@ -124,7 +125,7 @@ export function LabRecordDetail({
             >
               <View style={styles.rowCopy}>
                 <AppText selectable variant="heading">
-                  {item.current.label}
+                  {displayLabel}
                 </AppText>
                 <AppText selectable style={styles.secondary}>
                   {supportReason(item)}

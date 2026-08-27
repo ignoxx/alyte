@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { comparableBiomarkers } from '@alyte/catalogue';
 import {
+  buildMeasuredTrend,
   canonicalId,
   createSanitizationRecipe,
   EXTRACTION_PARSER_VERSION,
@@ -561,12 +563,12 @@ describe('protected manual Lab Record persistence', () => {
     await repository.close();
   });
 
-  test('LabsService safely maps manual labels and corrected identity without rewriting provenance', async () => {
+  test('LabsService safely maps manual labels into a compatible trend without rewriting provenance', async () => {
     const { repository } = createRepository();
     const labs = createLabsService({ repositoryFactory: async () => repository });
     const created = await labs.createRecord({
       id: 'lab-record-safe-mapping',
-      collectionDate: { kind: 'known', value: '2026-08-20' },
+      collectionDate: { kind: 'known', value: '2026-08-19' },
       specimenType: 'unknown',
       measurements: [
         {
@@ -574,12 +576,6 @@ describe('protected manual Lab Record persistence', () => {
           label: 'Total cholesterol',
           value: { kind: 'numeric', value: 205 },
           unit: 'mg/dL',
-        },
-        {
-          id: 'measurement-preserved-then-corrected',
-          label: 'Home result',
-          value: { kind: 'numeric', value: 1 },
-          unit: null,
         },
       ],
     });
@@ -590,9 +586,21 @@ describe('protected manual Lab Record persistence', () => {
     assert.equal(mapped?.original.label, 'Total cholesterol');
     assert.equal(mapped?.provenance, 'user-entered');
 
+    await labs.createRecord({
+      id: 'lab-record-corrected-mapping',
+      collectionDate: { kind: 'known', value: '2026-08-20' },
+      specimenType: 'unknown',
+      measurements: [
+        {
+          id: 'measurement-preserved-then-corrected',
+          label: 'Home result',
+          value: { kind: 'numeric', value: 210 },
+          unit: null,
+        },
+      ],
+    });
     const corrected = await labs.correctMeasurement('measurement-preserved-then-corrected', {
       label: 'Total cholesterol',
-      value: { kind: 'numeric', value: 210 },
       unit: 'mg/dL',
       specimenType: 'unknown',
       reason: 'Mapped reviewed label',
@@ -602,6 +610,21 @@ describe('protected manual Lab Record persistence', () => {
     assert.equal(corrected.originalState.biomarkerId, null);
     assert.equal(corrected.provenance, 'user-corrected');
     assert.equal(corrected.corrections[0]?.next.biomarkerId, corrected.biomarkerId);
+
+    const detail = await labs.getRecordDetail('lab-record-safe-mapping');
+    assert.equal(detail?.measurements[0]?.canonicalLabel, 'Total cholesterol');
+    const correctedRecord = await labs.getRecord('lab-record-corrected-mapping');
+    if (correctedRecord === null) throw new Error('Corrected Lab Record was not found');
+    const trend = buildMeasuredTrend(
+      [created, correctedRecord],
+      canonicalId('biomarker.total_cholesterol'),
+      comparableBiomarkers,
+    );
+    assert.deepEqual(
+      trend.points.map((point) => point.normalized.value),
+      [205, 210],
+    );
+    assert.equal(trend.direction, 'increased');
     await repository.close();
   });
 
