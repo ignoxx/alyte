@@ -66,8 +66,15 @@ export type MeasurementSourceLocation = {
   };
   readonly semantic?: {
     readonly adapterVersion: string;
-    readonly schemaVersion: 'alyte.semantic-mapper.v1';
+    readonly schemaVersion: 'alyte.semantic-mapper.v1' | 'alyte.semantic-mapper.v2';
     readonly sourceObservationIds: readonly string[];
+    readonly sourceFieldObservationIds?: {
+      readonly label: string;
+      readonly value: string;
+      readonly unit: string | null;
+      readonly referenceInterval: string | null;
+      readonly flag: string | null;
+    };
     readonly modelVersion?: string;
     readonly runtimeVersion?: string;
     readonly promptVersion?: string;

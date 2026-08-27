@@ -54,28 +54,29 @@ const multilingualAliases: readonly ExtractionAliasEntry[] = [
   },
 ];
 
-test('serializes candidate rows with complete IDs and headings without a flat observation list', () => {
+test('serializes candidate rows with compact keys and headings without source IDs', () => {
   const candidate = row('lt-ferritin', 'lt', ['Feritinas', '42', 'ng/mL', '15–150']);
   const heading = cell('lt-serum-heading', 'Serumas', 'lt', 0.1, 0.1);
   const serialized = JSON.parse(serializeSemanticMapperChunk([candidate], 'lt', [heading])) as {
     version: string;
-    rows: readonly [
-      { rowId: string; sourceObservationIds: readonly string[]; cells: readonly { id: string }[] },
-    ];
-    headings: readonly { id: string }[];
+    rows: readonly [{ key: string; cells: readonly { key: string; text: string }[] }];
+    headings: readonly { key: string; text: string }[];
     observations?: unknown;
   };
-  assert.equal(serialized.version, 'alyte.semantic-ocr-chunk.v2');
+  assert.equal(serialized.version, 'alyte.semantic-ocr-chunk.v3');
   assert.equal('observations' in serialized, false);
-  assert.equal(serialized.rows[0]?.rowId, 'lt-ferritin');
-  assert.deepEqual(serialized.rows[0]?.sourceObservationIds, candidate.sourceObservationIds);
+  assert.equal(serialized.rows[0]?.key, 'r0');
   assert.deepEqual(
-    serialized.rows[0]?.cells.map((item) => item.id),
-    candidate.sourceObservationIds,
+    serialized.rows[0]?.cells.map((item) => item.key),
+    ['c0', 'c1', 'c2', 'c3'],
   );
   assert.deepEqual(
-    serialized.headings.map((item) => item.id),
-    ['lt-serum-heading'],
+    serialized.rows[0]?.cells.map((item) => item.text),
+    ['Feritinas', '42', 'ng/mL', '15–150'],
+  );
+  assert.deepEqual(
+    serialized.headings.map((item) => item.key),
+    ['h0'],
   );
 });
 
@@ -142,7 +143,58 @@ test('accepts both supported Polish candidate rows with their complete source ID
   );
 });
 
-test('rejects partial, cross-row, reordered, and extra-ID proposals as one unsafe envelope', () => {
+test('rejects invented compact keys while preserving an independent valid row proposal', () => {
+  const first = row('first', 'lt', ['Feritinas', '42', 'ng/mL', '15–150']);
+  const second = row('second', 'pl', ['Hematokryt', '42', '%', '36–46']);
+  const accepted = validateSemanticMapperOutput(
+    {
+      schemaVersion: SEMANTIC_MAPPER_SCHEMA_VERSION,
+      proposals: [
+        {
+          rowKey: 'r0',
+          labelKey: 'c0',
+          valueKey: 'c9',
+          unitKey: 'c2',
+          referenceIntervalKey: 'c3',
+          flagKey: null,
+          role: 'measurement',
+          specimenType: 'serum',
+          biomarkerId: 'biomarker.ferritin',
+        },
+        {
+          rowKey: 'r1',
+          labelKey: 'c0',
+          valueKey: 'c1',
+          unitKey: 'c2',
+          referenceIntervalKey: 'c3',
+          flagKey: null,
+          role: 'measurement',
+          specimenType: 'blood',
+          biomarkerId: 'biomarker.hematocrit',
+        },
+      ],
+    },
+    [first, second],
+    multilingualAliases,
+  );
+  assert.deepEqual(accepted, [
+    {
+      sourceObservationIds: second.sourceObservationIds,
+      sourceFields: {
+        label: second.sourceObservationIds[0],
+        value: second.sourceObservationIds[1],
+        unit: second.sourceObservationIds[2],
+        referenceInterval: second.sourceObservationIds[3],
+        flag: null,
+      },
+      proposedBiomarkerId: 'biomarker.hematocrit',
+      proposedSpecimenType: 'blood',
+      role: 'measurement',
+    },
+  ]);
+});
+
+test('rejects partial, cross-row, reordered, and extra-ID proposals individually', () => {
   const first = row('first', 'en', ['Ferritin', '42', 'ng/mL', '15–150']);
   const second = row('second', 'en', ['Ferritin', '43', 'ng/mL', '15–150']);
   const base = {
@@ -212,14 +264,14 @@ test('bounds candidate rows, cells, headings, and the complete UTF-8 input', () 
   );
   assert.match(
     createSemanticMapperPrompt('lt', serializeSemanticMapperChunk([candidate], 'lt')),
-    /complete sourceObservationIds array exactly/u,
+    /compact row and cell keys/u,
   );
 });
 
 test('keeps production prompt, chunk, and manifest versions aligned', () => {
-  assert.equal(SEMANTIC_MAPPER_SCHEMA_VERSION, 'alyte.semantic-mapper.v1');
-  assert.equal(SEMANTIC_MAPPER_PROMPT_VERSION, 'alyte.semantic-mapper.prompt.v2');
-  assert.equal(SEMANTIC_OCR_CHUNK_VERSION, 'alyte.semantic-ocr-chunk.v2');
+  assert.equal(SEMANTIC_MAPPER_SCHEMA_VERSION, 'alyte.semantic-mapper.v2');
+  assert.equal(SEMANTIC_MAPPER_PROMPT_VERSION, 'alyte.semantic-mapper.prompt.v3');
+  assert.equal(SEMANTIC_OCR_CHUNK_VERSION, 'alyte.semantic-ocr-chunk.v3');
   assert.equal(
     SEMANTIC_MAPPER_PROMPT_VERSION,
     productionLocalModelManifest.compatibility.promptBundle,

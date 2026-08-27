@@ -1,5 +1,6 @@
 import { productionLocalModelManifest } from './manifest';
 import { normalizeLocalModelSnapshot, type LocalModelSnapshot } from './model';
+import { SEMANTIC_MAPPER_LIMITS } from './semantic-contract';
 
 export type NativeLocalModelsModule = {
   readonly getManifest: () => unknown;
@@ -140,7 +141,11 @@ export function createLocalModelService(options: LocalModelServiceOptions = {}):
       if (snapshot.state !== 'loaded' || !snapshot.loaded) {
         throw Object.assign(new Error('The local model is not loaded'), { failure: 'unavailable' });
       }
-      const output = await resolved.infer(prompt, 256, 16_384);
+      const output = await resolved.infer(
+        prompt,
+        SEMANTIC_MAPPER_LIMITS.outputTokenLimit,
+        SEMANTIC_MAPPER_LIMITS.maxOutputBytes,
+      );
       if (typeof output !== 'string') {
         throw Object.assign(new Error('The local model returned malformed output'), {
           failure: 'runtime-failed',
@@ -237,7 +242,7 @@ export function createFakeLocalModelNativeModule(): NativeLocalModelsModule {
       return emit({ ...state, state: 'loaded', loaded: true });
     },
     infer: async (_prompt, _maxOutputTokens, _outputCapacity) =>
-      JSON.stringify({ schemaVersion: 'alyte.semantic-mapper.v1', proposals: [] }),
+      JSON.stringify({ schemaVersion: 'alyte.semantic-mapper.v2', proposals: [] }),
     cancelInference: () => undefined,
     unload: () =>
       emit({ ...state, state: state.state === 'loaded' ? 'ready' : state.state, loaded: false }),

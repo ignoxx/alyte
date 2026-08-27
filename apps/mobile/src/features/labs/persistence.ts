@@ -393,15 +393,40 @@ function decodeStoredSemantic(
   const item = value as Record<string, unknown>;
   if (
     typeof item.adapterVersion !== 'string' ||
-    item.schemaVersion !== 'alyte.semantic-mapper.v1' ||
+    (item.schemaVersion !== 'alyte.semantic-mapper.v1' &&
+      item.schemaVersion !== 'alyte.semantic-mapper.v2') ||
     !Array.isArray(item.sourceObservationIds) ||
     item.sourceObservationIds.some((id) => typeof id !== 'string')
   )
     throw new Error('Invalid extraction semantic provenance');
+  const rawFields = item.sourceFieldObservationIds;
+  const validSourceFields =
+    typeof rawFields === 'object' &&
+    rawFields !== null &&
+    Object.keys(rawFields).length === 5 &&
+    ['label', 'value', 'unit', 'referenceInterval', 'flag'].every((key) => key in rawFields) &&
+    typeof (rawFields as Record<string, unknown>).label === 'string' &&
+    typeof (rawFields as Record<string, unknown>).value === 'string' &&
+    ['unit', 'referenceInterval', 'flag'].every((key) => {
+      const value = (rawFields as Record<string, unknown>)[key];
+      return value === null || typeof value === 'string';
+    });
+  if (rawFields !== undefined && !validSourceFields)
+    throw new Error('Invalid extraction semantic provenance');
+  const sourceFieldObservationIds = validSourceFields
+    ? (rawFields as {
+        readonly label: string;
+        readonly value: string;
+        readonly unit: string | null;
+        readonly referenceInterval: string | null;
+        readonly flag: string | null;
+      })
+    : undefined;
   return {
     adapterVersion: item.adapterVersion,
     schemaVersion: item.schemaVersion,
     sourceObservationIds: item.sourceObservationIds as string[],
+    ...(sourceFieldObservationIds === undefined ? {} : { sourceFieldObservationIds }),
     ...(typeof item.modelVersion === 'string' ? { modelVersion: item.modelVersion } : {}),
     ...(typeof item.runtimeVersion === 'string' ? { runtimeVersion: item.runtimeVersion } : {}),
     ...(typeof item.promptVersion === 'string' ? { promptVersion: item.promptVersion } : {}),

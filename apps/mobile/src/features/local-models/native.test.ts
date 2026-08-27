@@ -17,7 +17,7 @@ test('explicit simulator fake completes the same verified lifecycle without mode
   await assert.rejects(() => service.infer('synthetic prompt'), /not loaded/);
   assert.equal((await service.load()).state, 'loaded');
   assert.deepEqual(JSON.parse(await service.infer('synthetic prompt')), {
-    schemaVersion: 'alyte.semantic-mapper.v1',
+    schemaVersion: 'alyte.semantic-mapper.v2',
     proposals: [],
   });
   assert.equal((await service.unload()).state, 'ready');

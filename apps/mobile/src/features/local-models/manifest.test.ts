@@ -28,12 +28,12 @@ test('production model manifest pins one public Gemma artifact and runtime', () 
   assert.equal(productionLocalModelManifest.pack.artifact.bytes, 2_841_481_184);
   assert.equal(
     productionLocalModelManifest.compatibility.promptBundle,
-    'alyte.semantic-mapper.prompt.v2',
+    'alyte.semantic-mapper.prompt.v3',
   );
-  assert.equal(productionLocalModelManifest.compatibility.ocrChunk, 'alyte.semantic-ocr-chunk.v2');
+  assert.equal(productionLocalModelManifest.compatibility.ocrChunk, 'alyte.semantic-ocr-chunk.v3');
   assert.equal(
     productionLocalModelManifest.compatibility.semanticSchema,
-    'alyte.semantic-mapper.v1',
+    'alyte.semantic-mapper.v2',
   );
   assert.equal(
     productionLocalModelManifest.pack.artifact.sha256,

@@ -10,6 +10,7 @@ import {
   groupObservationsIntoRows,
   parseComparatorValue,
   parseLabDate,
+  reparseExtractionRowFromSemanticFields,
   revalidateExtractionRow,
   validateSemanticProposals,
   type ExtractionAliasEntry,
@@ -814,5 +815,72 @@ describe('local extraction domain', () => {
       ),
       [],
     );
+  });
+
+  it('reparses noisy Lithuanian multi-column rows from selected source cells', () => {
+    const observations = [
+      ['lt-label', 'mažo tankio lipoproteinų cholesterolis', 0.05],
+      ['lt-value', '3,8', 0.25],
+      ['lt-unit', 'mmol/L', 0.42],
+      ['lt-range', '<3,0', 0.56],
+      ['lt-flag', 'H', 0.7],
+      ['lt-method', 'IFCC', 0.8],
+      ['lt-noisy-value', '1,2', 0.88],
+      ['lt-accession', 'KRA-2026-AB', 0.96],
+    ].map(([id, text, x]) => ({
+      id: id as string,
+      text: text as string,
+      alternatives: [],
+      pageIndex: 0,
+      orientation: 0,
+      boundingBox: { x: x as number, y: 0.2, width: 0.08, height: 0.03 },
+      structure: {
+        kind: 'table-cell' as const,
+        tableId: 'lt-results',
+        rowIndex: 4,
+        columnIndex: Math.round((x as number) * 10),
+      },
+      recognition: { level: 'accurate' as const, language: 'lt', internalConfidence: null },
+    }));
+    const aliases: readonly ExtractionAliasEntry[] = [
+      {
+        id: 'biomarker.ldl_c',
+        aliases: ['mažo tankio lipoproteinų cholesterolis'],
+        specimens: ['serum'],
+        units: ['mmol/L'],
+      },
+    ];
+    const row = groupObservationsIntoRows(observations, {
+      aliases,
+      locale: 'lt-LT',
+      specimenType: 'serum',
+      collectionDate: { kind: 'known', value: '2026-08-22' },
+    })[0];
+    assert.ok(row);
+    assert.ok(row.reviewReasons.includes('unsupported-layout'));
+    const sourceText = row.sourceText;
+    const sourceRaw = row.source.raw;
+    const reparsed = reparseExtractionRowFromSemanticFields(
+      row,
+      {
+        label: 'lt-label',
+        value: 'lt-value',
+        unit: 'lt-unit',
+        referenceInterval: 'lt-range',
+        flag: 'lt-flag',
+      },
+      aliases,
+    );
+    assert.equal(reparsed.sourceText, sourceText);
+    assert.deepEqual(reparsed.source.raw, sourceRaw);
+    assert.deepEqual(
+      reparsed.source.observations?.map((observation) => observation.id),
+      observations.map((observation) => observation.id),
+    );
+    assert.deepEqual(reparsed.proposedValue, { kind: 'numeric', value: 3.8 });
+    assert.equal(reparsed.proposedUnit, 'mmol/L');
+    assert.equal(reparsed.proposedReferenceInterval, '<3,0');
+    assert.equal(reparsed.proposedFlag, 'H');
+    assert.equal(reparsed.reviewReasons.includes('unsupported-layout'), false);
   });
 });

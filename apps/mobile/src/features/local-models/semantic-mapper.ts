@@ -252,9 +252,6 @@ export function createLocalSemanticMapper(
             : (languageCode(observations[0].recognition.language) ?? 'en');
         const serialized = serializeSemanticMapperChunk(rows, locale, headings ?? []);
         const prompt = createSemanticMapperPrompt(locale, serialized);
-        if (new TextEncoder().encode(prompt).byteLength > SEMANTIC_MAPPER_LIMITS.maxInputBytes) {
-          throw new Error('semantic-inference-input-too-large');
-        }
         const generation = ++nextInferenceGeneration;
         const nativeWork = Promise.resolve().then(() => options.models.infer(prompt));
         const inference: ActiveInference = {

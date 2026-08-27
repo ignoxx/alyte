@@ -20,8 +20,8 @@ const loadedState = {
 };
 
 const observation: VisionTextObservation = {
-  id: 'synthetic-ldl',
-  text: 'LDL-C 3,8 mmol/L',
+  id: 'synthetic-ldl-label',
+  text: 'LDL-C',
   alternatives: [],
   pageIndex: 0,
   orientation: 0,
@@ -29,10 +29,24 @@ const observation: VisionTextObservation = {
   recognition: { level: 'accurate', language: 'de', internalConfidence: null },
 };
 
+const valueObservation: VisionTextObservation = {
+  ...observation,
+  id: 'synthetic-ldl-value',
+  text: '3,8',
+  boundingBox: { x: 0.5, y: 0.2, width: 0.3, height: 0.04 },
+};
+
+const unitObservation: VisionTextObservation = {
+  ...observation,
+  id: 'synthetic-ldl-unit',
+  text: 'mmol/L',
+  boundingBox: { x: 0.8, y: 0.2, width: 0.15, height: 0.04 },
+};
+
 const candidateRow = {
-  rowId: observation.id,
-  sourceObservationIds: [observation.id],
-  observations: [observation],
+  rowId: 'synthetic-ldl-row',
+  sourceObservationIds: [observation.id, valueObservation.id, unitObservation.id],
+  observations: [observation, valueObservation, unitObservation],
 } as const;
 
 function models(
@@ -156,10 +170,15 @@ test('accepts only validated source selections and preserves versioned provenanc
   const mapper = createLocalSemanticMapper({
     models: models(async () =>
       JSON.stringify({
-        schemaVersion: 'alyte.semantic-mapper.v1',
+        schemaVersion: 'alyte.semantic-mapper.v2',
         proposals: [
           {
-            sourceObservationIds: ['synthetic-ldl'],
+            rowKey: 'r0',
+            labelKey: 'c0',
+            valueKey: 'c1',
+            unitKey: 'c2',
+            referenceIntervalKey: null,
+            flagKey: null,
             role: 'measurement',
             specimenType: 'serum',
             biomarkerId: 'biomarker.ldl_c',
@@ -172,14 +191,21 @@ test('accepts only validated source selections and preserves versioned provenanc
   const mapped = await mapper.map({ pageIndex: 0, rows: [candidateRow] });
   assert.deepEqual(mapped, [
     {
-      sourceObservationIds: ['synthetic-ldl'],
+      sourceObservationIds: ['synthetic-ldl-label', 'synthetic-ldl-value', 'synthetic-ldl-unit'],
+      sourceFields: {
+        label: 'synthetic-ldl-label',
+        value: 'synthetic-ldl-value',
+        unit: 'synthetic-ldl-unit',
+        referenceInterval: null,
+        flag: null,
+      },
       proposedBiomarkerId: 'biomarker.ldl_c',
       proposedSpecimenType: 'serum',
       role: 'measurement',
     },
   ]);
-  assert.equal(mapper.provenance?.promptVersion, 'alyte.semantic-mapper.prompt.v2');
-  assert.equal(mapper.maxRowsPerChunk, 12);
+  assert.equal(mapper.provenance?.promptVersion, 'alyte.semantic-mapper.prompt.v3');
+  assert.equal(mapper.maxRowsPerChunk, 4);
 });
 
 test('rejects invented root keys before semantic validation', async () => {

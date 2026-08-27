@@ -16,6 +16,7 @@ import {
 import {
   groupObservationsIntoRows,
   parseLabDate,
+  reparseExtractionRowFromSemanticFields,
   revalidateExtractionRow,
   validateSemanticProposals,
   type ExtractionAliasEntry,
@@ -65,6 +66,10 @@ import {
   type ImageSanitizedVerification,
 } from './image';
 import { nativeVisionOCR, type VisionOCR } from './vision';
+import {
+  createSemanticMapperPrompt,
+  serializeSemanticMapperChunk,
+} from '../local-models/semantic-contract';
 
 export type PasswordRequest = (context: {
   readonly report: LabReport;
@@ -299,6 +304,7 @@ export type LabReportsServiceOptions = {
 export function createDefaultExtractionAliases(): readonly ExtractionAliasEntry[] {
   return comparableBiomarkers.map((entry) => ({
     id: entry.id,
+    ...(entry.canonicalLabel === undefined ? {} : { canonicalLabel: entry.canonicalLabel }),
     aliases: entry.aliases,
     specimens: entry.specimens,
     units: entry.units,
@@ -1756,9 +1762,9 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     const contexts: ExtractionDateContext[] = [];
     const excludedObservationIds = new Set<string>();
     const collectionWords =
-      /\b(collection|collected|sample|specimen|date of collection|abnahme|entnahme|proben(?:entnahme)?|prélèvement|prelevement|muestra|toma de muestra|prelievo|campione|colheita|amostra|afname|monster|pobranie|próbka|paėmimo data|mėginys|ėminys|paimta)\b/iu;
+      /\b(collection|collected|sample|specimen|date of collection|abnahme|entnahme|proben(?:entnahme)?|prélèvement|prelevement|muestra|toma de muestra|prelievo|campione|colheita|amostra|afname|monster|pobranie|próbka|paėmimo data|mėgin(?:ys|io data)|ėminys|paimta)\b/iu;
     const nonCollectionWords =
-      /\b(issued|report date|birth|dob|date of birth|ausgestellt|geburt|naissance|nacimiento|nascita|nascimento|geboorte|urodzenia|wydania|išdavimo data|gimimo data)\b/iu;
+      /\b(issued|report date|birth|dob|date of birth|ausgestellt|geburt|naissance|nacimiento|nascita|nascimento|geboorte|urodzenia|wydania|ataskaitos data|išdavimo data|gimimo data)\b/iu;
     for (const observation of observations) {
       const candidate = observation.text.match(/\b\d{1,4}[./-]\d{1,2}[./-]\d{1,4}\b/u)?.[0];
       if (candidate === undefined) continue;
@@ -1896,52 +1902,84 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       readonly rows: readonly ExtractionSemanticCandidateRow[];
       readonly headings: VisionTextObservation[];
     }[] = [];
+    // The production adapter advertises the compact-contract bound. Legacy test/provider seams
+    // without an explicit bound retain their historical row limit until they migrate to v2.
     const maxRowsPerChunk = Math.max(1, Math.floor(semanticMapper.maxRowsPerChunk ?? 12));
     const maxObservationsPerChunk = Math.max(
       1,
       Math.floor(semanticMapper.maxObservationsPerChunk ?? 48),
     );
+    const candidateRowsFor = (
+      rowChunk: readonly ExtractionDraftRow[],
+    ): readonly ExtractionSemanticCandidateRow[] =>
+      rowChunk.flatMap((row): ExtractionSemanticCandidateRow[] => {
+        const rowObservations = row.source.observationIds.flatMap((id) => {
+          const observation = observationById.get(id);
+          return observation === undefined ? [] : [observation];
+        });
+        return rowObservations.length === row.source.observationIds.length
+          ? [
+              {
+                rowId: row.id,
+                sourceObservationIds: [...row.source.observationIds],
+                observations: rowObservations,
+              },
+            ]
+          : [];
+      });
+    const headingsFor = (rowChunk: readonly ExtractionDraftRow[]): VisionTextObservation[] => {
+      // Preserve nearby section/table headings as context; they are never added to candidate rows.
+      const anchor = rowChunk[0]?.source.observations?.[0];
+      const anchorY = anchor?.boundingBox.y ?? 0;
+      const anchorTableId = anchor?.structure?.tableId ?? null;
+      return observations.filter((observation) => {
+        const structure = observation.structure;
+        if (candidateSourceIds.has(observation.id) || observation.pageIndex !== anchor?.pageIndex)
+          return false;
+        if (structure?.kind === 'table-cell' && structure.tableId === anchorTableId) return true;
+        const specimenHeading = specimenTypeFromText(observation.text) !== null;
+        const isAbove = observation.boundingBox.y <= anchorY;
+        return specimenHeading && isAbove && anchorY - observation.boundingBox.y <= 0.25;
+      });
+    };
+    const fitsProductionWireBudget = (rowChunk: readonly ExtractionDraftRow[]): boolean => {
+      // An explicitly bounded adapter is the production v2 seam. Check the complete prompt and
+      // response reserve before handing a chunk to native inference; older custom seams retain
+      // their pre-v2 test contract and do not serialize this wire format.
+      if (
+        semanticMapper.maxRowsPerChunk === undefined ||
+        semanticMapper.schemaVersion !== 'alyte.semantic-mapper.v2'
+      )
+        return true;
+      const candidateRows = candidateRowsFor(rowChunk);
+      const anchor = candidateRows[0]?.observations[0];
+      const locale = anchor?.recognition.language ?? 'en';
+      try {
+        const serialized = serializeSemanticMapperChunk(
+          candidateRows,
+          locale,
+          headingsFor(rowChunk),
+        );
+        createSemanticMapperPrompt(locale, serialized);
+        return true;
+      } catch {
+        return false;
+      }
+    };
     for (const group of rowGroups.values()) {
       let rowChunk: ExtractionDraftRow[] = [];
       let rowObservationCount = 0;
       const flushChunk = () => {
         if (rowChunk.length === 0) return;
-        const candidateRows = rowChunk.flatMap((row): ExtractionSemanticCandidateRow[] => {
-          const rowObservations = row.source.observationIds.flatMap((id) => {
-            const observation = observationById.get(id);
-            return observation === undefined ? [] : [observation];
-          });
-          return rowObservations.length === row.source.observationIds.length
-            ? [
-                {
-                  rowId: row.id,
-                  sourceObservationIds: [...row.source.observationIds],
-                  observations: rowObservations,
-                },
-              ]
-            : [];
-        });
-        // Preserve nearby section/table headings even when Vision placed them outside the table
-        // cells. A heading is context only: it is never added to the candidate row itself.
-        const anchor = rowChunk[0]?.source.observations?.[0];
-        const anchorY = anchor?.boundingBox.y ?? 0;
-        const anchorTableId = anchor?.structure?.tableId ?? null;
-        const headings = observations.filter((observation) => {
-          const structure = observation.structure;
-          if (candidateSourceIds.has(observation.id) || observation.pageIndex !== anchor?.pageIndex)
-            return false;
-          if (structure?.kind === 'table-cell' && structure.tableId === anchorTableId) return true;
-          const specimenHeading = specimenTypeFromText(observation.text) !== null;
-          const isAbove = observation.boundingBox.y <= anchorY;
-          return specimenHeading && isAbove && anchorY - observation.boundingBox.y <= 0.25;
-        });
-        if (candidateRows.length > 0) chunks.push({ rows: candidateRows, headings });
+        const candidateRows = candidateRowsFor(rowChunk);
+        if (candidateRows.length > 0)
+          chunks.push({ rows: candidateRows, headings: headingsFor(rowChunk) });
         rowChunk = [];
         rowObservationCount = 0;
       };
       for (const row of group) {
         const observationCount = row.source.observationIds.length;
-        if (observationCount > maxObservationsPerChunk) {
+        if (observationCount > maxObservationsPerChunk || !fitsProductionWireBudget([row])) {
           // Keep the deterministic row, but never hand an oversized row to the model adapter.
           flushChunk();
           continue;
@@ -1949,7 +1987,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         if (
           rowChunk.length > 0 &&
           (rowChunk.length >= maxRowsPerChunk ||
-            rowObservationCount + observationCount > maxObservationsPerChunk)
+            rowObservationCount + observationCount > maxObservationsPerChunk ||
+            !fitsProductionWireBudget([...rowChunk, row]))
         ) {
           flushChunk();
         }
@@ -2039,7 +2078,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           item.sourceObservationIds.every((id, index) => id === row.source.observationIds[index]),
       );
       if (proposal === undefined) return row;
-      if (proposal.role === 'ignore') return row;
+      if (proposal.role === 'ignore' || proposal.role === 'specimen-context') return row;
       const proposedSpecimenType =
         proposal.proposedSpecimenType === 'other' ? 'unknown' : proposal.proposedSpecimenType;
       // Deterministic section/row context outranks model context. A model can refine an unknown
@@ -2050,16 +2089,32 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         proposedSpecimenType !== row.proposedSpecimenType
       )
         return row;
-      const next = revalidateExtractionRow(
-        row,
-        {
-          ...(proposal.proposedBiomarkerId === null
-            ? {}
-            : { proposedBiomarkerId: proposal.proposedBiomarkerId }),
-          ...(proposedSpecimenType === undefined ? {} : { proposedSpecimenType }),
-        },
-        extractionAliases,
-      );
+      let next = row;
+      try {
+        // A v2 proposal selects exact OCR cells. Reparse only those cells so accession numbers,
+        // method codes, timestamps, and other columns cannot become competing value candidates.
+        if (proposal.sourceFields !== undefined) {
+          next = reparseExtractionRowFromSemanticFields(
+            row,
+            proposal.sourceFields,
+            extractionAliases,
+          );
+        }
+        next = revalidateExtractionRow(
+          next,
+          {
+            ...(proposal.proposedBiomarkerId === null
+              ? {}
+              : { proposedBiomarkerId: proposal.proposedBiomarkerId }),
+            ...(proposedSpecimenType === undefined ? {} : { proposedSpecimenType }),
+          },
+          extractionAliases,
+          proposal.sourceFields === undefined ? {} : { sourceFields: proposal.sourceFields },
+        );
+      } catch {
+        // A malformed selection never alters the deterministic row.
+        return row;
+      }
       if (
         next.reviewReasons.includes('incompatible-unit') ||
         next.reviewReasons.includes('incompatible-specimen')
@@ -2072,7 +2127,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           semantic: {
             adapterVersion: semanticMapper.adapterVersion,
             schemaVersion: semanticMapper.schemaVersion,
-            sourceObservationIds: proposal.sourceObservationIds,
+            sourceObservationIds: row.source.observationIds,
+            ...(proposal.sourceFields === undefined
+              ? {}
+              : { sourceFieldObservationIds: proposal.sourceFields }),
             ...semanticMapper.provenance,
           },
         },

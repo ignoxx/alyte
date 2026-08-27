@@ -59,8 +59,10 @@ export type ExtractionSourceLocation = {
   readonly raw?: ExtractionRawSourceTokens;
   readonly semantic?: {
     readonly adapterVersion: string;
-    readonly schemaVersion: 'alyte.semantic-mapper.v1';
+    readonly schemaVersion: ExtractionSemanticSchemaVersion;
     readonly sourceObservationIds: readonly string[];
+    /** Exact source cells selected for deterministic field parsing. */
+    readonly sourceFieldObservationIds?: ExtractionSemanticFieldSelection;
     /** Versioned runtime inputs that produced the accepted source selection. */
     readonly modelVersion?: string;
     readonly runtimeVersion?: string;
@@ -90,6 +92,18 @@ export type ExtractionDateContext = {
   readonly collectionDate: LabDateState;
   /** The unmodified OCR observation containing the date candidate. */
   readonly sourceText?: string;
+};
+
+export type ExtractionSemanticSchemaVersion =
+  'alyte.semantic-mapper.v1' | 'alyte.semantic-mapper.v2';
+
+/** Exact source observations selected for deterministic field parsing. */
+export type ExtractionSemanticFieldSelection = {
+  readonly label: string;
+  readonly value: string;
+  readonly unit: string | null;
+  readonly referenceInterval: string | null;
+  readonly flag: string | null;
 };
 
 export type ExtractionRowDecision = 'unresolved' | 'preserve' | 'skip' | 'resolve';
@@ -191,6 +205,8 @@ export type ExtractionDraft = {
 
 export type ExtractionAliasEntry = {
   readonly id: string;
+  /** Checked-in English display label; never model-authored or source provenance. */
+  readonly canonicalLabel?: string;
   readonly aliases: readonly string[];
   readonly specimens: readonly SpecimenType[];
   readonly units: readonly string[];
@@ -215,16 +231,17 @@ export type ExtractionMethodProfile = {
 
 export type ExtractionSemanticProposal = {
   readonly sourceObservationIds: readonly string[];
+  readonly sourceFields?: ExtractionSemanticFieldSelection;
   readonly proposedBiomarkerId: CanonicalId | null;
   readonly proposedSpecimenType?: SpecimenType | 'other';
-  readonly role?: 'measurement' | 'specimen-context' | 'ignore';
+  readonly role?: 'measurement' | 'preserve' | 'specimen-context' | 'ignore';
 };
 
 /**
  * A deterministic Vision/table/geometry group supplied to the semantic mapper. The row ID is
- * internal bookkeeping; the model may only copy the complete sourceObservationIds array when it
- * proposes a mapping. Keeping cells nested under a row prevents the wire contract from presenting
- * one physical result as an unrelated OCR wall.
+ * internal bookkeeping; the production wire contract addresses cells through compact row/cell
+ * keys and expands accepted selections back to the complete sourceObservationIds array locally.
+ * Keeping cells nested under a row prevents one physical result becoming an unrelated OCR wall.
  */
 export type ExtractionSemanticCandidateRow = {
   readonly rowId: string;
@@ -254,7 +271,7 @@ export type ExtractionSemanticCancellation = {
 
 export interface ExtractionSemanticMapper {
   readonly adapterVersion: string;
-  readonly schemaVersion: 'alyte.semantic-mapper.v1';
+  readonly schemaVersion: ExtractionSemanticSchemaVersion;
   /** Maximum number of deterministic candidate rows in one model request. */
   readonly maxRowsPerChunk?: number;
   /** Maximum OCR observations in one model request, including every cell in those rows. */
@@ -316,13 +333,31 @@ function candidateRowsFromInput(
   return input as readonly ExtractionSemanticCandidateRow[];
 }
 
+type SemanticWireRow = {
+  readonly row: ExtractionSemanticCandidateRow;
+  readonly rowKey: string;
+  readonly cellIds: ReadonlyMap<string, string>;
+};
+
+function semanticWireRows(
+  candidateRows: readonly ExtractionSemanticCandidateRow[],
+): readonly SemanticWireRow[] {
+  return candidateRows
+    .slice()
+    .sort((left, right) => left.rowId.localeCompare(right.rowId))
+    .map((row, rowIndex) => ({
+      row,
+      rowKey: `r${rowIndex}`,
+      cellIds: new Map(row.observations.map((observation, index) => [`c${index}`, observation.id])),
+    }));
+}
+
 /** Rejects model output unless it refers only to exact local rows and known catalogue IDs. */
 export function validateSemanticProposals(
   input: unknown,
   candidateRowsInput: SemanticCandidateRowsInput,
   aliases: readonly ExtractionAliasEntry[],
 ): readonly ExtractionSemanticProposal[] {
-  const isEnvelope = !Array.isArray(input);
   const proposals: readonly unknown[] | null = Array.isArray(input)
     ? input
     : typeof input === 'object' &&
@@ -342,7 +377,7 @@ export function validateSemanticProposals(
       row.rowId.length > 96 ||
       rowIds.has(row.rowId) ||
       row.sourceObservationIds.length === 0 ||
-      row.sourceObservationIds.length > 8 ||
+      row.sourceObservationIds.length > 24 ||
       new Set(row.sourceObservationIds).size !== row.sourceObservationIds.length ||
       row.sourceObservationIds.some((id) => id.length === 0 || id.length > 96) ||
       row.observations.length !== row.sourceObservationIds.length
@@ -359,36 +394,100 @@ export function validateSemanticProposals(
     rowBySourceIds.set(JSON.stringify(row.sourceObservationIds), row);
   }
   const biomarkerIds = new Set(aliases.map((item) => item.id));
-  const consumedRows = new Set<string>();
-  const accepted = proposals.flatMap((item) => {
+  const wireRows = semanticWireRows(candidateRows);
+  const wireRowsByKey = new Map(wireRows.map((item) => [item.rowKey, item]));
+  const parsed = proposals.flatMap((item) => {
     if (typeof item !== 'object' || item === null) return [];
     const value = item as Record<string, unknown>;
-    if (!Array.isArray(value.sourceObservationIds)) return [];
-    const allowedKeys = new Set([
-      'sourceObservationIds',
-      'proposedBiomarkerId',
-      'biomarkerId',
-      'proposedSpecimenType',
-      'specimenType',
-      'role',
-    ]);
+    const compact = typeof value.rowKey === 'string';
+    const allowedKeys = compact
+      ? new Set([
+          'rowKey',
+          'labelKey',
+          'valueKey',
+          'unitKey',
+          'referenceIntervalKey',
+          'flagKey',
+          'biomarkerId',
+          'role',
+          'specimenType',
+        ])
+      : new Set([
+          'sourceObservationIds',
+          'proposedBiomarkerId',
+          'biomarkerId',
+          'proposedSpecimenType',
+          'specimenType',
+          'role',
+        ]);
     if (Object.keys(value).some((key) => !allowedKeys.has(key))) return [];
+    let row: ExtractionSemanticCandidateRow | undefined;
+    let sourceObservationIds: string[];
+    let sourceFields: ExtractionSemanticFieldSelection | undefined;
+    if (compact) {
+      if (
+        typeof value.rowKey !== 'string' ||
+        !/^r(?:0|[1-9]\d*)$/u.test(value.rowKey) ||
+        value.labelKey === undefined ||
+        value.valueKey === undefined ||
+        value.unitKey === undefined ||
+        value.referenceIntervalKey === undefined ||
+        value.flagKey === undefined
+      )
+        return [];
+      const wireRow = wireRowsByKey.get(value.rowKey);
+      if (wireRow === undefined) return [];
+      row = wireRow.row;
+      const sourceIdForKey = (key: unknown, required: boolean): string | null | undefined => {
+        if (key === null) return required ? undefined : null;
+        if (typeof key !== 'string' || !/^c(?:0|[1-9]\d*)$/u.test(key)) return undefined;
+        return wireRow.cellIds.get(key);
+      };
+      const label = sourceIdForKey(value.labelKey, true);
+      const selectedValue = sourceIdForKey(value.valueKey, true);
+      const unit = sourceIdForKey(value.unitKey, false);
+      const referenceInterval = sourceIdForKey(value.referenceIntervalKey, false);
+      const flag = sourceIdForKey(value.flagKey, false);
+      if (
+        label === undefined ||
+        selectedValue === undefined ||
+        unit === undefined ||
+        referenceInterval === undefined ||
+        flag === undefined
+      )
+        return [];
+      if (typeof label !== 'string' || typeof selectedValue !== 'string') return [];
+      const selected = [label, selectedValue, unit, referenceInterval, flag].filter(
+        (item): item is string => item !== null,
+      );
+      if (new Set(selected).size !== selected.length || label === selectedValue) return [];
+      sourceObservationIds = [...row.sourceObservationIds];
+      sourceFields = {
+        label,
+        value: selectedValue,
+        unit,
+        referenceInterval,
+        flag,
+      };
+    } else {
+      if (!Array.isArray(value.sourceObservationIds)) return [];
+      sourceObservationIds = value.sourceObservationIds as string[];
+    }
     if (value.proposedBiomarkerId !== undefined && value.biomarkerId !== undefined) return [];
     if (value.proposedSpecimenType !== undefined && value.specimenType !== undefined) return [];
-    if (value.sourceObservationIds.some((id) => typeof id !== 'string')) return [];
-    const sourceObservationIds = value.sourceObservationIds as string[];
+    if (sourceObservationIds.some((id) => typeof id !== 'string')) return [];
     if (
       sourceObservationIds.length === 0 ||
-      sourceObservationIds.length > 8 ||
+      sourceObservationIds.length > (compact ? 24 : 8) ||
       sourceObservationIds.some((id) => id.length === 0 || id.length > 96) ||
       new Set(sourceObservationIds).size !== sourceObservationIds.length ||
       !sourceObservationIds.every((id) => sourceById.has(id))
     )
       return [];
-    const row = rowBySourceIds.get(JSON.stringify(sourceObservationIds));
+    row ??= rowBySourceIds.get(JSON.stringify(sourceObservationIds));
     // The model must copy the complete row ID array, including order. A partial, cross-row,
     // reordered, or extra-ID proposal is rejected rather than inferred or repaired.
-    if (row === undefined || consumedRows.has(row.rowId)) return [];
+    if (row === undefined) return [];
     const sourceRows = sourceObservationIds.map((id) => sourceById.get(id));
     if (sourceRows.some((observation) => observation === undefined)) return [];
     const rawBiomarkerId =
@@ -419,6 +518,7 @@ export function validateSemanticProposals(
       value.role === undefined
         ? undefined
         : value.role === 'measurement' ||
+            value.role === 'preserve' ||
             value.role === 'specimen-context' ||
             value.role === 'ignore'
           ? value.role
@@ -426,20 +526,25 @@ export function validateSemanticProposals(
     if (role === null) return [];
     if (role === 'measurement' && proposedBiomarkerId === null) return [];
     if (role !== undefined && role !== 'measurement' && proposedBiomarkerId !== null) return [];
+    if (compact && (role === 'measurement' || role === 'preserve') && sourceFields === undefined)
+      return [];
     const proposal: ExtractionSemanticProposal = {
       sourceObservationIds,
+      ...(sourceFields === undefined ? {} : { sourceFields }),
       proposedBiomarkerId,
       ...(proposedSpecimenType === undefined ? {} : { proposedSpecimenType }),
       ...(role === undefined ? {} : { role }),
     };
     if (proposal.proposedBiomarkerId !== null && !biomarkerIds.has(proposal.proposedBiomarkerId))
       return [];
-    consumedRows.add(row.rowId);
-    return [proposal];
+    return [{ proposal, rowId: row.rowId }];
   });
-  // A malformed or duplicate envelope must never partially influence the draft. The production
-  // mapper performs the same all-or-none check; this helper keeps legacy adapters fail-closed too.
-  return isEnvelope && accepted.length !== proposals.length ? [] : accepted;
+  // A malformed proposal is discarded independently, while duplicate proposals for one physical
+  // row are all rejected. This keeps good rows useful without allowing ambiguous output to win by
+  // array order.
+  const counts = new Map<string, number>();
+  for (const item of parsed) counts.set(item.rowId, (counts.get(item.rowId) ?? 0) + 1);
+  return parsed.filter((item) => counts.get(item.rowId) === 1).map((item) => item.proposal);
 }
 
 /**
@@ -526,6 +631,10 @@ export type ExtractionDraftRowPatch = {
   readonly proposedSpecimenType?: SpecimenType;
   readonly collectionDate?: LabDateState;
   readonly decision?: ExtractionRowDecision;
+};
+
+type SemanticRevalidationOptions = {
+  readonly sourceFields?: ExtractionSemanticFieldSelection;
 };
 
 export type ExtractionConfirmationPlan = {
@@ -817,6 +926,43 @@ function aliasPattern(alias: string): RegExp | null {
   return new RegExp(words.map(escapeRegExp).join('[^\\p{L}\\p{N}]+'), 'iu');
 }
 
+/**
+ * Finds aliases after the same accent/punctuation folding used for exact catalogue lookup. The
+ * regex path above is intentionally cheap, but cannot match a normalized `z` against Lithuanian
+ * `ž`; token ranges keep the original source offsets and therefore preserve source wording.
+ */
+function normalizedAliasMatch(
+  sourceText: string,
+  alias: string,
+): { readonly index: number; readonly length: number } | null {
+  const target = normalizeAlias(alias);
+  if (!target) return null;
+  const tokens = [...sourceText.matchAll(/[^\s]+/gu)].map((match) => ({
+    text: match[0] ?? '',
+    start: match.index ?? 0,
+  }));
+  for (let start = 0; start < tokens.length; start += 1) {
+    const parts: string[] = [];
+    for (let end = start; end < tokens.length; end += 1) {
+      const normalized = normalizeAlias(tokens[end]?.text ?? '');
+      if (!normalized) continue;
+      parts.push(normalized);
+      const candidate = parts.join(' ');
+      if (candidate === target) {
+        const first = tokens[start];
+        const last = tokens[end];
+        if (first === undefined || last === undefined) return null;
+        return {
+          index: first.start,
+          length: last.start + last.text.length - first.start,
+        };
+      }
+      if (!target.startsWith(`${candidate} `) && !candidate.startsWith(`${target} `)) break;
+    }
+  }
+  return null;
+}
+
 export function findUnsafeBiomarkerLabel(
   sourceText: string,
   aliases: readonly ExtractionAliasEntry[],
@@ -882,24 +1028,38 @@ function findAliasMatches(
     entry.aliases.flatMap((alias) => {
       const pattern = aliasPattern(alias);
       const match = pattern?.exec(sourceText);
-      return match === null || match === undefined
-        ? []
-        : (() => {
-            const start = match.index;
-            let end = start + match[0].length;
-            if (sourceText[end] === '(') {
-              const closing = sourceText.indexOf(')', end + 1);
-              if (closing >= 0) end = closing + 1;
-            }
-            return [
-              {
-                id: entry.id as CanonicalId,
-                text: sourceText.slice(start, end),
-                length: normalizeAlias(alias).length,
-                start,
-              },
-            ];
-          })();
+      const normalizedMatch =
+        match === null || match === undefined ? normalizedAliasMatch(sourceText, alias) : null;
+      if (match === null || match === undefined) {
+        if (normalizedMatch === null) return [];
+        return [
+          {
+            id: entry.id as CanonicalId,
+            text: sourceText.slice(
+              normalizedMatch.index,
+              normalizedMatch.index + normalizedMatch.length,
+            ),
+            length: normalizeAlias(alias).length,
+            start: normalizedMatch.index,
+          },
+        ];
+      }
+      return (() => {
+        const start = match.index;
+        let end = start + match[0].length;
+        if (sourceText[end] === '(') {
+          const closing = sourceText.indexOf(')', end + 1);
+          if (closing >= 0) end = closing + 1;
+        }
+        return [
+          {
+            id: entry.id as CanonicalId,
+            text: sourceText.slice(start, end),
+            length: normalizeAlias(alias).length,
+            start,
+          },
+        ];
+      })();
     }),
   );
   matches.sort((a, b) => a.start - b.start || b.length - a.length || a.text.length - b.text.length);
@@ -1221,10 +1381,53 @@ function parseSourceRow(
   };
 }
 
+function selectedObservationText(row: ExtractionDraftRow, id: string | null): string | null {
+  if (id === null) return null;
+  return row.source.observations?.find((observation) => observation.id === id)?.text.trim() ?? null;
+}
+
+/**
+ * Rebuilds source-shaped fields from the exact OCR cells selected by the semantic mapper. The
+ * complete source row, raw fields, and every OCR observation remain untouched; only the proposed
+ * parsed projection is replaced. A missing/invalid selection is rejected instead of falling back
+ * to the broad concatenated row.
+ */
+export function reparseExtractionRowFromSemanticFields(
+  row: ExtractionDraftRow,
+  sourceFields: ExtractionSemanticFieldSelection,
+  aliases: readonly ExtractionAliasEntry[],
+): ExtractionDraftRow {
+  const label = selectedObservationText(row, sourceFields.label);
+  const value = selectedObservationText(row, sourceFields.value);
+  const unit = selectedObservationText(row, sourceFields.unit);
+  const referenceInterval = selectedObservationText(row, sourceFields.referenceInterval);
+  const flag = selectedObservationText(row, sourceFields.flag);
+  if (label === null || value === null) throw new Error('semantic-source-field-missing');
+  const parsedValue =
+    parseComparatorValue(value) ??
+    (/^(?:not detected|positive|negative|detected|normal|abnormal|teigiamas|neigiamas|aptikta|neaptikta|positiv|negativ)$/iu.test(
+      value,
+    )
+      ? { kind: 'categorical' as const, value }
+      : { kind: 'free_text' as const, value });
+  const next: ExtractionDraftRow = {
+    ...row,
+    proposedLabel: label,
+    proposedValue: parsedValue,
+    proposedUnit: normalizeUnit(unit),
+    // Keep the exact selected text so revalidation can surface an invalid interval instead of
+    // silently converting it to null.
+    proposedReferenceInterval: referenceInterval,
+    proposedFlag: flag,
+  };
+  return revalidateExtractionRow(next, {}, aliases, { sourceFields });
+}
+
 export function revalidateExtractionRow(
   row: ExtractionDraftRow,
   patch: ExtractionDraftRowPatch,
   aliases: readonly ExtractionAliasEntry[],
+  options: SemanticRevalidationOptions = {},
 ): ExtractionDraftRow {
   const next = { ...row, ...patch, source: row.source, sourceValue: row.sourceValue };
   const reasons = new Set<ExtractionReviewReason>();
@@ -1232,7 +1435,10 @@ export function revalidateExtractionRow(
   if (!next.sourceValueString.trim()) reasons.add('missing-value');
   if (next.proposedValue.kind === 'free_text' && !next.proposedValue.value.trim())
     reasons.add('unparseable-value');
-  const aliasMatches = findAliasMatches(next.sourceText, aliases);
+  const aliasMatches = findAliasMatches(
+    options.sourceFields === undefined ? next.sourceText : next.proposedLabel,
+    aliases,
+  );
   const aliasMatch = aliasMatches[0] ?? null;
   const hasSiblingAlias = new Set(aliasMatches.map((match) => match.id)).size > 1;
   const unsafeMatch = findUnsafeBiomarkerLabel(
@@ -1242,7 +1448,32 @@ export function revalidateExtractionRow(
   );
   const globalUnsafeMatch =
     aliasMatch === null ? findUnsafeBiomarkerLabel(next.sourceText, aliases) : null;
-  const sourceValues = analyzeSourceValues(next.sourceText);
+  const sourceValues =
+    options.sourceFields === undefined
+      ? analyzeSourceValues(next.sourceText)
+      : {
+          valueCandidates:
+            next.proposedValue.kind === 'numeric' || next.proposedValue.kind === 'bounded'
+              ? [
+                  {
+                    raw: selectedObservationText(next, options.sourceFields.value) ?? '',
+                    start: 0,
+                    end: selectedObservationText(next, options.sourceFields.value)?.length ?? 0,
+                    value: next.proposedValue,
+                  },
+                ]
+              : [],
+          effectiveReferences:
+            next.proposedReferenceInterval === null
+              ? []
+              : [
+                  {
+                    raw: next.proposedReferenceInterval,
+                    start: 0,
+                    end: next.proposedReferenceInterval.length,
+                  },
+                ],
+        };
   const id =
     unsafeMatch === null && globalUnsafeMatch === null && !hasSiblingAlias
       ? next.proposedBiomarkerId
@@ -1252,9 +1483,10 @@ export function revalidateExtractionRow(
     reasons.add('ambiguous-assay');
   else if (!methodCompatible(next.sourceText, id, aliases)) reasons.add('incompatible-method');
   if (
-    sourceValues.valueCandidates.length > 1 ||
-    sourceValues.effectiveReferences.length > 1 ||
-    hasSiblingAlias
+    options.sourceFields === undefined &&
+    (sourceValues.valueCandidates.length > 1 ||
+      sourceValues.effectiveReferences.length > 1 ||
+      hasSiblingAlias)
   )
     reasons.add('unsupported-layout');
   if (!unitCompatible(next.proposedUnit, id, aliases)) reasons.add('incompatible-unit');

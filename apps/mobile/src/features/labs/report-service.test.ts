@@ -20,6 +20,7 @@ import {
   convertComparableValue,
   decodeVisionOCRResult,
   EXTRACTION_PARSER_VERSION,
+  extractionReviewRequiresAttention,
   groupObservationsIntoRows,
   parseLabDate,
   revalidateExtractionRow,
@@ -1431,7 +1432,7 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(draft.rows[1]?.source.semantic, null);
   });
 
-  test('bounds mapper input by candidate rows and preserves every deterministic row on partial failure', async () => {
+  test('bounds mapper input by candidate rows and keeps independent valid proposals on partial failure', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
     const observations = Array.from({ length: 13 }, (_, index) => ({
@@ -1490,8 +1491,10 @@ describe('protected Lab Report import lifecycle', () => {
 
     assert.deepEqual(chunkSizes, [12, 1]);
     assert.equal(draft.rows.length, 13);
+    assert.equal(draft.rows[0]?.source.semantic?.adapterVersion, 'bounded.mapper.v1');
+    assert.equal(draft.rows[1]?.source.semantic, null);
     assert.equal(
-      draft.rows.every((row) => row.source.semantic === null),
+      draft.rows.slice(2).every((row) => row.source.semantic === null),
       true,
     );
     assert.deepEqual(
@@ -1915,6 +1918,157 @@ describe('protected Lab Report import lifecycle', () => {
         { kind: 'known', value: '2026-08-22' },
       ],
     );
+  });
+
+  test('recognizes Lithuanian specimen collection wording without using birth or issued dates', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const observations = [
+      {
+        id: 'lt-issued-date',
+        text: 'Ataskaitos išdavimo data 2026-08-28',
+        alternatives: [],
+        boundingBox: { x: 0.1, y: 0.01, width: 0.55, height: 0.03 },
+        pageIndex: 0,
+        orientation: 0,
+        recognition: { level: 'accurate' as const, language: 'lt', internalConfidence: null },
+      },
+      {
+        id: 'lt-birth-date',
+        text: 'Gimimo data 1990-01-01',
+        alternatives: [],
+        boundingBox: { x: 0.1, y: 0.15, width: 0.45, height: 0.03 },
+        pageIndex: 0,
+        orientation: 0,
+        recognition: { level: 'accurate' as const, language: 'lt', internalConfidence: null },
+      },
+      {
+        id: 'lt-collection-date',
+        text: 'Mėginio data 2026-08-22',
+        alternatives: [],
+        boundingBox: { x: 0.1, y: 0.29, width: 0.45, height: 0.03 },
+        pageIndex: 0,
+        orientation: 0,
+        recognition: { level: 'accurate' as const, language: 'lt', internalConfidence: null },
+      },
+      {
+        id: 'lt-date-measurement',
+        text: 'LDL-C 3,8 mmol/L',
+        alternatives: [],
+        boundingBox: { x: 0.1, y: 0.4, width: 0.55, height: 0.03 },
+        pageIndex: 0,
+        orientation: 0,
+        recognition: { level: 'accurate' as const, language: 'lt', internalConfidence: null },
+      },
+    ];
+    const service = createService(repository, files, sanitizingPdf(files), {
+      async recognize(): Promise<VisionOCRResult> {
+        return {
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations,
+        };
+      },
+    });
+    const report = (await service.importPdf(source('lt-collection-date')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+    const draft = await service.startExtraction(report.id);
+    assert.equal(draft.rows.length, 1);
+    assert.deepEqual(draft.rows[0]?.collectionDate, { kind: 'known', value: '2026-08-22' });
+    assert.equal(draft.rows[0]?.collectionDateContext?.sourceText, 'Mėginio data 2026-08-22');
+    assert.deepEqual(draft.rows[0]?.source.observationIds, ['lt-date-measurement']);
+  });
+
+  test('keeps a representative 48-row report under the compact mapper blocker target', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const observations = [
+      {
+        id: 'aggregate-collection-date',
+        text: 'Mėginio data 2026-08-22',
+        alternatives: [],
+        boundingBox: { x: 0.05, y: 0.01, width: 0.4, height: 0.03 },
+        pageIndex: 0,
+        orientation: 0,
+        recognition: { level: 'accurate' as const, language: 'lt', internalConfidence: null },
+      },
+      ...Array.from({ length: 48 }, (_, index) => {
+        const y = 0.08 + index * 0.012;
+        const cells = [
+          ['label', 'LDL-C', 0.05],
+          ['value', '3,8', 0.28],
+          ['unit', 'mmol/L', 0.4],
+          ['range', '<5,0', 0.55],
+          ['accession', `KRA-${String(index + 1).padStart(2, '0')}`, 0.72],
+        ];
+        return cells.map(([field, text, x], columnIndex) => ({
+          id: `aggregate-${index}-${field}`,
+          text: text as string,
+          alternatives: [],
+          boundingBox: { x: x as number, y, width: 0.12, height: 0.03 },
+          pageIndex: 0,
+          orientation: 0,
+          structure: {
+            kind: 'table-cell' as const,
+            tableId: 'aggregate-results',
+            rowIndex: index,
+            columnIndex,
+          },
+          recognition: { level: 'accurate' as const, language: 'lt', internalConfidence: null },
+        }));
+      }).flat(),
+    ];
+    const chunks: number[] = [];
+    const mapper: ExtractionSemanticMapper = {
+      adapterVersion: 'aggregate.mapper.v2',
+      schemaVersion: 'alyte.semantic-mapper.v2',
+      maxRowsPerChunk: 4,
+      maxObservationsPerChunk: 24,
+      supports: () => true,
+      async map({ rows }) {
+        chunks.push(rows.length);
+        const ordered = [...rows].sort((left, right) => left.rowId.localeCompare(right.rowId));
+        return {
+          schemaVersion: 'alyte.semantic-mapper.v2',
+          proposals: ordered.map((_, rowIndex) => ({
+            rowKey: `r${rowIndex}`,
+            labelKey: 'c0',
+            valueKey: 'c1',
+            unitKey: 'c2',
+            referenceIntervalKey: 'c3',
+            flagKey: null,
+            role: 'measurement',
+            specimenType: 'serum',
+            biomarkerId: 'biomarker.ldl_c',
+          })),
+        };
+      },
+    };
+    const service = createService(
+      repository,
+      files,
+      sanitizingPdf(files),
+      {
+        async recognize(): Promise<VisionOCRResult> {
+          return {
+            contractVersion: 'alyte.vision.document.v2',
+            pageIndex: 0,
+            orientation: 0,
+            observations,
+          };
+        },
+      },
+      mapper,
+    );
+    const report = (await service.importPdf(source('compact-aggregate')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+    const draft = await service.startExtraction(report.id);
+    assert.equal(draft.rows.length, 48);
+    assert.equal(Math.max(...chunks), 4);
+    assert.equal(chunks.length, 12);
+    assert.equal(draft.rows.filter(extractionReviewRequiresAttention).length, 0);
+    assert.equal(draft.rows.filter((row) => row.source.semantic !== null).length, 48);
   });
 
   test('copies an image into protected storage, records page metadata, and survives relaunch', async () => {
