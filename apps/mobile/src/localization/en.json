@@ -188,6 +188,7 @@
     "reportImportCancelled": "Import was cancelled. No temporary source was kept.",
     "reportImportMultipleImages": "Choose one report image at a time. Each image becomes one Lab Report.",
     "reportImportInvalidImage": "The selected item is not a report image.",
+    "reportAlreadyImported": "Already imported",
     "reportWrongPassword": "That password did not unlock the PDF. The protected Original Report is retained so you can retry.",
     "reportMalformed": "This file could not be inspected as a readable PDF.",
     "reportViewFailed": "View import state",

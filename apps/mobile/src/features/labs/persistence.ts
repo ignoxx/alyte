@@ -877,6 +877,9 @@ export type LabRepository = {
     readonly sourceArtifact?: LabSourceArtifact | null;
     readonly now?: string;
   }): Promise<ExtractionDraft>;
+  listOpenExtractionDrafts(): Promise<
+    readonly { readonly reportId: string; readonly draftId: string }[]
+  >;
   countOpenExtractionDrafts(): Promise<number>;
   deleteExtractionDraft(id: string): Promise<void>;
   discardLegacyExtractionDraft(reportId: string): Promise<void>;
@@ -1557,6 +1560,20 @@ export function createLabRepository(
     return count;
   }
 
+  async function listOpenExtractionDrafts(): Promise<
+    readonly { readonly reportId: string; readonly draftId: string }[]
+  > {
+    await initialize();
+    const rows = await database.getAllAsync<{ report_id: string; draft_id: string }>(
+      `SELECT draft.report_id, draft.id AS draft_id
+       FROM extraction_drafts AS draft
+       INNER JOIN lab_reports AS report ON report.id = draft.report_id
+       WHERE draft.state = 'draft' AND report.import_state <> 'deleted'
+       ORDER BY draft.updated_at DESC, draft.id DESC;`,
+    );
+    return rows.map(({ report_id: reportId, draft_id: draftId }) => ({ reportId, draftId }));
+  }
+
   async function getExtractionDraftForReport(
     reportId: string,
     aliases?: readonly ExtractionAliasEntry[],
@@ -1893,6 +1910,7 @@ export function createLabRepository(
     finalizeCombinedDeletion,
     listPendingCombinedDeletions,
     createExtractionDraft,
+    listOpenExtractionDrafts,
     countOpenExtractionDrafts,
     deleteExtractionDraft,
     discardLegacyExtractionDraft,

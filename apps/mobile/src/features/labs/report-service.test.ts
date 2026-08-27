@@ -659,6 +659,10 @@ test('duplicate import destination resumes only an open draft and otherwise retu
     resolveLabReportImportDestination(true, { id: 'draft-confirmed', state: 'confirmed' }),
     { kind: 'report-detail' },
   );
+  assert.deepEqual(
+    resolveLabReportImportDestination(true, { id: 'draft-failed', state: 'failed' }),
+    { kind: 'report-detail' },
+  );
   assert.deepEqual(resolveLabReportImportDestination(true, null), { kind: 'report-detail' });
 });
 
@@ -2118,6 +2122,9 @@ describe('protected Lab Report import lifecycle', () => {
       rows,
       sourceArtifact: { kind: 'original', id: null, hash: first.report.sourceHash },
     });
+    assert.deepEqual(await service.listOpenExtractionDrafts(), [
+      { reportId: first.report.id, draftId: draft.id },
+    ]);
 
     const duplicate = await service.importPdf(source('same-open-draft'));
     assert.equal(duplicate?.duplicate, true);

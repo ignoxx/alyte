@@ -46,15 +46,21 @@ export type HomeMeasuredChange = {
   readonly direction: 'increased' | 'decreased' | 'stable';
 };
 
+export type HomeOpenExtractionDraft = {
+  readonly reportId: string;
+  readonly draftId: string;
+};
+
 export type HomeLabViewModel = {
   readonly latestReport: HomeReportRow | null;
   /** The newest confirmed Lab Record, including records linked to an Original Report. */
   readonly latestRecord: HomeReportRow | null;
   readonly recentReports: readonly HomeReportRow[];
   readonly recentRecords: readonly HomeReportRow[];
-  /** Source reports whose local import/review journey has not reached a confirmed Lab Record. */
+  /** Source reports whose local import/review journey still has an actionable next step. */
   readonly unfinishedReports: readonly LabReport[];
   readonly pendingImports: readonly LabReport[];
+  readonly openDrafts: readonly HomeOpenExtractionDraft[];
   readonly openDraftCount: number;
   readonly reviewCount: number;
   readonly measuredChanges: readonly HomeMeasuredChange[];
@@ -130,6 +136,7 @@ export function buildHomeLabViewModel(
   reports: readonly LabReport[],
   records: readonly LabRecord[],
   openDraftCount = 0,
+  openDrafts: readonly HomeOpenExtractionDraft[] = [],
 ): HomeLabViewModel {
   const reportRows = reports
     .filter((report) => report.importState !== 'deleted')
@@ -150,10 +157,20 @@ export function buildHomeLabViewModel(
     .slice(0, 3);
   const recentReports = reportRows.slice(0, 3);
   const latestReport = reportRows[0] ?? null;
-  const unfinishedReports = reports.filter(isUnfinishedLabReport).sort(compareUnfinishedReports);
-  // Keep the existing pending-import read-model field useful to the Home summary: an imported
-  // source without a confirmed record is still pending the local laboratory journey.
-  const pendingImports = unfinishedReports;
+  const openDraftReportIds = new Set(openDrafts.map((draft) => draft.reportId));
+  const unfinishedReports = reports
+    .filter((report) => openDraftReportIds.has(report.id) || isUnfinishedLabReport(report))
+    .sort((left, right) => {
+      const leftHasOpenDraft = openDraftReportIds.has(left.id);
+      const rightHasOpenDraft = openDraftReportIds.has(right.id);
+      if (leftHasOpenDraft !== rightHasOpenDraft) return leftHasOpenDraft ? -1 : 1;
+      return compareUnfinishedReports(left, right);
+    });
+  // An open draft is the actionable next step for its source report. Keep it out of the broader
+  // pending-import count so Home does not repeat the same work in two summary lines.
+  const pendingImports = reports
+    .filter((report) => isUnfinishedLabReport(report) && !openDraftReportIds.has(report.id))
+    .sort(compareUnfinishedReports);
   const reviewCount = records.reduce(
     (count, record) =>
       count +
@@ -189,6 +206,7 @@ export function buildHomeLabViewModel(
     recentRecords,
     unfinishedReports,
     pendingImports,
+    openDrafts,
     openDraftCount: Math.max(0, openDraftCount),
     reviewCount,
     measuredChanges,

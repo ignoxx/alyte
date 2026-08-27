@@ -68,7 +68,7 @@ export function LabReportImportScreen() {
     });
   }, [busy, navigation]);
 
-  function showImportedReport(
+  function navigateToImportedReport(
     report: LabReport,
     destination: LabReportImportDestination = { kind: 'report-detail' },
   ) {
@@ -92,6 +92,23 @@ export function LabReportImportScreen() {
     }
   }
 
+  function showImportedReport(
+    report: LabReport,
+    destination: LabReportImportDestination = { kind: 'report-detail' },
+    duplicate = false,
+  ) {
+    if (!duplicate) {
+      navigateToImportedReport(report, destination);
+      return;
+    }
+    Alert.alert(
+      t('labs.reportAlreadyImported'),
+      undefined,
+      [{ text: t('labs.done'), onPress: () => navigateToImportedReport(report, destination) }],
+      { cancelable: false },
+    );
+  }
+
   async function importPdf() {
     setBusy(true);
     setError(null);
@@ -99,7 +116,7 @@ export function LabReportImportScreen() {
       const result = await reports.importPdf(undefined, passwordRequest());
       if (result !== null) {
         setLastReport(result.report);
-        showImportedReport(result.report, result.destination);
+        showImportedReport(result.report, result.destination, result.duplicate);
       }
     } catch (caught) {
       setError(errorMessage(caught));
@@ -116,7 +133,7 @@ export function LabReportImportScreen() {
       const result = await reports.importImages(undefined, passwordRequest());
       if (result !== null) {
         setLastReport(result.report);
-        showImportedReport(result.report, result.destination);
+        showImportedReport(result.report, result.destination, result.duplicate);
       }
     } catch (caught) {
       setError(errorMessage(caught));

@@ -206,6 +206,31 @@ test('Home quick actions dispatch to sibling tabs and preserve the Log edit push
   ]);
 });
 
+test('Home continues an open Extraction Draft at its exact Labs route', () => {
+  const calls: unknown[][] = [];
+  const navigation = {
+    navigate: (...args: unknown[]) => calls.push(args),
+    getParent: () => ({ navigate: (...args: unknown[]) => calls.push(args) }),
+  } as unknown as ParentTabNavigation;
+
+  dispatchHomeQuickAction(navigation, {
+    kind: 'continue-report',
+    reportId: 'report-confirmed',
+    draftId: 'draft-open',
+  });
+
+  assert.deepEqual(calls, [
+    [
+      'Labs',
+      {
+        screen: 'ExtractionDraft',
+        params: { reportId: 'report-confirmed', draftId: 'draft-open' },
+        pop: true,
+      },
+    ],
+  ]);
+});
+
 test('Continue report pops to the one existing detail route and leaves a clean Labs Back path', () => {
   const router = StackRouter({ initialRouteName: 'LabsRoot' });
   const options = {

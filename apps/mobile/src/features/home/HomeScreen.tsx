@@ -152,7 +152,7 @@ function PopulatedHome({
   readonly model: HomeLabViewModel;
   readonly locale: string;
   readonly onImport: () => void;
-  readonly onContinueReport: (reportId: string) => void;
+  readonly onContinueReport: (reportId: string, draftId?: string) => void;
   readonly onOpenReport: (reportId: string) => void;
   readonly onOpenRecord: (recordId: string) => void;
   readonly onOpenBiomarkerHistory: (biomarkerId: string) => void;
@@ -194,7 +194,11 @@ function PopulatedHome({
       <View style={styles.rule} />
       {model.unfinishedReports[0] !== undefined && (
         <ContinueReport
-          onPress={() => onContinueReport(model.unfinishedReports[0]!.id)}
+          onPress={() => {
+            const report = model.unfinishedReports[0]!;
+            const draft = model.openDrafts.find((item) => item.reportId === report.id);
+            onContinueReport(report.id, draft?.draftId);
+          }}
           report={model.unfinishedReports[0]}
         />
       )}
@@ -277,12 +281,12 @@ export function HomeScreen() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextReports, nextRecords, nextDraftCount] = await Promise.all([
+      const [nextReports, nextRecords, nextDrafts] = await Promise.all([
         reports.listReports(),
         labs.listRecords(),
-        reports.countOpenExtractionDrafts(),
+        reports.listOpenExtractionDrafts(),
       ]);
-      setModel(buildHomeLabViewModel(nextReports, nextRecords, nextDraftCount));
+      setModel(buildHomeLabViewModel(nextReports, nextRecords, nextDrafts.length, nextDrafts));
       setError(false);
     } catch {
       setError(true);
@@ -299,8 +303,12 @@ export function HomeScreen() {
     dispatchHomeQuickActionFromStack(navigation, { kind: 'import-report' });
   }
 
-  function continueReport(reportId: string) {
-    dispatchHomeQuickActionFromStack(navigation, { kind: 'continue-report', reportId });
+  function continueReport(reportId: string, draftId?: string) {
+    dispatchHomeQuickActionFromStack(navigation, {
+      kind: 'continue-report',
+      reportId,
+      ...(draftId === undefined ? {} : { draftId }),
+    });
   }
 
   function openReport(reportId: string) {

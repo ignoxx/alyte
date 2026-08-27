@@ -265,6 +265,23 @@ test('Home does not classify an imported source linked to a confirmed Lab Record
   assert.deepEqual(model.unfinishedReports, []);
 });
 
+test('Home keeps an open Extraction Draft actionable after its report gains a confirmed record', () => {
+  const confirmed = report('confirmed-report', 'confirmed-record', '2026-08-18');
+  const record = labRecord('confirmed-record', '2026-08-18', [
+    measurement('confirmed-ldl', 'confirmed-record', 'biomarker.ldl_c', 110),
+  ]);
+  const model = buildHomeLabViewModel([confirmed], [record], 1, [
+    { reportId: confirmed.id, draftId: 'open-draft' },
+  ]);
+
+  assert.deepEqual(
+    model.unfinishedReports.map((item) => item.id),
+    [confirmed.id],
+  );
+  assert.deepEqual(model.openDrafts, [{ reportId: confirmed.id, draftId: 'open-draft' }]);
+  assert.deepEqual(model.pendingImports, []);
+});
+
 test('Home keeps a Lab Record discoverable after its Original Report is deleted', () => {
   const record = labRecord('surviving-record', '2026-08-18', []);
   const deletedReport = {

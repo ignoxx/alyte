@@ -7,7 +7,7 @@ export type ParentTabNavigation = NavigationProp<MainTabParamList>;
 
 export type HomeQuickAction =
   | { readonly kind: 'import-report' }
-  | { readonly kind: 'continue-report'; readonly reportId: string }
+  | { readonly kind: 'continue-report'; readonly reportId: string; readonly draftId?: string }
   | { readonly kind: 'open-report'; readonly reportId: string }
   | { readonly kind: 'open-record'; readonly recordId: string }
   | { readonly kind: 'open-biomarker-history'; readonly biomarkerId: string }
@@ -36,6 +36,14 @@ export function dispatchHomeQuickAction(
         ?.navigate(reportImportDestination.route);
       return;
     case 'continue-report':
+      if (action.draftId !== undefined) {
+        navigation.navigate('Labs', {
+          screen: 'ExtractionDraft',
+          params: { reportId: action.reportId, draftId: action.draftId },
+          pop: true,
+        });
+        return;
+      }
       navigation.navigate('Labs', {
         screen: 'LabReportDetail',
         params: { reportId: action.reportId },

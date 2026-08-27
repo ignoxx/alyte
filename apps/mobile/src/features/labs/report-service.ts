@@ -85,6 +85,11 @@ export type LabReportImportDestination =
   | { readonly kind: 'extraction-draft'; readonly draftId: string }
   | { readonly kind: 'report-detail' };
 
+export type LabReportExtractionDraftReference = {
+  readonly reportId: string;
+  readonly draftId: string;
+};
+
 /**
  * Decide where an import should land without treating a confirmed draft as open review work.
  * This is intentionally pure so the duplicate-source state boundary stays easy to verify.
@@ -243,6 +248,7 @@ export type LabReportsService = {
   deleteSanitizedReport(id: string): Promise<void>;
   deleteReport(id: string): Promise<void>;
   startExtraction(id: string, passwordRequest?: PasswordRequest): Promise<ExtractionDraft>;
+  listOpenExtractionDrafts(): Promise<readonly LabReportExtractionDraftReference[]>;
   countOpenExtractionDrafts(): Promise<number>;
   getExtractionDraft(id: string): Promise<ExtractionDraft | null>;
   updateExtractionRow(id: string, patch: ExtractionDraftRowPatch): Promise<ExtractionDraftRow>;
@@ -2345,6 +2351,11 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     return (await repository()).countOpenExtractionDrafts();
   }
 
+  async function listOpenExtractionDrafts(): Promise<readonly LabReportExtractionDraftReference[]> {
+    await ensureInitialized();
+    return (await repository()).listOpenExtractionDrafts();
+  }
+
   async function updateExtractionRow(
     id: string,
     patch: ExtractionDraftRowPatch,
@@ -2405,6 +2416,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     deleteSanitizedReport,
     deleteReport,
     startExtraction,
+    listOpenExtractionDrafts,
     countOpenExtractionDrafts,
     getExtractionDraft,
     updateExtractionRow,
