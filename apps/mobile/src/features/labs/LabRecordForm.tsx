@@ -1,6 +1,7 @@
 import {
   forwardRef,
   useCallback,
+  useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
@@ -10,7 +11,6 @@ import {
 import { Host, Picker } from '@expo/ui';
 import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import {
-  formatLocaleDecimal,
   parseLocaleDecimal,
   parseLocalDateInput,
   type CreateMeasurementInput,
@@ -46,6 +46,7 @@ type LabRecordFormProps = {
   readonly service: LabsService;
   readonly initialRecord?: LabRecord | null;
   readonly onSaved: (recordId: string) => void;
+  readonly onSavingChange?: (saving: boolean) => void;
 };
 
 export type LabRecordFormHandle = {
@@ -82,22 +83,6 @@ function emptyMeasurement(): MeasurementDraft {
     unit: '',
     referenceInterval: '',
     flag: '',
-  };
-}
-
-function draftFromMeasurement(measurement: LabRecord['measurements'][number]): MeasurementDraft {
-  const value = measurement.current.value;
-  return {
-    label: measurement.current.label,
-    value:
-      value.kind === 'numeric' || value.kind === 'bounded'
-        ? formatLocaleDecimal(value.value)
-        : value.value,
-    valueType: value.kind,
-    comparator: value.kind === 'bounded' ? value.comparator : '<',
-    unit: measurement.current.unit ?? '',
-    referenceInterval: measurement.current.referenceInterval ?? '',
-    flag: measurement.current.flag ?? '',
   };
 }
 
@@ -145,33 +130,11 @@ function valueTypeLabel(value: MeasurementValue['kind']): string {
   );
 }
 
-function measurementDraftChanged(
-  draft: MeasurementDraft,
-  measurement: LabRecord['measurements'][number],
-): boolean {
-  const initial = draftFromMeasurement(measurement);
-  return (
-    draft.label !== initial.label ||
-    draft.value !== initial.value ||
-    draft.valueType !== initial.valueType ||
-    draft.comparator !== initial.comparator ||
-    draft.unit !== initial.unit ||
-    draft.referenceInterval !== initial.referenceInterval ||
-    draft.flag !== initial.flag
-  );
-}
-
 export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>(
-  function LabRecordForm({ service, initialRecord, onSaved }, ref) {
+  function LabRecordForm({ service, initialRecord, onSaved, onSavingChange }, ref) {
     const navigation = useNavigation<NavigationProp<RootStackParamList>>();
     const editing = initialRecord !== undefined && initialRecord !== null;
-    const initialMeasurements = useMemo(
-      () =>
-        editing && initialRecord !== null && initialRecord !== undefined
-          ? initialRecord.measurements.map(draftFromMeasurement)
-          : [emptyMeasurement()],
-      [editing, initialRecord],
-    );
+    const initialMeasurements = useMemo(() => (editing ? [] : [emptyMeasurement()]), [editing]);
     const [date, setDate] = useState(
       initialRecord?.collectionDate.kind === 'known' ? initialRecord.collectionDate.value : '',
     );
@@ -189,6 +152,7 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
     const [error, setError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     const allowRemovalRef = useRef(false);
+    const saveInFlightRef = useRef<Promise<void> | null>(null);
     const locale = Intl.DateTimeFormat().resolvedOptions().locale;
     const initialSnapshot = useMemo(
       () =>
@@ -209,11 +173,17 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
       JSON.stringify({ date, dateMissing, specimenType, laboratoryName, notes, measurements }) !==
       initialSnapshot;
 
-    usePreventRemove(dirty, ({ data }) => {
-      if (allowRemovalRef.current) {
+    useEffect(() => {
+      onSavingChange?.(saving);
+    }, [onSavingChange, saving]);
+
+    usePreventRemove(true, ({ data }) => {
+      const saveInFlight = saveInFlightRef.current !== null;
+      if (allowRemovalRef.current || (!dirty && !saving && !saveInFlight)) {
         navigation.dispatch(data.action);
         return;
       }
+      if (saving || saveInFlight) return;
       Alert.alert(t('labs.recordDiscardTitle'), t('labs.recordDiscardBody'), [
         { text: t('labs.recordKeepEditing'), style: 'cancel' },
         {
@@ -239,82 +209,76 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
       });
     }, []);
 
-    const save = useCallback(async () => {
-      if (saving) return;
-      setError(null);
-      const parsedDate = dateMissing ? null : parseLocalDateInput(date, locale);
-      if (!dateMissing && parsedDate === null) {
-        setError(t('labs.invalidDate'));
-        return;
-      }
-      if (!editing && measurements.length === 0) {
-        setError(t('labs.requiredMeasurement'));
-        return;
-      }
-      if (
-        measurements.some(
-          (measurement) =>
-            measurement.label.trim().length === 0 || measurement.value.trim().length === 0,
-        )
-      ) {
-        setError(t('labs.requiredField'));
-        return;
-      }
-      const inputs = measurements.map(inputForMeasurement);
-      if (inputs.some((input) => input === null)) {
-        setError(t('labs.invalidNumeric'));
-        return;
-      }
-
-      setSaving(true);
-      try {
-        const collectionDate =
-          parsedDate === null
-            ? { kind: 'missing' as const }
-            : { kind: 'known' as const, value: parsedDate };
-        if (editing && initialRecord !== null && initialRecord !== undefined) {
-          await service.updateRecord(initialRecord.id, {
-            collectionDate,
-            specimenType,
-            laboratoryName: laboratoryName.trim() || null,
-            notes: notes.trim() || null,
-          });
-          for (const [index, input] of (inputs as CreateMeasurementInput[]).entries()) {
-            const original = initialRecord.measurements[index];
-            const draft = measurements[index];
-            if (
-              original !== undefined &&
-              draft !== undefined &&
-              measurementDraftChanged(draft, original)
-            ) {
-              await service.correctMeasurement(original.id, {
-                label: input.label,
-                value: input.value,
-                unit: input.unit ?? null,
-                referenceInterval: input.referenceInterval ?? null,
-                flag: input.flag ?? null,
-                reason: t('labs.correctionReason'),
-              });
-            }
-          }
-          allowRemovalRef.current = true;
-          onSaved(initialRecord.id);
-        } else {
-          const record = await service.createRecord({
-            collectionDate,
-            specimenType,
-            laboratoryName: laboratoryName.trim() || null,
-            notes: notes.trim() || null,
-            measurements: inputs as CreateMeasurementInput[],
-          });
-          allowRemovalRef.current = true;
-          onSaved(record.id);
+    const save = useCallback((): Promise<void> => {
+      if (saveInFlightRef.current !== null) return saveInFlightRef.current;
+      const operation = (async () => {
+        setError(null);
+        const parsedDate = dateMissing ? null : parseLocalDateInput(date, locale);
+        if (!dateMissing && parsedDate === null) {
+          setError(t('labs.invalidDate'));
+          return;
         }
-      } catch {
-        setError(t('labs.recordSaveError'));
-      } finally {
-        setSaving(false);
-      }
+        if (!editing && measurements.length === 0) {
+          setError(t('labs.requiredMeasurement'));
+          return;
+        }
+        if (
+          measurements.some(
+            (measurement) =>
+              measurement.label.trim().length === 0 || measurement.value.trim().length === 0,
+          )
+        ) {
+          setError(t('labs.requiredField'));
+          return;
+        }
+        const inputs = measurements.map(inputForMeasurement);
+        if (inputs.some((input) => input === null)) {
+          setError(t('labs.invalidNumeric'));
+          return;
+        }
+
+        setSaving(true);
+        try {
+          const collectionDate =
+            parsedDate === null
+              ? { kind: 'missing' as const }
+              : { kind: 'known' as const, value: parsedDate };
+          if (editing && initialRecord !== null && initialRecord !== undefined) {
+            await service.updateRecord(initialRecord.id, {
+              collectionDate,
+              specimenType,
+              laboratoryName: laboratoryName.trim() || null,
+              notes: notes.trim() || null,
+            });
+            allowRemovalRef.current = true;
+            onSaved(initialRecord.id);
+          } else {
+            const record = await service.createRecord({
+              collectionDate,
+              specimenType,
+              laboratoryName: laboratoryName.trim() || null,
+              notes: notes.trim() || null,
+              measurements: inputs as CreateMeasurementInput[],
+            });
+            allowRemovalRef.current = true;
+            onSaved(record.id);
+          }
+        } catch {
+          setError(t('labs.recordSaveError'));
+        } finally {
+          setSaving(false);
+        }
+      })();
+      saveInFlightRef.current = operation;
+      void operation.then(
+        () => {
+          if (saveInFlightRef.current === operation) saveInFlightRef.current = null;
+        },
+        () => {
+          if (saveInFlightRef.current === operation) saveInFlightRef.current = null;
+        },
+      );
+      return operation;
     }, [
       date,
       dateMissing,
@@ -325,7 +289,6 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
       measurements,
       notes,
       onSaved,
-      saving,
       service,
       specimenType,
     ]);
@@ -385,93 +348,95 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
           )}
         </AppSurface>
 
-        {measurements.length === 0 && (
-          <AppText style={styles.secondary}>{t('labs.recordNoMeasurements')}</AppText>
-        )}
-        {measurements.map((measurement, index) => {
-          const detailsExpanded = expandedMeasurementDetails.has(index);
-          return (
-            <AppSurface key={index} style={styles.section}>
-              <AppText variant="heading">{`${t('labs.recordDetail')} ${index + 1}`}</AppText>
-              <Field
-                editable={!saving}
-                label={t('labs.measurementLabel')}
-                onChangeText={(label) => updateMeasurement(index, { label })}
-                value={measurement.label}
-              />
-              <NativePickerField
-                disabled={saving}
-                label={t('labs.measurementType')}
-                onChange={(valueType) => updateMeasurement(index, { valueType })}
-                options={valueTypes.map((value) => ({ value, label: valueTypeLabel(value) }))}
-                value={measurement.valueType}
-              />
-              {measurement.valueType === 'bounded' && (
-                <NativePickerField
-                  disabled={saving}
-                  label={t('labs.measurementComparator')}
-                  onChange={(comparator) => updateMeasurement(index, { comparator })}
-                  options={[
-                    { value: '<', label: '<' },
-                    { value: '>', label: '>' },
-                  ]}
-                  value={measurement.comparator}
-                />
-              )}
-              <Field
-                editable={!saving}
-                keyboardType={
-                  measurement.valueType === 'numeric' || measurement.valueType === 'bounded'
-                    ? 'decimal-pad'
-                    : 'default'
-                }
-                label={t('labs.measurementValue')}
-                onChangeText={(value) => updateMeasurement(index, { value })}
-                value={measurement.value}
-              />
-              <Field
-                editable={!saving}
-                label={t('labs.measurementUnit')}
-                onChangeText={(unit) => updateMeasurement(index, { unit })}
-                value={measurement.unit}
-              />
-              <DisclosureButton
-                expanded={detailsExpanded}
-                label={
-                  detailsExpanded
-                    ? t('labs.measurementLessDetails')
-                    : t('labs.measurementMoreDetails')
-                }
-                onPress={() => toggleMeasurementDetails(index)}
-              />
-              {detailsExpanded && (
-                <View style={styles.details}>
-                  <Field
-                    editable={!saving}
-                    label={t('labs.measurementReference')}
-                    onChangeText={(referenceInterval) =>
-                      updateMeasurement(index, { referenceInterval })
-                    }
-                    value={measurement.referenceInterval}
-                  />
-                  <Field
-                    editable={!saving}
-                    label={t('labs.measurementFlag')}
-                    onChangeText={(flag) => updateMeasurement(index, { flag })}
-                    value={measurement.flag}
-                  />
-                </View>
-              )}
-            </AppSurface>
-          );
-        })}
         {!editing && (
-          <AppButton
-            disabled={saving}
-            label={t('labs.measurementAdd')}
-            onPress={() => setMeasurements((current) => [...current, emptyMeasurement()])}
-            tone="secondary"
-          />
+          <>
+            {measurements.length === 0 && (
+              <AppText style={styles.secondary}>{t('labs.recordNoMeasurements')}</AppText>
+            )}
+            {measurements.map((measurement, index) => {
+              const detailsExpanded = expandedMeasurementDetails.has(index);
+              return (
+                <AppSurface key={index} style={styles.section}>
+                  <AppText variant="heading">{`${t('labs.recordDetail')} ${index + 1}`}</AppText>
+                  <Field
+                    editable={!saving}
+                    label={t('labs.measurementLabel')}
+                    onChangeText={(label) => updateMeasurement(index, { label })}
+                    value={measurement.label}
+                  />
+                  <NativePickerField
+                    disabled={saving}
+                    label={t('labs.measurementType')}
+                    onChange={(valueType) => updateMeasurement(index, { valueType })}
+                    options={valueTypes.map((value) => ({ value, label: valueTypeLabel(value) }))}
+                    value={measurement.valueType}
+                  />
+                  {measurement.valueType === 'bounded' && (
+                    <NativePickerField
+                      disabled={saving}
+                      label={t('labs.measurementComparator')}
+                      onChange={(comparator) => updateMeasurement(index, { comparator })}
+                      options={[
+                        { value: '<', label: '<' },
+                        { value: '>', label: '>' },
+                      ]}
+                      value={measurement.comparator}
+                    />
+                  )}
+                  <Field
+                    editable={!saving}
+                    keyboardType={
+                      measurement.valueType === 'numeric' || measurement.valueType === 'bounded'
+                        ? 'decimal-pad'
+                        : 'default'
+                    }
+                    label={t('labs.measurementValue')}
+                    onChangeText={(value) => updateMeasurement(index, { value })}
+                    value={measurement.value}
+                  />
+                  <Field
+                    editable={!saving}
+                    label={t('labs.measurementUnit')}
+                    onChangeText={(unit) => updateMeasurement(index, { unit })}
+                    value={measurement.unit}
+                  />
+                  <DisclosureButton
+                    expanded={detailsExpanded}
+                    label={
+                      detailsExpanded
+                        ? t('labs.measurementLessDetails')
+                        : t('labs.measurementMoreDetails')
+                    }
+                    onPress={() => toggleMeasurementDetails(index)}
+                  />
+                  {detailsExpanded && (
+                    <View style={styles.details}>
+                      <Field
+                        editable={!saving}
+                        label={t('labs.measurementReference')}
+                        onChangeText={(referenceInterval) =>
+                          updateMeasurement(index, { referenceInterval })
+                        }
+                        value={measurement.referenceInterval}
+                      />
+                      <Field
+                        editable={!saving}
+                        label={t('labs.measurementFlag')}
+                        onChangeText={(flag) => updateMeasurement(index, { flag })}
+                        value={measurement.flag}
+                      />
+                    </View>
+                  )}
+                </AppSurface>
+              );
+            })}
+            <AppButton
+              disabled={saving}
+              label={t('labs.measurementAdd')}
+              onPress={() => setMeasurements((current) => [...current, emptyMeasurement()])}
+              tone="secondary"
+            />
+          </>
         )}
         {error !== null && <AppText style={styles.error}>{error}</AppText>}
       </SafeForm>
@@ -536,11 +501,20 @@ function NativePickerField<T extends string>({
   readonly options: readonly PickerOption<T>[];
   readonly value: T;
 }) {
+  const selectedLabel = options.find((option) => option.value === value)?.label ?? value;
+  const accessibilityLabel = `${label}: ${selectedLabel}`;
   return (
     <View style={styles.field}>
       <AppText variant="label">{label}</AppText>
       <View style={[styles.pickerSurface, disabled && styles.disabledPicker]}>
-        <Host matchContents>
+        <Host
+          accessible
+          accessibilityLabel={accessibilityLabel}
+          accessibilityRole="button"
+          accessibilityState={{ disabled }}
+          accessibilityValue={{ text: selectedLabel }}
+          matchContents
+        >
           <Picker
             appearance="menu"
             enabled={!disabled}

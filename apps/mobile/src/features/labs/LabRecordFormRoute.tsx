@@ -23,11 +23,12 @@ export function LabRecordFormRoute() {
     recordId === undefined ? null : undefined,
   );
   const [error, setError] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const finish = useCallback(
     (id: string) => {
       if (recordId === undefined) {
-        navigation.navigate('MainTabs', {
+        navigation.popTo('MainTabs', {
           screen: 'Labs',
           params: { screen: 'LabRecordDetail', params: { recordId: id } },
         });
@@ -42,17 +43,22 @@ export function LabRecordFormRoute() {
     navigation.setOptions({
       headerBackVisible: false,
       headerLeft: () => (
-        <HeaderAction label={t('labs.recordCancel')} onPress={() => navigation.goBack()} />
+        <HeaderAction
+          disabled={saving}
+          label={t('labs.recordCancel')}
+          onPress={() => navigation.goBack()}
+        />
       ),
       headerRight: () => (
         <HeaderAction
+          disabled={saving}
           label={t('labs.recordSaveShort')}
           onPress={() => void formRef.current?.save()}
         />
       ),
       title: recordId === undefined ? t('labs.recordCreateTitle') : t('labs.recordEditTitle'),
     });
-  }, [navigation, recordId]);
+  }, [navigation, recordId, saving]);
 
   useEffect(() => {
     if (recordId === undefined) return;
@@ -89,15 +95,18 @@ export function LabRecordFormRoute() {
       ref={formRef}
       initialRecord={record === undefined ? null : record}
       onSaved={finish}
+      onSavingChange={setSaving}
       service={labs}
     />
   );
 }
 
 function HeaderAction({
+  disabled = false,
   label,
   onPress,
 }: {
+  readonly disabled?: boolean;
   readonly label: string;
   readonly onPress: () => void;
 }) {
@@ -105,9 +114,15 @@ function HeaderAction({
     <Pressable
       accessibilityLabel={label}
       accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       hitSlop={8}
       onPress={onPress}
-      style={({ pressed }) => [styles.headerAction, pressed && styles.headerActionPressed]}
+      style={({ pressed }) => [
+        styles.headerAction,
+        disabled && styles.headerActionDisabled,
+        pressed && !disabled && styles.headerActionPressed,
+      ]}
     >
       <AppText style={styles.headerActionLabel}>{label}</AppText>
     </Pressable>
@@ -120,6 +135,7 @@ function StateView({ children }: { readonly children: ReactNode }) {
 
 const styles = StyleSheet.create({
   headerAction: { alignItems: 'center', justifyContent: 'center', minHeight: 44, minWidth: 44 },
+  headerActionDisabled: { opacity: 0.45 },
   headerActionLabel: { color: colors.accent },
   headerActionPressed: { opacity: 0.65 },
   state: { alignItems: 'center', flex: 1, justifyContent: 'center', padding: 24 },
