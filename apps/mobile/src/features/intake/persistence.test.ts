@@ -6,6 +6,7 @@ import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createIntakeRepository, type SqliteDatabase } from './persistence';
 import { createIntakeService, type IntakeMediaStore } from './service';
+import { LOCAL_MIGRATIONS } from '../local-database/migrations';
 import type { DatabaseProtection, ProtectionOptions } from '../local-database/protection';
 
 class NodeSqliteDatabase implements SqliteDatabase {
@@ -786,15 +787,14 @@ test('v4 to v5 migration adds protected Intake metadata and recovery storage', a
   await database.execAsync(`
     CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL);
     INSERT INTO schema_migrations VALUES (4, '2026-08-22T00:00:00.000Z');
-    CREATE TABLE intake_events (
-      id TEXT PRIMARY KEY, event_type TEXT NOT NULL, occurred_at TEXT NOT NULL, local_date TEXT NOT NULL,
-      origin TEXT NOT NULL, provenance TEXT NOT NULL, review_state TEXT NOT NULL,
-      analysis_inclusion TEXT NOT NULL, notes TEXT, source_media_path TEXT,
-      source_media_hash TEXT, source_media_size INTEGER, source_media_protection_json TEXT,
-      copied_from_event_id TEXT, log_again_undoable INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-    );
   `);
+  // A v4 database contains the complete lab schema because later extraction migrations retain
+  // foreign-key ownership of drafts and rows through the lab report and record tables. Build the
+  // historical shape through the released migrations instead of creating a partial intake-only
+  // fixture that cannot validly continue to the current schema.
+  for (const migration of LOCAL_MIGRATIONS.slice(0, 4)) {
+    if ('sql' in migration) await database.execAsync(migration.sql);
+  }
   const repository = createIntakeRepository(database, { protection });
   await repository.listEvents();
   const columns = await database.getAllAsync<{ name: string }>('PRAGMA table_info(intake_events);');

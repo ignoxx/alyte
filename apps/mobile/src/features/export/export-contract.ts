@@ -174,6 +174,9 @@ export const EXPORT_SCHEMA_DECISIONS: readonly ExportTableDecision[] = [
     'source_artifact_hash',
     'provenance_state',
     'failure_reason',
+    'pipeline_fingerprint_json',
+    'pipeline_fingerprint_hash',
+    'revision',
   ]),
   includedTable('extraction_draft_rows', [
     'id',
@@ -203,6 +206,7 @@ export const EXPORT_SCHEMA_DECISIONS: readonly ExportTableDecision[] = [
     'source_value_json',
     'date_context_json',
     'decision',
+    'edit_state',
   ]),
   includedTable('intake_events', [
     'id',
