@@ -285,3 +285,5 @@ export interface ApiErrorResponse {
     readonly message: string;
   };
 }
+
+export * from './cloud-result-envelope.js';
