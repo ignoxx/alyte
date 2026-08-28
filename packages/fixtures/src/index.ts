@@ -89,3 +89,8 @@ export {
   type BloodLiverLabReportFixture,
   type BloodLiverOCRObservation,
 } from './blood-liver-lab-reports';
+export {
+  geometryFixtureMatrix,
+  type GeometryFixture,
+  type GeometryFixtureObservation,
+} from './geometry-fixtures';
