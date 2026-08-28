@@ -259,9 +259,9 @@ export class CloudResultService {
     try {
       this.resultStore.remove(row.id);
     } catch {
-      // Metadata is already terminal, so a retry cannot return ciphertext. Periodic reconciliation
-      // and strict account deletion continue to retry the physical unlink.
-      throw new CloudResultFailure(503, 'cloud_result_storage_failure');
+      // The exact bytes were already read and retrieval was claimed atomically. Return them even
+      // when unlinking fails so a valid result is not lost; terminal metadata prevents a second
+      // response, while reconciliation and strict deletion retry the encrypted-file cleanup.
     }
     return bytes;
   }
@@ -294,18 +294,17 @@ export class CloudResultService {
         cleanupFailed = this.tryRemove(result.request_id, artifacts, cleanupFailed);
         continue;
       }
+      if (this.isExpired(result.expires_at, nowMs)) {
+        // Persist the terminal classification before best-effort unlinking. A crash after this
+        // update must converge to expired even when the file was already absent or unlink fails.
+        this.database.markCloudResultExpired(result.request_id, now.toISOString());
+        const removed = this.removeRequestArtifacts(result.request_id, artifacts);
+        if (!removed) cleanupFailed = true;
+        continue;
+      }
       if (request === undefined || artifact === undefined || !artifact.regular) {
         this.database.markCloudResultFailed(result.request_id, 'cloud_result_cache_missing');
         cleanupFailed = this.tryRemove(result.request_id, artifacts, cleanupFailed);
-        continue;
-      }
-      if (this.isExpired(result.expires_at, nowMs)) {
-        const removed = this.removeRequestArtifacts(result.request_id, artifacts);
-        if (removed) {
-          this.database.markCloudResultExpired(result.request_id, now.toISOString());
-        } else {
-          cleanupFailed = true;
-        }
         continue;
       }
       if (
@@ -487,14 +486,15 @@ export class CloudResultService {
   }
 
   private expireReady(requestId: string): void {
-    try {
-      this.resultStore.remove(requestId);
-    } catch {
-      throw new CloudResultFailure(503, 'cloud_result_storage_failure');
-    }
     this.database.transaction(() => {
       this.database.markCloudResultExpired(requestId, this.clock.now().toISOString());
     });
+    try {
+      this.resultStore.remove(requestId);
+    } catch {
+      // Expired metadata is durable even when physical cleanup needs reconciliation.
+      throw new CloudResultFailure(503, 'cloud_result_storage_failure');
+    }
   }
 
   private invalidateReady(requestId: string): void {
