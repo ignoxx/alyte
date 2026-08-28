@@ -4,7 +4,7 @@ import PDFKit
 import UIKit
 import Vision
 
-let alyteVisionContractVersion = "alyte.vision.document.v2"
+let alyteVisionContractVersion = "alyte.vision.document.v3"
 
 private enum AlyteVisionError: LocalizedError {
   case unreadable
@@ -121,7 +121,8 @@ public final class AlyteVisionModule: Module {
                 pageIndex: pageIndex,
                 orientation: orientation,
                 structure: ["kind": "table-cell", "tableId": "table-\(documentIndex)-\(tableIndex)", "rowIndex": rowIndex, "columnIndex": columnIndex],
-                lines: cell.content.text.lines
+                lines: cell.content.text.lines,
+                words: cell.content.text.words
               ))
             }
           }
@@ -135,11 +136,17 @@ public final class AlyteVisionModule: Module {
             id: "document-\(pageIndex)-\(documentIndex)-line-\(lineIndex)", text: text,
             box: line.boundingBox.cgRect, pageIndex: pageIndex, orientation: orientation,
             structure: ["kind": "text", "tableId": NSNull(), "rowIndex": NSNull(), "columnIndex": NSNull()],
-            lines: [line]
+            lines: [line],
+            words: alyteWords(in: line.boundingBox.cgRect, from: document.document.text.words)
           ))
         }
       }
-      return ["contractVersion": alyteVisionContractVersion, "pageIndex": pageIndex, "orientation": orientation, "observations": observations]
+      return [
+        "contractVersion": alyteVisionContractVersion,
+        "pageIndex": pageIndex,
+        "orientation": orientation,
+        "observations": alyteApplyPageTokenSpanCap(observations),
+      ]
     }
   }
 }

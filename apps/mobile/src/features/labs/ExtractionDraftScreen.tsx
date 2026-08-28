@@ -109,7 +109,7 @@ export function ExtractionDraftScreen() {
     } finally {
       setLoading(false);
     }
-  }, [reports, route.params.draftId]);
+  }, [reports, route.params.draftId, route.params.reportId]);
 
   useEffect(() => {
     void load();
@@ -141,6 +141,56 @@ export function ExtractionDraftScreen() {
   const included = confirmation.included;
   const canConfirm = draft !== null && confirmation.canConfirm;
   const hasBottomAccessory = confirmation.included > 0;
+  const canReprocess =
+    (draft?.state === 'draft' || draft?.state === 'confirmed') && draft.pipelineStatus === 'older';
+  const canImprove =
+    draft?.state === 'draft' &&
+    draft.rows.some(
+      (row) =>
+        row.editState === 'automatic' &&
+        row.source.observations !== undefined &&
+        row.source.observations.length > 0 &&
+        (row.proposedBiomarkerId === null || row.reviewReasons.length > 0),
+    );
+
+  const reprocess = useCallback(() => {
+    if (busy || draft === null || !canReprocess) return;
+    Alert.alert(t('labs.extractionReprocessTitle'), t('labs.extractionReprocessBody'), [
+      { text: t('labs.cancel'), style: 'cancel' },
+      {
+        text: t('labs.extractionReprocess'),
+        style: 'destructive',
+        onPress: () => {
+          navigation
+            .getParent()
+            ?.getParent<NativeStackNavigationProp<RootStackParamList>>()
+            ?.navigate('ExtractionProgress', {
+              reportId: route.params.reportId,
+              mode: 'reprocess',
+            });
+        },
+      },
+    ]);
+  }, [busy, canReprocess, draft, navigation, route.params.reportId]);
+
+  const improve = useCallback(() => {
+    if (busy || draft === null || !canImprove) return;
+    Alert.alert(t('labs.extractionImproveTitle'), t('labs.extractionImproveBody'), [
+      { text: t('labs.cancel'), style: 'cancel' },
+      {
+        text: t('labs.extractionImprove'),
+        onPress: () => {
+          setBusy(true);
+          setSaveError(false);
+          void reports
+            .improveExtraction(draft.id)
+            .then(() => load())
+            .catch(() => setSaveError(true))
+            .finally(() => setBusy(false));
+        },
+      },
+    ]);
+  }, [busy, canImprove, draft, load, reports]);
 
   const openRow = useCallback(
     (rowId: string, selectNeedsReview = false) => {
@@ -264,6 +314,43 @@ export function ExtractionDraftScreen() {
               )}`}
             </AppText>
             <AppText style={styles.intro}>{t('labs.extractionCompactIntro')}</AppText>
+            <View style={styles.pipelineStatus}>
+              <StatusPill tone={draft.pipelineStatus === 'current' ? 'neutral' : 'reviewNeeded'}>
+                {draft.pipelineStatus === 'current'
+                  ? t('labs.extractionCurrentStatus')
+                  : t('labs.extractionOlderStatus')}
+              </StatusPill>
+              {draft.hasUserEdits && (
+                <AppText style={styles.muted}>{`· ${t('labs.extractionEditedStatus')}`}</AppText>
+              )}
+              {draft.hasUnknownEdits && (
+                <AppText
+                  style={styles.muted}
+                >{`· ${t('labs.extractionUnknownEditStatus')}`}</AppText>
+              )}
+            </View>
+            {canReprocess && (
+              <View style={styles.reprocessCard}>
+                <AppText style={styles.muted}>{t('labs.extractionReprocessBody')}</AppText>
+                <AppButton
+                  disabled={busy}
+                  label={busy ? t('labs.extractionReprocessBusy') : t('labs.extractionReprocess')}
+                  onPress={reprocess}
+                  tone="secondary"
+                />
+              </View>
+            )}
+            {canImprove && (
+              <View style={styles.reprocessCard}>
+                <AppText style={styles.muted}>{t('labs.extractionImproveBody')}</AppText>
+                <AppButton
+                  disabled={busy}
+                  label={busy ? t('labs.extractionImproveBusy') : t('labs.extractionImprove')}
+                  onPress={improve}
+                  tone="secondary"
+                />
+              </View>
+            )}
             {loadError && (
               <AppText selectable style={styles.loadError}>
                 {t('labs.extractionLoadError')}
@@ -448,6 +535,13 @@ const styles = StyleSheet.create({
   },
   summary: { flexShrink: 1, fontVariant: ['tabular-nums'], width: '100%' },
   intro: { color: colors.mutedInk, flexShrink: 1, width: '100%' },
+  pipelineStatus: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
+  reprocessCard: {
+    backgroundColor: colors.accentSoft,
+    borderRadius: 14,
+    gap: spacing.sm,
+    padding: spacing.md,
+  },
   loadError: { color: colors.danger },
   muted: { color: colors.mutedInk },
   filters: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingTop: spacing.xs },

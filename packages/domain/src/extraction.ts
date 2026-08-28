@@ -11,8 +11,117 @@ import { normalizeAlias } from './text';
 
 export { normalizeAlias } from './text';
 
-export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.document.v2' as const;
-export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v5' as const;
+export const VISION_OCR_LEGACY_CONTRACT_VERSION = 'alyte.vision.document.v2' as const;
+export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.document.v3' as const;
+export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v6' as const;
+/**
+ * The physical-row grouping contract is deliberately independent from the parser version.  The
+ * geometry/token-lattice work can advance this seam in a later phase without making a parser
+ * version look current by accident.
+ */
+export const EXTRACTION_ROW_SEGMENTATION_VERSION = 'alyte.row-segmentation.v2' as const;
+
+export const EXTRACTION_PIPELINE_FINGERPRINT_SCHEMA =
+  'alyte.extraction-pipeline-fingerprint.v1' as const;
+
+export type ExtractionPipelineFingerprintInput = {
+  readonly sourceHash: string | null;
+  readonly ocrContractVersion: string | null;
+  readonly rowSegmentationVersion: string | null;
+  readonly parserVersion: string | null;
+  readonly semanticAdapterVersion: string | null;
+  readonly semanticSchemaVersion: ExtractionSemanticSchemaVersion | null;
+  readonly semanticChunkVersion: string | null;
+  readonly semanticPromptVersion: string | null;
+  readonly modelVersion: string | null;
+  readonly runtimeVersion: string | null;
+  readonly catalogueVersion: string | null;
+};
+
+export type ExtractionPipelineFingerprint = ExtractionPipelineFingerprintInput & {
+  readonly schemaVersion: typeof EXTRACTION_PIPELINE_FINGERPRINT_SCHEMA;
+  /** Monotonic extraction revision for one report; a full reprocess increments it. */
+  readonly revision: number;
+  /** Stable identity of the complete compatibility input, not a source-data hash. */
+  readonly hash: string;
+};
+
+/**
+ * Keep fingerprint serialization independent of object insertion order. The digest is a stable
+ * compatibility identity; the Original Report's SHA-256 remains the authoritative artifact hash.
+ */
+export function extractionPipelineFingerprintCanonicalJson(
+  input: ExtractionPipelineFingerprintInput,
+): string {
+  return JSON.stringify({
+    sourceHash: input.sourceHash,
+    ocrContractVersion: input.ocrContractVersion,
+    rowSegmentationVersion: input.rowSegmentationVersion,
+    parserVersion: input.parserVersion,
+    semanticAdapterVersion: input.semanticAdapterVersion,
+    semanticSchemaVersion: input.semanticSchemaVersion,
+    semanticChunkVersion: input.semanticChunkVersion,
+    semanticPromptVersion: input.semanticPromptVersion,
+    modelVersion: input.modelVersion,
+    runtimeVersion: input.runtimeVersion,
+    catalogueVersion: input.catalogueVersion,
+  });
+}
+
+/**
+ * A small dependency-free digest makes the fingerprint usable in domain and mobile tests without
+ * importing Node or a provider runtime. It is intentionally not used for artifact integrity.
+ */
+function extractionFingerprintDigest(value: string): string {
+  const seeds = [2166136261, 2246822519, 3266489917, 668265263] as const;
+  return seeds
+    .map((seed) => {
+      let hash: number = seed;
+      for (const character of value) {
+        hash ^= character.charCodeAt(0);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(16).padStart(8, '0');
+    })
+    .join('');
+}
+
+export function createExtractionPipelineFingerprint(
+  input: ExtractionPipelineFingerprintInput,
+  revision = 1,
+): ExtractionPipelineFingerprint {
+  if (!Number.isSafeInteger(revision) || revision < 1) {
+    throw new Error('Extraction pipeline revision must be a positive integer');
+  }
+  const canonical = extractionPipelineFingerprintCanonicalJson(input);
+  return {
+    schemaVersion: EXTRACTION_PIPELINE_FINGERPRINT_SCHEMA,
+    revision,
+    ...input,
+    hash: extractionFingerprintDigest(canonical),
+  };
+}
+
+export function classifyExtractionPipelineFingerprint(
+  stored: ExtractionPipelineFingerprint | null | undefined,
+  current: ExtractionPipelineFingerprint,
+): 'current' | 'older' {
+  return stored !== null && stored !== undefined && stored.hash === current.hash
+    ? 'current'
+    : 'older';
+}
+
+export function extractionDraftHasUserEdits(
+  rows: readonly Pick<ExtractionDraftRow, 'editState'>[],
+): boolean {
+  return rows.some((row) => row.editState === 'user-edited');
+}
+
+export function extractionDraftHasUnknownEdits(
+  rows: readonly Pick<ExtractionDraftRow, 'editState'>[],
+): boolean {
+  return rows.some((row) => row.editState === 'legacy-unknown');
+}
 
 const NUMERIC_TOKEN_PATTERN =
   '[<>≤≥]?\\s*[+-]?(?:(?:\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)|(?:\\d+(?:[.,]\\d+)?)|(?:\\.\\d+))';
@@ -24,6 +133,24 @@ export type NormalizedBoundingBox = {
   readonly y: number;
   readonly width: number;
   readonly height: number;
+};
+
+export type VisionTokenSpan = {
+  readonly id: string;
+  readonly parentObservationId: string;
+  /** Inclusive UTF-16 code-unit offset into the parent observation text. */
+  readonly start: number;
+  /** Exclusive UTF-16 code-unit offset into the parent observation text. */
+  readonly end: number;
+  /** Exact parent substring; never normalized or translated. */
+  readonly text: string;
+  readonly boundingBox: NormalizedBoundingBox;
+};
+
+/** Span provenance attached to a geometry-derived source cell. */
+export type VisionSourceSpan = VisionTokenSpan & {
+  /** Retained so a persisted cell can be checked against its complete OCR parent after reopen. */
+  readonly parentText: string;
 };
 
 export type VisionTextObservation = {
@@ -39,6 +166,10 @@ export type VisionTextObservation = {
     readonly rowIndex: number | null;
     readonly columnIndex: number | null;
   };
+  /** Token spans are present only for OCR v3 observations. */
+  readonly spans?: readonly VisionTokenSpan[];
+  /** Local geometry adapter provenance; native OCR never authors this field. */
+  readonly sourceSpan?: VisionSourceSpan;
   /** Internal routing metadata. Never render this as a user-facing accuracy percentage. */
   readonly recognition: {
     readonly level: 'fast' | 'accurate';
@@ -48,7 +179,8 @@ export type VisionTextObservation = {
 };
 
 export type VisionOCRResult = {
-  readonly contractVersion: typeof VISION_OCR_CONTRACT_VERSION;
+  readonly contractVersion:
+    typeof VISION_OCR_LEGACY_CONTRACT_VERSION | typeof VISION_OCR_CONTRACT_VERSION;
   readonly pageIndex: number;
   readonly orientation: number;
   readonly observations: readonly VisionTextObservation[];
@@ -201,14 +333,23 @@ export type ExtractionDraftRow = {
   readonly reviewReasons: readonly ExtractionReviewReason[];
   readonly reviewState: 'ready' | 'needs-review';
   readonly decision: ExtractionRowDecision;
+  /** Independent from the pipeline status so a rerun can never silently erase a correction. */
+  /** Optional only for in-memory legacy callers; persisted rows always decode this field. */
+  readonly editState?: 'automatic' | 'user-edited' | 'legacy-unknown';
 };
 
 export type ExtractionDraft = {
   readonly id: string;
   readonly reportId: string;
   readonly state: 'draft' | 'confirmed' | 'failed';
-  readonly ocrContractVersion: typeof VISION_OCR_CONTRACT_VERSION;
-  readonly parserVersion: typeof EXTRACTION_PARSER_VERSION;
+  /** Stored values remain readable across parser releases; compatibility is surfaced separately. */
+  readonly ocrContractVersion: string;
+  readonly parserVersion: string;
+  readonly pipelineFingerprint: ExtractionPipelineFingerprint | null;
+  readonly pipelineStatus: 'current' | 'older';
+  readonly revision: number;
+  readonly hasUserEdits: boolean;
+  readonly hasUnknownEdits?: boolean;
   readonly sourceArtifact?: LabSourceArtifact | null;
   readonly collectionDate: LabDateState;
   readonly rows: readonly ExtractionDraftRow[];
@@ -701,17 +842,22 @@ export function decodeVisionOCRResult(input: unknown): VisionOCRResult {
   if (typeof input !== 'object' || input === null)
     throw new Error('Vision OCR result is not an object');
   const value = input as Record<string, unknown>;
-  if (value.contractVersion !== VISION_OCR_CONTRACT_VERSION)
-    throw new Error('Unsupported Vision OCR contract version');
+  const contractVersion =
+    value.contractVersion === VISION_OCR_CONTRACT_VERSION
+      ? VISION_OCR_CONTRACT_VERSION
+      : value.contractVersion === VISION_OCR_LEGACY_CONTRACT_VERSION
+        ? VISION_OCR_LEGACY_CONTRACT_VERSION
+        : null;
+  if (contractVersion === null) throw new Error('Unsupported Vision OCR contract version');
   const pageIndex = finiteInteger(value.pageIndex, 'Vision OCR page index', 0);
   const orientation = finiteInteger(value.orientation ?? 0, 'Vision OCR orientation', -360, 360);
   if (!Array.isArray(value.observations)) throw new Error('Vision OCR observations are missing');
   return {
-    contractVersion: VISION_OCR_CONTRACT_VERSION,
+    contractVersion,
     pageIndex,
     orientation,
     observations: value.observations.map((item, index) =>
-      decodeObservation(item, index, pageIndex, orientation),
+      decodeObservation(item, index, pageIndex, orientation, contractVersion),
     ),
   };
 }
@@ -737,6 +883,7 @@ function decodeObservation(
   index: number,
   pageIndex: number,
   pageOrientation: number,
+  contractVersion: typeof VISION_OCR_LEGACY_CONTRACT_VERSION | typeof VISION_OCR_CONTRACT_VERSION,
 ): VisionTextObservation {
   if (typeof input !== 'object' || input === null)
     throw new Error(`Vision OCR observation ${index} is not an object`);
@@ -784,11 +931,16 @@ function decodeObservation(
       : finiteNumber(rawRecognition.internalConfidence, 'Vision OCR internal confidence');
   if (internalConfidence !== null && (internalConfidence < 0 || internalConfidence > 1))
     throw new Error(`Vision OCR observation ${index} has invalid internal confidence`);
+  const id =
+    typeof value.id === 'string' && value.id.length > 0
+      ? value.id
+      : `observation-${pageIndex}-${index}`;
+  const spans =
+    contractVersion === VISION_OCR_CONTRACT_VERSION
+      ? decodeVisionTokenSpans(value.spans, text, id, index)
+      : undefined;
   return {
-    id:
-      typeof value.id === 'string' && value.id.length > 0
-        ? value.id
-        : `observation-${pageIndex}-${index}`,
+    id,
     text,
     alternatives,
     boundingBox,
@@ -801,7 +953,122 @@ function decodeObservation(
         ? pageOrientation
         : finiteInteger(value.orientation, 'Vision OCR observation orientation', -360, 360),
     structure: decodeObservationStructure(value.structure, index),
+    ...(spans === undefined ? {} : { spans }),
+    ...(value.sourceSpan === undefined
+      ? {}
+      : { sourceSpan: decodeVisionSourceSpan(value.sourceSpan, text, id, index) }),
     recognition: { level, language, internalConfidence },
+  };
+}
+
+function decodeVisionTokenSpans(
+  input: unknown,
+  parentText: string,
+  parentId: string,
+  observationIndex: number,
+): readonly VisionTokenSpan[] | undefined {
+  if (input === undefined) return undefined;
+  if (!Array.isArray(input) || input.length > 128)
+    throw new Error(`Vision OCR observation ${observationIndex} has invalid token spans`);
+  const spans = input.map((item, index) => {
+    if (typeof item !== 'object' || item === null)
+      throw new Error(`Vision OCR observation ${observationIndex} has invalid token span`);
+    const value = item as Record<string, unknown>;
+    const start = finiteInteger(value.start, 'Vision OCR token span start', 0, parentText.length);
+    const end = finiteInteger(value.end, 'Vision OCR token span end', 0, parentText.length);
+    if (start >= end)
+      throw new Error(`Vision OCR observation ${observationIndex} has invalid token span`);
+    const text = typeof value.text === 'string' ? value.text : '';
+    if (text !== parentText.slice(start, end))
+      throw new Error(`Vision OCR observation ${observationIndex} has non-exact token span`);
+    const parentObservationId =
+      typeof value.parentObservationId === 'string' ? value.parentObservationId : null;
+    if (parentObservationId !== parentId)
+      throw new Error(`Vision OCR observation ${observationIndex} has invalid token parent`);
+    const rawBox = value.boundingBox;
+    if (typeof rawBox !== 'object' || rawBox === null)
+      throw new Error(`Vision OCR observation ${observationIndex} has invalid token bounding box`);
+    const box = rawBox as Record<string, unknown>;
+    const boundingBox = {
+      x: finiteNumber(box.x, 'Vision OCR token bounding-box x'),
+      y: finiteNumber(box.y, 'Vision OCR token bounding-box y'),
+      width: finiteNumber(box.width, 'Vision OCR token bounding-box width'),
+      height: finiteNumber(box.height, 'Vision OCR token bounding-box height'),
+    };
+    if (
+      boundingBox.x < 0 ||
+      boundingBox.y < 0 ||
+      boundingBox.width <= 0 ||
+      boundingBox.height <= 0 ||
+      boundingBox.x + boundingBox.width > 1.000001 ||
+      boundingBox.y + boundingBox.height > 1.000001
+    )
+      throw new Error(`Vision OCR observation ${observationIndex} has invalid token bounding box`);
+    const id =
+      typeof value.id === 'string' && value.id.length > 0
+        ? value.id
+        : `${parentId}-span-${start}-${end}`;
+    return { id, parentObservationId, start, end, text, boundingBox, index };
+  });
+  const ordered = [...spans].sort(
+    (left, right) => left.start - right.start || left.end - right.end,
+  );
+  const ids = new Set<string>();
+  let priorEnd = -1;
+  for (const span of ordered) {
+    if (ids.has(span.id) || span.start < priorEnd)
+      throw new Error(`Vision OCR observation ${observationIndex} has overlapping token spans`);
+    ids.add(span.id);
+    priorEnd = span.end;
+  }
+  return ordered.map(({ index: _index, ...span }) => span);
+}
+
+function decodeVisionSourceSpan(
+  input: unknown,
+  cellText: string,
+  cellId: string,
+  observationIndex: number,
+): VisionSourceSpan {
+  if (typeof input !== 'object' || input === null)
+    throw new Error(`Vision OCR observation ${observationIndex} has invalid source span`);
+  const value = input as Record<string, unknown>;
+  const parentText = typeof value.parentText === 'string' ? value.parentText : null;
+  const parentObservationId =
+    typeof value.parentObservationId === 'string' ? value.parentObservationId : null;
+  if (parentText === null || parentObservationId === null)
+    throw new Error(`Vision OCR observation ${observationIndex} has invalid source span`);
+  const start = finiteInteger(value.start, 'Vision source span start', 0, parentText.length);
+  const end = finiteInteger(value.end, 'Vision source span end', 0, parentText.length);
+  if (start >= end || parentText.slice(start, end) !== cellText)
+    throw new Error(`Vision OCR observation ${observationIndex} has non-exact source span`);
+  const rawBox = value.boundingBox;
+  if (typeof rawBox !== 'object' || rawBox === null)
+    throw new Error(`Vision OCR observation ${observationIndex} has invalid source span box`);
+  const box = rawBox as Record<string, unknown>;
+  const boundingBox = {
+    x: finiteNumber(box.x, 'Vision source span bounding-box x'),
+    y: finiteNumber(box.y, 'Vision source span bounding-box y'),
+    width: finiteNumber(box.width, 'Vision source span bounding-box width'),
+    height: finiteNumber(box.height, 'Vision source span bounding-box height'),
+  };
+  if (
+    boundingBox.x < 0 ||
+    boundingBox.y < 0 ||
+    boundingBox.width <= 0 ||
+    boundingBox.height <= 0 ||
+    boundingBox.x + boundingBox.width > 1.000001 ||
+    boundingBox.y + boundingBox.height > 1.000001
+  )
+    throw new Error(`Vision OCR observation ${observationIndex} has invalid source span box`);
+  return {
+    id: typeof value.id === 'string' && value.id.length > 0 ? value.id : `${cellId}-source-span`,
+    parentObservationId,
+    start,
+    end,
+    text: cellText,
+    boundingBox,
+    parentText,
   };
 }
 
@@ -1530,6 +1797,7 @@ function parseSourceRow(
     reviewReasons: [...new Set(reasons)],
     reviewState: extractionReviewHasOnlyNonBlockingReasons(reasons) ? 'ready' : 'needs-review',
     decision: defaultExtractionDecision([...new Set(reasons)]),
+    editState: 'automatic',
   };
 }
 

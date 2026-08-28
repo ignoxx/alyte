@@ -66,6 +66,7 @@ export function LabReportDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
+  const [openDraftId, setOpenDraftId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -76,6 +77,15 @@ export function LabReportDetailScreen() {
         setIntegrity('missing');
       } else {
         setIntegrity(await reports.verifySource(next.id));
+      }
+      try {
+        const openDraft = (await reports.listOpenExtractionDrafts()).find(
+          (candidate) => candidate.reportId === route.params.reportId,
+        );
+        setOpenDraftId(openDraft?.draftId ?? null);
+      } catch {
+        // An unavailable draft lookup should not hide the imported report or block a safe retry.
+        setOpenDraftId(null);
       }
       setError(false);
     } catch {
@@ -149,6 +159,13 @@ export function LabReportDetailScreen() {
 
   async function extractLocally() {
     if (report === null) return;
+    if (openDraftId !== null) {
+      navigation.navigate('ExtractionDraft', {
+        reportId: report.id,
+        draftId: openDraftId,
+      });
+      return;
+    }
     navigation
       .getParent<NativeStackNavigationProp<RootStackParamList>>()
       ?.getParent<NativeStackNavigationProp<RootStackParamList>>()
@@ -299,7 +316,11 @@ export function LabReportDetailScreen() {
             <View style={styles.extractAction}>
               <AppButton
                 disabled={busy}
-                label={t('labs.extractionStart')}
+                label={
+                  openDraftId === null
+                    ? t('labs.extractionStart')
+                    : t('labs.extractionReviewCached')
+                }
                 onPress={() => void extractLocally()}
                 style={styles.extractButton}
               />

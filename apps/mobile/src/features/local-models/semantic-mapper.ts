@@ -11,12 +11,13 @@ import { canStartAutomatedExtraction } from './model';
 import type { LocalModelService } from './native';
 import {
   createSemanticMapperPrompt,
+  createSemanticMapperRetryPrompt,
   SEMANTIC_MAPPER_LIMITS,
   SEMANTIC_MAPPER_PROMPT_VERSION,
   SEMANTIC_MAPPER_SCHEMA_VERSION,
   SEMANTIC_OCR_CHUNK_VERSION,
   serializeSemanticMapperChunk,
-  validateSemanticMapperOutput,
+  validateSemanticMapperOutputWithState,
 } from './semantic-contract';
 
 const PROMPT_VERSION = SEMANTIC_MAPPER_PROMPT_VERSION;
@@ -259,51 +260,96 @@ export function createLocalSemanticMapper(
             : (languageCode(observations[0].recognition.language) ?? 'en');
         const serialized = serializeSemanticMapperChunk(rows, locale, headings ?? []);
         const prompt = createSemanticMapperPrompt(locale, serialized);
-        const generation = ++nextInferenceGeneration;
-        const nativeWork = Promise.resolve().then(() => options.models.infer(prompt));
-        const inference: ActiveInference = {
-          generation,
-          settled: nativeWork.then(
-            () => undefined,
-            () => undefined,
-          ),
-        };
-        activeInference = inference;
-        void inference.settled.then(() => {
-          if (activeInference !== inference) return;
-          activeInference = null;
-          runtimeQuarantined = false;
-        });
-        const cancelNative = () => {
-          if (activeInference?.generation !== generation) return;
-          try {
-            options.models.cancelInference();
-          } catch {
-            // A cancellation callback is advisory; timeout/quarantine still protects the context.
-          }
-        };
-        let raw: string;
-        try {
-          raw = await withTimeout(nativeWork, timeoutMs, cancelNative, cancellation, (settled) => {
-            if (!settled && activeInference === inference) runtimeQuarantined = true;
+        const infer = async (inferencePrompt: string): Promise<string> => {
+          const generation = ++nextInferenceGeneration;
+          const nativeWork = Promise.resolve().then(() => options.models.infer(inferencePrompt));
+          const inference: ActiveInference = {
+            generation,
+            settled: nativeWork.then(
+              () => undefined,
+              () => undefined,
+            ),
+          };
+          activeInference = inference;
+          void inference.settled.then(() => {
+            if (activeInference !== inference) return;
+            activeInference = null;
+            runtimeQuarantined = false;
           });
-        } catch (error) {
-          // Only the native typed missing/unloaded contract returns to model setup. Timeouts,
-          // malformed output, and runtime failures remain ordinary per-chunk deterministic fallback.
-          if (localModelFailureCategory(error) === 'unavailable') {
-            throw new SemanticModelUnavailableError(
-              'The verified Gemma model pack became unavailable during extraction',
+          const cancelNative = () => {
+            if (activeInference?.generation !== generation) return;
+            try {
+              options.models.cancelInference();
+            } catch {
+              // A cancellation callback is advisory; timeout/quarantine still protects the context.
+            }
+          };
+          try {
+            return await withTimeout(
+              nativeWork,
+              timeoutMs,
+              cancelNative,
+              cancellation,
+              (settled) => {
+                if (!settled && activeInference === inference) runtimeQuarantined = true;
+              },
             );
+          } catch (error) {
+            // Only the native typed missing/unloaded contract returns to model setup. Timeouts,
+            // malformed output, and runtime failures remain ordinary per-chunk deterministic fallback.
+            if (localModelFailureCategory(error) === 'unavailable') {
+              throw new SemanticModelUnavailableError(
+                'The verified Gemma model pack became unavailable during extraction',
+              );
+            }
+            throw error;
           }
-          throw error;
+        };
+        const isResponseEnvelope = (
+          value: unknown,
+        ): value is {
+          readonly schemaVersion: string;
+          readonly proposals: readonly unknown[];
+        } =>
+          typeof value === 'object' &&
+          value !== null &&
+          !Array.isArray(value) &&
+          Object.keys(value).every((key) => key === 'schemaVersion' || key === 'proposals') &&
+          (value as Record<string, unknown>).schemaVersion === SEMANTIC_MAPPER_SCHEMA_VERSION &&
+          Array.isArray((value as Record<string, unknown>).proposals);
+        const parse = (raw: string): unknown => {
+          try {
+            return JSON.parse(raw) as unknown;
+          } catch {
+            return null;
+          }
+        };
+        let currentRows = rows;
+        const accepted = [] as ReturnType<
+          typeof validateSemanticMapperOutputWithState
+        >['proposals'][number][];
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const parsed = parse(
+            attempt === 0
+              ? await infer(prompt)
+              : await infer(
+                  createSemanticMapperRetryPrompt(
+                    locale,
+                    serializeSemanticMapperChunk(currentRows, locale, []),
+                  ),
+                ),
+          );
+          const result = isResponseEnvelope(parsed)
+            ? validateSemanticMapperOutputWithState(parsed, currentRows, options.aliases)
+            : { proposals: [], rejectedRows: currentRows, malformedEnvelope: true };
+          accepted.push(...result.proposals);
+          if (result.rejectedRows.length === 0 || attempt === 1) return accepted;
+          // Retry only rows that were not accepted. Valid siblings are never sent again, even
+          // when one envelope entry is malformed, duplicated, or crosses a physical row.
+          currentRows = result.rejectedRows;
+          if (cancellation?.isCancelled()) throw new Error('semantic-inference-cancelled');
         }
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(raw) as unknown;
-        } catch {
-          return [];
-        }
-        return validateSemanticMapperOutput(parsed, rows, options.aliases);
+        return accepted;
       }),
   };
 }

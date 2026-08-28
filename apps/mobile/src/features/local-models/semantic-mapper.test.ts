@@ -49,6 +49,16 @@ const candidateRow = {
   observations: [observation, valueObservation, unitObservation],
 } as const;
 
+const siblingRow = {
+  rowId: 'synthetic-hdl-row',
+  sourceObservationIds: ['synthetic-hdl-label', 'synthetic-hdl-value', 'synthetic-hdl-unit'],
+  observations: [
+    { ...observation, id: 'synthetic-hdl-label', text: 'HDL-C' },
+    { ...valueObservation, id: 'synthetic-hdl-value', text: '1,4' },
+    { ...unitObservation, id: 'synthetic-hdl-unit' },
+  ],
+} as const;
+
 function models(
   infer: (prompt: string) => Promise<string>,
   state: LocalModelSnapshot = loadedState,
@@ -204,8 +214,8 @@ test('accepts only validated source selections and preserves versioned provenanc
       role: 'measurement',
     },
   ]);
-  assert.equal(mapper.provenance?.promptVersion, 'alyte.semantic-mapper.prompt.v5');
-  assert.equal(mapper.maxRowsPerChunk, 4);
+  assert.equal(mapper.provenance?.promptVersion, 'alyte.semantic-mapper.prompt.v6');
+  assert.equal(mapper.maxRowsPerChunk, 2);
 });
 
 test('rejects invented root keys before semantic validation', async () => {
@@ -222,7 +232,7 @@ test('rejects invented root keys before semantic validation', async () => {
   assert.deepEqual(await mapper.map({ pageIndex: 0, rows: [candidateRow] }), []);
 });
 
-test('rejects a partial envelope and times out without retaining model output', async () => {
+test('retries malformed output once, then preserves deterministic fallback on timeout', async () => {
   let calls = 0;
   let cancelled = 0;
   let finishSecondInference: (() => void) | undefined;
@@ -263,13 +273,72 @@ test('rejects a partial envelope and times out without retaining model output', 
     ),
     aliases,
   });
-  assert.deepEqual(await mapper.map({ pageIndex: 0, rows: [candidateRow] }), []);
   await assert.rejects(
     mapper.map({ pageIndex: 0, rows: [candidateRow] }),
     /semantic-inference-timeout/,
   );
+  assert.equal(calls, 2);
   // The timeout is a cooperative native cancellation request, not only a JS race.
   assert.equal(cancelled, 1);
+});
+
+test('retries only the malformed sibling while retaining a valid proposal', async () => {
+  let calls = 0;
+  const prompts: string[] = [];
+  const validRow = {
+    rowId: 'a-small-valid-row',
+    sourceObservationIds: ['small-valid-label', 'small-valid-value'],
+    observations: [
+      { ...observation, id: 'small-valid-label', text: 'LDL-C' },
+      { ...valueObservation, id: 'small-valid-value', text: '3.8' },
+    ],
+  } as const;
+  const malformedRow = {
+    rowId: 'b-small-malformed-row',
+    sourceObservationIds: ['small-malformed-label', 'small-malformed-value'],
+    observations: [
+      { ...observation, id: 'small-malformed-label', text: 'HDL-C' },
+      { ...valueObservation, id: 'small-malformed-value', text: '1.4' },
+    ],
+  } as const;
+  const mapper = createLocalSemanticMapper({
+    models: models(async (prompt) => {
+      prompts.push(prompt);
+      calls += 1;
+      if (calls === 1) {
+        return JSON.stringify({
+          schemaVersion: 'alyte.semantic-mapper.v2',
+          proposals: [
+            {
+              rowKey: 'r0',
+              labelKey: 'c0',
+              valueKey: 'c1',
+              unitKey: null,
+              referenceIntervalKey: null,
+              flagKey: null,
+              role: 'measurement',
+              specimenType: 'serum',
+              biomarkerId: 'biomarker.ldl_c',
+            },
+            { rowKey: 'missing-row-key' },
+          ],
+        });
+      }
+      return JSON.stringify({ schemaVersion: 'alyte.semantic-mapper.v2', proposals: [] });
+    }),
+    aliases,
+  });
+  const proposals = (await mapper.map({
+    pageIndex: 0,
+    rows: [validRow, malformedRow],
+  })) as readonly {
+    readonly sourceObservationIds: readonly string[];
+  }[];
+  assert.equal(calls, 2);
+  assert.equal(proposals.length, 1);
+  assert.deepEqual(proposals[0]?.sourceObservationIds, validRow.sourceObservationIds);
+  assert.match(prompts[1]!, /HDL-C/u);
+  assert.doesNotMatch(prompts[1]!, /synthetic-ldl-label/u);
 });
 
 test('waits for the active inference before releasing the last runtime lease', async () => {

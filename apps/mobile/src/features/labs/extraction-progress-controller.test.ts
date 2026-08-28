@@ -180,6 +180,7 @@ test('restored complete progress opens its existing draft without restarting ext
     readyInput({
       restoredProgress: {
         reportId: 'report-restored',
+        mode: 'start',
         stage: 'review',
         status: 'complete',
         completed: 1,
@@ -221,6 +222,7 @@ test('restored complete progress with no draft offers the report fallback', () =
   const restoredInput = {
     restoredProgress: {
       reportId: 'report-restored-no-draft',
+      mode: 'start' as const,
       stage: 'review' as const,
       status: 'complete' as const,
       completed: 1,

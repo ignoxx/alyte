@@ -20,6 +20,12 @@ import {
   type ExtractionDraftRowPatch,
   type ExtractionDateContext,
   type LabSourceArtifact,
+  type ExtractionPipelineFingerprint,
+  createExtractionPipelineFingerprint,
+  EXTRACTION_PIPELINE_FINGERPRINT_SCHEMA,
+  classifyExtractionPipelineFingerprint,
+  extractionDraftHasUserEdits,
+  extractionDraftHasUnknownEdits,
   type SanitizationRecipe,
   createSanitizationRecipe,
 } from '@alyte/domain';
@@ -126,6 +132,7 @@ type ExtractionDraftRowDb = {
   review_reasons_json: unknown;
   review_state: unknown;
   decision: unknown;
+  edit_state: unknown;
 };
 
 type ExtractionDraftDb = {
@@ -144,17 +151,24 @@ type ExtractionDraftDb = {
   source_artifact_hash: unknown;
   provenance_state: unknown;
   failure_reason: unknown;
+  pipeline_fingerprint_json: unknown;
+  pipeline_fingerprint_hash: unknown;
+  revision: unknown;
 };
 
 export type LabReportExtractionOperation = {
   readonly reportId: string;
   readonly state: 'active' | 'interrupted' | 'failed' | 'cancelled' | 'complete';
+  readonly mode?: 'start' | 'reprocess' | 'improve';
   readonly stage: 'import' | 'ocr' | 'model' | 'review';
   readonly completed: number;
   readonly total: number;
   readonly error: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly pipelineFingerprint?: ExtractionPipelineFingerprint | null;
+  readonly pipelineFingerprintHash?: string | null;
+  readonly revision?: number;
 };
 
 type ExtractionOperationDb = {
@@ -166,6 +180,10 @@ type ExtractionOperationDb = {
   error: unknown;
   created_at: unknown;
   updated_at: unknown;
+  mode: unknown;
+  pipeline_fingerprint_json: unknown;
+  pipeline_fingerprint_hash: unknown;
+  revision: unknown;
 };
 
 function requiredString(value: unknown, field: string): string {
@@ -200,12 +218,25 @@ function nonNegativeInteger(value: unknown, field: string): number {
 }
 
 function extractionOperationFromDb(row: ExtractionOperationDb): LabReportExtractionOperation {
+  const revision = Number(row.revision ?? 1);
+  if (!Number.isSafeInteger(revision) || revision < 1)
+    throw new Error('Invalid extraction operation revision in local database');
+  const pipelineFingerprint = decodePipelineFingerprint(
+    row.pipeline_fingerprint_json,
+    row.pipeline_fingerprint_hash,
+    row.revision,
+  );
   return {
     reportId: requiredString(row.report_id, 'extraction operation report id'),
     state: enumValue(
       row.state,
       ['active', 'interrupted', 'failed', 'cancelled', 'complete'] as const,
       'extraction operation state',
+    ),
+    mode: enumValue(
+      row.mode ?? 'start',
+      ['start', 'reprocess', 'improve'] as const,
+      'extraction operation mode',
     ),
     stage: enumValue(
       row.stage,
@@ -217,6 +248,12 @@ function extractionOperationFromDb(row: ExtractionOperationDb): LabReportExtract
     error: nullableString(row.error, 'extraction operation error'),
     createdAt: requiredString(row.created_at, 'extraction operation created timestamp'),
     updatedAt: requiredString(row.updated_at, 'extraction operation updated timestamp'),
+    pipelineFingerprint,
+    pipelineFingerprintHash: nullableString(
+      row.pipeline_fingerprint_hash,
+      'extraction pipeline fingerprint hash',
+    ),
+    revision,
   };
 }
 
@@ -513,6 +550,64 @@ function parseJson(value: unknown, field: string): unknown {
   }
 }
 
+function decodePipelineFingerprint(
+  value: unknown,
+  hashValue: unknown,
+  revisionValue: unknown,
+): ExtractionPipelineFingerprint | null {
+  if (value === null || value === undefined) {
+    // Operation rows may retain only the bounded opaque hash. Complete compatibility JSON is
+    // intentionally available only from the draft root.
+    return null;
+  }
+  const raw = parseJson(value, 'extraction pipeline fingerprint');
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error('Invalid extraction pipeline fingerprint in local database');
+  }
+  const candidate = raw as Record<string, unknown>;
+  if (candidate.schemaVersion !== EXTRACTION_PIPELINE_FINGERPRINT_SCHEMA) {
+    throw new Error('Unsupported extraction pipeline fingerprint');
+  }
+  const nullable = (name: string): string | null => {
+    const item = candidate[name];
+    if (item !== null && typeof item !== 'string') {
+      throw new Error('Invalid extraction pipeline fingerprint value');
+    }
+    return item as string | null;
+  };
+  const revision = Number(candidate.revision);
+  const rootRevision = Number(revisionValue ?? revision);
+  if (!Number.isSafeInteger(revision) || revision < 1 || rootRevision !== revision) {
+    throw new Error('Invalid extraction pipeline fingerprint revision');
+  }
+  const input = {
+    sourceHash: nullable('sourceHash'),
+    ocrContractVersion: nullable('ocrContractVersion'),
+    rowSegmentationVersion: nullable('rowSegmentationVersion'),
+    parserVersion: nullable('parserVersion'),
+    semanticAdapterVersion: nullable('semanticAdapterVersion'),
+    semanticSchemaVersion: nullable('semanticSchemaVersion') as
+      'alyte.semantic-mapper.v1' | 'alyte.semantic-mapper.v2' | null,
+    semanticChunkVersion: nullable('semanticChunkVersion'),
+    semanticPromptVersion: nullable('semanticPromptVersion'),
+    modelVersion: nullable('modelVersion'),
+    runtimeVersion: nullable('runtimeVersion'),
+    catalogueVersion: nullable('catalogueVersion'),
+  } as const;
+  if (
+    input.semanticSchemaVersion !== null &&
+    input.semanticSchemaVersion !== 'alyte.semantic-mapper.v1' &&
+    input.semanticSchemaVersion !== 'alyte.semantic-mapper.v2'
+  ) {
+    throw new Error('Invalid extraction pipeline semantic schema');
+  }
+  const expected = createExtractionPipelineFingerprint(input, revision);
+  if (candidate.hash !== expected.hash || (hashValue ?? null) !== expected.hash) {
+    throw new Error('Extraction pipeline fingerprint hash mismatch');
+  }
+  return expected;
+}
+
 function draftDate(value: unknown, state: unknown): LabRecord['collectionDate'] {
   const dateState = enumValue(state, ['known', 'missing'] as const, 'extraction date state');
   const date = nullableString(value, 'extraction collection date');
@@ -627,12 +722,18 @@ function extractionRowFromDb(row: ExtractionDraftRowDb): ExtractionDraftRow {
       ['unresolved', 'preserve', 'skip', 'resolve'] as const,
       'extraction row decision',
     ),
+    editState: enumValue(
+      row.edit_state ?? 'automatic',
+      ['automatic', 'user-edited', 'legacy-unknown'] as const,
+      'extraction row edit state',
+    ),
   };
 }
 
 function extractionDraftFromDb(
   row: ExtractionDraftDb,
   rows: readonly ExtractionDraftRow[],
+  currentFingerprint?: ExtractionPipelineFingerprint,
 ): ExtractionDraft {
   const state = enumValue(
     row.state,
@@ -649,8 +750,15 @@ function extractionDraftFromDb(
   }
   const ocr = requiredString(row.ocr_contract_version, 'OCR contract version');
   const parser = requiredString(row.parser_version, 'extraction parser version');
-  if (ocr !== VISION_OCR_CONTRACT_VERSION || parser !== EXTRACTION_PARSER_VERSION)
-    throw new Error('Unsupported extraction draft version');
+  const pipelineFingerprint = decodePipelineFingerprint(
+    row.pipeline_fingerprint_json,
+    row.pipeline_fingerprint_hash,
+    row.revision,
+  );
+  const revision = Number(row.revision ?? pipelineFingerprint?.revision ?? 1);
+  if (!Number.isSafeInteger(revision) || revision < 1) {
+    throw new Error('Invalid extraction draft revision');
+  }
   const sourceArtifact = decodeStoredArtifact(
     row.source_artifact_kind === null || row.source_artifact_kind === undefined
       ? null
@@ -676,8 +784,30 @@ function extractionDraftFromDb(
     id: requiredString(row.id, 'extraction draft id'),
     reportId: requiredString(row.report_id, 'extraction report id'),
     state,
-    ocrContractVersion: VISION_OCR_CONTRACT_VERSION,
-    parserVersion: EXTRACTION_PARSER_VERSION,
+    ocrContractVersion: ocr,
+    parserVersion: parser,
+    pipelineFingerprint,
+    pipelineStatus: classifyExtractionPipelineFingerprint(
+      pipelineFingerprint,
+      currentFingerprint ??
+        pipelineFingerprint ??
+        createExtractionPipelineFingerprint({
+          sourceHash: null,
+          ocrContractVersion: null,
+          rowSegmentationVersion: null,
+          parserVersion: null,
+          semanticAdapterVersion: null,
+          semanticSchemaVersion: null,
+          semanticChunkVersion: null,
+          semanticPromptVersion: null,
+          modelVersion: null,
+          runtimeVersion: null,
+          catalogueVersion: null,
+        }),
+    ),
+    revision,
+    hasUserEdits: extractionDraftHasUserEdits(rows),
+    hasUnknownEdits: extractionDraftHasUnknownEdits(rows),
     collectionDate: draftDate(row.collection_date, row.date_state),
     rows,
     createdAt: requiredString(row.created_at, 'extraction draft created timestamp'),
@@ -708,16 +838,6 @@ function canonicalExtractionArtifacts(
     return { ...row, source: { ...row.source, artifact: sourceArtifact } };
   });
   return { sourceArtifact, rows: canonicalRows };
-}
-
-function extractionDraftVersions(row: ExtractionDraftDb): {
-  readonly ocr: string;
-  readonly parser: string;
-} {
-  return {
-    ocr: requiredString(row.ocr_contract_version, 'OCR contract version'),
-    parser: requiredString(row.parser_version, 'extraction parser version'),
-  };
 }
 
 const specimenTypes = ['blood', 'serum', 'plasma', 'urine', 'stool', 'saliva', 'unknown'] as const;
@@ -946,6 +1066,8 @@ export type LabRepository = {
     readonly collectionDate: LabRecord['collectionDate'];
     readonly rows: readonly ExtractionDraftRow[];
     readonly sourceArtifact?: LabSourceArtifact | null;
+    readonly pipelineFingerprint?: ExtractionPipelineFingerprint | null;
+    readonly revision?: number;
     readonly now?: string;
   }): Promise<ExtractionDraft>;
   listOpenExtractionDrafts(): Promise<
@@ -959,11 +1081,34 @@ export type LabRepository = {
   getExtractionDraft(
     id: string,
     aliases?: readonly ExtractionAliasEntry[],
+    currentFingerprint?: ExtractionPipelineFingerprint,
   ): Promise<ExtractionDraft | null>;
   getExtractionDraftForReport(
     reportId: string,
     aliases?: readonly ExtractionAliasEntry[],
+    currentFingerprint?: ExtractionPipelineFingerprint,
   ): Promise<ExtractionDraft | null>;
+  replaceExtractionDraft(input: {
+    readonly previousDraftId: string;
+    readonly id?: string;
+    readonly reportId: string;
+    readonly collectionDate: LabRecord['collectionDate'];
+    readonly rows: readonly ExtractionDraftRow[];
+    readonly sourceArtifact?: LabSourceArtifact | null;
+    readonly pipelineFingerprint?: ExtractionPipelineFingerprint | null;
+    readonly revision: number;
+    readonly ocrContractVersion?: string;
+    readonly parserVersion?: string;
+    readonly preserveRowIds?: boolean;
+    readonly now?: string;
+  }): Promise<ExtractionDraft>;
+  updateExtractionDraftRows(input: {
+    readonly draftId: string;
+    readonly expectedRevision: number;
+    readonly rows: readonly ExtractionDraftRow[];
+    readonly pipelineFingerprint: ExtractionPipelineFingerprint;
+  }): Promise<ExtractionDraft>;
+  hasConfirmedRecordsForReport(reportId: string): Promise<boolean>;
   updateExtractionDraftRow(
     id: string,
     patch: ExtractionDraftRowPatch,
@@ -1485,12 +1630,14 @@ export function createLabRepository(
 
   const extractionDraftColumns = `id, report_id, state, ocr_contract_version, parser_version,
     collection_date, date_state, created_at, updated_at, confirmed_at, source_artifact_kind,
-    source_artifact_id, source_artifact_hash, provenance_state, failure_reason`;
+    source_artifact_id, source_artifact_hash, provenance_state, failure_reason,
+    pipeline_fingerprint_json, pipeline_fingerprint_hash, revision`;
   const extractionRowColumns = `id, draft_id, row_order, panel_label, source_text, source_label,
     source_value_string, source_value_json, source_unit, source_reference_interval, source_flag, source_page_index,
     source_bbox_json, source_orientation, proposed_label, proposed_value_json, proposed_unit,
     proposed_reference_interval, proposed_flag, proposed_biomarker_id, proposed_specimen_type,
-    collection_date, date_state, date_context_json, review_reasons_json, review_state, decision`;
+    collection_date, date_state, date_context_json, review_reasons_json, review_state, decision,
+    edit_state`;
 
   async function extractionRowsFor(draftId: string): Promise<readonly ExtractionDraftRow[]> {
     const rows = await database.getAllAsync<ExtractionDraftRowDb>(
@@ -1503,58 +1650,19 @@ export function createLabRepository(
   async function readExtractionDraft(
     row: ExtractionDraftDb,
     aliases?: readonly ExtractionAliasEntry[],
+    currentFingerprint?: ExtractionPipelineFingerprint,
   ): Promise<ExtractionDraft> {
     const rows = await extractionRowsFor(requiredString(row.id, 'extraction draft id'));
-    const versions = extractionDraftVersions(row);
-    const state = enumValue(
-      row.state,
-      ['draft', 'confirmed', 'failed'] as const,
-      'extraction draft state',
-    );
-    if (
-      state === 'draft' &&
-      versions.ocr === VISION_OCR_CONTRACT_VERSION &&
-      versions.parser !== EXTRACTION_PARSER_VERSION &&
-      aliases !== undefined
-    ) {
-      await withWrite(async () => {
-        for (const current of rows) {
-          const next = revalidateExtractionRow(current, {}, aliases);
-          await database.runAsync(
-            `UPDATE extraction_draft_rows SET proposed_biomarker_id = ?, review_reasons_json = ?,
-              review_state = ?, decision = ? WHERE id = ?;`,
-            next.proposedBiomarkerId,
-            JSON.stringify(next.reviewReasons),
-            next.reviewState,
-            next.decision,
-            next.id,
-          );
-        }
-        await database.runAsync(
-          'UPDATE extraction_drafts SET parser_version = ?, updated_at = ? WHERE id = ?;',
-          EXTRACTION_PARSER_VERSION,
-          now(),
-          row.id,
-        );
-      });
-      const refreshed = await database.getAllAsync<ExtractionDraftDb>(
-        `SELECT ${extractionDraftColumns} FROM extraction_drafts WHERE id = ?;`,
-        row.id,
-      );
-      const refreshedRow = refreshed[0];
-      if (refreshedRow === undefined)
-        throw new Error('Extraction Draft was removed during migration');
-      return extractionDraftFromDb(
-        refreshedRow,
-        await extractionRowsFor(requiredString(refreshedRow.id, 'extraction draft id')),
-      );
-    }
-    return extractionDraftFromDb(row, rows);
+    // Parser changes are reported by the fingerprint; reading must never revalidate, rewrite, or
+    // relabel an older draft because doing so could erase the exact historical extraction path.
+    void aliases;
+    return extractionDraftFromDb(row, rows, currentFingerprint);
   }
 
   async function getExtractionDraft(
     id: string,
     aliases?: readonly ExtractionAliasEntry[],
+    currentFingerprint?: ExtractionPipelineFingerprint,
   ): Promise<ExtractionDraft | null> {
     await initialize();
     const rows = await database.getAllAsync<ExtractionDraftDb>(
@@ -1562,7 +1670,7 @@ export function createLabRepository(
       id,
     );
     const row = rows[0];
-    return row === undefined ? null : readExtractionDraft(row, aliases);
+    return row === undefined ? null : readExtractionDraft(row, aliases, currentFingerprint);
   }
 
   async function deleteExtractionDraft(id: string): Promise<void> {
@@ -1594,19 +1702,28 @@ export function createLabRepository(
     await withWrite(async () => {
       await database.runAsync(
         `INSERT INTO extraction_operations
-           (report_id, state, stage, completed, total, error, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           (report_id, state, mode, stage, completed, total, error, created_at, updated_at,
+            pipeline_fingerprint_json, pipeline_fingerprint_hash, revision)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(report_id) DO UPDATE SET state = excluded.state, stage = excluded.stage,
            completed = excluded.completed, total = excluded.total, error = excluded.error,
-           updated_at = excluded.updated_at;`,
+           mode = excluded.mode, pipeline_fingerprint_json = excluded.pipeline_fingerprint_json,
+           pipeline_fingerprint_hash = excluded.pipeline_fingerprint_hash,
+           revision = excluded.revision, updated_at = excluded.updated_at;`,
         operation.reportId,
         operation.state,
+        operation.mode ?? 'start',
         operation.stage,
         operation.completed,
         operation.total,
         operation.error,
         operation.createdAt,
         operation.updatedAt,
+        // Extraction operations are resumable UI metadata only. Keep the complete fingerprint on
+        // the draft root; the operation table gets at most its bounded opaque hash token.
+        null,
+        operation.pipelineFingerprintHash ?? operation.pipelineFingerprint?.hash ?? null,
+        operation.revision ?? operation.pipelineFingerprint?.revision ?? 1,
       );
     });
   }
@@ -1616,7 +1733,8 @@ export function createLabRepository(
   ): Promise<LabReportExtractionOperation | null> {
     await initialize();
     const rows = await database.getAllAsync<ExtractionOperationDb>(
-      `SELECT report_id, state, stage, completed, total, error, created_at, updated_at
+      `SELECT report_id, state, mode, stage, completed, total, error, created_at, updated_at,
+        pipeline_fingerprint_json, pipeline_fingerprint_hash, revision
        FROM extraction_operations WHERE report_id = ?;`,
       reportId,
     );
@@ -1655,6 +1773,7 @@ export function createLabRepository(
   async function getExtractionDraftForReport(
     reportId: string,
     aliases?: readonly ExtractionAliasEntry[],
+    currentFingerprint?: ExtractionPipelineFingerprint,
   ): Promise<ExtractionDraft | null> {
     await initialize();
     const rows = await database.getAllAsync<ExtractionDraftDb>(
@@ -1670,7 +1789,7 @@ export function createLabRepository(
       reportId,
     );
     const row = rows[0];
-    return row === undefined ? null : readExtractionDraft(row, aliases);
+    return row === undefined ? null : readExtractionDraft(row, aliases, currentFingerprint);
   }
 
   async function createExtractionDraft(input: {
@@ -1679,70 +1798,231 @@ export function createLabRepository(
     readonly collectionDate: LabRecord['collectionDate'];
     readonly rows: readonly ExtractionDraftRow[];
     readonly sourceArtifact?: LabSourceArtifact | null;
+    readonly pipelineFingerprint?: ExtractionPipelineFingerprint | null;
+    readonly revision?: number;
     readonly now?: string;
   }): Promise<ExtractionDraft> {
     await initialize();
     assertLabDateState(input.collectionDate);
     if (input.rows.length === 0)
       throw new Error('Extraction Draft must preserve at least one source row');
+    const revision = input.revision ?? 1;
+    if (!Number.isSafeInteger(revision) || revision < 1)
+      throw new Error('Extraction Draft revision must be a positive integer');
+    if (
+      input.pipelineFingerprint !== undefined &&
+      input.pipelineFingerprint !== null &&
+      input.pipelineFingerprint.revision !== revision
+    ) {
+      throw new Error('Extraction Draft fingerprint revision does not match its root');
+    }
     const canonical = canonicalExtractionArtifacts(input.sourceArtifact ?? null, input.rows);
     const draftId = input.id ?? makeId('extraction-draft');
     const createdAt = input.now ?? now();
     await withWrite(async () => {
+      await insertExtractionDraftInTransaction({
+        id: draftId,
+        reportId: input.reportId,
+        collectionDate: input.collectionDate,
+        rows: canonical.rows,
+        sourceArtifact: canonical.sourceArtifact,
+        pipelineFingerprint: input.pipelineFingerprint ?? null,
+        revision,
+        ocrContractVersion: VISION_OCR_CONTRACT_VERSION,
+        parserVersion: EXTRACTION_PARSER_VERSION,
+        createdAt,
+      });
+    });
+    const created = await getExtractionDraft(draftId);
+    if (created === null) throw new Error('Extraction Draft could not be read back');
+    return created;
+  }
+
+  async function insertExtractionDraftInTransaction(input: {
+    readonly id: string;
+    readonly reportId: string;
+    readonly collectionDate: LabRecord['collectionDate'];
+    readonly rows: readonly ExtractionDraftRow[];
+    readonly sourceArtifact: LabSourceArtifact | null;
+    readonly pipelineFingerprint: ExtractionPipelineFingerprint | null;
+    readonly revision: number;
+    readonly ocrContractVersion: string;
+    readonly parserVersion: string;
+    readonly preserveRowIds?: boolean;
+    readonly createdAt: string;
+  }): Promise<void> {
+    await database.runAsync(
+      `INSERT INTO extraction_drafts (id, report_id, state, ocr_contract_version, parser_version,
+        collection_date, date_state, created_at, updated_at, confirmed_at, source_artifact_kind,
+        source_artifact_id, source_artifact_hash, provenance_state, failure_reason,
+        pipeline_fingerprint_json, pipeline_fingerprint_hash, revision)
+       VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'current', NULL, ?, ?, ?);`,
+      input.id,
+      input.reportId,
+      input.ocrContractVersion,
+      input.parserVersion,
+      input.collectionDate.kind === 'known' ? input.collectionDate.value : null,
+      input.collectionDate.kind,
+      input.createdAt,
+      input.createdAt,
+      input.sourceArtifact?.kind ?? null,
+      input.sourceArtifact?.id ?? null,
+      input.sourceArtifact?.hash ?? null,
+      input.pipelineFingerprint === null ? null : JSON.stringify(input.pipelineFingerprint),
+      input.pipelineFingerprint?.hash ?? null,
+      input.revision,
+    );
+    for (const canonicalRow of input.rows) {
+      const row = {
+        ...canonicalRow,
+        id: input.preserveRowIds ? canonicalRow.id : makeId('extraction-draft-row'),
+      };
       await database.runAsync(
-        `INSERT INTO extraction_drafts (id, report_id, state, ocr_contract_version, parser_version,
-          collection_date, date_state, created_at, updated_at, confirmed_at, source_artifact_kind,
-          source_artifact_id, source_artifact_hash, provenance_state, failure_reason)
-         VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'current', NULL);`,
-        draftId,
-        input.reportId,
-        VISION_OCR_CONTRACT_VERSION,
-        EXTRACTION_PARSER_VERSION,
-        input.collectionDate.kind === 'known' ? input.collectionDate.value : null,
-        input.collectionDate.kind,
-        createdAt,
-        createdAt,
-        canonical.sourceArtifact?.kind ?? null,
-        canonical.sourceArtifact?.id ?? null,
-        canonical.sourceArtifact?.hash ?? null,
+        `INSERT INTO extraction_draft_rows (
+          id, draft_id, row_order, panel_label, source_text, source_label, source_value_string,
+          source_value_json, source_unit, source_reference_interval, source_flag, source_page_index, source_bbox_json,
+          source_orientation, proposed_label, proposed_value_json, proposed_unit,
+          proposed_reference_interval, proposed_flag, proposed_biomarker_id, proposed_specimen_type,
+          collection_date, date_state, date_context_json, review_reasons_json, review_state, decision,
+          edit_state
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        row.id,
+        input.id,
+        row.order,
+        row.panelLabel,
+        row.sourceText,
+        row.sourceLabel,
+        row.sourceValueString,
+        JSON.stringify(row.sourceValue),
+        row.sourceUnit,
+        row.sourceReferenceInterval,
+        row.sourceFlag,
+        row.source.pageIndex,
+        JSON.stringify({
+          ...row.source.boundingBox,
+          observationIds: row.source.observationIds,
+          observations: row.source.observations ?? [],
+          raw: row.source.raw ?? null,
+          semantic: row.source.semantic ?? null,
+          artifact: row.source.artifact ?? input.sourceArtifact ?? null,
+        }),
+        row.source.orientation,
+        row.proposedLabel,
+        JSON.stringify(row.proposedValue),
+        row.proposedUnit,
+        row.proposedReferenceInterval,
+        row.proposedFlag,
+        row.proposedBiomarkerId,
+        row.proposedSpecimenType,
+        row.collectionDate.kind === 'known' ? row.collectionDate.value : null,
+        row.collectionDate.kind,
+        row.collectionDateContext === null ? null : JSON.stringify(row.collectionDateContext),
+        JSON.stringify(row.reviewReasons),
+        row.reviewState,
+        row.decision,
+        row.editState ?? 'automatic',
       );
-      // Vision observation IDs identify source evidence and can repeat across reports. Allocate a
-      // separate storage identity for each persisted row so a later report cannot collide with an
-      // earlier draft while source.observationIds and source.observations retain that provenance.
-      const persistedRows = canonical.rows.map((row) => ({
-        ...row,
-        id: makeId('extraction-draft-row'),
-      }));
-      for (const row of persistedRows) {
-        await database.runAsync(
-          `INSERT INTO extraction_draft_rows (
-            id, draft_id, row_order, panel_label, source_text, source_label, source_value_string,
-            source_value_json, source_unit, source_reference_interval, source_flag, source_page_index, source_bbox_json,
-            source_orientation, proposed_label, proposed_value_json, proposed_unit,
-            proposed_reference_interval, proposed_flag, proposed_biomarker_id, proposed_specimen_type,
-            collection_date, date_state, date_context_json, review_reasons_json, review_state, decision
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-          row.id,
-          draftId,
-          row.order,
-          row.panelLabel,
-          row.sourceText,
-          row.sourceLabel,
-          row.sourceValueString,
-          JSON.stringify(row.sourceValue),
-          row.sourceUnit,
-          row.sourceReferenceInterval,
-          row.sourceFlag,
-          row.source.pageIndex,
-          JSON.stringify({
-            ...row.source.boundingBox,
-            observationIds: row.source.observationIds,
-            observations: row.source.observations ?? [],
-            raw: row.source.raw ?? null,
-            semantic: row.source.semantic ?? null,
-            artifact: row.source.artifact ?? canonical.sourceArtifact ?? null,
-          }),
-          row.source.orientation,
+    }
+  }
+
+  async function replaceExtractionDraft(input: {
+    readonly previousDraftId: string;
+    readonly id?: string;
+    readonly reportId: string;
+    readonly collectionDate: LabRecord['collectionDate'];
+    readonly rows: readonly ExtractionDraftRow[];
+    readonly sourceArtifact?: LabSourceArtifact | null;
+    readonly pipelineFingerprint?: ExtractionPipelineFingerprint | null;
+    readonly revision: number;
+    readonly ocrContractVersion?: string;
+    readonly parserVersion?: string;
+    readonly preserveRowIds?: boolean;
+    readonly now?: string;
+  }): Promise<ExtractionDraft> {
+    await initialize();
+    assertLabDateState(input.collectionDate);
+    if (input.rows.length === 0)
+      throw new Error('Extraction Draft must preserve at least one source row');
+    if (!Number.isSafeInteger(input.revision) || input.revision < 1)
+      throw new Error('Extraction Draft revision must be a positive integer');
+    if (
+      input.pipelineFingerprint !== undefined &&
+      input.pipelineFingerprint !== null &&
+      input.pipelineFingerprint.revision !== input.revision
+    ) {
+      throw new Error('Extraction Draft fingerprint revision does not match its root');
+    }
+    const canonical = canonicalExtractionArtifacts(input.sourceArtifact ?? null, input.rows);
+    const draftId = input.id ?? makeId('extraction-draft');
+    const createdAt = input.now ?? now();
+    await withWrite(async () => {
+      const previous = await database.getAllAsync<{ report_id: unknown; state: unknown }>(
+        'SELECT report_id, state FROM extraction_drafts WHERE id = ?;',
+        input.previousDraftId,
+      );
+      if (previous[0] === undefined) throw new Error('Extraction Draft was not found');
+      if (previous[0].report_id !== input.reportId)
+        throw new Error('Extraction Draft belongs to another report');
+      if (previous[0].state !== 'draft')
+        throw new Error('Only an open Extraction Draft can be reprocessed');
+      // The delete and insert occur in one SQLite transaction. A failed insert rolls the delete
+      // back, so callers never lose the old draft while a replacement is being prepared.
+      await database.runAsync('DELETE FROM extraction_drafts WHERE id = ?;', input.previousDraftId);
+      await insertExtractionDraftInTransaction({
+        id: draftId,
+        reportId: input.reportId,
+        collectionDate: input.collectionDate,
+        rows: canonical.rows,
+        sourceArtifact: canonical.sourceArtifact,
+        pipelineFingerprint: input.pipelineFingerprint ?? null,
+        revision: input.revision,
+        ocrContractVersion: input.ocrContractVersion ?? VISION_OCR_CONTRACT_VERSION,
+        parserVersion: input.parserVersion ?? EXTRACTION_PARSER_VERSION,
+        ...(input.preserveRowIds === undefined ? {} : { preserveRowIds: input.preserveRowIds }),
+        createdAt,
+      });
+    });
+    const created = await getExtractionDraft(draftId);
+    if (created === null) throw new Error('Replacement Extraction Draft could not be read back');
+    return created;
+  }
+
+  async function hasConfirmedRecordsForReport(reportId: string): Promise<boolean> {
+    await initialize();
+    const rows = await database.getAllAsync<{ count: unknown }>(
+      'SELECT COUNT(*) AS count FROM lab_records WHERE lab_report_id = ?;',
+      reportId,
+    );
+    const count = Number(rows[0]?.count ?? 0);
+    if (!Number.isSafeInteger(count) || count < 0)
+      throw new Error('Invalid confirmed Lab Record count in local database');
+    return count > 0;
+  }
+
+  async function updateExtractionDraftRows(input: {
+    readonly draftId: string;
+    readonly expectedRevision: number;
+    readonly rows: readonly ExtractionDraftRow[];
+    readonly pipelineFingerprint: ExtractionPipelineFingerprint;
+  }): Promise<ExtractionDraft> {
+    await initialize();
+    await withWrite(async () => {
+      const roots = await database.getAllAsync<{ state: unknown; revision: unknown }>(
+        'SELECT state, revision FROM extraction_drafts WHERE id = ?;',
+        input.draftId,
+      );
+      const root = roots[0];
+      if (root === undefined) throw new Error('Extraction Draft was not found');
+      if (root.state !== 'draft') throw new Error('Only an open Extraction Draft can improve');
+      if (Number(root.revision ?? 1) !== input.expectedRevision)
+        throw new Error('Extraction Draft changed while improvement was running');
+      for (const row of input.rows) {
+        const result = await database.runAsync(
+          `UPDATE extraction_draft_rows SET proposed_label = ?, proposed_value_json = ?,
+            proposed_unit = ?, proposed_reference_interval = ?, proposed_flag = ?, proposed_biomarker_id = ?,
+            proposed_specimen_type = ?, collection_date = ?, date_state = ?, date_context_json = ?,
+            review_reasons_json = ?, review_state = ?, decision = ?, source_bbox_json = ?, edit_state = ?
+           WHERE id = ? AND draft_id = ?;`,
           row.proposedLabel,
           JSON.stringify(row.proposedValue),
           row.proposedUnit,
@@ -1756,12 +2036,33 @@ export function createLabRepository(
           JSON.stringify(row.reviewReasons),
           row.reviewState,
           row.decision,
+          JSON.stringify({
+            ...row.source.boundingBox,
+            observationIds: row.source.observationIds,
+            observations: row.source.observations ?? [],
+            raw: row.source.raw ?? null,
+            semantic: row.source.semantic ?? null,
+            artifact: row.source.artifact ?? null,
+          }),
+          row.editState ?? 'automatic',
+          row.id,
+          input.draftId,
         );
+        if (result.changes !== 1) throw new Error('Extraction Draft row changed while improving');
       }
+      await database.runAsync(
+        `UPDATE extraction_drafts SET pipeline_fingerprint_json = ?, pipeline_fingerprint_hash = ?,
+          updated_at = ? WHERE id = ? AND state = 'draft' AND revision = ?;`,
+        JSON.stringify(input.pipelineFingerprint),
+        input.pipelineFingerprint.hash,
+        now(),
+        input.draftId,
+        input.expectedRevision,
+      );
     });
-    const created = await getExtractionDraft(draftId);
-    if (created === null) throw new Error('Extraction Draft could not be read back');
-    return created;
+    const updated = await getExtractionDraft(input.draftId);
+    if (updated === null) throw new Error('Improved Extraction Draft could not be read back');
+    return updated;
   }
 
   async function updateExtractionDraftRow(
@@ -1797,16 +2098,24 @@ export function createLabRepository(
         resolvedPatch.proposedBiomarkerId,
         resolvedPatch.proposedSpecimenType,
       ].some((value) => value !== undefined);
+      const userEditedDecision = resolvedPatch.decision !== undefined;
       const revalidated = revalidateExtractionRow(current, resolvedPatch, aliases);
-      updated = userEditedSemanticFields
-        ? { ...revalidated, source: { ...revalidated.source, semantic: null } }
-        : revalidated;
+      updated =
+        userEditedSemanticFields || userEditedDecision
+          ? {
+              ...revalidated,
+              editState: 'user-edited',
+              ...(userEditedSemanticFields
+                ? { source: { ...revalidated.source, semantic: null } }
+                : {}),
+            }
+          : revalidated;
       const next = updated;
       await database.runAsync(
         `UPDATE extraction_draft_rows SET proposed_label = ?, proposed_value_json = ?,
           proposed_unit = ?, proposed_reference_interval = ?, proposed_flag = ?, proposed_biomarker_id = ?,
           proposed_specimen_type = ?, collection_date = ?, date_state = ?, review_reasons_json = ?,
-          review_state = ?, decision = ? WHERE id = ?;`,
+          review_state = ?, decision = ?, edit_state = ? WHERE id = ?;`,
         next.proposedLabel,
         JSON.stringify(next.proposedValue),
         next.proposedUnit,
@@ -1819,6 +2128,7 @@ export function createLabRepository(
         JSON.stringify(next.reviewReasons),
         next.reviewState,
         next.decision,
+        next.editState ?? current.editState ?? 'automatic',
         row.id,
       );
       if (userEditedSemanticFields) {
@@ -1885,7 +2195,7 @@ export function createLabRepository(
         });
         await database.runAsync(
           `UPDATE extraction_draft_rows SET collection_date = ?, date_state = ?, review_reasons_json = ?,
-            review_state = ?, decision = ? WHERE id = ?;`,
+            review_state = ?, decision = ?, edit_state = 'user-edited' WHERE id = ?;`,
           next.collectionDate.kind === 'known' ? next.collectionDate.value : null,
           next.collectionDate.kind,
           JSON.stringify(next.reviewReasons),
@@ -2111,6 +2421,9 @@ export function createLabRepository(
     getExtractionOperation,
     getExtractionDraft,
     getExtractionDraftForReport,
+    replaceExtractionDraft,
+    updateExtractionDraftRows,
+    hasConfirmedRecordsForReport,
     updateExtractionDraftRow,
     updateExtractionDraftGroupDate,
     confirmExtractionDraft,

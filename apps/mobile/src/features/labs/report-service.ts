@@ -15,7 +15,9 @@ import {
 } from '@alyte/domain';
 import {
   groupObservationsIntoRows,
+  enumerateGeometryFieldCandidates,
   parseLabDate,
+  reconstructGeometryLattice,
   reparseExtractionRowFromSemanticFields,
   revalidateExtractionRow,
   validateSemanticProposals,
@@ -32,8 +34,16 @@ import {
   type VisionTextObservation,
   type VisionOCRResult,
   type SpecimenType,
+  type ExtractionPipelineFingerprint,
+  type GeometryRow,
+  type GeometrySourceObservation,
+  type VisionSourceSpan,
+  createExtractionPipelineFingerprint,
+  EXTRACTION_ROW_SEGMENTATION_VERSION,
+  EXTRACTION_PARSER_VERSION,
+  VISION_OCR_CONTRACT_VERSION,
 } from '@alyte/domain';
-import { comparableBiomarkers } from '@alyte/catalogue';
+import { CATALOGUE_VERSION, comparableBiomarkers } from '@alyte/catalogue';
 import {
   openProtectedLabDatabase,
   type LabReportExtractionOperation,
@@ -165,12 +175,15 @@ export type LabReportExtractionReadiness = {
 
 export type LabReportExtractionProgress = {
   readonly reportId: string;
+  readonly mode: LabReportExtractionMode;
   readonly stage: 'import' | 'ocr' | 'model' | 'review';
   readonly status: 'active' | 'complete' | 'failed' | 'cancelled' | 'interrupted';
   readonly completed: number;
   readonly total: number;
   readonly error?: LabReportExtractionError['reason'];
 };
+
+export type LabReportExtractionMode = 'start' | 'reprocess' | 'improve';
 
 export type SanitizationEditorState = {
   readonly report: LabReport;
@@ -228,7 +241,8 @@ export class LabReportExtractionError extends Error {
       | 'persistence'
       | 'wrong-password'
       | 'cancelled'
-      | 'interrupted',
+      | 'interrupted'
+      | 'improve-deferred',
     message: string,
     options?: { readonly cause?: unknown },
   ) {
@@ -275,6 +289,10 @@ export type LabReportsService = {
   deleteSanitizedReport(id: string): Promise<void>;
   deleteReport(id: string): Promise<void>;
   startExtraction(id: string, passwordRequest?: PasswordRequest): Promise<ExtractionDraft>;
+  /** Explicitly rebuilds the review revision from the immutable Original Report. */
+  reprocessExtraction(id: string, passwordRequest?: PasswordRequest): Promise<ExtractionDraft>;
+  /** Refines only stored, unresolved, automatic source-cell rows; never reruns OCR. */
+  improveExtraction(id: string): Promise<ExtractionDraft>;
   listOpenExtractionDrafts(): Promise<readonly LabReportExtractionDraftReference[]>;
   countOpenExtractionDrafts(): Promise<number>;
   getExtractionDraft(id: string): Promise<ExtractionDraft | null>;
@@ -560,6 +578,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
 
   function extractionProgressEvent(
     reportId: string,
+    mode: LabReportExtractionMode,
     stage: LabReportExtractionProgress['stage'],
     status: LabReportExtractionProgress['status'],
     completed: number,
@@ -568,6 +587,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   ): void {
     publishExtractionProgress({
       reportId,
+      mode,
       stage,
       status,
       completed,
@@ -591,6 +611,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       'wrong-password',
       'cancelled',
       'interrupted',
+      'improve-deferred',
     ];
     return value !== null && supported.includes(value as LabReportExtractionError['reason'])
       ? (value as LabReportExtractionError['reason'])
@@ -600,15 +621,19 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   async function persistExtractionOperation(
     repo: LabRepository,
     reportId: string,
+    mode: LabReportExtractionMode,
     state: LabReportExtractionOperation['state'],
     stage: LabReportExtractionProgress['stage'],
     completed: number,
     total: number,
     error: string | null = null,
+    pipelineFingerprint: ExtractionPipelineFingerprint | null = null,
+    revision = pipelineFingerprint?.revision ?? 1,
   ): Promise<void> {
     const current = await repo.getExtractionOperation(reportId);
     await repo.upsertExtractionOperation({
       reportId,
+      mode,
       state,
       stage,
       completed,
@@ -616,7 +641,32 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       error,
       createdAt: current?.createdAt ?? now(),
       updatedAt: now(),
+      pipelineFingerprint,
+      pipelineFingerprintHash: pipelineFingerprint?.hash ?? null,
+      revision,
     });
+  }
+
+  function currentExtractionPipelineFingerprint(
+    sourceHash: string | null,
+    revision = 1,
+  ): ExtractionPipelineFingerprint {
+    return createExtractionPipelineFingerprint(
+      {
+        sourceHash,
+        ocrContractVersion: VISION_OCR_CONTRACT_VERSION,
+        rowSegmentationVersion: EXTRACTION_ROW_SEGMENTATION_VERSION,
+        parserVersion: EXTRACTION_PARSER_VERSION,
+        semanticAdapterVersion: semanticMapper?.adapterVersion ?? null,
+        semanticSchemaVersion: semanticMapper?.schemaVersion ?? null,
+        semanticChunkVersion: semanticMapper?.provenance?.chunkVersion ?? null,
+        semanticPromptVersion: semanticMapper?.provenance?.promptVersion ?? null,
+        modelVersion: semanticMapper?.provenance?.modelVersion ?? null,
+        runtimeVersion: semanticMapper?.provenance?.runtimeVersion ?? null,
+        catalogueVersion: semanticMapper?.provenance?.catalogueVersion ?? CATALOGUE_VERSION,
+      },
+      revision,
+    );
   }
 
   function persistedPath(path: string): string {
@@ -1674,6 +1724,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     const durableError = progressError(durable.error, durable.state);
     const progress: LabReportExtractionProgress = {
       reportId: id,
+      mode: durable.mode ?? 'start',
       stage: durable.stage,
       status:
         durable.state === 'active'
@@ -1894,11 +1945,160 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }));
   }
 
+  type GeometryExtractionRows = {
+    readonly rows: readonly ExtractionDraftRow[];
+    readonly semanticCandidateRowIds: ReadonlySet<string>;
+  };
+
+  /**
+   * Converts native v3 observations into exact source-cell observations before deterministic
+   * parsing. The synthetic cell keeps the parent's complete text and UTF-16 offsets, so a model
+   * can select a source cell without ever authoring or normalizing a value.
+   */
+  function geometryCellObservation(
+    cell: GeometryRow['cells'][number],
+    parent: VisionTextObservation,
+  ): VisionTextObservation {
+    const parentStructure = parent.structure;
+    return {
+      id: cell.id,
+      text: cell.text,
+      alternatives: parent.alternatives,
+      boundingBox: cell.boundingBox,
+      pageIndex: cell.pageIndex,
+      orientation: parent.orientation,
+      structure:
+        parentStructure?.kind === 'table-cell'
+          ? {
+              kind: 'table-cell',
+              tableId: parentStructure.tableId,
+              rowIndex: parentStructure.rowIndex,
+              columnIndex: parentStructure.columnIndex,
+            }
+          : {
+              kind: 'text',
+              tableId: parentStructure?.tableId ?? null,
+              rowIndex: null,
+              columnIndex: cell.columnIndex,
+            },
+      sourceSpan: {
+        id: `${cell.id}:source`,
+        parentObservationId: cell.parentId,
+        start: cell.sourceStart,
+        end: cell.sourceEnd,
+        text: cell.text,
+        boundingBox: cell.boundingBox,
+        parentText: parent.text,
+      } satisfies VisionSourceSpan,
+      recognition: parent.recognition,
+    };
+  }
+
+  function geometryRowsForExtraction(
+    observations: readonly VisionTextObservation[],
+    options: {
+      readonly locale: string;
+      readonly collectionDate: LabDateState;
+      readonly collectionDateDefaulted: boolean;
+      readonly collectionDateContexts: readonly ExtractionDateContext[];
+      readonly aliases: readonly ExtractionAliasEntry[];
+      readonly artifact: LabSourceArtifact;
+    },
+  ): GeometryExtractionRows {
+    const sourceById = new Map(observations.map((observation) => [observation.id, observation]));
+    const specimenByObservationId = new Map<string, SpecimenType>();
+    for (const group of specimenContextGroups(observations)) {
+      for (const observation of group.observations)
+        specimenByObservationId.set(observation.id, group.specimenType);
+    }
+    const dateKeyFor = (observation: VisionTextObservation): string => {
+      const nearest = options.collectionDateContexts
+        .filter((context) => context.pageIndex === observation.pageIndex)
+        .sort(
+          (left, right) =>
+            Math.abs(left.centerY - observation.boundingBox.y) -
+            Math.abs(right.centerY - observation.boundingBox.y),
+        )[0];
+      if (nearest === undefined) return options.collectionDateDefaulted ? 'defaulted' : 'unscoped';
+      return `${nearest.pageIndex}:${nearest.observationId}:${nearest.collectionDate.kind === 'known' ? nearest.collectionDate.value : 'missing'}`;
+    };
+    const lattice = reconstructGeometryLattice(
+      observations.map((observation): GeometrySourceObservation => {
+        const tableId = observation.structure?.tableId ?? null;
+        return {
+          id: observation.id,
+          text: observation.text,
+          boundingBox: observation.boundingBox,
+          pageIndex: observation.pageIndex,
+          ...(observation.orientation === undefined
+            ? {}
+            : { orientation: observation.orientation }),
+          ...(observation.structure === undefined ? {} : { structure: observation.structure }),
+          ...(observation.spans === undefined ? {} : { spans: observation.spans }),
+          context: {
+            tableId,
+            sectionId:
+              tableId === null
+                ? `page:${observation.pageIndex}:loose`
+                : `${observation.pageIndex}:table:${tableId}`,
+            specimenKey: specimenByObservationId.get(observation.id) ?? 'unknown',
+            collectionDateKey: dateKeyFor(observation),
+          },
+        };
+      }),
+    );
+    const rows: ExtractionDraftRow[] = [];
+    const semanticCandidateRowIds = new Set<string>();
+    for (const physicalRow of lattice.rows) {
+      const rowObservations =
+        physicalRow.cells.length === 0
+          ? physicalRow.sourceObservationIds.flatMap((id) => {
+              const source = sourceById.get(id);
+              return source === undefined ? [] : [source];
+            })
+          : physicalRow.cells.flatMap((cell) => {
+              const parent = sourceById.get(cell.sourceObservationId);
+              return parent === undefined ? [] : [geometryCellObservation(cell, parent)];
+            });
+      if (rowObservations.length === 0) continue;
+      const specimenType =
+        specimenTypeFromText(rowObservations.map((item) => item.text).join(' ')) ?? 'unknown';
+      const parsedRows = groupObservationsIntoRows(rowObservations, {
+        locale: options.locale,
+        collectionDate: options.collectionDate,
+        collectionDateDefaulted: options.collectionDateDefaulted,
+        collectionDateContexts: options.collectionDateContexts,
+        specimenType,
+        aliases: options.aliases,
+        artifact: options.artifact,
+      });
+      const candidates = enumerateGeometryFieldCandidates(physicalRow);
+      for (const parsedRow of parsedRows) {
+        rows.push(parsedRow);
+        if (candidates.requiresReview) semanticCandidateRowIds.add(parsedRow.id);
+      }
+    }
+    rows.sort((left, right) => {
+      const leftSource = left.source.observations?.[0];
+      const rightSource = right.source.observations?.[0];
+      return (
+        (leftSource?.pageIndex ?? 0) - (rightSource?.pageIndex ?? 0) ||
+        (leftSource?.boundingBox.y ?? 0) - (rightSource?.boundingBox.y ?? 0) ||
+        (leftSource?.boundingBox.x ?? 0) - (rightSource?.boundingBox.x ?? 0)
+      );
+    });
+    return {
+      rows: rows.map((row, order) => ({ ...row, order })),
+      semanticCandidateRowIds,
+    };
+  }
+
   async function applySemanticMappings(
     rows: readonly ExtractionDraftRow[],
     observations: readonly VisionTextObservation[],
     onProgress?: (completed: number, total: number) => void,
     cancellation?: ExtractionSemanticCancellation,
+    semanticCandidateRowIds?: ReadonlySet<string>,
   ): Promise<readonly ExtractionDraftRow[]> {
     if (semanticMapper === undefined) {
       onProgress?.(0, 0);
@@ -1906,8 +2106,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }
     // Deterministically complete rows do not benefit from semantic mapping. Keep them out of the
     // request entirely; unresolved, ambiguous, and unsupported rows remain eligible for refinement.
-    const candidateRowsForMapping = rows.filter(
-      (row) => row.proposedBiomarkerId === null || row.reviewReasons.length > 0,
+    const candidateRowsForMapping = rows.filter((row) =>
+      semanticCandidateRowIds === undefined
+        ? row.proposedBiomarkerId === null || row.reviewReasons.length > 0
+        : semanticCandidateRowIds.has(row.id),
     );
     if (candidateRowsForMapping.length === 0) {
       onProgress?.(0, 0);
@@ -1920,6 +2122,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     );
     const rowGroups = new Map<string, ExtractionDraftRow[]>();
     const allRowSourceIds = new Set(rows.flatMap((row) => row.source.observationIds));
+    const allRowParentIds = new Set(
+      rows.flatMap((row) =>
+        (row.source.observations ?? []).flatMap((observation) => {
+          const parentId = observation.sourceSpan?.parentObservationId;
+          return parentId === undefined ? [] : [parentId];
+        }),
+      ),
+    );
     for (const row of candidateRowsForMapping) {
       const first = row.source.observations?.[0];
       const table = first?.structure?.tableId ?? 'page';
@@ -1934,7 +2144,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }[] = [];
     // The production adapter advertises the compact-contract bound. Legacy test/provider seams
     // without an explicit bound retain their historical row limit until they migrate to v2.
-    const maxRowsPerChunk = Math.max(1, Math.floor(semanticMapper.maxRowsPerChunk ?? 12));
+    const maxRowsPerChunk = Math.max(
+      1,
+      Math.min(
+        semanticMapper.schemaVersion === 'alyte.semantic-mapper.v2' ? 2 : Number.MAX_SAFE_INTEGER,
+        Math.floor(semanticMapper.maxRowsPerChunk ?? 12),
+      ),
+    );
     const maxObservationsPerChunk = Math.max(
       1,
       Math.floor(semanticMapper.maxObservationsPerChunk ?? 48),
@@ -1943,10 +2159,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       rowChunk: readonly ExtractionDraftRow[],
     ): readonly ExtractionSemanticCandidateRow[] =>
       rowChunk.flatMap((row): ExtractionSemanticCandidateRow[] => {
-        const rowObservations = row.source.observationIds.flatMap((id) => {
-          const observation = observationById.get(id);
-          return observation === undefined ? [] : [observation];
-        });
+        const rowObservations =
+          row.source.observations === undefined
+            ? row.source.observationIds.flatMap((id) => {
+                const observation = observationById.get(id);
+                return observation === undefined ? [] : [observation];
+              })
+            : [...row.source.observations];
         return rowObservations.length === row.source.observationIds.length
           ? [
               {
@@ -1964,7 +2183,11 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const anchorTableId = anchor?.structure?.tableId ?? null;
       return observations.filter((observation) => {
         const structure = observation.structure;
-        if (allRowSourceIds.has(observation.id) || observation.pageIndex !== anchor?.pageIndex)
+        if (
+          allRowSourceIds.has(observation.id) ||
+          allRowParentIds.has(observation.id) ||
+          observation.pageIndex !== anchor?.pageIndex
+        )
           return false;
         if (structure?.kind === 'table-cell' && structure.tableId === anchorTableId) return true;
         const specimenHeading = specimenTypeFromText(observation.text) !== null;
@@ -1978,7 +2201,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       // their pre-v2 test contract and do not serialize this wire format.
       if (
         semanticMapper.maxRowsPerChunk === undefined ||
-        semanticMapper.schemaVersion !== 'alyte.semantic-mapper.v2'
+        semanticMapper.schemaVersion !== 'alyte.semantic-mapper.v2' ||
+        semanticMapper.adapterVersion !== 'alyte.gemma4-e2b.semantic-mapper.v1'
       )
         return true;
       const candidateRows = candidateRowsFor(rowChunk);
@@ -2179,9 +2403,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     });
   }
 
-  async function startExtraction(
+  async function runExtraction(
     id: string,
     passwordRequest?: PasswordRequest,
+    mode: LabReportExtractionMode = 'start',
   ): Promise<ExtractionDraft> {
     const previousOperation = extractionOperations.get(id);
     if (previousOperation !== undefined) cancelExtractionOperation(previousOperation);
@@ -2195,6 +2420,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       let password = '';
       let createdDraft: ExtractionDraft | null = null;
       let activeRepo: LabRepository | null = null;
+      let operationPipelineFingerprint: ExtractionPipelineFingerprint | null = null;
+      let extractionRevision = 1;
       const isCancelled = () =>
         extractionOperations.get(id) !== operationToken || operationToken.cancelled;
       const cancellation: ExtractionSemanticCancellation = {
@@ -2217,9 +2444,47 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         if (report.importState !== 'imported' || report.originalPath === null) {
           throw new Error('Only an imported Lab Report can be extracted');
         }
-        await persistExtractionOperation(repo, id, 'active', 'import', 0, 1);
+        const existingDraft = await repo.getExtractionDraftForReport(
+          id,
+          extractionAliases,
+          currentExtractionPipelineFingerprint(report.sourceHash),
+        );
+        // Starting extraction is intentionally idempotent. Returning the existing draft before
+        // touching durable progress avoids a fake OCR/model pass and makes cached work explicit.
+        if (mode === 'start' && existingDraft !== null && existingDraft.state !== 'failed') {
+          return existingDraft;
+        }
+        if (mode === 'reprocess') {
+          if (
+            existingDraft === null ||
+            (existingDraft.state !== 'draft' && existingDraft.state !== 'confirmed')
+          ) {
+            throw new LabReportExtractionError(
+              'persistence',
+              'Only an existing Extraction Draft can be reprocessed',
+            );
+          }
+        }
+        extractionRevision = mode === 'reprocess' ? (existingDraft?.revision ?? 0) + 1 : 1;
+        const pipelineFingerprint = currentExtractionPipelineFingerprint(
+          report.sourceHash,
+          extractionRevision,
+        );
+        operationPipelineFingerprint = pipelineFingerprint;
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'import',
+          0,
+          1,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-        extractionProgressEvent(id, 'import', 'complete', 1, 1);
+        extractionProgressEvent(id, mode, 'import', 'complete', 1, 1);
         if ((await verifySource(id)) !== 'verified') {
           throw new LabReportExtractionError(
             'original-source',
@@ -2227,15 +2492,6 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           );
         }
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-        const existingDraft = await repo.getExtractionDraftForReport(id, extractionAliases);
-        if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-        if (existingDraft !== null && existingDraft.state !== 'failed') {
-          await persistExtractionOperation(repo, id, 'complete', 'review', 1, 1);
-          extractionProgressEvent(id, 'review', 'complete', 1, 1);
-          if (isCancelled())
-            throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-          return existingDraft;
-        }
         if (existingDraft?.state === 'failed') {
           // v11 drafts have no trustworthy artifact identity. They are explicitly invalidated by
           // migration and are removed only when a user requests regeneration.
@@ -2306,8 +2562,19 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         if (pages.length === 0) {
           throw new LabReportExtractionError('recognition', 'The report has no readable pages');
         }
-        await persistExtractionOperation(repo, id, 'active', 'ocr', 0, pages.length);
-        extractionProgressEvent(id, 'ocr', 'active', 0, pages.length);
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'ocr',
+          0,
+          pages.length,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'ocr', 'active', 0, pages.length);
         const results: VisionOCRResult[] = [];
         for (const [pageNumber, page] of pages.entries()) {
           if (isCancelled())
@@ -2343,11 +2610,33 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           }
           if (isCancelled())
             throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-          await persistExtractionOperation(repo, id, 'active', 'ocr', pageNumber, pages.length);
-          extractionProgressEvent(id, 'ocr', 'active', pageNumber + 1, pages.length);
+          await persistExtractionOperation(
+            repo,
+            id,
+            mode,
+            'active',
+            'ocr',
+            pageNumber,
+            pages.length,
+            null,
+            pipelineFingerprint,
+            extractionRevision,
+          );
+          extractionProgressEvent(id, mode, 'ocr', 'active', pageNumber + 1, pages.length);
         }
-        await persistExtractionOperation(repo, id, 'active', 'ocr', pages.length, pages.length);
-        extractionProgressEvent(id, 'ocr', 'complete', pages.length, pages.length);
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'ocr',
+          pages.length,
+          pages.length,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'ocr', 'complete', pages.length, pages.length);
 
         const dateContext = dateContextFromOCR(results);
         // A report with no collection-date context gets one captured local-day fallback. The
@@ -2370,48 +2659,98 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           id: null,
           hash: report.sourceHash,
         };
-        const deterministicRows = specimenContextGroups(observations)
-          .flatMap(({ observations: contextObservations, specimenType }) =>
-            groupObservationsIntoRows(contextObservations, {
-              locale: Intl.DateTimeFormat().resolvedOptions().locale,
+        const locale = Intl.DateTimeFormat().resolvedOptions().locale;
+        const geometryExtraction = results.some(
+          (result) => result.contractVersion === VISION_OCR_CONTRACT_VERSION,
+        )
+          ? geometryRowsForExtraction(observations, {
+              locale,
               collectionDate,
               collectionDateDefaulted,
               collectionDateContexts: dateContext.contexts,
-              specimenType,
               aliases: extractionAliases,
               artifact: sourceArtifact,
-            }),
-          )
-          .sort((left, right) => {
-            const leftSource = left.source.observations?.[0];
-            const rightSource = right.source.observations?.[0];
-            return (
-              (leftSource?.pageIndex ?? 0) - (rightSource?.pageIndex ?? 0) ||
-              (leftSource?.boundingBox.y ?? 0) - (rightSource?.boundingBox.y ?? 0) ||
-              (leftSource?.boundingBox.x ?? 0) - (rightSource?.boundingBox.x ?? 0)
-            );
-          })
-          .map((row, order) => ({ ...row, order }));
-        await persistExtractionOperation(repo, id, 'active', 'model', 0, 0);
-        extractionProgressEvent(id, 'model', 'active', 0, 0);
+            })
+          : null;
+        const deterministicRows =
+          geometryExtraction?.rows ??
+          specimenContextGroups(observations)
+            .flatMap(({ observations: contextObservations, specimenType }) =>
+              groupObservationsIntoRows(contextObservations, {
+                locale,
+                collectionDate,
+                collectionDateDefaulted,
+                collectionDateContexts: dateContext.contexts,
+                specimenType,
+                aliases: extractionAliases,
+                artifact: sourceArtifact,
+              }),
+            )
+            .sort((left, right) => {
+              const leftSource = left.source.observations?.[0];
+              const rightSource = right.source.observations?.[0];
+              return (
+                (leftSource?.pageIndex ?? 0) - (rightSource?.pageIndex ?? 0) ||
+                (leftSource?.boundingBox.y ?? 0) - (rightSource?.boundingBox.y ?? 0) ||
+                (leftSource?.boundingBox.x ?? 0) - (rightSource?.boundingBox.x ?? 0)
+              );
+            })
+            .map((row, order) => ({ ...row, order }));
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'model',
+          0,
+          0,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'model', 'active', 0, 0);
         const rows = await applySemanticMappings(
           deterministicRows,
           observations,
-          (completed, total) => extractionProgressEvent(id, 'model', 'active', completed, total),
+          (completed, total) =>
+            extractionProgressEvent(id, mode, 'model', 'active', completed, total),
           cancellation,
+          geometryExtraction?.semanticCandidateRowIds,
         );
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         const modelTotal = extractionProgress.get(id)?.total ?? 0;
-        await persistExtractionOperation(repo, id, 'active', 'model', modelTotal, modelTotal);
-        extractionProgressEvent(id, 'model', 'complete', modelTotal, modelTotal);
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'model',
+          modelTotal,
+          modelTotal,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'model', 'complete', modelTotal, modelTotal);
         if (rows.length === 0) {
           throw new LabReportExtractionError(
             'no-reviewable-measurements',
             'Local OCR found no reviewable Measurements',
           );
         }
-        await persistExtractionOperation(repo, id, 'active', 'review', 0, 1);
-        extractionProgressEvent(id, 'review', 'active', 0, 1);
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'review',
+          0,
+          1,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'review', 'active', 0, 1);
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         if ((await verifySource(id)) !== 'verified') {
           throw new LabReportExtractionError(
@@ -2419,34 +2758,85 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             'The Original Report changed and must be imported again',
           );
         }
-        const draft = await repo.createExtractionDraft({
+        const draftInput = {
           reportId: id,
           collectionDate,
           rows,
           sourceArtifact,
-        });
+          pipelineFingerprint,
+          revision: extractionRevision,
+        } as const;
+        const draft =
+          mode === 'reprocess' && existingDraft?.state === 'draft'
+            ? await repo.replaceExtractionDraft({
+                previousDraftId: existingDraft.id,
+                ...draftInput,
+                revision: extractionRevision,
+              })
+            : await repo.createExtractionDraft(draftInput);
         createdDraft = draft;
         // The source can change while SQLite is writing a large draft. Reverify immediately
-        // before exposing it; a stale result is never allowed to survive this race.
+        // after the atomic commit as well as immediately before it. A replaced open draft is
+        // restored from the exact in-memory snapshot if this post-write check fails.
         if ((await verifySource(id)) !== 'verified') {
-          await repo.deleteExtractionDraft(draft.id);
+          if (mode === 'reprocess' && existingDraft?.state === 'draft') {
+            await repo.replaceExtractionDraft({
+              previousDraftId: draft.id,
+              id: existingDraft.id,
+              reportId: existingDraft.reportId,
+              collectionDate: existingDraft.collectionDate,
+              rows: existingDraft.rows,
+              sourceArtifact: existingDraft.sourceArtifact ?? null,
+              pipelineFingerprint: existingDraft.pipelineFingerprint,
+              revision: existingDraft.revision,
+              ocrContractVersion: existingDraft.ocrContractVersion,
+              parserVersion: existingDraft.parserVersion,
+              preserveRowIds: true,
+            });
+          } else {
+            await repo.deleteExtractionDraft(draft.id);
+          }
           createdDraft = null;
           throw new LabReportExtractionError(
             'original-source',
             'The Original Report changed and must be imported again',
           );
         }
-        if (isCancelled()) {
+        // Cancellation at the write seam is a committed success. This avoids reporting failure
+        // while exposing a replacement or deleting the exact prior draft after atomic replace.
+        if (mode === 'start' && isCancelled()) {
           await repo.deleteExtractionDraft(draft.id);
           createdDraft = null;
           throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         }
-        await persistExtractionOperation(repo, id, 'complete', 'review', 1, 1);
-        extractionProgressEvent(id, 'review', 'complete', 1, 1);
-        if (isCancelled()) {
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'complete',
+          'review',
+          1,
+          1,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'review', 'complete', 1, 1);
+        if (isCancelled() && mode !== 'reprocess') {
           await repo.deleteExtractionDraft(draft.id);
           createdDraft = null;
-          await persistExtractionOperation(repo, id, 'cancelled', 'review', 1, 1, 'cancelled');
+          await persistExtractionOperation(
+            repo,
+            id,
+            mode,
+            'cancelled',
+            'review',
+            1,
+            1,
+            'cancelled',
+            pipelineFingerprint,
+            extractionRevision,
+          );
           throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         }
         return draft;
@@ -2463,7 +2853,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
                 { cause: error },
               );
         const cancelled = isCancelled() || extractionError.reason === 'cancelled';
-        if (cancelled && createdDraft !== null) {
+        if (cancelled && createdDraft !== null && mode !== 'reprocess') {
           try {
             await activeRepo?.deleteExtractionDraft(createdDraft.id);
           } catch {
@@ -2477,11 +2867,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             await persistExtractionOperation(
               activeRepo,
               id,
+              mode,
               cancelled ? 'cancelled' : 'failed',
               extractionProgress.get(id)?.stage ?? 'import',
               extractionProgress.get(id)?.completed ?? 0,
               extractionProgress.get(id)?.total ?? 0,
               terminalReason,
+              operationPipelineFingerprint,
+              extractionRevision,
             );
         } catch {
           // A terminal UI state is still safe if the database is unavailable; relaunch will
@@ -2489,6 +2882,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         }
         extractionProgressEvent(
           id,
+          mode,
           extractionProgress.get(id)?.stage ?? 'import',
           cancelled ? 'cancelled' : 'failed',
           extractionProgress.get(id)?.completed ?? 0,
@@ -2507,9 +2901,145 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     });
   }
 
+  async function startExtraction(
+    id: string,
+    passwordRequest?: PasswordRequest,
+  ): Promise<ExtractionDraft> {
+    return runExtraction(id, passwordRequest, 'start');
+  }
+
+  async function reprocessExtraction(
+    id: string,
+    passwordRequest?: PasswordRequest,
+  ): Promise<ExtractionDraft> {
+    return runExtraction(id, passwordRequest, 'reprocess');
+  }
+
+  async function improveExtraction(id: string): Promise<ExtractionDraft> {
+    const previousOperation = extractionOperations.get(id);
+    if (previousOperation !== undefined) cancelExtractionOperation(previousOperation);
+    const operationToken: ExtractionOperationToken = {
+      generation: ++nextExtractionOperation,
+      cancelled: false,
+      cancellationListeners: new Set(),
+    };
+    extractionOperations.set(id, operationToken);
+    return serialized(async () => {
+      const isCancelled = () =>
+        extractionOperations.get(id) !== operationToken || operationToken.cancelled;
+      const cancellation: ExtractionSemanticCancellation = {
+        isCancelled,
+        subscribe: (listener) => {
+          if (isCancelled()) {
+            listener();
+            return () => undefined;
+          }
+          operationToken.cancellationListeners.add(listener);
+          return () => operationToken.cancellationListeners.delete(listener);
+        },
+      };
+      try {
+        await ensureInitialized();
+        const repo = await repository();
+        const report = await repo.getReport(id);
+        if (report === null) throw new Error('Lab Report was not found');
+        const draft = await repo.getExtractionDraftForReport(
+          id,
+          extractionAliases,
+          currentExtractionPipelineFingerprint(report.sourceHash),
+        );
+        if (draft === null || draft.state !== 'draft')
+          throw new LabReportExtractionError('persistence', 'Only an open draft can be improved');
+        const sourceArtifact = draft.sourceArtifact ?? null;
+        if (
+          sourceArtifact === null ||
+          sourceArtifact.kind !== 'original' ||
+          sourceArtifact.hash !== report.sourceHash ||
+          (await verifySource(id)) !== 'verified'
+        ) {
+          throw new LabReportExtractionError(
+            'original-source',
+            'The Original Report is missing or has changed',
+          );
+        }
+        if (semanticMapper === undefined) return draft;
+        const eligibleIds = new Set(
+          draft.rows
+            .filter(
+              (row) =>
+                row.editState === 'automatic' &&
+                row.source.observations !== undefined &&
+                row.source.observations.length > 0 &&
+                (row.proposedBiomarkerId === null || row.reviewReasons.length > 0) &&
+                !row.reviewReasons.includes('incompatible-unit') &&
+                !row.reviewReasons.includes('incompatible-specimen'),
+            )
+            .map((row) => row.id),
+        );
+        if (eligibleIds.size === 0) return draft;
+        const observations = [
+          ...new Map(
+            draft.rows
+              .flatMap((row) => row.source.observations ?? [])
+              .map((observation) => [observation.id, observation] as const),
+          ).values(),
+        ];
+        const improvedRows = await applySemanticMappings(
+          draft.rows,
+          observations,
+          undefined,
+          cancellation,
+          eligibleIds,
+        );
+        if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Improvement cancelled');
+        if ((await verifySource(id)) !== 'verified')
+          throw new LabReportExtractionError('original-source', 'The Original Report changed');
+        const changedRows = improvedRows.filter((row, index) => {
+          const before = draft.rows[index];
+          return before !== undefined && JSON.stringify(before) !== JSON.stringify(row);
+        });
+        if (changedRows.length === 0) return draft;
+        const base = draft.pipelineFingerprint;
+        const fingerprint = createExtractionPipelineFingerprint(
+          {
+            sourceHash: report.sourceHash,
+            ocrContractVersion: base?.ocrContractVersion ?? null,
+            rowSegmentationVersion: base?.rowSegmentationVersion ?? null,
+            parserVersion: base?.parserVersion ?? null,
+            semanticAdapterVersion: semanticMapper.adapterVersion,
+            semanticSchemaVersion: semanticMapper.schemaVersion,
+            semanticChunkVersion: semanticMapper.provenance?.chunkVersion ?? null,
+            semanticPromptVersion: semanticMapper.provenance?.promptVersion ?? null,
+            modelVersion: semanticMapper.provenance?.modelVersion ?? null,
+            runtimeVersion: semanticMapper.provenance?.runtimeVersion ?? null,
+            catalogueVersion: semanticMapper.provenance?.catalogueVersion ?? CATALOGUE_VERSION,
+          },
+          draft.revision,
+        );
+        return await repo.updateExtractionDraftRows({
+          draftId: draft.id,
+          expectedRevision: draft.revision,
+          rows: changedRows,
+          pipelineFingerprint: fingerprint,
+        });
+      } finally {
+        operationToken.cancellationListeners.clear();
+        if (extractionOperations.get(id) === operationToken) extractionOperations.delete(id);
+      }
+    });
+  }
+
   async function getExtractionDraft(id: string): Promise<ExtractionDraft | null> {
     await ensureInitialized();
-    return (await repository()).getExtractionDraft(id, extractionAliases);
+    const repo = await repository();
+    const draft = await repo.getExtractionDraft(id, extractionAliases);
+    if (draft === null) return null;
+    const report = await repo.getReport(draft.reportId);
+    return repo.getExtractionDraft(
+      id,
+      extractionAliases,
+      currentExtractionPipelineFingerprint(report?.sourceHash ?? null, draft.revision),
+    );
   }
 
   async function countOpenExtractionDrafts(): Promise<number> {
@@ -2598,6 +3128,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     deleteSanitizedReport,
     deleteReport,
     startExtraction,
+    reprocessExtraction,
+    improveExtraction,
     listOpenExtractionDrafts,
     countOpenExtractionDrafts,
     getExtractionDraft,
