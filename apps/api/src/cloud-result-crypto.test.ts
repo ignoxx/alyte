@@ -3,67 +3,159 @@ import { generateKeyPairSync } from 'node:crypto';
 import { describe, it } from 'node:test';
 import vector from '../../../packages/contracts/test-vectors/cloud-result-envelope-v1.json' with { type: 'json' };
 import {
+  CLOUD_RESULT_ENVELOPE_AUTHENTICATION_TAG_BYTES,
+  CLOUD_RESULT_ENVELOPE_BINARY_ENCODING,
+  CLOUD_RESULT_ENVELOPE_CIPHER,
+  CLOUD_RESULT_ENVELOPE_EPHEMERAL_PUBLIC_KEY_BYTES,
+  CLOUD_RESULT_ENVELOPE_KDF,
+  CLOUD_RESULT_ENVELOPE_KEY_AGREEMENT,
   CLOUD_RESULT_ENVELOPE_MAX_CIPHERTEXT_BYTES,
+  CLOUD_RESULT_ENVELOPE_NONCE_BYTES,
+  CLOUD_RESULT_ENVELOPE_SALT_BYTES,
+  CLOUD_RESULT_ENVELOPE_SCHEMA_VERSION,
   decodeCloudResultEnvelope,
+  decodeCloudResultEnvelopeJson,
   serializeCloudResultEnvelope,
-  type P256PublicKeyJwk,
+  type CloudResultEnvelopeContext,
 } from '@alyte/contracts';
 import {
   CloudResultCryptoFailure,
   decryptCloudResultForReference,
   encryptCloudResult,
   encryptCloudResultForTesting,
+  type CloudResultEncryptionInput,
 } from './cloud-result-crypto.js';
 
-const devicePrivateKeyJwk = {
-  kty: 'EC',
-  x: 'JuJMOEwg-R94trj8N3pdSjQs4hj2NjOyZmM7NnbeAVM',
-  y: 'iIE8qtvmlnTSYss7oBFIeirR-PC4U7Fh_QrepUrrB7Y',
-  crv: 'P-256',
-  d: 'iVc6XRGEi2REfPKFkBs4qaKABCgryiRJnjkteW6nm3o',
-} as const;
+function decodeVectorBase64url(value: string, expectedBytes?: number): Buffer {
+  assert.match(value, /^[A-Za-z0-9_-]+$/);
+  assert.doesNotMatch(value, /=/);
+  assert.notEqual(value.length % 4, 1);
+  const decoded = Buffer.from(value, 'base64url');
+  assert.equal(decoded.toString('base64url'), value);
+  if (expectedBytes !== undefined) assert.equal(decoded.length, expectedBytes);
+  return decoded;
+}
 
-const devicePublicKeyJwk: P256PublicKeyJwk = {
-  kty: 'EC',
-  x: devicePrivateKeyJwk.x,
-  y: devicePrivateKeyJwk.y,
-  crv: devicePrivateKeyJwk.crv,
-};
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
+const vectorPlaintext = decodeVectorBase64url(vector.plaintextBase64url);
 const vectorInput = {
-  requestId: 'vector.request-118',
-  contractVersion: '2026-08-28',
-  resultSchemaVersion: 'alyte.synthetic.result.v1',
-  handlerVersion: 1,
-  devicePublicKeyJwk,
-  plaintext: Buffer.from('synthetic-result-118'),
+  ...vector.context,
+  devicePublicKeyJwk: vector.devicePublicKeyJwk,
+  plaintext: vectorPlaintext,
 } as const;
-
 const vectorMaterial = {
-  ephemeralPrivateKeyJwk: {
-    kty: 'EC',
-    x: 'er-JGYPuzBOTpjMfWkp7jzgsFIFzkK6Zl7zd-bzbQRY',
-    y: '0sIZslr9wom8qjn59gLCgfCU31hfnMRB-RWDrBEkb34',
-    crv: 'P-256',
-    d: 'O29RBgx_g_vr8iGhhquFNrmaSn2CIzL6_7v69qM2bdk',
-  },
-  salt: Buffer.from('00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff', 'hex'),
-  nonce: Buffer.from('0102030405060708090a0b0c', 'hex'),
+  ephemeralPrivateKeyJwk: vector.ephemeralPrivateKeyJwk,
+  salt: decodeVectorBase64url(vector.salt, vector.binaryFieldLengths.salt.bytes),
+  nonce: decodeVectorBase64url(vector.nonce, vector.binaryFieldLengths.nonce.bytes),
 } as const;
-
+const vectorPrivateKeyJwk = vector.devicePrivateKeyJwk;
+const vectorEnvelope = decodeCloudResultEnvelopeJson(vector.serializedEnvelope);
 const VECTOR_SERIALIZED = vector.serializedEnvelope;
 
-function expectCryptoFailure(action: () => unknown, code: CloudResultCryptoFailure['code']): void {
-  assert.throws(action, (error: unknown) => {
-    assert.ok(error instanceof CloudResultCryptoFailure);
-    assert.equal(error.code, code);
-    assert.equal(error.message, code);
-    return true;
+function assertVectorDeclarations(): void {
+  assert.equal(vector.schemaVersion, CLOUD_RESULT_ENVELOPE_SCHEMA_VERSION);
+  assert.equal(vector.encoding.binary, CLOUD_RESULT_ENVELOPE_BINARY_ENCODING);
+  assert.equal(
+    vector.encoding.jwkCoordinatesAndPrivateScalar,
+    CLOUD_RESULT_ENVELOPE_BINARY_ENCODING,
+  );
+  assert.equal(vector.encoding.plaintext, 'base64url-unpadded-utf8');
+  assert.equal(vector.encoding.serializedEnvelope, 'canonical-utf8-json');
+  assert.deepEqual(vector.binaryFieldLengths, {
+    ephemeralPublicKey: {
+      encoding: CLOUD_RESULT_ENVELOPE_BINARY_ENCODING,
+      bytes: CLOUD_RESULT_ENVELOPE_EPHEMERAL_PUBLIC_KEY_BYTES,
+    },
+    salt: {
+      encoding: CLOUD_RESULT_ENVELOPE_BINARY_ENCODING,
+      bytes: CLOUD_RESULT_ENVELOPE_SALT_BYTES,
+    },
+    nonce: {
+      encoding: CLOUD_RESULT_ENVELOPE_BINARY_ENCODING,
+      bytes: CLOUD_RESULT_ENVELOPE_NONCE_BYTES,
+    },
+    ciphertext: {
+      encoding: CLOUD_RESULT_ENVELOPE_BINARY_ENCODING,
+      minBytes: 1,
+      maxBytes: CLOUD_RESULT_ENVELOPE_MAX_CIPHERTEXT_BYTES,
+    },
+    authenticationTag: {
+      encoding: CLOUD_RESULT_ENVELOPE_BINARY_ENCODING,
+      bytes: CLOUD_RESULT_ENVELOPE_AUTHENTICATION_TAG_BYTES,
+    },
   });
+  for (const key of [vector.devicePrivateKeyJwk, vector.devicePublicKeyJwk]) {
+    assert.equal(key.kty, 'EC');
+    assert.equal(key.crv, 'P-256');
+    decodeVectorBase64url(key.x, 32);
+    decodeVectorBase64url(key.y, 32);
+  }
+  decodeVectorBase64url(vectorPrivateKeyJwk.d, 32);
+  decodeVectorBase64url(vector.ephemeralPrivateKeyJwk.x, 32);
+  decodeVectorBase64url(vector.ephemeralPrivateKeyJwk.y, 32);
+  decodeVectorBase64url(vector.ephemeralPrivateKeyJwk.d, 32);
+  const plaintextText = new TextDecoder('utf-8', { fatal: true }).decode(vectorPlaintext);
+  assert.equal(Buffer.from(plaintextText, 'utf8').toString('base64url'), vector.plaintextBase64url);
+  assert.equal(vectorEnvelope.schemaVersion, vector.schemaVersion);
+  assert.equal(vectorEnvelope.keyAgreement, CLOUD_RESULT_ENVELOPE_KEY_AGREEMENT);
+  assert.equal(vectorEnvelope.kdf, CLOUD_RESULT_ENVELOPE_KDF);
+  assert.equal(vectorEnvelope.cipher, CLOUD_RESULT_ENVELOPE_CIPHER);
+  assert.equal(vectorEnvelope.requestId, vector.context.requestId);
+  assert.equal(vectorEnvelope.contractVersion, vector.context.contractVersion);
+  assert.equal(vectorEnvelope.resultSchemaVersion, vector.context.resultSchemaVersion);
+  assert.equal(vectorEnvelope.handlerVersion, vector.context.handlerVersion);
+  decodeVectorBase64url(
+    vectorEnvelope.ephemeralPublicKey,
+    vector.binaryFieldLengths.ephemeralPublicKey.bytes,
+  );
+  decodeVectorBase64url(vectorEnvelope.salt, vector.binaryFieldLengths.salt.bytes);
+  decodeVectorBase64url(vectorEnvelope.nonce, vector.binaryFieldLengths.nonce.bytes);
+  decodeVectorBase64url(vectorEnvelope.ciphertext);
+  assert.ok(
+    Buffer.from(vectorEnvelope.ciphertext, 'base64url').length >=
+      vector.binaryFieldLengths.ciphertext.minBytes,
+  );
+  assert.ok(
+    Buffer.from(vectorEnvelope.ciphertext, 'base64url').length <=
+      vector.binaryFieldLengths.ciphertext.maxBytes,
+  );
+  decodeVectorBase64url(
+    vectorEnvelope.authenticationTag,
+    vector.binaryFieldLengths.authenticationTag.bytes,
+  );
+}
+
+function expectCryptoFailure(
+  action: () => unknown,
+  code: CloudResultCryptoFailure['code'],
+  sensitiveValues: readonly string[],
+  label: string,
+): void {
+  assert.throws(
+    action,
+    (error: unknown) => {
+      assert.ok(error instanceof CloudResultCryptoFailure);
+      assert.equal(error.code, code);
+      assert.equal(error.message, code);
+      for (const value of sensitiveValues) {
+        if (value.length > 0) assert.doesNotMatch(error.message, new RegExp(escapeRegExp(value)));
+      }
+      return true;
+    },
+    label,
+  );
+}
+
+function changeFirstBase64urlCharacter(value: string): string {
+  return `${value[0] === 'A' ? 'B' : 'A'}${value.slice(1)}`;
 }
 
 describe('cloud result crypto envelope', () => {
-  it('matches the deterministic synthetic interoperability vector and round-trips', () => {
+  it('uses the committed vector as the complete deterministic interoperability source', () => {
+    assertVectorDeclarations();
     const result = encryptCloudResultForTesting(vectorInput, vectorMaterial);
     const serialized = serializeCloudResultEnvelope(result);
     assert.equal(serialized, VECTOR_SERIALIZED);
@@ -71,14 +163,14 @@ describe('cloud result crypto envelope', () => {
       Buffer.from(
         decryptCloudResultForReference({
           envelope: decodeCloudResultEnvelope(result),
-          devicePrivateKeyJwk,
+          devicePrivateKeyJwk: vectorPrivateKeyJwk,
           context: vectorInput,
         }),
       ),
-      vectorInput.plaintext,
+      vectorPlaintext,
     );
-    assert.doesNotMatch(serialized, new RegExp(devicePrivateKeyJwk.d));
-    assert.doesNotMatch(serialized, /synthetic-result-118/);
+    assert.doesNotMatch(serialized, new RegExp(escapeRegExp(vectorPrivateKeyJwk.d)));
+    assert.doesNotMatch(serialized, new RegExp(escapeRegExp(vectorPlaintext.toString('utf8'))));
   });
 
   it('uses fresh ephemeral keys and nonces for production encryption', () => {
@@ -91,87 +183,210 @@ describe('cloud result crypto envelope', () => {
       Buffer.from(
         decryptCloudResultForReference({
           envelope: first,
-          devicePrivateKeyJwk,
+          devicePrivateKeyJwk: vectorPrivateKeyJwk,
           context: vectorInput,
         }),
       ),
-      vectorInput.plaintext,
+      vectorPlaintext,
     );
     assert.deepEqual(
       Buffer.from(
         decryptCloudResultForReference({
           envelope: second,
-          devicePrivateKeyJwk,
+          devicePrivateKeyJwk: vectorPrivateKeyJwk,
           context: vectorInput,
         }),
       ),
-      vectorInput.plaintext,
+      vectorPlaintext,
     );
   });
 
-  it('fails closed for wrong keys, context, tampering, malformed keys, and oversized plaintext', () => {
+  it('rejects the fail-closed matrix with bounded non-sensitive errors', () => {
+    assertVectorDeclarations();
     const result = encryptCloudResultForTesting(vectorInput, vectorMaterial);
     const wrongPair = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
     const wrongPrivateKeyJwk = wrongPair.privateKey.export({ format: 'jwk' });
-    expectCryptoFailure(
+    const offCurveCoordinate = Buffer.alloc(32).toString('base64url');
+    const oversizedCiphertext = Buffer.alloc(
+      CLOUD_RESULT_ENVELOPE_MAX_CIPHERTEXT_BYTES + 1,
+    ).toString('base64url');
+    const sensitiveValues = [
+      vectorPrivateKeyJwk.d,
+      vectorPlaintext.toString('utf8'),
+      result.ciphertext,
+      wrongPrivateKeyJwk.d ?? '',
+    ];
+    const decrypt =
+      (
+        envelope: unknown,
+        context: CloudResultEnvelopeContext = vectorInput,
+        devicePrivateKeyJwk: unknown = vectorPrivateKeyJwk,
+      ) =>
       () =>
-        decryptCloudResultForReference({
-          envelope: result,
-          devicePrivateKeyJwk: wrongPrivateKeyJwk,
-          context: vectorInput,
+        decryptCloudResultForReference({ envelope, devicePrivateKeyJwk, context });
+    const encrypt = (input: CloudResultEncryptionInput) => () =>
+      encryptCloudResultForTesting(input, vectorMaterial);
+    const failures: Array<{
+      name: string;
+      action: () => unknown;
+      code: CloudResultCryptoFailure['code'];
+    }> = [
+      ...(
+        [
+          ['wrong request ID', { ...vectorInput, requestId: `${vector.context.requestId}.other` }],
+          [
+            'wrong contract version',
+            { ...vectorInput, contractVersion: `${vector.context.contractVersion}.other` },
+          ],
+          [
+            'wrong result schema version',
+            { ...vectorInput, resultSchemaVersion: `${vector.context.resultSchemaVersion}.other` },
+          ],
+          [
+            'wrong handler version',
+            { ...vectorInput, handlerVersion: vector.context.handlerVersion + 1 },
+          ],
+        ] as const
+      ).map(([name, context]) => ({
+        name,
+        action: decrypt(result, context),
+        code: 'cloud_result_context_mismatch' as const,
+      })),
+      ...(
+        [
+          ['unsupported schema version', { schemaVersion: 'alyte.cloud-result-envelope.v2' }],
+          ['unsupported key agreement', { keyAgreement: 'X25519-ECDH' }],
+          ['unsupported KDF', { kdf: 'HKDF-SHA-512' }],
+          ['unsupported cipher', { cipher: 'AES-128-GCM' }],
+        ] as const
+      ).map(([name, patch]) => ({
+        name,
+        action: decrypt({ ...result, ...patch }),
+        code: 'cloud_result_envelope_invalid' as const,
+      })),
+      ...(
+        [
+          [
+            'ephemeral key noncanonical encoding',
+            { ephemeralPublicKey: `${result.ephemeralPublicKey}=` },
+          ],
+          [
+            'ephemeral key wrong length',
+            { ephemeralPublicKey: result.ephemeralPublicKey.slice(0, -1) },
+          ],
+          [
+            'ephemeral key off curve',
+            {
+              ephemeralPublicKey: Buffer.concat([
+                Buffer.from([0x04]),
+                Buffer.alloc(CLOUD_RESULT_ENVELOPE_EPHEMERAL_PUBLIC_KEY_BYTES - 1),
+              ]).toString('base64url'),
+            },
+          ],
+          ['salt invalid encoding', { salt: '!' }],
+          ['salt wrong length', { salt: result.salt.slice(0, -1) }],
+          ['nonce invalid encoding', { nonce: '!' }],
+          ['nonce wrong length', { nonce: result.nonce.slice(0, -1) }],
+          ['ciphertext invalid encoding', { ciphertext: '!' }],
+          ['ciphertext empty', { ciphertext: '' }],
+          ['ciphertext oversized', { ciphertext: oversizedCiphertext }],
+          ['authentication tag invalid encoding', { authenticationTag: '!' }],
+          [
+            'authentication tag noncanonical trailing bits',
+            { authenticationTag: `${result.authenticationTag.slice(0, -1)}B` },
+          ],
+          [
+            'authentication tag wrong length',
+            {
+              authenticationTag: result.authenticationTag.slice(0, -1),
+            },
+          ],
+        ] as const
+      ).map(([name, patch]) => ({
+        name,
+        action: decrypt({ ...result, ...patch }),
+        code: 'cloud_result_envelope_invalid' as const,
+      })),
+      {
+        name: 'tampered ciphertext',
+        action: decrypt({
+          ...result,
+          ciphertext: changeFirstBase64urlCharacter(result.ciphertext),
         }),
-      'cloud_result_decryption_failed',
-    );
-    expectCryptoFailure(
-      () =>
-        decryptCloudResultForReference({
-          envelope: result,
-          devicePrivateKeyJwk,
-          context: { ...vectorInput, requestId: 'different-request' },
+        code: 'cloud_result_decryption_failed',
+      },
+      {
+        name: 'tampered authentication tag',
+        action: decrypt({
+          ...result,
+          authenticationTag: changeFirstBase64urlCharacter(result.authenticationTag),
         }),
-      'cloud_result_context_mismatch',
-    );
-    expectCryptoFailure(
-      () =>
-        decryptCloudResultForReference({
-          envelope: { ...result, ciphertext: `${result.ciphertext.slice(0, -1)}A` },
-          devicePrivateKeyJwk,
-          context: vectorInput,
+        code: 'cloud_result_decryption_failed',
+      },
+      {
+        name: 'wrong device key',
+        action: decrypt(result, vectorInput, wrongPrivateKeyJwk),
+        code: 'cloud_result_decryption_failed',
+      },
+      {
+        name: 'alternate device curve',
+        action: encrypt({
+          ...vectorInput,
+          devicePublicKeyJwk: { ...vectorInput.devicePublicKeyJwk, crv: 'P-384' },
         }),
-      'cloud_result_decryption_failed',
-    );
-    expectCryptoFailure(
-      () =>
-        encryptCloudResultForTesting(
-          {
-            ...vectorInput,
-            devicePublicKeyJwk: { ...devicePublicKeyJwk, d: devicePrivateKeyJwk.d },
+        code: 'cloud_result_key_invalid',
+      },
+      {
+        name: 'off-curve device coordinates',
+        action: encrypt({
+          ...vectorInput,
+          devicePublicKeyJwk: {
+            ...vectorInput.devicePublicKeyJwk,
+            x: offCurveCoordinate,
+            y: offCurveCoordinate,
           },
-          vectorMaterial,
-        ),
-      'cloud_result_key_invalid',
-    );
-    expectCryptoFailure(
-      () =>
-        encryptCloudResultForTesting(
-          {
-            ...vectorInput,
-            devicePublicKeyJwk: { ...devicePublicKeyJwk, x: 'not-base64url' },
+        }),
+        code: 'cloud_result_key_invalid',
+      },
+      {
+        name: 'malformed device coordinate encoding',
+        action: encrypt({
+          ...vectorInput,
+          devicePublicKeyJwk: { ...vectorInput.devicePublicKeyJwk, x: '!' },
+        }),
+        code: 'cloud_result_key_invalid',
+      },
+      {
+        name: 'wrong-length device coordinate',
+        action: encrypt({
+          ...vectorInput,
+          devicePublicKeyJwk: {
+            ...vectorInput.devicePublicKeyJwk,
+            x: vectorInput.devicePublicKeyJwk.x.slice(0, -1),
           },
-          vectorMaterial,
-        ),
-      'cloud_result_key_invalid',
-    );
-    expectCryptoFailure(
-      () =>
-        encryptCloudResultForTesting(
-          {
-            ...vectorInput,
-            plaintext: new Uint8Array(CLOUD_RESULT_ENVELOPE_MAX_CIPHERTEXT_BYTES + 1),
-          },
-          vectorMaterial,
-        ),
-      'cloud_result_plaintext_too_large',
-    );
+        }),
+        code: 'cloud_result_key_invalid',
+      },
+      {
+        name: 'private member injection',
+        action: encrypt({
+          ...vectorInput,
+          devicePublicKeyJwk: { ...vectorInput.devicePublicKeyJwk, d: vectorPrivateKeyJwk.d },
+        }),
+        code: 'cloud_result_key_invalid',
+      },
+      {
+        name: 'oversized plaintext',
+        action: encrypt({
+          ...vectorInput,
+          plaintext: new Uint8Array(CLOUD_RESULT_ENVELOPE_MAX_CIPHERTEXT_BYTES + 1),
+        }),
+        code: 'cloud_result_plaintext_too_large',
+      },
+    ];
+
+    for (const failure of failures) {
+      expectCryptoFailure(failure.action, failure.code, sensitiveValues, failure.name);
+    }
   });
 });

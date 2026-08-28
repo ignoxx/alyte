@@ -1,5 +1,22 @@
 {
   "schemaVersion": "alyte.cloud-result-envelope.v1",
+  "encoding": {
+    "binary": "base64url-unpadded-canonical",
+    "jwkCoordinatesAndPrivateScalar": "base64url-unpadded-canonical",
+    "plaintext": "base64url-unpadded-utf8",
+    "serializedEnvelope": "canonical-utf8-json"
+  },
+  "binaryFieldLengths": {
+    "ephemeralPublicKey": { "encoding": "base64url-unpadded-canonical", "bytes": 65 },
+    "salt": { "encoding": "base64url-unpadded-canonical", "bytes": 32 },
+    "nonce": { "encoding": "base64url-unpadded-canonical", "bytes": 12 },
+    "ciphertext": {
+      "encoding": "base64url-unpadded-canonical",
+      "minBytes": 1,
+      "maxBytes": 262144
+    },
+    "authenticationTag": { "encoding": "base64url-unpadded-canonical", "bytes": 16 }
+  },
   "context": {
     "requestId": "vector.request-118",
     "contractVersion": "2026-08-28",
@@ -28,6 +45,6 @@
   },
   "salt": "ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8",
   "nonce": "AQIDBAUGBwgJCgsM",
-  "plaintext": "c3ludGhldGljLXJlc3VsdC0xMTg=",
+  "plaintextBase64url": "c3ludGhldGljLXJlc3VsdC0xMTg",
   "serializedEnvelope": "{\"schemaVersion\":\"alyte.cloud-result-envelope.v1\",\"keyAgreement\":\"P-256-ECDH\",\"kdf\":\"HKDF-SHA-256\",\"cipher\":\"AES-256-GCM\",\"requestId\":\"vector.request-118\",\"contractVersion\":\"2026-08-28\",\"resultSchemaVersion\":\"alyte.synthetic.result.v1\",\"handlerVersion\":1,\"ephemeralPublicKey\":\"BHq_iRmD7swTk6YzH1pKe484LBSBc5CumZe83fm820EW0sIZslr9wom8qjn59gLCgfCU31hfnMRB-RWDrBEkb34\",\"salt\":\"ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8\",\"nonce\":\"AQIDBAUGBwgJCgsM\",\"ciphertext\":\"2HfsdZk0CfAPhPBW4vYK4_-16-s\",\"authenticationTag\":\"wXa1wo4fbbTL5s42UB3FEg\"}"
 }

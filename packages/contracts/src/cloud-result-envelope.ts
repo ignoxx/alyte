@@ -3,9 +3,10 @@
  * CryptoKit implementation. The envelope contains ciphertext and cryptographic metadata only;
  * result plaintext is never part of this contract.
  *
- * Key agreement uses an uncompressed SEC1 P-256 point (0x04 || X || Y), encoded as unpadded
- * base64url. ECDH produces the shared secret directly. HKDF uses SHA-256, a fresh 32-byte salt,
- * and UTF-8 info equal to `alyte/cloud-result-envelope/v1\0` followed by the canonical AAD.
+ * Key agreement uses an uncompressed SEC1 P-256 point (0x04 || X || Y), encoded as canonical
+ * base64url without padding. ECDH produces the shared secret directly. HKDF uses SHA-256 with a
+ * fresh 32-byte salt and UTF-8 info equal to `alyte/cloud-result-envelope/v1\0` followed by the
+ * canonical AAD.
  * AES-256-GCM uses a fresh 12-byte nonce and a separate 16-byte authentication tag. AAD is the
  * canonical UTF-8 JSON object containing only schemaVersion, requestId, contractVersion,
  * resultSchemaVersion, and handlerVersion, in that order.
@@ -18,6 +19,8 @@ export const CLOUD_RESULT_ENVELOPE_SCHEMA_VERSION = 'alyte.cloud-result-envelope
 export const CLOUD_RESULT_ENVELOPE_KEY_AGREEMENT = 'P-256-ECDH' as const;
 export const CLOUD_RESULT_ENVELOPE_KDF = 'HKDF-SHA-256' as const;
 export const CLOUD_RESULT_ENVELOPE_CIPHER = 'AES-256-GCM' as const;
+/** All binary envelope fields use canonical RFC 4648 base64url without padding. */
+export const CLOUD_RESULT_ENVELOPE_BINARY_ENCODING = 'base64url-unpadded-canonical' as const;
 
 export const CLOUD_RESULT_ENVELOPE_EPHEMERAL_PUBLIC_KEY_BYTES = 65;
 export const CLOUD_RESULT_ENVELOPE_SALT_BYTES = 32;
@@ -36,13 +39,15 @@ export interface CloudResultEnvelope {
   readonly contractVersion: string;
   readonly resultSchemaVersion: string;
   readonly handlerVersion: number;
-  /** Uncompressed SEC1 P-256 public point, encoded as unpadded base64url. */
+  /** Canonical base64url without padding; exactly 65 decoded bytes: 0x04 || 32-byte X || 32-byte Y. */
   readonly ephemeralPublicKey: string;
+  /** Canonical base64url without padding; exactly 32 decoded bytes of HKDF salt. */
   readonly salt: string;
-  /** 96-bit AES-GCM nonce, encoded as unpadded base64url. */
+  /** Canonical base64url without padding; exactly 12 decoded bytes (96-bit AES-GCM nonce). */
   readonly nonce: string;
+  /** Canonical base64url without padding; 1 through 262,144 decoded ciphertext bytes. */
   readonly ciphertext: string;
-  /** AES-GCM authentication tag is transported separately from ciphertext. */
+  /** Canonical base64url without padding; exactly 16 decoded bytes, separate from ciphertext. */
   readonly authenticationTag: string;
 }
 
@@ -127,10 +132,51 @@ function base64urlSextet(character: number): number {
   return character === 0x2d ? 62 : 63;
 }
 
-function startsWithUncompressedP256Point(value: string): boolean {
+/** NIST P-256 field prime, curve coefficient A = -3, and curve coefficient B. */
+const P256_PRIME = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffffn;
+const P256_A = P256_PRIME - 3n;
+const P256_B = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604bn;
+
+function decodeCanonicalBase64url(value: string): Uint8Array {
+  const bytes = new Uint8Array(base64urlByteLength(value));
+  let accumulator = 0;
+  let bits = 0;
+  let offset = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    accumulator = ((accumulator << 6) | base64urlSextet(value.charCodeAt(index))) & 0x3fff;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes[offset] = (accumulator >> bits) & 0xff;
+      offset += 1;
+      accumulator &= (1 << bits) - 1;
+    }
+  }
+  return bytes;
+}
+
+function bytesToBigInt(value: Uint8Array): bigint {
+  let result = 0n;
+  for (const byte of value) result = (result << 8n) | BigInt(byte);
+  return result;
+}
+
+function positiveMod(value: bigint, modulus: bigint): bigint {
+  const remainder = value % modulus;
+  return remainder >= 0n ? remainder : remainder + modulus;
+}
+
+function isUncompressedP256Point(value: unknown): value is string {
+  if (!isCanonicalBase64url(value, CLOUD_RESULT_ENVELOPE_EPHEMERAL_PUBLIC_KEY_BYTES)) {
+    return false;
+  }
+  const point = decodeCanonicalBase64url(value);
+  if (point[0] !== 0x04) return false;
+  const x = bytesToBigInt(point.subarray(1, 33));
+  const y = bytesToBigInt(point.subarray(33, 65));
+  if (x >= P256_PRIME || y >= P256_PRIME) return false;
   return (
-    ((base64urlSextet(value.charCodeAt(0)) << 2) | (base64urlSextet(value.charCodeAt(1)) >> 4)) ===
-    4
+    positiveMod(y * y, P256_PRIME) === positiveMod(x * x * x + P256_A * x + P256_B, P256_PRIME)
   );
 }
 
@@ -206,7 +252,7 @@ export function decodeCloudResultEnvelope(value: unknown): CloudResultEnvelope {
       value.ephemeralPublicKey,
       CLOUD_RESULT_ENVELOPE_EPHEMERAL_PUBLIC_KEY_BYTES,
     ) ||
-    !startsWithUncompressedP256Point(value.ephemeralPublicKey) ||
+    !isUncompressedP256Point(value.ephemeralPublicKey) ||
     !isCanonicalBase64url(value.salt, CLOUD_RESULT_ENVELOPE_SALT_BYTES) ||
     !isCanonicalBase64url(value.nonce, CLOUD_RESULT_ENVELOPE_NONCE_BYTES) ||
     !isCanonicalBase64url(
