@@ -20,6 +20,8 @@ export const REVENUECAT_WEBHOOK_PATH = '/v1/webhooks/revenuecat';
 /** Versioned admission frontier for the first asynchronous cloud request slice. */
 export const CLOUD_REQUESTS_PATH = '/v1/cloud-requests';
 export const CLOUD_REQUEST_STATUS_PATH = '/v1/cloud-requests/:requestId';
+/** Owner-only retrieval of a device-encrypted result envelope. */
+export const CLOUD_REQUEST_RESULT_PATH = '/v1/cloud-requests/:requestId/result';
 export const CLOUD_REQUEST_CANCEL_PATH = '/v1/cloud-requests/:requestId/cancel';
 /** Binary upload is intentionally a separate route from JSON admission. */
 export const CLOUD_REQUEST_UPLOAD_PATH = '/v1/cloud-requests/:requestId/upload';
@@ -84,7 +86,15 @@ export type CloudAllowanceWarning = 'normal' | 'near-limit' | 'critical' | 'exha
 export type CloudRequestOperation = 'intake-image' | 'lab-report';
 
 /** States owned by the admission/upload/queue frontier. */
-export type CloudRequestState = 'awaiting-upload' | 'uploaded' | 'queued' | 'cancelled' | 'expired';
+export type CloudRequestState =
+  | 'awaiting-upload'
+  | 'uploaded'
+  | 'queued'
+  | 'ready'
+  | 'retrieved'
+  | 'failed'
+  | 'cancelled'
+  | 'expired';
 
 /** Persisted request rows keep the contract version they were admitted under. */
 export type CloudRequestContractVersion = string;
@@ -111,7 +121,12 @@ export type CloudRequestErrorCode =
   | 'cloud_upload_not_completeable'
   | 'cloud_upload_required'
   | 'cloud_request_expired'
-  | 'cloud_account_cleanup_incomplete';
+  | 'cloud_account_cleanup_incomplete'
+  | 'cloud_result_not_available'
+  | 'cloud_result_envelope_invalid'
+  | 'cloud_result_context_mismatch'
+  | 'cloud_result_conflict'
+  | 'cloud_result_storage_failure';
 
 export interface P256PublicKeyJwk {
   readonly kty: 'EC';
@@ -142,6 +157,12 @@ export interface CloudRequestStatusResponse {
   readonly uploadedAt?: string | null;
   /** Null until complete-upload inserts the durable handler-v1 job. */
   readonly queuedAt?: string | null;
+  /** True only while a valid encrypted envelope is available for the owner to retrieve. */
+  readonly resultAvailable?: boolean;
+  /** Result-cache expiry; null when no result has been published. */
+  readonly resultExpiresAt?: string | null;
+  /** Bounded non-sensitive failure category, when a result cache is unusable. */
+  readonly failureCategory?: string | null;
   /** Unsealed requests expire no later than this timestamp. */
   readonly expiresAt?: string;
   readonly expiredAt?: string | null;

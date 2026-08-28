@@ -11,6 +11,7 @@ import {
   CLOUD_ALLOWANCES_RECONCILE_PATH,
   CLOUD_REQUEST_CANCEL_PATH,
   CLOUD_REQUEST_COMPLETE_UPLOAD_PATH,
+  CLOUD_REQUEST_RESULT_PATH,
   CLOUD_REQUEST_STATUS_PATH,
   CLOUD_REQUESTS_PATH,
   CLOUD_REQUEST_UPLOAD_CONTENT_TYPE,
@@ -42,6 +43,8 @@ import {
   CloudRequestService,
 } from './cloud-request.js';
 import { TransientUploadStore } from './transient-upload-store.js';
+import { CloudResultService, CloudResultFailure } from './cloud-result.js';
+import { CloudResultStore } from './cloud-result-store.js';
 import { createRevenueCatAuthority, type RevenueCatAuthority } from './revenuecat.js';
 import {
   DEFAULT_LOCAL_RUNTIME_PATH,
@@ -65,6 +68,8 @@ export interface ServerOptions {
   readonly cloudMaxEnabled?: boolean;
   readonly cloudRequestService?: CloudRequestService;
   readonly uploadStore?: TransientUploadStore;
+  readonly resultStore?: CloudResultStore;
+  readonly cloudResultService?: CloudResultService;
   /** Test-only capture seam for proving the Fastify redaction boundary. */
   readonly loggerStream?: { write(message: string): void };
 }
@@ -109,6 +114,12 @@ function requestIdParam(request: FastifyRequest): unknown {
 
 function errorResponse(code: string, message: string): ApiErrorResponse {
   return { error: { code, message } };
+}
+
+function redactRequestUrl(url: string): string {
+  // Cloud request IDs are operational secrets at the framework boundary. Keep the route shape
+  // useful for diagnostics while preventing request/result IDs from entering ordinary logs.
+  return url.replace(/\/v1\/cloud-requests\/[^/?]+/g, '/v1/cloud-requests/[REDACTED]');
 }
 
 export function createServer(options: ServerOptions = {}): FastifyInstance {
@@ -164,7 +175,7 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     serializers: {
       req: (request) => ({
         method: request.method,
-        url: request.url,
+        url: redactRequestUrl(request.url),
         version:
           typeof request.headers['accept-version'] === 'string'
             ? request.headers['accept-version']
@@ -210,6 +221,11 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
   const server = Fastify({
     bodyLimit: API_BODY_LIMIT_BYTES,
     logger: loggerOptions,
+  });
+  // Fastify's default not-found handler includes the raw URL in its log message. Keep unknown
+  // cloud-request paths bounded too; the request serializer cannot redact that framework message.
+  server.setNotFoundHandler((_request, reply) => {
+    void reply.status(404).send(errorResponse('not_found', 'not_found'));
   });
   // The RevenueCat signature covers the exact incoming bytes. Parse JSON ourselves so the
   // webhook route receives those bytes while ordinary API routes retain their object body shape.
@@ -275,12 +291,21 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
       ...(options.clock === undefined ? {} : { clock: options.clock }),
       uploadStore: options.uploadStore ?? new TransientUploadStore(runtimePath),
     });
+  const cloudResults =
+    options.cloudResultService ??
+    new CloudResultService({
+      database,
+      resultStore: options.resultStore ?? new CloudResultStore(runtimePath),
+      ...(options.clock === undefined ? {} : { clock: options.clock }),
+    });
   database.cleanupExpired(options.clock?.now() ?? new Date());
   cloudRequests.reconcile();
+  cloudResults.reconcile();
   const cleanupInterval = setInterval(
     () => {
       database.cleanupExpired(options.clock?.now() ?? new Date());
       cloudRequests.reconcile();
+      cloudResults.reconcile();
     },
     Math.min(
       options.cleanupIntervalMs ?? CLOUD_UPLOAD_CLEANUP_INTERVAL_MS,
@@ -301,6 +326,11 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
       return;
     }
     if (error instanceof CloudRequestFailure) {
+      server.log.warn({ event: 'api.request_rejected', outcome: error.code }, 'request rejected');
+      void reply.status(error.statusCode).send(errorResponse(error.code, error.code));
+      return;
+    }
+    if (error instanceof CloudResultFailure) {
       server.log.warn({ event: 'api.request_rejected', outcome: error.code }, 'request rejected');
       void reply.status(error.statusCode).send(errorResponse(error.code, error.code));
       return;
@@ -374,6 +404,7 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     // Account deletion cascades SQLite rows first; strict reconciliation must verify that the
     // corresponding orphaned transient artifacts are gone before returning a success response.
     cloudRequests.reconcile({ strict: true });
+    cloudResults.reconcile({ strict: true });
     return response;
   });
 
@@ -409,7 +440,13 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
 
   server.get(CLOUD_REQUEST_STATUS_PATH, async (request) => {
     const authenticated = auth.authenticateAccess(bearerToken(request));
-    return cloudRequests.status(authenticated.accountId, requestIdParam(request));
+    return cloudResults.status(authenticated.accountId, requestIdParam(request));
+  });
+
+  server.get(CLOUD_REQUEST_RESULT_PATH, async (request, reply) => {
+    const authenticated = auth.authenticateAccess(bearerToken(request));
+    const envelope = cloudResults.retrieve(authenticated.accountId, requestIdParam(request));
+    return reply.type('application/json').send(envelope);
   });
 
   const uploadCloudRequest = async (request: FastifyRequest) => {

@@ -184,11 +184,12 @@ function canonicalAdmission(admission: CloudRequestAdmissionRequest): string {
   });
 }
 
-function toStatus(row: CloudRequestRow): CloudRequestStatusResponse {
+export function toStatus(row: CloudRequestRow): CloudRequestStatusResponse {
+  const resultState = row.result_state ?? null;
   return {
     requestId: row.id,
     operation: row.operation,
-    state: row.state,
+    state: resultState ?? row.state,
     byteCount: row.byte_count,
     pageCount: row.page_count,
     contractVersion: row.contract_version,
@@ -197,6 +198,9 @@ function toStatus(row: CloudRequestRow): CloudRequestStatusResponse {
     cancelledAt: row.cancelled_at,
     uploadedAt: row.uploaded_at,
     queuedAt: row.queued_at,
+    resultAvailable: resultState === 'ready',
+    resultExpiresAt: row.result_expires_at ?? null,
+    failureCategory: row.result_failure_category ?? null,
     expiresAt: row.upload_expires_at,
     expiredAt: row.expired_at,
   };
@@ -336,12 +340,18 @@ export class CloudRequestService {
     if (row.state === 'cancelled' || row.state === 'expired') {
       throw new CloudRequestFailure(409, 'cloud_request_expired');
     }
+    if (row.result_state !== undefined && row.result_state !== null) {
+      throw new CloudRequestFailure(409, 'cloud_upload_not_completeable');
+    }
     if (row.state === 'queued') {
       if (uploadStore.hasExactBytes(id, body)) return toStatus(row);
       if (!uploadStore.hasExactSize(id, row.byte_count)) {
         throw new CloudRequestFailure(409, 'cloud_upload_artifact_missing');
       }
       throw new CloudRequestFailure(409, 'cloud_upload_conflict');
+    }
+    if (row.state !== 'awaiting-upload' && row.state !== 'uploaded') {
+      throw new CloudRequestFailure(409, 'cloud_upload_not_completeable');
     }
     if (row.state === 'uploaded') {
       if (uploadStore.hasExactBytes(id, body)) return toStatus(row);
@@ -492,7 +502,12 @@ export class CloudRequestService {
       }
       return toStatus(current);
     }
-    if (current.state === 'queued') {
+    if (
+      current.state === 'queued' ||
+      current.state === 'ready' ||
+      current.state === 'retrieved' ||
+      current.state === 'failed'
+    ) {
       throw new CloudRequestFailure(409, 'cloud_request_not_cancellable');
     }
     if (this.uploadStore === undefined && current.state !== 'awaiting-upload') {
@@ -509,7 +524,12 @@ export class CloudRequestService {
       const current = this.database.findCloudRequest(accountId as string, id);
       if (current === undefined) throw new CloudRequestFailure(404, 'cloud_request_not_found');
       if (current.state === 'cancelled' || current.state === 'expired') return toStatus(current);
-      if (current.state === 'queued') {
+      if (
+        current.state === 'queued' ||
+        current.state === 'ready' ||
+        current.state === 'retrieved' ||
+        current.state === 'failed'
+      ) {
         throw new CloudRequestFailure(409, 'cloud_request_not_cancellable');
       }
       const cancelledAt = this.clock.now().toISOString();

@@ -5,6 +5,7 @@ import {
   CLOUD_ALLOWANCES_PATH,
   CLOUD_REQUEST_CANCEL_PATH,
   CLOUD_REQUEST_COMPLETE_UPLOAD_PATH,
+  CLOUD_REQUEST_RESULT_PATH,
   CLOUD_REQUEST_UPLOAD_PATH,
   CLOUD_REQUEST_MAX_BYTES,
   CLOUD_REQUEST_MAX_PAGES,
@@ -56,6 +57,7 @@ describe('cloud contracts', () => {
   it('defines the bounded cloud admission/status/cancellation contract', () => {
     assert.equal(CLOUD_REQUESTS_PATH, '/v1/cloud-requests');
     assert.equal(CLOUD_REQUEST_STATUS_PATH, '/v1/cloud-requests/:requestId');
+    assert.equal(CLOUD_REQUEST_RESULT_PATH, '/v1/cloud-requests/:requestId/result');
     assert.equal(CLOUD_REQUEST_CANCEL_PATH, '/v1/cloud-requests/:requestId/cancel');
     assert.equal(CLOUD_REQUEST_UPLOAD_PATH, '/v1/cloud-requests/:requestId/upload');
     assert.equal(
@@ -69,10 +71,22 @@ describe('cloud contracts', () => {
       'awaiting-upload',
       'uploaded',
       'queued',
+      'ready',
+      'retrieved',
+      'failed',
       'cancelled',
       'expired',
     ];
-    assert.deepEqual(states, ['awaiting-upload', 'uploaded', 'queued', 'cancelled', 'expired']);
+    assert.deepEqual(states, [
+      'awaiting-upload',
+      'uploaded',
+      'queued',
+      'ready',
+      'retrieved',
+      'failed',
+      'cancelled',
+      'expired',
+    ]);
     const errors: readonly CloudRequestErrorCode[] = [
       'cloud_request_invalid',
       'cloud_request_operation_invalid',
@@ -95,6 +109,12 @@ describe('cloud contracts', () => {
       'cloud_upload_not_completeable',
       'cloud_upload_required',
       'cloud_request_expired',
+      'cloud_account_cleanup_incomplete',
+      'cloud_result_not_available',
+      'cloud_result_envelope_invalid',
+      'cloud_result_context_mismatch',
+      'cloud_result_conflict',
+      'cloud_result_storage_failure',
     ];
     assert.deepEqual(errors, [
       'cloud_request_invalid',
@@ -118,6 +138,12 @@ describe('cloud contracts', () => {
       'cloud_upload_not_completeable',
       'cloud_upload_required',
       'cloud_request_expired',
+      'cloud_account_cleanup_incomplete',
+      'cloud_result_not_available',
+      'cloud_result_envelope_invalid',
+      'cloud_result_context_mismatch',
+      'cloud_result_conflict',
+      'cloud_result_storage_failure',
     ]);
 
     const storedVersionStatus: CloudRequestStatusResponse = {

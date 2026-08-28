@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import type { CloudRequestOperation, CloudRequestState } from '@alyte/contracts';
 
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 export const SESSION_RETENTION_MS = 24 * 60 * 60 * 1_000;
 export const OPERATION_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -145,6 +145,34 @@ export interface CloudRequestRow {
   readonly queued_at: string | null;
   readonly expired_at: string | null;
   readonly cancelled_at: string | null;
+  /** Joined result-cache state; absent when the request has no result metadata. */
+  readonly result_state?: CloudResultState | null;
+  readonly result_schema_version?: string | null;
+  readonly result_handler_version?: number | null;
+  readonly result_byte_count?: number | null;
+  readonly result_ready_at?: string | null;
+  readonly result_expires_at?: string | null;
+  readonly result_retrieved_at?: string | null;
+  readonly result_expired_at?: string | null;
+  readonly result_failure_category?: CloudResultFailureCategory | null;
+}
+
+export type CloudResultState = 'ready' | 'retrieved' | 'failed' | 'expired';
+export type CloudResultFailureCategory =
+  'cloud_result_cache_missing' | 'cloud_result_cache_invalid' | 'cloud_result_cache_conflict';
+
+/** Allowlisted metadata for one ciphertext-only result cache entry. */
+export interface CloudResultCacheRow {
+  readonly request_id: string;
+  readonly state: CloudResultState;
+  readonly result_schema_version: string;
+  readonly handler_version: number;
+  readonly byte_count: number;
+  readonly ready_at: string;
+  readonly expires_at: string;
+  readonly retrieved_at: string | null;
+  readonly expired_at: string | null;
+  readonly failure_category: CloudResultFailureCategory | null;
 }
 
 /** Operational metadata for one queued analysis handler invocation. No payload is stored here. */
@@ -451,6 +479,26 @@ const migrations: readonly string[] = [
       updated_at TEXT NOT NULL
     );
     CREATE INDEX analysis_jobs_ready_idx ON analysis_jobs(state, available_at, id);
+  `,
+  `
+    -- Result rows contain only bounded cache metadata. Ciphertext lives in the protected
+    -- cloud-result store; the request foreign key makes account deletion cascade metadata.
+    CREATE TABLE cloud_result_cache (
+      request_id TEXT PRIMARY KEY NOT NULL REFERENCES cloud_requests(id) ON DELETE CASCADE,
+      state TEXT NOT NULL CHECK (state IN ('ready', 'retrieved', 'failed', 'expired')),
+      result_schema_version TEXT NOT NULL,
+      handler_version INTEGER NOT NULL CHECK (handler_version > 0),
+      byte_count INTEGER NOT NULL CHECK (byte_count > 0 AND byte_count <= 524288),
+      ready_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      retrieved_at TEXT,
+      expired_at TEXT,
+      failure_category TEXT CHECK (
+        failure_category IS NULL OR
+        failure_category IN ('cloud_result_cache_missing', 'cloud_result_cache_invalid', 'cloud_result_cache_conflict')
+      )
+    );
+    CREATE INDEX cloud_result_cache_expiry_idx ON cloud_result_cache(state, expires_at, request_id);
   `,
 ];
 
@@ -1089,13 +1137,39 @@ export class AccountDatabase {
   findCloudRequest(accountId: string, requestId: string): CloudRequestRow | undefined {
     return this.sqlite
       .prepare(
+        `SELECT cloud_requests.id, cloud_requests.account_id, cloud_requests.operation,
+                cloud_requests.state, cloud_requests.byte_count, cloud_requests.page_count,
+                cloud_requests.device_public_key_jwk, cloud_requests.idempotency_key_hash,
+                cloud_requests.request_fingerprint, cloud_requests.contract_version,
+                cloud_requests.created_at, cloud_requests.updated_at, cloud_requests.upload_expires_at,
+                cloud_requests.uploaded_at, cloud_requests.queued_at, cloud_requests.expired_at,
+                cloud_requests.cancelled_at,
+                cloud_result_cache.state AS result_state,
+                cloud_result_cache.result_schema_version,
+                cloud_result_cache.handler_version AS result_handler_version,
+                cloud_result_cache.byte_count AS result_byte_count,
+                cloud_result_cache.ready_at AS result_ready_at,
+                cloud_result_cache.expires_at AS result_expires_at,
+                cloud_result_cache.retrieved_at AS result_retrieved_at,
+                cloud_result_cache.expired_at AS result_expired_at,
+                cloud_result_cache.failure_category AS result_failure_category
+         FROM cloud_requests
+         LEFT JOIN cloud_result_cache ON cloud_result_cache.request_id = cloud_requests.id
+         WHERE cloud_requests.account_id = ? AND cloud_requests.id = ?`,
+      )
+      .get(accountId, requestId) as CloudRequestRow | undefined;
+  }
+
+  findCloudRequestById(requestId: string): CloudRequestRow | undefined {
+    return this.sqlite
+      .prepare(
         `SELECT id, account_id, operation, state, byte_count, page_count,
                 device_public_key_jwk, idempotency_key_hash, request_fingerprint,
                 contract_version, created_at, updated_at, upload_expires_at,
                 uploaded_at, queued_at, expired_at, cancelled_at
-         FROM cloud_requests WHERE account_id = ? AND id = ?`,
+         FROM cloud_requests WHERE id = ?`,
       )
-      .get(accountId, requestId) as CloudRequestRow | undefined;
+      .get(requestId) as CloudRequestRow | undefined;
   }
 
   findCloudRequestByIdempotencyHash(
@@ -1104,11 +1178,25 @@ export class AccountDatabase {
   ): CloudRequestRow | undefined {
     return this.sqlite
       .prepare(
-        `SELECT id, account_id, operation, state, byte_count, page_count,
-                device_public_key_jwk, idempotency_key_hash, request_fingerprint,
-                contract_version, created_at, updated_at, upload_expires_at,
-                uploaded_at, queued_at, expired_at, cancelled_at
-         FROM cloud_requests WHERE account_id = ? AND idempotency_key_hash = ?`,
+        `SELECT cloud_requests.id, cloud_requests.account_id, cloud_requests.operation,
+                cloud_requests.state, cloud_requests.byte_count, cloud_requests.page_count,
+                cloud_requests.device_public_key_jwk, cloud_requests.idempotency_key_hash,
+                cloud_requests.request_fingerprint, cloud_requests.contract_version,
+                cloud_requests.created_at, cloud_requests.updated_at, cloud_requests.upload_expires_at,
+                cloud_requests.uploaded_at, cloud_requests.queued_at, cloud_requests.expired_at,
+                cloud_requests.cancelled_at,
+                cloud_result_cache.state AS result_state,
+                cloud_result_cache.result_schema_version,
+                cloud_result_cache.handler_version AS result_handler_version,
+                cloud_result_cache.byte_count AS result_byte_count,
+                cloud_result_cache.ready_at AS result_ready_at,
+                cloud_result_cache.expires_at AS result_expires_at,
+                cloud_result_cache.retrieved_at AS result_retrieved_at,
+                cloud_result_cache.expired_at AS result_expired_at,
+                cloud_result_cache.failure_category AS result_failure_category
+         FROM cloud_requests
+         LEFT JOIN cloud_result_cache ON cloud_result_cache.request_id = cloud_requests.id
+         WHERE cloud_requests.account_id = ? AND cloud_requests.idempotency_key_hash = ?`,
       )
       .get(accountId, idempotencyKeyHash) as CloudRequestRow | undefined;
   }
@@ -1208,6 +1296,76 @@ export class AccountDatabase {
         job.created_at,
         job.updated_at,
       );
+  }
+
+  findCloudResultCache(requestId: string): CloudResultCacheRow | undefined {
+    return this.sqlite
+      .prepare('SELECT * FROM cloud_result_cache WHERE request_id = ?')
+      .get(requestId) as CloudResultCacheRow | undefined;
+  }
+
+  listCloudResultCache(): readonly CloudResultCacheRow[] {
+    return this.sqlite
+      .prepare('SELECT * FROM cloud_result_cache ORDER BY ready_at ASC, request_id ASC')
+      .all() as CloudResultCacheRow[];
+  }
+
+  createCloudResultCache(result: CloudResultCacheRow): void {
+    this.sqlite
+      .prepare(
+        `INSERT INTO cloud_result_cache
+          (request_id, state, result_schema_version, handler_version, byte_count,
+           ready_at, expires_at, retrieved_at, expired_at, failure_category)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        result.request_id,
+        result.state,
+        result.result_schema_version,
+        result.handler_version,
+        result.byte_count,
+        result.ready_at,
+        result.expires_at,
+        result.retrieved_at,
+        result.expired_at,
+        result.failure_category,
+      );
+  }
+
+  markCloudResultRetrieved(requestId: string, retrievedAt: string): boolean {
+    return (
+      this.sqlite
+        .prepare(
+          `UPDATE cloud_result_cache
+           SET state = 'retrieved', retrieved_at = COALESCE(retrieved_at, ?), failure_category = NULL
+           WHERE request_id = ? AND state = 'ready'`,
+        )
+        .run(retrievedAt, requestId).changes === 1
+    );
+  }
+
+  markCloudResultExpired(requestId: string, expiredAt: string): boolean {
+    return (
+      this.sqlite
+        .prepare(
+          `UPDATE cloud_result_cache
+           SET state = 'expired', expired_at = COALESCE(expired_at, ?), failure_category = NULL
+           WHERE request_id = ? AND state = 'ready'`,
+        )
+        .run(expiredAt, requestId).changes === 1
+    );
+  }
+
+  markCloudResultFailed(requestId: string, failureCategory: CloudResultFailureCategory): boolean {
+    return (
+      this.sqlite
+        .prepare(
+          `UPDATE cloud_result_cache
+           SET state = 'failed', failure_category = ?
+           WHERE request_id = ? AND state = 'ready'`,
+        )
+        .run(failureCategory, requestId).changes === 1
+    );
   }
 
   findAnalysisJobByRequest(requestId: string): AnalysisJobRow | undefined {
