@@ -13,6 +13,7 @@ import {
   type CloudRequestAdmissionRequest,
   type CloudRequestAdmissionResponse,
   type CloudRequestCancellationResponse,
+  type CloudRequestOperation,
   type CloudRequestStatusResponse,
   type CloudResultEnvelope,
   type P256PublicKeyJwk,
@@ -57,8 +58,32 @@ export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promis
 export type CloudRequestApiClientOptions = {
   readonly baseUrl?: string | null;
   readonly fetchImpl?: FetchLike;
-  readonly requireHttps?: boolean;
+  /** Development-only seam for an HTTP server bound to localhost. HTTPS remains the default. */
+  readonly allowInsecureLoopbackForDevelopment?: boolean;
   readonly requestTimeoutMs?: number;
+};
+
+/** The complete request context that every successful status must match. */
+export type CloudRequestContext = {
+  readonly requestId: string;
+  readonly operation: CloudRequestOperation;
+  readonly byteCount: number;
+  readonly pageCount: number;
+  readonly contractVersion: typeof CONTRACT_VERSION;
+};
+
+type CloudRequestStatusContext = Pick<CloudRequestContext, 'requestId' | 'contractVersion'> &
+  Partial<Pick<CloudRequestContext, 'operation' | 'byteCount' | 'pageCount'>>;
+
+/**
+ * A Blob/File-shaped body accepted by Expo's fetch implementation. The structural check is
+ * intentional: expo-file-system File instances can come from a different JS realm than Blob.
+ */
+export type CloudRequestUploadBody = {
+  readonly size: number;
+  readonly type: string;
+  readonly arrayBuffer: () => Promise<ArrayBuffer>;
+  readonly stream?: (() => ReadableStream<Uint8Array>) | undefined;
 };
 
 export type CloudRequestAdmissionInput = {
@@ -68,87 +93,38 @@ export type CloudRequestAdmissionInput = {
   readonly signal?: AbortSignal | undefined;
 };
 
-export type CloudRequestUploadInput = {
+export type CloudRequestUploadInput = CloudRequestStatusContext & {
   readonly accessToken: string;
-  readonly requestId: string;
-  /** Blob also covers File in Expo SDK 57 and preserves the caller's exact bytes. */
-  readonly artifact: Blob;
-  /** The byte count admitted by the backend; it must equal artifact.size. */
   readonly byteCount: number;
+  readonly artifact: CloudRequestUploadBody;
   readonly idempotencyKey: string;
   readonly signal?: AbortSignal | undefined;
 };
 
-export type CloudRequestMutationInput = {
+export type CloudRequestMutationInput = CloudRequestStatusContext & {
   readonly accessToken: string;
-  readonly requestId: string;
   readonly idempotencyKey: string;
   readonly signal?: AbortSignal | undefined;
 };
 
-export type CloudRequestReadInput = {
+export type CloudRequestReadInput = CloudRequestStatusContext & {
   readonly accessToken: string;
-  readonly requestId: string;
   readonly signal?: AbortSignal | undefined;
 };
 
 export type CloudRequestApi = {
-  readonly admit: {
-    (
-      accessToken: string,
-      request: CloudRequestAdmissionRequest,
-      idempotencyKey: string,
-      signal?: AbortSignal,
-    ): Promise<CloudRequestAdmissionResponse>;
-    (input: CloudRequestAdmissionInput): Promise<CloudRequestAdmissionResponse>;
-  };
-  readonly upload: {
-    (
-      accessToken: string,
-      requestId: string,
-      artifact: Blob,
-      byteCount: number,
-      idempotencyKey: string,
-      signal?: AbortSignal,
-    ): Promise<CloudRequestStatusResponse>;
-    (input: CloudRequestUploadInput): Promise<CloudRequestStatusResponse>;
-  };
-  readonly completeUpload: {
-    (
-      accessToken: string,
-      requestId: string,
-      idempotencyKey: string,
-      signal?: AbortSignal,
-    ): Promise<CloudRequestStatusResponse>;
-    (input: CloudRequestMutationInput): Promise<CloudRequestStatusResponse>;
-  };
-  readonly status: {
-    (
-      accessToken: string,
-      requestId: string,
-      signal?: AbortSignal,
-    ): Promise<CloudRequestStatusResponse>;
-    (input: CloudRequestReadInput): Promise<CloudRequestStatusResponse>;
-  };
-  readonly retrieve: {
-    (accessToken: string, requestId: string, signal?: AbortSignal): Promise<CloudResultEnvelope>;
-    (input: CloudRequestReadInput): Promise<CloudResultEnvelope>;
-  };
-  readonly cancel: {
-    (
-      accessToken: string,
-      requestId: string,
-      idempotencyKey: string,
-      signal?: AbortSignal,
-    ): Promise<CloudRequestCancellationResponse>;
-    (input: CloudRequestMutationInput): Promise<CloudRequestCancellationResponse>;
-  };
+  readonly admit: (input: CloudRequestAdmissionInput) => Promise<CloudRequestAdmissionResponse>;
+  readonly upload: (input: CloudRequestUploadInput) => Promise<CloudRequestStatusResponse>;
+  readonly completeUpload: (
+    input: CloudRequestMutationInput,
+  ) => Promise<CloudRequestStatusResponse>;
+  readonly status: (input: CloudRequestReadInput) => Promise<CloudRequestStatusResponse>;
+  readonly retrieve: (input: CloudRequestReadInput) => Promise<CloudResultEnvelope>;
+  readonly cancel: (input: CloudRequestMutationInput) => Promise<CloudRequestCancellationResponse>;
 };
 
 /** The result envelope can be close to 350 KiB at its shared 256 KiB ciphertext limit. */
 export const MAX_CLOUD_REQUEST_RESPONSE_BYTES = 512 * 1024;
-/** Alias kept intentionally close to the account adapter's bounded-response terminology. */
-export const MAX_RESPONSE_BODY_BYTES = MAX_CLOUD_REQUEST_RESPONSE_BYTES;
 export const MAX_CLOUD_REQUEST_JSON_DEPTH = 16;
 export const MAX_CLOUD_REQUEST_JSON_VALUES = 4_096;
 export const MAX_REQUEST_ID_LENGTH = 128;
@@ -161,6 +137,7 @@ const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._~-]*$/;
 const VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const PRINTABLE_HEADER_PATTERN = /^[\x21-\x7E]+$/;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
+const UTC_ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 const STATUS_KEYS = [
   'byteCount',
@@ -259,11 +236,9 @@ function validIdempotencyKey(value: unknown): value is string {
 }
 
 function validTimestamp(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    value.length <= MAX_CONTEXT_TEXT_LENGTH &&
-    Number.isFinite(Date.parse(value))
-  );
+  if (typeof value !== 'string' || !UTC_ISO_TIMESTAMP_PATTERN.test(value)) return false;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
 }
 
 function validInteger(value: unknown, minimum: number, maximum: number): value is number {
@@ -371,8 +346,32 @@ function optionalTimestamp(value: unknown): string | null {
   return value;
 }
 
+type ExpectedStatusContext = Readonly<Partial<CloudRequestContext>>;
+
+function ensureStatusContext(
+  status: CloudRequestStatusResponse,
+  expected: ExpectedStatusContext | undefined,
+): void {
+  // A well-formed response from another contract is not a sibling request response.
+  if (status.contractVersion !== CONTRACT_VERSION) {
+    throw new CloudRequestApiError(502, 'unsupported_contract');
+  }
+  if (
+    (expected?.requestId !== undefined && status.requestId !== expected.requestId) ||
+    (expected?.operation !== undefined && status.operation !== expected.operation) ||
+    (expected?.byteCount !== undefined && status.byteCount !== expected.byteCount) ||
+    (expected?.pageCount !== undefined && status.pageCount !== expected.pageCount) ||
+    (expected?.contractVersion !== undefined && status.contractVersion !== expected.contractVersion)
+  ) {
+    throw new CloudRequestApiError(502, 'invalid_response');
+  }
+}
+
 /** Strictly decode the shared Cloud Request status shape without retaining unknown fields. */
-export function decodeCloudRequestStatus(value: unknown): CloudRequestStatusResponse {
+export function decodeCloudRequestStatus(
+  value: unknown,
+  expectedContext?: ExpectedStatusContext,
+): CloudRequestStatusResponse {
   if (!isRecord(value) || !statusKeys(value)) {
     throw new CloudRequestApiError(502, 'invalid_response');
   }
@@ -440,10 +439,10 @@ export function decodeCloudRequestStatus(value: unknown): CloudRequestStatusResp
   if (result.state === 'ready' && result.resultAvailable === false) {
     throw new CloudRequestApiError(502, 'invalid_response');
   }
-  return Object.freeze(result) as unknown as CloudRequestStatusResponse;
+  const status = Object.freeze(result) as unknown as CloudRequestStatusResponse;
+  ensureStatusContext(status, expectedContext);
+  return status;
 }
-
-export const decodeCloudRequestStatusResponse = decodeCloudRequestStatus;
 
 function parseErrorCode(value: unknown): string | null {
   if (
@@ -479,16 +478,29 @@ function pathForRequest(path: string, requestId: string): string {
   return path.replace(':requestId', encodeURIComponent(requestId));
 }
 
-function configuredUrl(value: string | null | undefined, requireHttps: boolean): string | null {
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
+}
+
+function configuredUrl(
+  value: string | null | undefined,
+  allowInsecureLoopbackForDevelopment: boolean,
+): string | null {
   const input = value?.trim();
   if (input === undefined || input.length === 0) return null;
   try {
     const url = new URL(input);
+    const secure = url.protocol === 'https:';
+    const allowedDevelopmentLoopback =
+      allowInsecureLoopbackForDevelopment &&
+      url.protocol === 'http:' &&
+      isLoopbackHostname(url.hostname);
     if (
       url.username.length > 0 ||
       url.password.length > 0 ||
       url.hostname.length === 0 ||
-      (requireHttps && url.protocol !== 'https:')
+      (!secure && !allowedDevelopmentLoopback)
     ) {
       return null;
     }
@@ -496,14 +508,6 @@ function configuredUrl(value: string | null | undefined, requireHttps: boolean):
   } catch {
     return null;
   }
-}
-
-export function cloudRequestApiUrl(): string | null {
-  return configuredUrl(process.env.EXPO_PUBLIC_API_URL, false);
-}
-
-export function productionCloudRequestApiUrl(): string | null {
-  return configuredUrl(process.env.EXPO_PUBLIC_API_URL, true);
 }
 
 function inspectJson(value: unknown): void {
@@ -571,44 +575,89 @@ function parseBoundedJson(value: string): unknown {
   }
 }
 
-async function boundedResponseText(response: Response): Promise<string> {
-  const contentLength = response.headers.get('content-length');
-  if (contentLength !== null) {
-    const declared = Number(contentLength);
-    if (Number.isSafeInteger(declared) && declared > MAX_CLOUD_REQUEST_RESPONSE_BYTES) {
-      throw new CloudRequestApiError(502, 'invalid_response');
-    }
-  }
-  const reader = response.body?.getReader?.();
-  if (reader === undefined) {
-    const body = await response.text();
-    if (new TextEncoder().encode(body).byteLength > MAX_CLOUD_REQUEST_RESPONSE_BYTES) {
-      throw new CloudRequestApiError(502, 'invalid_response');
-    }
-    return body;
-  }
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  let bytes = 0;
-  let body = '';
+type ResponseReader = ReadableStreamDefaultReader<Uint8Array>;
+
+async function cancelResponseBody(response: Response, reader?: ResponseReader): Promise<void> {
   try {
+    if (reader !== undefined) {
+      await reader.cancel();
+      return;
+    }
+    const cancel = response.body?.cancel;
+    if (typeof cancel === 'function') await cancel.call(response.body);
+  } catch {
+    // The closed transport error is the only observable outcome.
+  }
+}
+
+/** Read only through a streaming reader; an unbounded text() fallback is deliberately forbidden. */
+async function boundedResponseText(response: Response, abortSignal?: AbortSignal): Promise<string> {
+  let reader: ResponseReader | undefined;
+  let removeAbortListener: (() => void) | undefined;
+  let completed = false;
+  const cancelReader = (): Promise<void> => cancelResponseBody(response, reader);
+
+  try {
+    try {
+      reader = response.body?.getReader?.() as ResponseReader | undefined;
+    } catch {
+      await cancelResponseBody(response);
+      throw new CloudRequestApiError(502, 'invalid_response');
+    }
+    if (reader === undefined) {
+      await cancelResponseBody(response);
+      throw new CloudRequestApiError(502, 'invalid_response');
+    }
+
+    if (abortSignal !== undefined) {
+      const abortBodyRead = () => {
+        // Remove the listener immediately on abort so a stalled native reader cannot retain it.
+        removeAbortListener?.();
+        removeAbortListener = undefined;
+        void cancelReader();
+      };
+      if (abortSignal.aborted) abortBodyRead();
+      else {
+        abortSignal.addEventListener('abort', abortBodyRead, { once: true });
+        removeAbortListener = () => abortSignal.removeEventListener('abort', abortBodyRead);
+      }
+    }
+
+    const contentLength = response.headers.get('content-length');
+    if (contentLength !== null) {
+      if (!/^\d+$/.test(contentLength)) {
+        await cancelReader();
+        throw new CloudRequestApiError(502, 'invalid_response');
+      }
+      const declared = Number(contentLength);
+      if (!Number.isSafeInteger(declared) || declared > MAX_CLOUD_REQUEST_RESPONSE_BYTES) {
+        await cancelReader();
+        throw new CloudRequestApiError(502, 'invalid_response');
+      }
+    }
+
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+    let bytes = 0;
+    let body = '';
     while (true) {
       const chunk = await reader.read();
       if (chunk.done) break;
       bytes += chunk.value.byteLength;
       if (bytes > MAX_CLOUD_REQUEST_RESPONSE_BYTES) {
-        try {
-          await reader.cancel();
-        } catch {
-          // The bounded response error is the only observable outcome.
-        }
+        await cancelReader();
         throw new CloudRequestApiError(502, 'invalid_response');
       }
       body += decoder.decode(chunk.value, { stream: true });
     }
-    return body + decoder.decode();
+    body += decoder.decode();
+    completed = true;
+    return body;
   } catch (error) {
+    if (!completed) await cancelReader();
     if (error instanceof CloudRequestApiError) throw error;
     throw new CloudRequestApiError(502, 'invalid_response');
+  } finally {
+    removeAbortListener?.();
   }
 }
 
@@ -644,23 +693,63 @@ function mapHttpFailure(
   return 'request_rejected';
 }
 
-function decodeEnvelopeResponse(value: unknown, requestId: string): CloudResultEnvelope {
+function decodeEnvelopeResponse(
+  value: unknown,
+  expected: CloudRequestStatusContext,
+): CloudResultEnvelope {
   let envelope: CloudResultEnvelope;
   try {
     envelope = decodeCloudResultEnvelope(value);
   } catch {
     throw new CloudRequestApiError(502, 'invalid_response');
   }
-  if (envelope.requestId !== requestId) {
-    throw new CloudRequestApiError(502, 'invalid_response');
-  }
-  if (envelope.contractVersion !== CONTRACT_VERSION) {
+  if (
+    envelope.contractVersion !== CONTRACT_VERSION ||
+    envelope.contractVersion !== expected.contractVersion
+  ) {
     throw new CloudRequestApiError(502, 'unsupported_contract');
+  }
+  if (envelope.requestId !== expected.requestId) {
+    throw new CloudRequestApiError(502, 'invalid_response');
   }
   return envelope;
 }
 
 const defaultFetch: FetchLike = (input, init) => fetch(input, init);
+
+function isUploadBody(value: unknown): value is CloudRequestUploadBody {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<CloudRequestUploadBody>;
+  return (
+    'size' in candidate &&
+    typeof candidate.type === 'string' &&
+    typeof candidate.arrayBuffer === 'function' &&
+    (candidate.stream === undefined || typeof candidate.stream === 'function')
+  );
+}
+
+function octetStreamBody(body: CloudRequestUploadBody): CloudRequestUploadBody {
+  if (body.type === CLOUD_REQUEST_UPLOAD_CONTENT_TYPE) return body;
+  // Expo SDK 57's fetch intentionally overrides Content-Type with body.type for Blob-like bodies.
+  // Keep the original bytes and delegate arrayBuffer without base64/JSON conversion; this single
+  // structural wrapper changes only the media-type metadata that Expo uses for its native request.
+  return {
+    get size() {
+      return body.size;
+    },
+    type: CLOUD_REQUEST_UPLOAD_CONTENT_TYPE,
+    arrayBuffer: () => body.arrayBuffer(),
+    stream: body.stream === undefined ? undefined : () => body.stream!(),
+  };
+}
+
+function readUploadBodySize(body: CloudRequestUploadBody): number {
+  try {
+    return body.size;
+  } catch {
+    throw new CloudRequestApiError(0, 'upload_body_invalid');
+  }
+}
 
 /**
  * Focused HTTP adapter for the Cloud Request admission/upload/result lifecycle. It has no
@@ -675,7 +764,7 @@ export class CloudRequestApiClient implements CloudRequestApi {
     const hasBaseUrlOverride = Object.prototype.hasOwnProperty.call(options, 'baseUrl');
     this.baseUrl = configuredUrl(
       hasBaseUrlOverride ? options.baseUrl : process.env.EXPO_PUBLIC_API_URL,
-      options.requireHttps === true,
+      options.allowInsecureLoopbackForDevelopment === true,
     );
     this.fetchImpl = options.fetchImpl ?? defaultFetch;
     this.requestTimeoutMs =
@@ -690,21 +779,7 @@ export class CloudRequestApiClient implements CloudRequestApi {
     return this.baseUrl !== null;
   }
 
-  async admit(
-    accessTokenOrInput: string | CloudRequestAdmissionInput,
-    request?: CloudRequestAdmissionRequest,
-    idempotencyKey?: string,
-    signal?: AbortSignal,
-  ): Promise<CloudRequestAdmissionResponse> {
-    const input: CloudRequestAdmissionInput =
-      typeof accessTokenOrInput === 'string'
-        ? {
-            accessToken: accessTokenOrInput,
-            request: request as CloudRequestAdmissionRequest,
-            idempotencyKey: idempotencyKey as string,
-            signal,
-          }
-        : accessTokenOrInput;
+  async admit(input: CloudRequestAdmissionInput): Promise<CloudRequestAdmissionResponse> {
     validateAccessToken(input.accessToken);
     const admission = validateAdmission(input.request);
     validateMutationKey(input.idempotencyKey);
@@ -714,66 +789,41 @@ export class CloudRequestApiClient implements CloudRequestApi {
         method: 'POST',
         accessToken: input.accessToken,
         idempotencyKey: input.idempotencyKey,
-        body: JSON.stringify({
+        body: JSON.stringify(admission),
+        signal: input.signal,
+      },
+      (value) =>
+        decodeCloudRequestStatus(value, {
           operation: admission.operation,
           byteCount: admission.byteCount,
           pageCount: admission.pageCount,
-          devicePublicKeyJwk: admission.devicePublicKeyJwk,
-          contractVersion: admission.contractVersion,
+          contractVersion: CONTRACT_VERSION,
         }),
-        signal: input.signal,
-      },
-      decodeCloudRequestStatus,
       'admit',
     );
   }
 
-  async upload(
-    accessTokenOrInput: string | CloudRequestUploadInput,
-    requestId?: string,
-    artifact?: Blob,
-    byteCountOrKey?: number | string,
-    idempotencyKeyOrSignal?: string | number | AbortSignal,
-    signal?: AbortSignal,
-  ): Promise<CloudRequestStatusResponse> {
-    const input: CloudRequestUploadInput =
-      typeof accessTokenOrInput === 'string'
-        ? {
-            accessToken: accessTokenOrInput,
-            requestId: requestId as string,
-            artifact: artifact as Blob,
-            byteCount:
-              typeof byteCountOrKey === 'number'
-                ? byteCountOrKey
-                : typeof idempotencyKeyOrSignal === 'number'
-                  ? idempotencyKeyOrSignal
-                  : ((artifact as Blob | undefined)?.size ?? 0),
-            idempotencyKey:
-              typeof byteCountOrKey === 'string'
-                ? byteCountOrKey
-                : (idempotencyKeyOrSignal as string),
-            signal:
-              typeof byteCountOrKey === 'number'
-                ? signal
-                : typeof idempotencyKeyOrSignal === 'number'
-                  ? signal
-                  : (idempotencyKeyOrSignal as AbortSignal | undefined),
-          }
-        : accessTokenOrInput;
-    validateAccessToken(input.accessToken);
-    validateRequestIdOrThrow(input.requestId);
+  async upload(input: CloudRequestUploadInput): Promise<CloudRequestStatusResponse> {
+    validateContext(input);
     validateMutationKey(input.idempotencyKey);
-    if (!isBlob(input.artifact)) {
+    if (!isUploadBody(input.artifact)) {
       throw new CloudRequestApiError(0, 'upload_body_invalid');
     }
+    const initialSize = readUploadBodySize(input.artifact);
     if (!validInteger(input.byteCount, 1, CLOUD_REQUEST_MAX_BYTES)) {
       throw new CloudRequestApiError(0, 'upload_too_large');
     }
-    if (!validInteger(input.artifact.size, 1, CLOUD_REQUEST_MAX_BYTES)) {
+    if (!validInteger(initialSize, 1, CLOUD_REQUEST_MAX_BYTES)) {
       throw new CloudRequestApiError(0, 'upload_too_large');
     }
-    if (input.artifact.size !== input.byteCount) {
+    if (initialSize !== input.byteCount) {
       throw new CloudRequestApiError(0, 'upload_size_mismatch');
+    }
+    let bodyForFetch: CloudRequestUploadBody;
+    try {
+      bodyForFetch = octetStreamBody(input.artifact);
+    } catch {
+      throw new CloudRequestApiError(0, 'upload_body_invalid');
     }
     return this.request(
       pathForRequest(CLOUD_REQUEST_UPLOAD_PATH, input.requestId),
@@ -781,84 +831,47 @@ export class CloudRequestApiClient implements CloudRequestApi {
         method: 'PUT',
         accessToken: input.accessToken,
         idempotencyKey: input.idempotencyKey,
-        body: input.artifact,
+        body: bodyForFetch,
         contentType: CLOUD_REQUEST_UPLOAD_CONTENT_TYPE,
         signal: input.signal,
+        beforeFetch: () => {
+          // Re-read at the last safe moment. A mutable File-like body must fail closed.
+          const finalSize = readUploadBodySize(input.artifact);
+          if (finalSize !== initialSize || finalSize !== input.byteCount) {
+            throw new CloudRequestApiError(0, 'upload_size_mismatch');
+          }
+        },
       },
-      decodeCloudRequestStatus,
+      (value) => decodeCloudRequestStatus(value, input),
       'upload',
     );
   }
 
-  async completeUpload(
-    accessTokenOrInput: string | CloudRequestMutationInput,
-    requestId?: string,
-    idempotencyKey?: string,
-    signal?: AbortSignal,
-  ): Promise<CloudRequestStatusResponse> {
-    const input: CloudRequestMutationInput =
-      typeof accessTokenOrInput === 'string'
-        ? {
-            accessToken: accessTokenOrInput,
-            requestId: requestId as string,
-            idempotencyKey: idempotencyKey as string,
-            signal,
-          }
-        : accessTokenOrInput;
+  async completeUpload(input: CloudRequestMutationInput): Promise<CloudRequestStatusResponse> {
     return this.mutationStatus(CLOUD_REQUEST_COMPLETE_UPLOAD_PATH, input, 'complete');
   }
 
-  async status(
-    accessTokenOrInput: string | CloudRequestReadInput,
-    requestId?: string,
-    signal?: AbortSignal,
-  ): Promise<CloudRequestStatusResponse> {
-    const input: CloudRequestReadInput =
-      typeof accessTokenOrInput === 'string'
-        ? { accessToken: accessTokenOrInput, requestId: requestId as string, signal }
-        : accessTokenOrInput;
+  async status(input: CloudRequestReadInput): Promise<CloudRequestStatusResponse> {
     validateRead(input);
     return this.request(
       pathForRequest(CLOUD_REQUEST_STATUS_PATH, input.requestId),
       { method: 'GET', accessToken: input.accessToken, signal: input.signal },
-      decodeCloudRequestStatus,
+      (value) => decodeCloudRequestStatus(value, input),
       'status',
     );
   }
 
-  async retrieve(
-    accessTokenOrInput: string | CloudRequestReadInput,
-    requestId?: string,
-    signal?: AbortSignal,
-  ): Promise<CloudResultEnvelope> {
-    const input: CloudRequestReadInput =
-      typeof accessTokenOrInput === 'string'
-        ? { accessToken: accessTokenOrInput, requestId: requestId as string, signal }
-        : accessTokenOrInput;
+  async retrieve(input: CloudRequestReadInput): Promise<CloudResultEnvelope> {
     validateRead(input);
     return this.request(
       pathForRequest(CLOUD_REQUEST_RESULT_PATH, input.requestId),
       { method: 'GET', accessToken: input.accessToken, signal: input.signal },
-      (value) => decodeEnvelopeResponse(value, input.requestId),
+      (value) => decodeEnvelopeResponse(value, input),
       'retrieve',
     );
   }
 
-  async cancel(
-    accessTokenOrInput: string | CloudRequestMutationInput,
-    requestId?: string,
-    idempotencyKey?: string,
-    signal?: AbortSignal,
-  ): Promise<CloudRequestCancellationResponse> {
-    const input: CloudRequestMutationInput =
-      typeof accessTokenOrInput === 'string'
-        ? {
-            accessToken: accessTokenOrInput,
-            requestId: requestId as string,
-            idempotencyKey: idempotencyKey as string,
-            signal,
-          }
-        : accessTokenOrInput;
+  async cancel(input: CloudRequestMutationInput): Promise<CloudRequestCancellationResponse> {
     return this.mutationStatus(CLOUD_REQUEST_CANCEL_PATH, input, 'cancel');
   }
 
@@ -867,8 +880,7 @@ export class CloudRequestApiClient implements CloudRequestApi {
     input: CloudRequestMutationInput,
     operation: 'complete' | 'cancel',
   ): Promise<CloudRequestStatusResponse> {
-    validateAccessToken(input.accessToken);
-    validateRequestIdOrThrow(input.requestId);
+    validateContext(input);
     validateMutationKey(input.idempotencyKey);
     return this.request(
       pathForRequest(path, input.requestId),
@@ -878,7 +890,7 @@ export class CloudRequestApiClient implements CloudRequestApi {
         idempotencyKey: input.idempotencyKey,
         signal: input.signal,
       },
-      decodeCloudRequestStatus,
+      (value) => decodeCloudRequestStatus(value, input),
       operation,
     );
   }
@@ -890,8 +902,9 @@ export class CloudRequestApiClient implements CloudRequestApi {
       readonly accessToken: string;
       readonly idempotencyKey?: string;
       readonly contentType?: string;
-      readonly body?: string | Blob;
+      readonly body?: string | CloudRequestUploadBody;
       readonly signal?: AbortSignal | undefined;
+      readonly beforeFetch?: () => void;
     },
     decode: (value: unknown) => T,
     operation: 'admit' | 'upload' | 'complete' | 'status' | 'retrieve' | 'cancel',
@@ -911,27 +924,28 @@ export class CloudRequestApiClient implements CloudRequestApi {
 
     const timeoutController = new AbortController();
     const timeoutId = setTimeout(() => timeoutController.abort(), this.requestTimeoutMs);
-    let removeCallerAbortListener: (() => void) | null = null;
+    let removeCallerAbortListener: (() => void) | undefined;
     if (options.signal !== undefined) {
       const abortCaller = () => timeoutController.abort();
       options.signal.addEventListener('abort', abortCaller, { once: true });
       removeCallerAbortListener = () => options.signal?.removeEventListener('abort', abortCaller);
     }
+    let removeAbortPromiseListener: (() => void) | undefined;
     const abortPromise = new Promise<never>((_, reject) => {
-      timeoutController.signal.addEventListener(
-        'abort',
-        () => {
-          const error = new Error('cloud_request_aborted');
-          error.name = 'AbortError';
-          reject(error);
-        },
-        { once: true },
-      );
+      const rejectAbort = () => {
+        const error = new Error('cloud_request_aborted');
+        error.name = 'AbortError';
+        reject(error);
+      };
+      timeoutController.signal.addEventListener('abort', rejectAbort, { once: true });
+      removeAbortPromiseListener = () =>
+        timeoutController.signal.removeEventListener('abort', rejectAbort);
     });
     const init: RequestInit = { method: options.method, headers, signal: timeoutController.signal };
-    if (options.body !== undefined) init.body = options.body;
+    if (options.body !== undefined) init.body = options.body as BodyInit;
 
     try {
+      options.beforeFetch?.();
       let fetchPromise: Promise<Response>;
       try {
         fetchPromise = Promise.resolve(this.fetchImpl(`${this.baseUrl}${path}`, init));
@@ -951,7 +965,7 @@ export class CloudRequestApiClient implements CloudRequestApi {
 
       let payload: unknown;
       try {
-        const textPromise = boundedResponseText(response);
+        const textPromise = boundedResponseText(response, timeoutController.signal);
         void textPromise.catch(() => undefined);
         const body = await Promise.race([textPromise, abortPromise]);
         if (body.trim().length === 0) {
@@ -978,23 +992,34 @@ export class CloudRequestApiClient implements CloudRequestApi {
     } finally {
       clearTimeout(timeoutId);
       removeCallerAbortListener?.();
+      removeAbortPromiseListener?.();
     }
   }
 }
 
-export const CloudRequestClient = CloudRequestApiClient;
-
-export function createCloudRequestApi(
-  options: CloudRequestApiClientOptions = {},
-): CloudRequestApiClient {
-  return new CloudRequestApiClient(options);
+function validateContext(
+  input: CloudRequestStatusContext & { readonly accessToken: string },
+): void {
+  validateAccessToken(input.accessToken);
+  validateRequestIdOrThrow(input.requestId);
+  if (input.contractVersion !== CONTRACT_VERSION) {
+    throw new CloudRequestApiError(0, 'unsupported_contract');
+  }
+  if (
+    input.operation !== undefined &&
+    input.operation !== 'intake-image' &&
+    input.operation !== 'lab-report'
+  ) {
+    invalidRequest();
+  }
+  if (input.byteCount !== undefined && !validInteger(input.byteCount, 1, CLOUD_REQUEST_MAX_BYTES)) {
+    invalidRequest();
+  }
+  if (input.pageCount !== undefined && !validInteger(input.pageCount, 1, CLOUD_REQUEST_MAX_PAGES)) {
+    invalidRequest();
+  }
 }
 
 function validateRead(input: CloudRequestReadInput): void {
-  validateAccessToken(input.accessToken);
-  validateRequestIdOrThrow(input.requestId);
-}
-
-function isBlob(value: unknown): value is Blob {
-  return typeof Blob !== 'undefined' && value instanceof Blob;
+  validateContext(input);
 }
