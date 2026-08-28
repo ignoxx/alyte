@@ -5,19 +5,13 @@ import {
   type LocalModelSnapshot,
 } from '../local-models/model';
 
-export const ONBOARDING_PAGE_COUNT = 6;
-export const ONBOARDING_MODEL_SELECTION_PAGE = 3;
-export const ONBOARDING_MODEL_DOWNLOAD_PAGE = 4;
-export const ONBOARDING_READY_PAGE = 5;
+export const ONBOARDING_PAGE_COUNT = 5;
+export const ONBOARDING_MODEL_PAGE = 3;
+export const ONBOARDING_READY_PAGE = 4;
 
-export function onboardingCanContinue(
-  page: number,
-  modelSelected: boolean,
-  snapshot: LocalModelSnapshot | null,
-): boolean {
+export function onboardingCanContinue(page: number, snapshot: LocalModelSnapshot | null): boolean {
   if (page < 0 || page >= ONBOARDING_PAGE_COUNT) return false;
-  if (page < ONBOARDING_MODEL_SELECTION_PAGE) return true;
-  if (page === ONBOARDING_MODEL_SELECTION_PAGE) return modelSelected;
+  if (page < ONBOARDING_MODEL_PAGE) return true;
   return snapshot !== null && canCompleteModelOnboarding(snapshot);
 }
 
@@ -25,7 +19,6 @@ export function onboardingCanContinue(
 export function onboardingCanNavigateTo(
   currentPage: number,
   targetPage: number,
-  modelSelected: boolean,
   snapshot: LocalModelSnapshot | null,
 ): boolean {
   if (
@@ -38,7 +31,7 @@ export function onboardingCanNavigateTo(
   }
   if (targetPage <= currentPage) return true;
   for (let page = currentPage; page < targetPage; page += 1) {
-    if (!onboardingCanContinue(page, modelSelected, snapshot)) return false;
+    if (!onboardingCanContinue(page, snapshot)) return false;
   }
   return true;
 }
@@ -54,7 +47,7 @@ export function onboardingResumePage(snapshot: LocalModelSnapshot | null): numbe
     snapshot !== null &&
     (isModelDownloadActive(snapshot) || hasResumableModelDownload(snapshot))
   ) {
-    return ONBOARDING_MODEL_DOWNLOAD_PAGE;
+    return ONBOARDING_MODEL_PAGE;
   }
   return 0;
 }

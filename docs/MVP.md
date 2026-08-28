@@ -135,9 +135,9 @@ headroom rather than treating it as abuse.
   Hugging Face account token,
   use a gated model, silently follow a moving branch such as `main`, or expose an experimental
   model picker.
-- Onboarding presents Gemma 4 E2B (Q4_0) as the sole first-release model choice and requires the person
-  to select, download, verify, and reach on-disk `ready` before entering Alyte. It never activates
-  or loads the runtime during onboarding. There is no skip, account, or
+- Onboarding presents Gemma 4 E2B (Q4_0) as the sole first-release model pack and requires the person
+  to download, verify, and reach on-disk `ready` before entering Alyte. It never activates or loads
+  the runtime during onboarding. There is no skip, account, or
   paywall gate. Offline, cancelled, failed, or insufficient-space downloads remain in the download
   step with a safe retry. If the pack is deleted later, Alyte presents the same disclosure as a
   contextual reinstall gate before new automated extraction while existing local history remains
@@ -609,17 +609,18 @@ messages, medication reminders, biomarker warnings, and inferred-health alerts a
 - First launch uses a concise sequence covering the product promise; local-first/no-account
   privacy; the need to verify imports and distinguish measured results from general research; the
   optional paid cloud boundary plus adult-only/non-diagnostic scope; and the required local model
-  selection/download.
+  preparation, verification, and retry path.
 - Onboarding leads directly into the local app after the model pack verifies and never forces
   account creation or a paywall.
-- The already-shipped onboarding is not presumed final: the release pass must verify that each
-  screen earns its place and emphasizes the two-report outcome over implementation details.
-- Onboarding discloses Gemma 4 E2B (Q4_0)'s source, publisher, license, download size, and device-space
-  requirement, then requires explicit selection and a verified download ending in on-disk `ready`.
-  Runtime activation/load happens only immediately before semantic extraction. Gemma is the only
-  first-release option, but the selection step keeps the model-pack boundary explicit; it is not a
-  public multi-model picker. Permissions, account creation, and payment remain deferred until
-  contextually needed.
+- The release onboarding is a concise five-page journey: Welcome, measured history, Private and
+  honest, one combined Prepare local extraction page, and Ready. Each page earns its place and
+  emphasizes the two-report outcome over implementation details.
+- The combined Prepare local extraction page presents Gemma 4 E2B (Q4_0) as Alyte's sole reviewed
+  pack, with its source, publisher, license, download size, and device-space requirement. That
+  page owns download, resume, verification, failure, and retry; completion requires a verified
+  on-disk `ready` artifact. Runtime activation/load happens only immediately before semantic
+  extraction. Gemma is not a public multi-model picker. Permissions, account creation, and payment
+  remain deferred until contextually needed.
 - Detailed teaching is contextual and appears when the person first imports, verifies, analyzes,
   or explores evidence rather than lengthening the opening tour.
 - Settings provides clear Contact, Feedback, and Billing Help actions for complaints or assistance.

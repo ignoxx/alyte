@@ -187,8 +187,9 @@ laboratory-history release.
 
 Build:
 
-- short onboarding that explains local mode, measured versus estimated data, cloud consent, and
-  adult-only scope without requiring login;
+- five-page onboarding that explains local mode, measured versus estimated data, cloud consent, and
+  adult-only scope without requiring login, ending with one combined required-model preparation
+  page;
 - privacy dashboard, app lock, exact-upload preview, support/FAQ, terms and privacy links;
 - Full Export, local deletion, cloud account export/deletion, and StoreKit restore;
 - paywall copy and the provisional EUR prices/allowances from `MVP.md`;
@@ -299,9 +300,10 @@ Cloud Plus passes Gate C.
 5. **Candidate extraction** — Vision document/tables, measurement filtering, locale parsing,
    Lithuanian fixtures, per-section specimen context, deterministic validation, a provider-neutral
    semantic mapper, and structured-fixture candidate evaluation through #50 and #66.
-6. **Required extraction model pack** — no bundled weights; explicit selection and verified Gemma
-   4 E2B (Q4_0) download ending in on-disk `ready` before onboarding completes; runtime activation
-   and load stay lazy and extraction-scoped; contextual reinstall gate after later deletion;
+6. **Required extraction model pack** — no bundled weights; a verified Gemma 4 E2B (Q4_0)
+   preparation page with disclosure and a verified download ending in on-disk `ready`
+   before onboarding completes; runtime activation and load stay lazy and extraction-scoped;
+   contextual reinstall gate after later deletion;
    direct public/ungated Hugging Face download from an immutable revision; reviewed
    manifest/license, checksum verification, and storage/load/delete lifecycle through #51; followed
    by constrained extraction integration and deterministic inference-failure fallback through #52.

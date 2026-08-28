@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  ActivityIndicator,
   AccessibilityInfo,
+  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -32,7 +32,7 @@ import {
 } from '../local-models/model-ui';
 import type { LocalModelService } from '../local-models/native';
 import {
-  ONBOARDING_MODEL_DOWNLOAD_PAGE,
+  ONBOARDING_MODEL_PAGE,
   ONBOARDING_PAGE_COUNT,
   ONBOARDING_READY_PAGE,
   onboardingCanContinue,
@@ -46,30 +46,13 @@ type OnboardingScreenProps = {
   readonly onComplete: () => Promise<void>;
 };
 
-function ModelFact({
-  icon,
-  children,
-}: {
-  readonly icon: 'phone' | 'cloud';
-  readonly children: string;
-}) {
-  return (
-    <View style={styles.fact}>
-      <AppIcon name={icon} size={18} color={colors.accent} />
-      <AppText variant="caption" style={styles.factLabel} selectable>
-        {children}
-      </AppText>
-    </View>
-  );
-}
-
 function IntroPage({
   icon,
   title,
   body,
   children,
 }: {
-  readonly icon: 'library' | 'lockShield' | 'chart' | 'cloud' | 'checkmarkCircle';
+  readonly icon: 'library' | 'lockShield' | 'chart' | 'checkmarkCircle';
   readonly title: string;
   readonly body: string;
   readonly children?: ReactNode;
@@ -92,79 +75,58 @@ function IntroPage({
   );
 }
 
-function ModelSelectionPage({
-  selected,
-  onSelect,
-  model,
+function ModelFact({
+  icon,
+  children,
 }: {
-  readonly selected: boolean;
-  readonly onSelect: () => void;
-  readonly model: LocalModelService;
+  readonly icon: 'phone' | 'cloud';
+  readonly children: string;
 }) {
   return (
-    <View style={styles.pageBody}>
-      <StatusPill>{t('onboarding.modelEyebrow')}</StatusPill>
-      <View style={styles.pageCopy}>
-        <AppText variant="title" style={styles.pageTitle} selectable>
-          {t('onboarding.modelChoiceTitle')}
-        </AppText>
-        <AppText style={styles.pageBodyText} selectable>
-          {t('onboarding.modelChoiceBody')}
-        </AppText>
-      </View>
-
-      <Pressable
-        accessibilityLabel={t('onboarding.modelSelectLabel')}
-        accessibilityRole="radio"
-        accessibilityState={{ selected }}
-        onPress={onSelect}
-        style={({ pressed }) => [
-          styles.modelChoice,
-          selected && styles.modelChoiceSelected,
-          pressed && styles.pressed,
-        ]}
-      >
-        <View style={styles.modelChoiceIcon}>
-          <AppIcon name="folder" size={26} color={colors.accent} />
-        </View>
-        <View style={styles.modelChoiceCopy}>
-          <AppText variant="heading" selectable>
-            {t('onboarding.modelName')}
-          </AppText>
-          <AppText style={styles.muted} selectable>
-            {model.manifest.pack.publisher}
-          </AppText>
-          <AppText variant="caption" style={styles.muted} selectable>
-            {t('onboarding.modelChoiceFact')}
-          </AppText>
-        </View>
-        <AppIcon
-          name="checkmarkCircle"
-          size={28}
-          color={selected ? colors.accent : colors.disabledInk}
-          accessibilityLabel={
-            selected ? t('onboarding.modelSelected') : t('onboarding.modelNotSelected')
-          }
-        />
-      </Pressable>
-
-      <ModelDetailsDisclosure manifest={model.manifest} />
+    <View style={styles.fact}>
+      <AppIcon name={icon} size={18} color={colors.accent} />
+      <AppText variant="caption" style={styles.factLabel} selectable>
+        {children}
+      </AppText>
     </View>
   );
 }
 
-function ModelDownloadPage({
+function ModelMetadataRow({ label, value }: { readonly label: string; readonly value: string }) {
+  return (
+    <View style={styles.metadataRow} accessibilityRole="summary">
+      <AppText variant="caption" style={styles.metadataLabel} selectable>
+        {label}
+      </AppText>
+      <AppText variant="caption" style={styles.metadataValue} selectable>
+        {value}
+      </AppText>
+    </View>
+  );
+}
+
+function ModelPreparationPage({
+  model,
   snapshot,
   modelFailure,
+  cancelled,
+  cancelError,
 }: {
+  readonly model: LocalModelService;
   readonly snapshot: LocalModelSnapshot | null;
   readonly modelFailure: LocalModelSnapshot['failure'];
+  readonly cancelled: boolean;
+  readonly cancelError: boolean;
 }) {
   const ready = snapshot !== null && canCompleteModelOnboarding(snapshot);
   const resumable = hasResumableModelDownload(snapshot);
   const active = snapshot !== null && isModelDownloadActive(snapshot);
   const failed = snapshot?.state === 'failed';
   const failure = failed ? (snapshot?.failure ?? null) : modelFailure;
+  const showCancelError = cancelError && !resumable;
+  const showFailure = modelSetupFailureVisible(snapshot, modelFailure);
+  const artifact = model.manifest.pack.artifact;
+  const source = model.manifest.pack.source;
 
   return (
     <View style={styles.pageBody}>
@@ -181,8 +143,10 @@ function ModelDownloadPage({
       </View>
 
       <AppSurface style={styles.modelSummary}>
-        <View style={styles.packHeader}>
-          <AppIcon name="folder" size={26} color={colors.accent} />
+        <View accessibilityRole="summary" style={styles.packHeader}>
+          <View style={styles.modelIconWell} accessibilityElementsHidden>
+            <AppIcon name="folder" size={26} color={colors.accent} />
+          </View>
           <View style={styles.packCopy}>
             <AppText variant="heading" selectable>
               {t('onboarding.modelName')}
@@ -192,11 +156,31 @@ function ModelDownloadPage({
             </AppText>
           </View>
         </View>
-        <View style={styles.facts}>
+
+        <View accessibilityRole="summary" style={styles.facts}>
           <ModelFact icon="phone">{t('onboarding.modelSizeFact')}</ModelFact>
           <ModelFact icon="phone">{t('onboarding.modelSpaceFact')}</ModelFact>
           <ModelFact icon="phone">{t('onboarding.modelRunsLocallyFact')}</ModelFact>
           <ModelFact icon="cloud">{t('onboarding.modelNoUploadFact')}</ModelFact>
+        </View>
+
+        <View style={styles.metadata} accessibilityRole="summary">
+          <ModelMetadataRow
+            label={t('onboarding.modelPublisherLabel')}
+            value={model.manifest.pack.publisher}
+          />
+          <ModelMetadataRow
+            label={t('onboarding.modelLicenseLabel')}
+            value={model.manifest.pack.license}
+          />
+          <ModelMetadataRow
+            label={t('onboarding.modelSourceLabel')}
+            value={`${source.repository} @ ${source.revision}`}
+          />
+          <ModelMetadataRow
+            label={t('onboarding.modelArtifactLabel')}
+            value={`${artifact.repository}/${artifact.filename} @ ${artifact.revision}`}
+          />
         </View>
       </AppSurface>
 
@@ -220,7 +204,7 @@ function ModelDownloadPage({
         </AppSurface>
       ) : null}
 
-      {modelSetupFailureVisible(snapshot, modelFailure) ? (
+      {showFailure && !showCancelError ? (
         <AppSurface tone="soft" style={styles.callout}>
           <AppText variant="heading" style={styles.error} selectable>
             {t(modelSetupFailureMessageKey(failure))}
@@ -228,12 +212,28 @@ function ModelDownloadPage({
         </AppSurface>
       ) : null}
 
-      {active && snapshot !== null ? <ModelProgress snapshot={snapshot} /> : null}
-      {active ? (
+      {showCancelError ? (
+        <AppSurface tone="soft" style={styles.callout}>
+          <AppText variant="heading" style={styles.error} selectable>
+            {t('onboarding.modelCancelFailure')}
+          </AppText>
+        </AppSurface>
+      ) : null}
+
+      {cancelled && !resumable && !showFailure ? (
+        <AppText style={styles.muted} selectable>
+          {t('onboarding.modelSetupCancelDisclosure')}
+        </AppText>
+      ) : null}
+
+      {active || resumable ? <ModelProgress snapshot={snapshot!} /> : null}
+      {active && snapshot?.state !== 'cancelling' ? (
         <AppText style={styles.muted} selectable>
           {t('onboarding.modelKeepOpen')}
         </AppText>
       ) : null}
+
+      <ModelDetailsDisclosure manifest={model.manifest} />
     </View>
   );
 }
@@ -268,11 +268,12 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   const cancellationRequestedRef = useRef(false);
   const previousReadyRef = useRef(false);
   const [page, setPage] = useState(0);
-  const [modelSelected, setModelSelected] = useState(false);
   const [snapshot, setSnapshot] = useState<LocalModelSnapshot | null>(null);
   const [modelFailure, setModelFailure] = useState<LocalModelSnapshot['failure']>(null);
   const [busy, setBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
+  const [cancelled, setCancelled] = useState(false);
+  const [cancelError, setCancelError] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [completionFailed, setCompletionFailed] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
@@ -295,7 +296,6 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
         if (!hasInteractedRef.current) {
           const resumePage = onboardingResumePage(next);
           if (resumePage > 0) {
-            setModelSelected(true);
             shouldSyncPagerRef.current = true;
             setPage(resumePage);
           }
@@ -332,20 +332,20 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
     const becameReady = ready && !previousReadyRef.current;
     previousReadyRef.current = ready;
     if (
-      page !== ONBOARDING_MODEL_DOWNLOAD_PAGE ||
+      page !== ONBOARDING_MODEL_PAGE ||
       !becameReady ||
-      !onboardingCanNavigateTo(page, ONBOARDING_READY_PAGE, modelSelected, snapshot)
+      !onboardingCanNavigateTo(page, ONBOARDING_READY_PAGE, snapshot)
     ) {
       return;
     }
     hasInteractedRef.current = true;
     shouldSyncPagerRef.current = true;
     setPage(ONBOARDING_READY_PAGE);
-  }, [modelSelected, page, ready, snapshot]);
+  }, [page, ready, snapshot]);
 
   function moveToPage(nextPage: number, animated = !reduceMotion) {
     if (pagerLocked || nextPage < 0 || nextPage >= ONBOARDING_PAGE_COUNT) return;
-    if (!onboardingCanNavigateTo(page, nextPage, modelSelected, snapshot)) {
+    if (!onboardingCanNavigateTo(page, nextPage, snapshot)) {
       pagerRef.current?.scrollTo({ x: width * page, animated: false });
       return;
     }
@@ -365,12 +365,16 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
 
   async function startDownload() {
     cancellationRequestedRef.current = false;
+    setCancelled(false);
+    setCancelError(false);
     setModelFailure(null);
     setBusy(true);
     try {
       await model.startDownload();
     } catch (error) {
-      if (!isExpectedDownloadCancellation(error, cancellationRequestedRef.current)) {
+      if (isExpectedDownloadCancellation(error, cancellationRequestedRef.current)) {
+        setCancelled(true);
+      } else {
         setModelFailure(modelFailureFromError(error));
       }
     } finally {
@@ -381,20 +385,23 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
 
   async function cancelDownload() {
     cancellationRequestedRef.current = true;
+    setCancelError(false);
     setCancelBusy(true);
     try {
       await model.cancelDownload();
+      setCancelled(true);
       setModelFailure(null);
     } catch {
       cancellationRequestedRef.current = false;
-      setModelFailure('unknown');
+      setCancelled(false);
+      setCancelError(true);
     } finally {
       setCancelBusy(false);
     }
   }
 
   function continueLabel(): string {
-    if (page === ONBOARDING_MODEL_DOWNLOAD_PAGE) {
+    if (page === ONBOARDING_MODEL_PAGE) {
       if (ready) return t('onboarding.next');
       if (pagerLocked || busy) return t('onboarding.modelPreparing');
       if (resumable) return t('onboarding.modelContinueDownload');
@@ -407,34 +414,40 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
 
   function continueDisabled(): boolean {
     if (finishing || cancelBusy) return true;
-    if (page === ONBOARDING_MODEL_DOWNLOAD_PAGE)
-      return snapshot === null || (pagerLocked && !ready) || busy;
-    return !onboardingCanContinue(page, modelSelected, snapshot);
+    if (page === ONBOARDING_MODEL_PAGE) {
+      if (pagerLocked || busy) return true;
+      return modelAction === 'checking' || modelAction === 'none';
+    }
+    return !onboardingCanContinue(page, snapshot);
   }
 
   async function handleContinue() {
     if (continueDisabled()) return;
-    const eligible = onboardingCanContinue(page, modelSelected, snapshot);
-    if (page === ONBOARDING_MODEL_DOWNLOAD_PAGE && !eligible) {
-      await startDownload();
-      return;
-    }
-    if (!eligible) return;
-    if (page < ONBOARDING_MODEL_DOWNLOAD_PAGE && eligible) return moveToPage(page + 1);
-    if (page === ONBOARDING_MODEL_DOWNLOAD_PAGE && eligible)
-      return moveToPage(ONBOARDING_READY_PAGE);
-    if (page === ONBOARDING_READY_PAGE) {
-      setFinishing(true);
-      setCompletionFailed(false);
-      try {
-        await onComplete();
-      } catch {
-        setCompletionFailed(true);
-        setFinishing(false);
+    if (page === ONBOARDING_MODEL_PAGE) {
+      if (ready) {
+        moveToPage(ONBOARDING_READY_PAGE);
+      } else if (
+        modelAction === 'download' ||
+        modelAction === 'continue' ||
+        modelAction === 'retry'
+      ) {
+        await startDownload();
       }
       return;
     }
-    await startDownload();
+    if (!onboardingCanContinue(page, snapshot)) return;
+    if (page < ONBOARDING_MODEL_PAGE) {
+      moveToPage(page + 1);
+      return;
+    }
+    setFinishing(true);
+    setCompletionFailed(false);
+    try {
+      await onComplete();
+    } catch {
+      setCompletionFailed(true);
+      setFinishing(false);
+    }
   }
 
   const pages = [
@@ -445,34 +458,40 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
       body={t('onboarding.body')}
     />,
     <IntroPage
-      key="local"
+      key="history"
       icon="chart"
       title={t('onboarding.historyTitle')}
       body={t('onboarding.historyBody')}
     />,
     <IntroPage
-      key="measured"
+      key="privacy"
       icon="lockShield"
       title={t('onboarding.privacyTitle')}
       body={t('onboarding.privacyBody')}
     />,
-    <ModelSelectionPage
-      key="model-selection"
+    <ModelPreparationPage
+      key="model"
       model={model}
-      selected={modelSelected}
-      onSelect={() => {
-        hasInteractedRef.current = true;
-        setModelSelected(true);
-      }}
+      snapshot={snapshot}
+      modelFailure={modelFailure}
+      cancelled={cancelled}
+      cancelError={cancelError}
     />,
-    <ModelDownloadPage key="model-download" modelFailure={modelFailure} snapshot={snapshot} />,
     <ReadyPage key="ready" completionFailed={completionFailed} />,
   ];
 
   return (
     <View style={screenStyles.safe}>
-      <View style={[styles.topBar, { paddingTop: Math.max(insets.top, spacing.sm) }]}>
-        <View style={styles.topBarSide}>
+      <View
+        style={[
+          styles.topBar,
+          {
+            height: TOP_BAR_CONTENT_HEIGHT + insets.top,
+            paddingTop: insets.top,
+          },
+        ]}
+      >
+        <View style={styles.topBarControlSlot}>
           {page > 0 && !pagerLocked ? (
             <Pressable
               accessibilityLabel={t('onboarding.back')}
@@ -483,14 +502,16 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
             >
               <AppIcon name="chevronLeft" size={18} color={colors.accent} />
             </Pressable>
-          ) : null}
+          ) : (
+            <View accessibilityElementsHidden style={styles.backButton} />
+          )}
         </View>
         <AppText variant="caption" style={styles.stepLabel} selectable>
           {t('onboarding.step')
             .replace('{current}', String(page + 1))
             .replace('{total}', String(ONBOARDING_PAGE_COUNT))}
         </AppText>
-        <View style={styles.topBarSide} />
+        <View accessibilityElementsHidden style={styles.topBarControlSlot} />
       </View>
 
       <ScrollView
@@ -518,6 +539,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
 
       <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
         <View
+          accessibilityLabel={t('onboarding.progressLabel')}
           accessibilityRole="progressbar"
           accessibilityValue={{ min: 1, max: ONBOARDING_PAGE_COUNT, now: page + 1 }}
           style={styles.dots}
@@ -532,7 +554,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
           onPress={() => void handleContinue()}
           style={styles.continueButton}
         />
-        {page === ONBOARDING_MODEL_DOWNLOAD_PAGE && pagerLocked ? (
+        {page === ONBOARDING_MODEL_PAGE && pagerLocked ? (
           <AppButton
             disabled={cancelBusy}
             label={cancelBusy ? t('onboarding.modelCancelling') : t('onboarding.modelCancel')}
@@ -545,21 +567,22 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   );
 }
 
+const TOP_BAR_CONTENT_HEIGHT = 52;
+
 const styles = StyleSheet.create({
   topBar: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    minHeight: 52,
     paddingHorizontal: spacing.lg,
   },
-  topBarSide: { minWidth: 44 },
+  topBarControlSlot: { alignItems: 'center', height: 44, justifyContent: 'center', width: 44 },
   backButton: {
     alignItems: 'center',
     borderRadius: 99,
+    height: 44,
     justifyContent: 'center',
-    minHeight: 44,
-    minWidth: 44,
+    width: 44,
   },
   stepLabel: { color: colors.mutedInk, fontVariant: ['tabular-nums'] },
   pagerContent: { flexGrow: 1 },
@@ -579,32 +602,30 @@ const styles = StyleSheet.create({
   pageTitle: { textAlign: 'center' },
   pageBodyText: { color: colors.mutedInk, maxWidth: 380, textAlign: 'center', ...typography.body },
   muted: { color: colors.mutedInk },
-  modelChoice: {
-    alignItems: 'center',
-    borderColor: colors.border,
-    borderCurve: 'continuous',
-    borderRadius: radii.md,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: spacing.md,
-    padding: spacing.md,
-  },
-  modelChoiceSelected: { borderColor: colors.accent, backgroundColor: colors.surface },
-  modelChoiceIcon: {
+  modelSummary: { gap: spacing.lg, padding: spacing.lg },
+  modelIconWell: {
     alignItems: 'center',
     backgroundColor: colors.accentSoft,
+    borderCurve: 'continuous',
     borderRadius: radii.sm,
     height: 48,
     justifyContent: 'center',
     width: 48,
   },
-  modelChoiceCopy: { flex: 1, gap: spacing.xs },
-  modelSummary: { gap: spacing.lg, padding: spacing.lg },
   packHeader: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
   packCopy: { flex: 1, gap: spacing.xs },
   facts: { gap: spacing.sm },
   fact: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, minHeight: 30 },
   factLabel: { color: colors.ink, flexShrink: 1 },
+  metadata: {
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: spacing.sm,
+    paddingTop: spacing.md,
+  },
+  metadataRow: { gap: spacing.xs },
+  metadataLabel: { color: colors.mutedInk, ...typography.label },
+  metadataValue: { color: colors.ink },
   checking: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, minHeight: 44 },
   callout: { gap: spacing.sm, padding: spacing.md },
   error: { color: colors.danger },
