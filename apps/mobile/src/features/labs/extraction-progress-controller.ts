@@ -1,5 +1,20 @@
 import type { LabReportExtractionError, LabReportExtractionProgress } from './report-service';
 
+export type ExtractionProgressTerminalDestination =
+  | { readonly kind: 'draft'; readonly reportId: string; readonly draftId: string }
+  | { readonly kind: 'report'; readonly reportId: string };
+
+export function extractionTerminalNavigationReady(
+  destination: ExtractionProgressTerminalDestination | null,
+  input: {
+    readonly focused: boolean;
+    readonly activeOperation: boolean;
+    readonly hasFailure: boolean;
+  },
+): boolean {
+  return destination !== null && input.focused && !input.activeOperation && !input.hasFailure;
+}
+
 export type ExtractionProgressControllerInput = {
   readonly focused: boolean;
   readonly durableLoaded: boolean;
@@ -18,8 +33,7 @@ type ExtractionProgressControllerDependencies = {
   readonly startExtraction: (reportId: string) => Promise<{ readonly id: string }>;
   readonly classifyFailure: (error: unknown) => LabReportExtractionError['reason'];
   readonly openModelSetup: () => void;
-  readonly openDraft: (reportId: string, draftId: string) => void;
-  readonly openReport: (reportId: string) => void;
+  readonly setTerminalDestination: (destination: ExtractionProgressTerminalDestination) => void;
   readonly setActiveOperation: (active: boolean) => void;
   readonly setFailure: (failure: LabReportExtractionError['reason'] | null) => void;
   readonly setModelUnavailable: () => void;
@@ -61,13 +75,15 @@ export class ExtractionProgressController {
       this.completed = true;
       this.dependencies.setActiveOperation(false);
       this.dependencies.setFailure(null);
-      if (this.focused) {
-        if (input.restoredDraftId === null) {
-          this.dependencies.openReport(this.dependencies.reportId);
-        } else {
-          this.dependencies.openDraft(this.dependencies.reportId, input.restoredDraftId);
-        }
-      }
+      this.dependencies.setTerminalDestination(
+        input.restoredDraftId === null
+          ? { kind: 'report', reportId: this.dependencies.reportId }
+          : {
+              kind: 'draft',
+              reportId: this.dependencies.reportId,
+              draftId: input.restoredDraftId,
+            },
+      );
       return;
     }
     if (!input.modelReady) {
@@ -140,9 +156,11 @@ export class ExtractionProgressController {
     this.started = false;
     this.completed = true;
     this.dependencies.setActiveOperation(false);
-    if (this.focused) {
-      this.dependencies.openDraft(this.dependencies.reportId, draftId);
-    }
+    this.dependencies.setTerminalDestination({
+      kind: 'draft',
+      reportId: this.dependencies.reportId,
+      draftId,
+    });
   }
 
   private fail(generation: number, error: unknown): void {

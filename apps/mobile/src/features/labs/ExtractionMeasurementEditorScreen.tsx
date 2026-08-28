@@ -393,7 +393,6 @@ function Field({
 const styles = StyleSheet.create({
   safe: { backgroundColor: colors.canvas, flex: 1 },
   scroll: { flex: 1 },
-  loading: { padding: spacing.lg },
   center: {
     flex: 1,
     alignItems: 'center',

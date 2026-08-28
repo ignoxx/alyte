@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  extractionTerminalNavigationReady,
   ExtractionProgressController,
+  type ExtractionProgressTerminalDestination,
   type ExtractionProgressControllerInput,
 } from './extraction-progress-controller';
 import { LabReportExtractionError } from './report-service';
@@ -41,6 +43,7 @@ test('not-ready routes once, then setup completion starts the same report once',
   const starts: string[] = [];
   const setupRoutes: string[] = [];
   const draftRoutes: Array<{ reportId: string; draftId: string }> = [];
+  const stateTransitions: string[] = [];
   const controller = new ExtractionProgressController({
     reportId: 'report-79',
     startExtraction: async (reportId) => {
@@ -49,9 +52,14 @@ test('not-ready routes once, then setup completion starts the same report once',
     },
     classifyFailure: () => 'recognition',
     openModelSetup: () => setupRoutes.push('setup'),
-    openDraft: (reportId, draftId) => draftRoutes.push({ reportId, draftId }),
-    openReport: () => assert.fail('a newly completed extraction has a draft'),
-    setActiveOperation: () => undefined,
+    setTerminalDestination: (destination) => {
+      stateTransitions.push('terminal');
+      assert.equal(stateTransitions[0], 'guard-off');
+      if (destination.kind === 'draft') {
+        draftRoutes.push({ reportId: destination.reportId, draftId: destination.draftId });
+      }
+    },
+    setActiveOperation: (active) => stateTransitions.push(active ? 'guard-on' : 'guard-off'),
     setFailure: () => undefined,
     setModelUnavailable: () => undefined,
   });
@@ -71,6 +79,7 @@ test('not-ready routes once, then setup completion starts the same report once',
   await extraction.promise;
   await flushController();
   assert.deepEqual(draftRoutes, [{ reportId: 'report-79', draftId: 'draft-79' }]);
+  assert.deepEqual(stateTransitions, ['guard-off', 'guard-on', 'guard-off', 'terminal']);
 });
 
 test('mid-operation unavailable opens setup once and ignores the late rejection', async () => {
@@ -85,8 +94,7 @@ test('mid-operation unavailable opens setup once and ignores the late rejection'
     openModelSetup: () => {
       setupRoutes += 1;
     },
-    openDraft: () => assert.fail('an unavailable operation must not open a draft'),
-    openReport: () => assert.fail('an unavailable operation must not open the report'),
+    setTerminalDestination: () => assert.fail('an unavailable operation must not complete'),
     setActiveOperation: () => undefined,
     setFailure: () => undefined,
     setModelUnavailable: () => {
@@ -113,7 +121,6 @@ test('mid-operation unavailable opens setup once and ignores the late rejection'
 test('dispose prevents late completion and repeated evaluation from navigating', async () => {
   const extraction = deferred<{ readonly id: string }>();
   let starts = 0;
-  let draftRoutes = 0;
   const controller = new ExtractionProgressController({
     reportId: 'report-unmounted',
     startExtraction: () => {
@@ -122,10 +129,7 @@ test('dispose prevents late completion and repeated evaluation from navigating',
     },
     classifyFailure: () => 'recognition',
     openModelSetup: () => undefined,
-    openDraft: () => {
-      draftRoutes += 1;
-    },
-    openReport: () => assert.fail('an unmounted operation must not open the report'),
+    setTerminalDestination: () => assert.fail('an unmounted operation must not complete'),
     setActiveOperation: () => undefined,
     setFailure: () => undefined,
     setModelUnavailable: () => undefined,
@@ -141,7 +145,6 @@ test('dispose prevents late completion and repeated evaluation from navigating',
   await flushController();
   controller.evaluate(readyInput());
   assert.equal(starts, 1);
-  assert.equal(draftRoutes, 0);
 });
 
 test('restored complete progress opens its existing draft without restarting extraction', () => {
@@ -156,8 +159,16 @@ test('restored complete progress opens its existing draft without restarting ext
     },
     classifyFailure: () => 'recognition',
     openModelSetup: () => assert.fail('a complete operation must not reopen model setup'),
-    openDraft: (reportId, draftId) => draftRoutes.push({ reportId, draftId }),
-    openReport: () => assert.fail('the existing open draft should be preferred'),
+    setTerminalDestination: (destination) => {
+      assert.deepEqual(destination, {
+        kind: 'draft',
+        reportId: 'report-restored',
+        draftId: 'draft-restored',
+      });
+      if (destination.kind === 'draft') {
+        draftRoutes.push({ reportId: destination.reportId, draftId: destination.draftId });
+      }
+    },
     setActiveOperation: (active) => {
       activeOperation = active;
     },
@@ -195,9 +206,11 @@ test('restored complete progress with no draft offers the report fallback', () =
     },
     classifyFailure: () => 'recognition',
     openModelSetup: () => assert.fail('a complete operation must not reopen model setup'),
-    openDraft: () => assert.fail('there is no restored draft'),
-    openReport: (reportId) => {
-      assert.equal(reportId, 'report-restored-no-draft');
+    setTerminalDestination: (destination) => {
+      assert.deepEqual(destination, {
+        kind: 'report',
+        reportId: 'report-restored-no-draft',
+      });
       reportRoutes += 1;
     },
     setActiveOperation: (active) => activeTransitions.push(active),
@@ -205,20 +218,51 @@ test('restored complete progress with no draft offers the report fallback', () =
     setModelUnavailable: () => assert.fail('a complete operation does not need a model'),
   });
 
-  controller.evaluate(
-    readyInput({
-      restoredProgress: {
-        reportId: 'report-restored-no-draft',
-        stage: 'review',
-        status: 'complete',
-        completed: 1,
-        total: 1,
-      },
-      restoredDraftId: null,
-    }),
-  );
+  const restoredInput = {
+    restoredProgress: {
+      reportId: 'report-restored-no-draft',
+      stage: 'review' as const,
+      status: 'complete' as const,
+      completed: 1,
+      total: 1,
+    },
+    restoredDraftId: undefined,
+  };
+  controller.evaluate(readyInput(restoredInput));
+
+  // A failed or still-pending lookup must not be collapsed into the successful no-draft result.
+  assert.equal(starts, 0);
+  assert.equal(reportRoutes, 0);
+  assert.deepEqual(activeTransitions, []);
+
+  controller.evaluate(readyInput({ ...restoredInput, restoredDraftId: null }));
 
   assert.equal(starts, 0);
   assert.equal(reportRoutes, 1);
   assert.deepEqual(activeTransitions, [false]);
+});
+
+test('terminal handoff is ready only after the operation guard has rendered off', () => {
+  const destination: ExtractionProgressTerminalDestination = {
+    kind: 'draft',
+    reportId: 'report-guard',
+    draftId: 'draft-guard',
+  };
+
+  assert.equal(
+    extractionTerminalNavigationReady(destination, {
+      focused: true,
+      activeOperation: true,
+      hasFailure: false,
+    }),
+    false,
+  );
+  assert.equal(
+    extractionTerminalNavigationReady(destination, {
+      focused: true,
+      activeOperation: false,
+      hasFailure: false,
+    }),
+    true,
+  );
 });

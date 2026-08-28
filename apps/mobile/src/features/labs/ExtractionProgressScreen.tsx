@@ -19,7 +19,11 @@ import {
   type LabReportExtractionProgress,
   type PasswordRequest,
 } from './report-service';
-import { ExtractionProgressController } from './extraction-progress-controller';
+import {
+  extractionTerminalNavigationReady,
+  ExtractionProgressController,
+  type ExtractionProgressTerminalDestination,
+} from './extraction-progress-controller';
 import { extractionFailurePresentation } from './extraction-progress-presentation';
 import { canStartAutomatedExtraction } from '../local-models/model';
 
@@ -77,6 +81,9 @@ export function ExtractionProgressScreen() {
     null,
   );
   const [restoredDraftId, setRestoredDraftId] = useState<string | null | undefined>(undefined);
+  const [restoredDraftLookupFailed, setRestoredDraftLookupFailed] = useState(false);
+  const [terminalDestination, setTerminalDestination] =
+    useState<ExtractionProgressTerminalDestination | null>(null);
   const [modelStateLoaded, setModelStateLoaded] = useState(false);
   const controller = useMemo(
     () =>
@@ -86,34 +93,7 @@ export function ExtractionProgressScreen() {
         classifyFailure: (error) =>
           error instanceof LabReportExtractionError ? error.reason : 'recognition',
         openModelSetup: () => navigation.navigate('ModelInstall'),
-        openDraft: (reportId, draftId) => {
-          navigation.navigate(
-            'MainTabs',
-            {
-              screen: 'Labs',
-              params: {
-                screen: 'ExtractionDraft',
-                params: { reportId, draftId },
-                pop: true,
-              },
-            },
-            { pop: true },
-          );
-        },
-        openReport: (reportId) => {
-          navigation.navigate(
-            'MainTabs',
-            {
-              screen: 'Labs',
-              params: {
-                screen: 'LabReportDetail',
-                params: { reportId },
-                pop: true,
-              },
-            },
-            { pop: true },
-          );
-        },
+        setTerminalDestination,
         setActiveOperation,
         setFailure,
         setModelUnavailable: () => {
@@ -167,8 +147,13 @@ export function ExtractionProgressScreen() {
         setProgress(durable);
         setRestoredProgress(durable);
         if (durable.status === 'active') setActiveOperation(true);
-        if (durable.status !== 'complete') setRestoredDraftId(null);
+        if (durable.status !== 'complete') {
+          setRestoredDraftId(null);
+          setRestoredDraftLookupFailed(false);
+        }
         if (durable.status === 'complete') {
+          setRestoredDraftId(undefined);
+          setRestoredDraftLookupFailed(false);
           void reports
             .listOpenExtractionDrafts()
             .then((drafts) => {
@@ -178,7 +163,9 @@ export function ExtractionProgressScreen() {
               );
             })
             .catch(() => {
-              if (active) setRestoredDraftId(null);
+              if (!active) return;
+              setRestoredDraftLookupFailed(true);
+              setFailure('persistence');
             });
         }
         if (
@@ -206,6 +193,47 @@ export function ExtractionProgressScreen() {
       unsubscribe();
     };
   }, [controller, reports, route.params.reportId]);
+
+  useEffect(() => {
+    const destination = terminalDestination;
+    if (
+      destination === null ||
+      !extractionTerminalNavigationReady(destination, {
+        focused: isFocused,
+        activeOperation,
+        hasFailure: failure !== null,
+      })
+    )
+      return;
+    setTerminalDestination(null);
+    if (destination.kind === 'draft') {
+      navigation.navigate(
+        'MainTabs',
+        {
+          screen: 'Labs',
+          params: {
+            screen: 'ExtractionDraft',
+            params: { reportId: destination.reportId, draftId: destination.draftId },
+            pop: true,
+          },
+        },
+        { pop: true },
+      );
+    } else {
+      navigation.navigate(
+        'MainTabs',
+        {
+          screen: 'Labs',
+          params: {
+            screen: 'LabReportDetail',
+            params: { reportId: destination.reportId },
+            pop: true,
+          },
+        },
+        { pop: true },
+      );
+    }
+  }, [activeOperation, failure, isFocused, navigation, terminalDestination]);
 
   useEffect(() => {
     let active = true;
@@ -270,6 +298,23 @@ export function ExtractionProgressScreen() {
   }
 
   function retry() {
+    if (restoredProgress?.status === 'complete' && restoredDraftLookupFailed) {
+      setRestoredDraftLookupFailed(false);
+      setRestoredDraftId(undefined);
+      setFailure(null);
+      void reports
+        .listOpenExtractionDrafts()
+        .then((drafts) => {
+          setRestoredDraftId(
+            drafts.find((draft) => draft.reportId === route.params.reportId)?.draftId ?? null,
+          );
+        })
+        .catch(() => {
+          setRestoredDraftLookupFailed(true);
+          setFailure('persistence');
+        });
+      return;
+    }
     controller.retry();
     setFailure(null);
     setCancellationRequested(false);
