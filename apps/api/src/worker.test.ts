@@ -435,6 +435,7 @@ describe('analysis job runner lifecycle', () => {
     const runner = createJobRunner({
       database,
       ownerId: 'failing-runner',
+      handler: async () => undefined,
       logger: logger(events),
       timer,
       pollIntervalMs: 10,
@@ -505,6 +506,7 @@ describe('analysis job runner lifecycle', () => {
       database,
       clock: new MutableClock(),
       ownerId: 'runner-owner',
+      handler: async () => undefined,
       logger: logger(events),
       pollIntervalMs: 5,
     });

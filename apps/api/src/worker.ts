@@ -517,12 +517,15 @@ class DurableJobRunner implements JobRunner {
 }
 
 /**
- * The entrypoint keeps running without a queue during the account-free API foundation. Once a
- * database is supplied, it activates the durable lease runner; no health payload crosses this
- * lifecycle seam.
+ * The entrypoint keeps running without a queue during the account-free API foundation. It activates
+ * the durable lease runner only when both a database and an explicit handler are supplied; no
+ * health payload crosses this lifecycle seam.
  */
 export function createJobRunner(options: JobRunnerOptions = {}): JobRunner {
-  if (options.database === undefined) {
+  // A database alone is not enough to activate processing.  Keeping the runner inert until an
+  // explicit handler is supplied prevents a production process from claiming and churning work
+  // while provider configuration is absent.
+  if (options.database === undefined || options.handler === undefined) {
     return {
       start: () => undefined,
       stop: async () => undefined,
