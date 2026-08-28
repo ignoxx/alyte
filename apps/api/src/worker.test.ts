@@ -10,6 +10,7 @@ import {
   createJobRunner,
   type AnalysisJobHandler,
   type JobRunnerLogger,
+  type JobRunnerTimer,
 } from './worker.js';
 
 const NOW = '2026-08-28T12:00:00.000Z';
@@ -98,6 +99,25 @@ class Deferred {
     this.promise = new Promise<void>((resolve) => {
       this.resolve = resolve;
     });
+  }
+}
+
+class TrackingTimer implements JobRunnerTimer {
+  readonly pending = new Set<ReturnType<typeof setTimeout>>();
+
+  setTimeout(callback: () => void, milliseconds: number): ReturnType<typeof setTimeout> {
+    let handle!: ReturnType<typeof setTimeout>;
+    handle = setTimeout(() => {
+      this.pending.delete(handle);
+      callback();
+    }, milliseconds);
+    this.pending.add(handle);
+    return handle;
+  }
+
+  clearTimeout(handle: ReturnType<typeof setTimeout>): void {
+    clearTimeout(handle);
+    this.pending.delete(handle);
   }
 }
 
@@ -194,6 +214,56 @@ describe('analysis job lease repository', () => {
       assert.equal(reclaimed?.prompt_version, 'prompt-v1');
     } finally {
       database.close();
+    }
+  });
+
+  it('reclaims a persisted live lease once after restart and preserves operational metadata', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'alyte-job-restart-'));
+    const filename = join(directory, 'queue.sqlite');
+    const firstDatabase = createDatabaseAt(filename);
+    seedJob(firstDatabase, { id: 'restartable', requestId: 'restart-request' });
+    const firstLease = firstDatabase.claimAnalysisJob({
+      now: NOW,
+      leaseOwner: 'first-runner',
+      leaseExpiresAt: '2026-08-28T12:01:00.000Z',
+    });
+    assert.equal(firstLease?.state, 'processing');
+    assert.equal(firstLease?.attempts, 1);
+    firstDatabase.close();
+
+    const restartedDatabase = new AccountDatabase({ filename });
+    try {
+      assert.equal(
+        restartedDatabase.claimAnalysisJob({
+          now: '2026-08-28T12:00:59.999Z',
+          leaseOwner: 'second-runner',
+          leaseExpiresAt: '2026-08-28T12:02:00.000Z',
+        }),
+        undefined,
+      );
+      const reclaimed = restartedDatabase.claimAnalysisJob({
+        now: '2026-08-28T12:01:00.000Z',
+        leaseOwner: 'second-runner',
+        leaseExpiresAt: '2026-08-28T12:02:00.000Z',
+      });
+      assert.equal(reclaimed?.id, 'restartable');
+      assert.equal(reclaimed?.attempts, 2);
+      assert.equal(reclaimed?.request_id, 'restart-request');
+      assert.equal(reclaimed?.request_contract_version, 'request-contract-v1');
+      assert.equal(reclaimed?.schema_version, 'schema-v1');
+      assert.equal(reclaimed?.prompt_version, 'prompt-v1');
+      assert.equal(reclaimed?.handler_version, ANALYSIS_JOB_HANDLER_VERSION);
+      assert.equal(
+        restartedDatabase.claimAnalysisJob({
+          now: '2026-08-28T12:01:00.000Z',
+          leaseOwner: 'third-runner',
+          leaseExpiresAt: '2026-08-28T12:03:00.000Z',
+        }),
+        undefined,
+      );
+    } finally {
+      restartedDatabase.close();
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 
@@ -294,6 +364,88 @@ describe('analysis job lease repository', () => {
 });
 
 describe('analysis job runner lifecycle', () => {
+  it('cancels an idle poll timer before stop resolves', async () => {
+    const database = createDatabase();
+    const timer = new TrackingTimer();
+    const runner = createJobRunner({
+      database,
+      ownerId: 'idle-runner',
+      timer,
+      pollIntervalMs: 50,
+    });
+    runner.start();
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await runner.stop({ gracePeriodMs: 0 });
+      assert.equal(timer.pending.size, 0);
+    } finally {
+      await runner.stop({ gracePeriodMs: 0 });
+      database.close();
+    }
+  });
+
+  it('clears fast-handler timers and prevents a later claim after stop', async () => {
+    const database = createDatabase();
+    const timer = new TrackingTimer();
+    let handled = 0;
+    const handledOnce = new Deferred();
+    seedJob(database, { id: 'fast-job' });
+    const runner = createJobRunner({
+      database,
+      ownerId: 'fast-runner',
+      clock: new MutableClock(),
+      timer,
+      handler: async () => {
+        handled += 1;
+        handledOnce.resolve();
+      },
+      pollIntervalMs: 50,
+      heartbeatIntervalMs: 10,
+      leaseDurationMs: 40,
+    });
+    runner.start();
+    try {
+      await handledOnce.promise;
+      assert.equal(handled, 1);
+      await runner.stop({ gracePeriodMs: 0 });
+      assert.equal(timer.pending.size, 0);
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      assert.equal(handled, 1);
+    } finally {
+      await runner.stop({ gracePeriodMs: 0 });
+      database.close();
+    }
+  });
+
+  it('contains claim repository failures and keeps the loop stoppable', async () => {
+    const database = createDatabase();
+    const events: Array<{ event: string; version?: number; outcome?: string }> = [];
+    const timer = new TrackingTimer();
+    database.claimAnalysisJob = () => {
+      throw new Error('synthetic sqlite failure');
+    };
+    const runner = createJobRunner({
+      database,
+      ownerId: 'failing-runner',
+      logger: logger(events),
+      timer,
+      pollIntervalMs: 10,
+    });
+    runner.start();
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      await assert.doesNotReject(runner.stop({ gracePeriodMs: 0 }));
+      assert.equal(timer.pending.size, 0);
+      assert.equal(
+        events.some((entry) => entry.outcome === 'claim_failed'),
+        true,
+      );
+    } finally {
+      await runner.stop({ gracePeriodMs: 0 });
+      database.close();
+    }
+  });
+
   it('claims v1 work, renews outside handler/database transaction, and relinquishes on bounded drain', async () => {
     const database = createDatabase();
     const events: Array<{ event: string; version?: number; outcome?: string }> = [];

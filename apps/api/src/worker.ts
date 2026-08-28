@@ -68,10 +68,33 @@ const quietLogger: JobRunnerLogger = {
   warn: () => undefined,
 };
 
-function wait(timer: JobRunnerTimer, milliseconds: number): Promise<void> {
-  return new Promise((resolve) => {
-    timer.setTimeout(resolve, milliseconds);
+interface CancellableWait {
+  readonly promise: Promise<void>;
+  cancel(): void;
+}
+
+function cancellableWait(timer: JobRunnerTimer, milliseconds: number): CancellableWait {
+  let handle: ReturnType<typeof setTimeout> | undefined;
+  let resolveWait!: () => void;
+  let settled = false;
+  const settle = (): void => {
+    if (settled) return;
+    settled = true;
+    handle = undefined;
+    resolveWait();
+  };
+  const promise = new Promise<void>((resolve) => {
+    resolveWait = resolve;
+    handle = timer.setTimeout(settle, milliseconds);
   });
+  return {
+    promise,
+    cancel: () => {
+      if (settled) return;
+      if (handle !== undefined) timer.clearTimeout(handle);
+      settle();
+    },
+  };
 }
 
 function validOwner(value: string): boolean {
@@ -115,6 +138,7 @@ class DurableJobRunner implements JobRunner {
   private readonly heartbeatIntervalMs: number;
   private readonly leaseDurationMs: number;
   private readonly active = new Map<string, ActiveJob>();
+  private readonly pendingWaits = new Set<CancellableWait>();
   private unsupportedVersions = new Set<number>();
   private loopPromise: Promise<void> | undefined;
   private stopPromise: Promise<void> | undefined;
@@ -156,60 +180,82 @@ class DurableJobRunner implements JobRunner {
     if (this.stopPromise !== undefined) return this.stopPromise;
     const gracePeriodMs = boundedGracePeriod(options.gracePeriodMs);
     this.running = false;
+    this.cancelPendingWaits();
     this.stopPromise = this.drain(gracePeriodMs);
     return this.stopPromise;
   }
 
   private async runLoop(): Promise<void> {
     while (this.running) {
-      const now = this.clock.now();
-      this.observeUnsupported(now);
-      if (!this.running) break;
+      try {
+        const now = this.clock.now();
+        this.observeUnsupported(now);
+        if (!this.running) break;
+        const claimed = this.claim(now);
+        if (claimed === undefined) {
+          await this.wait(this.pollIntervalMs);
+          continue;
+        }
+        await this.runHandler(claimed);
+      } catch {
+        // Keep repository and timer failures from terminating the retryable polling loop. The
+        // next bounded poll is a safe retry point; no exception details enter operational logs.
+        this.logWarn(undefined, 'runner_iteration_failed');
+        if (this.running) await this.wait(this.pollIntervalMs);
+      }
+    }
+  }
+
+  private async runHandler(claimed: AnalysisJobRow): Promise<void> {
+    const active: ActiveJob = { job: claimed, heartbeatTimer: undefined, relinquished: false };
+    this.active.set(claimed.id, active);
+    try {
+      this.logInfo(claimed.handler_version, 'claimed');
+      this.scheduleHeartbeat(active);
+      await this.handler(claimed, {
+        heartbeat: () => this.heartbeat(active),
+      });
+      this.requeueAfterHandler(active);
+    } catch {
+      // This slice has no terminal completion/failure policy. Requeueing leaves the job
+      // retryable; later provider/result work owns terminal transitions and error categories.
+      this.requeueAfterHandler(active);
+    } finally {
+      this.clearHeartbeat(active);
+      if (this.active.get(claimed.id) === active) this.active.delete(claimed.id);
+    }
+  }
+
+  private observeUnsupported(now: Date): void {
+    try {
+      const versions = new Set(
+        this.database.listUnsupportedReadyAnalysisHandlerVersions(now.toISOString(), [
+          ANALYSIS_JOB_HANDLER_VERSION,
+        ]),
+      );
+      for (const version of versions) {
+        if (this.unsupportedVersions.has(version)) continue;
+        this.logWarn(version, 'unsupported_handler');
+      }
+      this.unsupportedVersions = versions;
+    } catch {
+      this.logWarn(undefined, 'unsupported_observation_failed');
+    }
+  }
+
+  private claim(now: Date): AnalysisJobRow | undefined {
+    try {
       const nowIso = now.toISOString();
-      const claimed = this.database.claimAnalysisJob({
+      return this.database.claimAnalysisJob({
         now: nowIso,
         leaseOwner: this.ownerId,
         leaseExpiresAt: new Date(now.getTime() + this.leaseDurationMs).toISOString(),
         supportedHandlerVersions: [ANALYSIS_JOB_HANDLER_VERSION],
       });
-      if (claimed === undefined) {
-        await wait(this.timer, this.pollIntervalMs);
-        continue;
-      }
-      const active: ActiveJob = { job: claimed, heartbeatTimer: undefined, relinquished: false };
-      this.active.set(claimed.id, active);
-      this.logger.info('analysis_job', {
-        handlerVersion: claimed.handler_version,
-        outcome: 'claimed',
-      });
-      this.scheduleHeartbeat(active);
-      try {
-        await this.handler(claimed, {
-          heartbeat: () => this.heartbeat(active),
-        });
-        this.requeueAfterHandler(active);
-      } catch {
-        // This slice has no terminal completion/failure policy. Requeueing leaves the job
-        // retryable; later provider/result work owns terminal transitions and error categories.
-        this.requeueAfterHandler(active);
-      } finally {
-        this.clearHeartbeat(active);
-        if (this.active.get(claimed.id) === active) this.active.delete(claimed.id);
-      }
+    } catch {
+      this.logWarn(undefined, 'claim_failed');
+      return undefined;
     }
-  }
-
-  private observeUnsupported(now: Date): void {
-    const versions = new Set(
-      this.database.listUnsupportedReadyAnalysisHandlerVersions(now.toISOString(), [
-        ANALYSIS_JOB_HANDLER_VERSION,
-      ]),
-    );
-    for (const version of versions) {
-      if (this.unsupportedVersions.has(version)) continue;
-      this.logger.warn('analysis_job', { handlerVersion: version, outcome: 'unsupported_handler' });
-    }
-    this.unsupportedVersions = versions;
   }
 
   private scheduleHeartbeat(active: ActiveJob): void {
@@ -217,43 +263,54 @@ class DurableJobRunner implements JobRunner {
     active.heartbeatTimer = this.timer.setTimeout(() => {
       active.heartbeatTimer = undefined;
       if (active.relinquished || this.active.get(active.job.id) !== active) return;
-      const outcome = this.heartbeat(active);
+      const result = this.heartbeatResult(active);
+      const outcome = result.outcome;
       if (outcome !== 'renewed') {
-        this.logger.warn('analysis_job', {
-          handlerVersion: active.job.handler_version,
-          outcome: `heartbeat_${outcome}`,
-        });
-        return;
+        this.logWarn(active.job.handler_version, `heartbeat_${outcome}`);
       }
-      this.scheduleHeartbeat(active);
+      if (result.retry || outcome === 'renewed') this.scheduleHeartbeat(active);
     }, this.heartbeatIntervalMs);
   }
 
   private heartbeat(active: ActiveJob): AnalysisJobLeaseOutcome {
-    if (active.relinquished) return 'not-live';
+    return this.heartbeatResult(active).outcome;
+  }
+
+  private heartbeatResult(active: ActiveJob): {
+    readonly outcome: AnalysisJobLeaseOutcome;
+    readonly retry: boolean;
+  } {
+    if (active.relinquished) return { outcome: 'not-live', retry: false };
     const now = this.clock.now();
-    return this.database.heartbeatAnalysisJob({
-      jobId: active.job.id,
-      leaseOwner: this.ownerId,
-      now: now.toISOString(),
-      leaseExpiresAt: new Date(now.getTime() + this.leaseDurationMs).toISOString(),
-    });
+    try {
+      return {
+        outcome: this.database.heartbeatAnalysisJob({
+          jobId: active.job.id,
+          leaseOwner: this.ownerId,
+          now: now.toISOString(),
+          leaseExpiresAt: new Date(now.getTime() + this.leaseDurationMs).toISOString(),
+        }),
+        retry: false,
+      };
+    } catch {
+      this.logWarn(active.job.handler_version, 'heartbeat_failed');
+      return { outcome: 'not-live', retry: true };
+    }
   }
 
   private requeueAfterHandler(active: ActiveJob): void {
     if (active.relinquished) return;
-    const now = this.clock.now();
-    const outcome = this.database.relinquishAnalysisJob({
-      jobId: active.job.id,
-      leaseOwner: this.ownerId,
-      now: now.toISOString(),
-      availableAt: new Date(now.getTime() + this.pollIntervalMs).toISOString(),
-    });
-    if (outcome === 'relinquished') {
-      this.logger.info('analysis_job', {
-        handlerVersion: active.job.handler_version,
-        outcome: 'requeued',
+    try {
+      const now = this.clock.now();
+      const outcome = this.database.relinquishAnalysisJob({
+        jobId: active.job.id,
+        leaseOwner: this.ownerId,
+        now: now.toISOString(),
+        availableAt: new Date(now.getTime() + this.pollIntervalMs).toISOString(),
       });
+      if (outcome === 'relinquished') this.logInfo(active.job.handler_version, 'requeued');
+    } catch {
+      this.logWarn(active.job.handler_version, 'requeue_failed');
     }
   }
 
@@ -268,13 +325,12 @@ class DurableJobRunner implements JobRunner {
     const loop = this.loopPromise;
     if (loop === undefined && this.active.size === 0) return;
     const completed = loop === undefined ? Promise.resolve() : loop;
-    let timedOut = false;
-    await Promise.race([
-      completed,
-      wait(this.timer, gracePeriodMs).then(() => {
-        timedOut = true;
-      }),
+    const graceWait = cancellableWait(this.timer, gracePeriodMs);
+    const timedOut = await Promise.race([
+      completed.then(() => false),
+      graceWait.promise.then(() => true),
     ]);
+    graceWait.cancel();
     if (!timedOut && this.active.size === 0) return;
 
     // A handler that outlives the grace window is detached from its lease. The handler remains
@@ -283,19 +339,50 @@ class DurableJobRunner implements JobRunner {
       this.clearHeartbeat(active);
       if (active.relinquished) continue;
       active.relinquished = true;
-      const now = this.clock.now();
-      const outcome = this.database.relinquishAnalysisJob({
-        jobId: active.job.id,
-        leaseOwner: this.ownerId,
-        now: now.toISOString(),
-        availableAt: now.toISOString(),
-      });
-      if (outcome === 'relinquished') {
-        this.logger.info('analysis_job', {
-          handlerVersion: active.job.handler_version,
-          outcome: 'drain_relinquished',
+      try {
+        const now = this.clock.now();
+        const outcome = this.database.relinquishAnalysisJob({
+          jobId: active.job.id,
+          leaseOwner: this.ownerId,
+          now: now.toISOString(),
+          availableAt: now.toISOString(),
         });
+        if (outcome === 'relinquished') {
+          this.logInfo(active.job.handler_version, 'drain_relinquished');
+        }
+      } catch {
+        this.logWarn(active.job.handler_version, 'drain_relinquish_failed');
       }
+    }
+  }
+
+  private wait(milliseconds: number): Promise<void> {
+    const pending = cancellableWait(this.timer, milliseconds);
+    this.pendingWaits.add(pending);
+    return pending.promise.finally(() => this.pendingWaits.delete(pending));
+  }
+
+  private cancelPendingWaits(): void {
+    for (const pending of this.pendingWaits) pending.cancel();
+  }
+
+  private logInfo(handlerVersion: number | undefined, outcome: string): void {
+    try {
+      const attributes = { outcome } as { handlerVersion?: number; outcome: string };
+      if (handlerVersion !== undefined) attributes.handlerVersion = handlerVersion;
+      this.logger.info('analysis_job', attributes);
+    } catch {
+      // Operational logging must never interrupt lease safety or stop/drain completion.
+    }
+  }
+
+  private logWarn(handlerVersion: number | undefined, outcome: string): void {
+    try {
+      const attributes = { outcome } as { handlerVersion?: number; outcome: string };
+      if (handlerVersion !== undefined) attributes.handlerVersion = handlerVersion;
+      this.logger.warn('analysis_job', attributes);
+    } catch {
+      // Operational logging must never interrupt lease safety or stop/drain completion.
     }
   }
 }
