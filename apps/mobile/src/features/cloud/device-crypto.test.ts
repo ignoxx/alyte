@@ -5,6 +5,7 @@ import vector from '../../../../../packages/contracts/test-vectors/cloud-result-
 import {
   createDeviceCrypto,
   createFakeDeviceCrypto,
+  clearDeviceCryptoBytes,
   DeviceCryptoError,
   type NativeDeviceCryptoModule,
 } from './device-crypto';
@@ -12,12 +13,11 @@ import {
 const envelope = JSON.parse(vector.serializedEnvelope) as unknown;
 const context = vector.context;
 const plaintext = new TextEncoder().encode('synthetic-result-118');
-const plaintextBase64url = vector.plaintextBase64url;
 
 function fakeNative(overrides: Partial<NativeDeviceCryptoModule> = {}): NativeDeviceCryptoModule {
   return {
     getDevicePublicKeyJwk: () => vector.devicePublicKeyJwk,
-    decryptCloudResult: () => plaintextBase64url,
+    decryptCloudResult: () => plaintext,
     ...overrides,
   };
 }
@@ -38,20 +38,38 @@ describe('device crypto adapter', () => {
       (error: unknown) =>
         error instanceof DeviceCryptoError && error.code === 'cloud_result_key_invalid',
     );
+
+    await assert.rejects(
+      createDeviceCrypto({
+        native: fakeNative({
+          getDevicePublicKeyJwk: () => ({
+            ...vector.devicePublicKeyJwk,
+            x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+            y: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+          }),
+        }),
+      }).getPublicKeyJwk(),
+      (error: unknown) =>
+        error instanceof DeviceCryptoError && error.code === 'cloud_result_key_invalid',
+    );
   });
 
-  it('passes the canonical envelope and context to native and decodes transient bytes', async () => {
+  it('passes the canonical envelope and context to native and returns transient bytes', async () => {
     let received: unknown[] = [];
+    const nativePlaintext = Uint8Array.from(plaintext);
     const service = createDeviceCrypto({
       native: fakeNative({
         decryptCloudResult: (...args) => {
           received = args;
-          return plaintextBase64url;
+          return nativePlaintext;
         },
       }),
     });
 
-    assert.deepEqual(await service.decrypt(envelope, context), plaintext);
+    const returned = await service.decrypt(envelope, context);
+    assert.strictEqual(returned, nativePlaintext);
+    clearDeviceCryptoBytes(returned);
+    assert.deepEqual(nativePlaintext, new Uint8Array(nativePlaintext.byteLength));
     assert.deepEqual(received, [vector.serializedEnvelope, ...Object.values(context)]);
   });
 
@@ -61,7 +79,7 @@ describe('device crypto adapter', () => {
       native: fakeNative({
         decryptCloudResult: () => {
           calls += 1;
-          return plaintextBase64url;
+          return plaintext;
         },
       }),
     });
@@ -108,8 +126,7 @@ describe('device crypto adapter', () => {
 
     const oversized = createDeviceCrypto({
       native: fakeNative({
-        decryptCloudResult: () =>
-          'A'.repeat(Math.ceil((CLOUD_RESULT_ENVELOPE_MAX_CIPHERTEXT_BYTES * 8) / 6) + 1),
+        decryptCloudResult: () => new Uint8Array(CLOUD_RESULT_ENVELOPE_MAX_CIPHERTEXT_BYTES + 1),
       }),
     });
     await assert.rejects(oversized.decrypt(envelope, context), (error: unknown) => {
@@ -117,6 +134,14 @@ describe('device crypto adapter', () => {
       assert.equal(error.code, 'cloud_result_plaintext_too_large');
       return true;
     });
+
+    await assert.rejects(
+      createDeviceCrypto({
+        native: fakeNative({ decryptCloudResult: () => vector.plaintextBase64url }),
+      }).decrypt(envelope, context),
+      (error: unknown) =>
+        error instanceof DeviceCryptoError && error.code === 'device_crypto_native_failure',
+    );
   });
 
   it('has a closed missing-native state and a deterministic injected fake', async () => {
@@ -125,7 +150,12 @@ describe('device crypto adapter', () => {
       (error: unknown) =>
         error instanceof DeviceCryptoError && error.code === 'device_crypto_native_unavailable',
     );
-    const fake = createFakeDeviceCrypto({ plaintextBase64url });
+    const fake = createFakeDeviceCrypto({ plaintext });
+    assert.deepEqual(await fake.getPublicKeyJwk(), vector.devicePublicKeyJwk);
     assert.deepEqual(await fake.decrypt(envelope, context), plaintext);
+
+    const owned = Uint8Array.from(plaintext);
+    clearDeviceCryptoBytes(owned);
+    assert.deepEqual(owned, new Uint8Array(plaintext.byteLength));
   });
 });

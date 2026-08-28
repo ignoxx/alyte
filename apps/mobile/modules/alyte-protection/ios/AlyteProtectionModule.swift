@@ -23,9 +23,9 @@ public final class AlyteProtectionModule: Module {
         contractVersion: String,
         resultSchemaVersion: String,
         handlerVersion: Int
-      ) throws -> String in
+      ) throws -> Data in
       do {
-        return try Self.deviceCrypto.decryptBase64url(
+        return try Self.deviceCrypto.decryptData(
           envelopeJSON: envelopeJSON,
           requestId: requestId,
           contractVersion: contractVersion,

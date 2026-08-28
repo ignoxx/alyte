@@ -52,23 +52,38 @@ enum AlyteDeviceCryptoError: Error {
   }
 }
 
-private final class AlyteDeviceCryptoKeychainStore: AlyteDeviceCryptoKeyStore {
-  private static let service = "app.alyte.device-crypto"
-  private static let account = "cloud-result-decryption-key-v1"
+final class AlyteDeviceCryptoKeychainStore: AlyteDeviceCryptoKeyStore {
+  static let defaultService = "app.alyte.device-crypto"
+  static let defaultAccount = "cloud-result-decryption-key-v1"
 
+  private let service: String
+  private let account: String
   private let lock = NSLock()
+
+  init(
+    service: String = AlyteDeviceCryptoKeychainStore.defaultService,
+    account: String = AlyteDeviceCryptoKeychainStore.defaultAccount
+  ) {
+    self.service = service
+    self.account = account
+  }
+
+  private var identity: [String: Any] {
+    let value: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: account,
+    ]
+    return value
+  }
 
   func read() throws -> Data? {
     lock.lock()
     defer { lock.unlock() }
 
-    let query: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: Self.service,
-      kSecAttrAccount as String: Self.account,
-      kSecReturnData as String: kCFBooleanTrue as Any,
-      kSecMatchLimit as String: kSecMatchLimitOne,
-    ]
+    var query = identity
+    query[kSecReturnData as String] = kCFBooleanTrue as Any
+    query[kSecMatchLimit as String] = kSecMatchLimitOne
     var result: CFTypeRef?
     let status = SecItemCopyMatching(query as CFDictionary, &result)
     if status == errSecItemNotFound { return nil }
@@ -82,15 +97,11 @@ private final class AlyteDeviceCryptoKeychainStore: AlyteDeviceCryptoKeyStore {
     lock.lock()
     defer { lock.unlock() }
 
-    let identity: [String: Any] = [
+    let identity = self.identity
+    var item: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: Self.service,
-      kSecAttrAccount as String: Self.account,
-    ]
-    let item: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: Self.service,
-      kSecAttrAccount as String: Self.account,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: account,
       kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
       kSecValueData as String: value,
     ]
@@ -376,12 +387,13 @@ final class AlyteDeviceCrypto {
     handlerVersion: Int
   ) throws -> Data {
     let envelope = try AlyteDeviceCryptoEnvelope(json: envelopeJSON)
-    let aad = try associatedData(
+    var aad = try associatedData(
       requestId: requestId,
       contractVersion: contractVersion,
       resultSchemaVersion: resultSchemaVersion,
       handlerVersion: handlerVersion
     )
+    defer { aad.resetBytes(in: 0..<aad.count) }
     guard
       envelope.requestId == requestId,
       envelope.contractVersion == contractVersion,
@@ -391,7 +403,14 @@ final class AlyteDeviceCrypto {
       throw AlyteDeviceCryptoError.contextMismatch
     }
 
-    let fields = try envelope.binaryFields()
+    var fields = try envelope.binaryFields()
+    defer {
+      fields.ephemeral.resetBytes(in: 0..<fields.ephemeral.count)
+      fields.salt.resetBytes(in: 0..<fields.salt.count)
+      fields.nonce.resetBytes(in: 0..<fields.nonce.count)
+      fields.ciphertext.resetBytes(in: 0..<fields.ciphertext.count)
+      fields.tag.resetBytes(in: 0..<fields.tag.count)
+    }
     let ephemeralPublicKey: P256.KeyAgreement.PublicKey
     do {
       ephemeralPublicKey = try P256.KeyAgreement.PublicKey(x963Representation: fields.ephemeral)
@@ -408,6 +427,7 @@ final class AlyteDeviceCrypto {
 
     var info = Self.hkdfInfoPrefix
     info.append(aad)
+    defer { info.resetBytes(in: 0..<info.count) }
     let symmetricKey = sharedSecret.hkdfDerivedSymmetricKey(
       using: SHA256.self,
       salt: fields.salt,
@@ -428,23 +448,22 @@ final class AlyteDeviceCrypto {
     }
   }
 
-  /// Module-facing path returns only canonical base64url and clears its owned plaintext copy.
-  func decryptBase64url(
+  /// Returns plaintext as Data for the Expo bridge's Uint8Array mapping. Ownership transfers to
+  /// the bridge; callers should clear the mutable JavaScript buffer after consuming it.
+  func decryptData(
     envelopeJSON: String,
     requestId: String,
     contractVersion: String,
     resultSchemaVersion: String,
     handlerVersion: Int
-  ) throws -> String {
-    var plaintext = try decrypt(
+  ) throws -> Data {
+    return try decrypt(
       envelopeJSON: envelopeJSON,
       requestId: requestId,
       contractVersion: contractVersion,
       resultSchemaVersion: resultSchemaVersion,
       handlerVersion: handlerVersion
     )
-    defer { plaintext.resetBytes(in: 0..<plaintext.count) }
-    return Self.encodeBase64url(plaintext)
   }
 
   private func privateKey() throws -> P256.KeyAgreement.PrivateKey {

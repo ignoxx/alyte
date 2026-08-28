@@ -89,46 +89,24 @@ function isCanonicalBase64url(value: unknown, expectedBytes: number): value is s
   return !((remainder === 2 && (last & 0x0f) !== 0) || (remainder === 3 && (last & 0x03) !== 0));
 }
 
-function decodeBase64url(value: unknown, maxBytes: number): Uint8Array {
-  if (typeof value !== 'string' || value.length === 0 || !BASE64URL_PATTERN.test(value)) {
-    throw new DeviceCryptoError('cloud_result_decryption_failed');
-  }
-  if (value.length > Math.ceil((maxBytes * 8) / 6)) {
-    throw new DeviceCryptoError('cloud_result_plaintext_too_large');
-  }
-  if (value.length % 4 === 1) throw new DeviceCryptoError('cloud_result_decryption_failed');
-  const remainder = value.length % 4;
-  const lastCharacter = value.charCodeAt(value.length - 1);
-  const last =
-    lastCharacter >= 0x41 && lastCharacter <= 0x5a
-      ? lastCharacter - 0x41
-      : lastCharacter >= 0x61 && lastCharacter <= 0x7a
-        ? lastCharacter - 0x61 + 26
-        : lastCharacter >= 0x30 && lastCharacter <= 0x39
-          ? lastCharacter - 0x30 + 52
-          : lastCharacter === 0x2d
-            ? 62
-            : 63;
-  if ((remainder === 2 && (last & 0x0f) !== 0) || (remainder === 3 && (last & 0x03) !== 0)) {
-    throw new DeviceCryptoError('cloud_result_decryption_failed');
-  }
+const P256_PRIME = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffffn;
+const P256_A = P256_PRIME - 3n;
+const P256_B = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604bn;
+
+function base64urlSextet(character: number): number {
+  if (character >= 0x41 && character <= 0x5a) return character - 0x41;
+  if (character >= 0x61 && character <= 0x7a) return character - 0x61 + 26;
+  if (character >= 0x30 && character <= 0x39) return character - 0x30 + 52;
+  return character === 0x2d ? 62 : 63;
+}
+
+function decodeCanonicalBase64url(value: string): Uint8Array {
   const bytes = new Uint8Array(Math.floor((value.length * 6) / 8));
   let accumulator = 0;
   let bits = 0;
   let offset = 0;
   for (const character of value) {
-    const code = character.charCodeAt(0);
-    const sextet =
-      code >= 0x41 && code <= 0x5a
-        ? code - 0x41
-        : code >= 0x61 && code <= 0x7a
-          ? code - 0x61 + 26
-          : code >= 0x30 && code <= 0x39
-            ? code - 0x30 + 52
-            : code === 0x2d
-              ? 62
-              : 63;
-    accumulator = ((accumulator << 6) | sextet) & 0x3fff;
+    accumulator = ((accumulator << 6) | base64urlSextet(character.charCodeAt(0))) & 0x3fff;
     bits += 6;
     if (bits >= 8) {
       bits -= 8;
@@ -137,10 +115,39 @@ function decodeBase64url(value: unknown, maxBytes: number): Uint8Array {
       accumulator &= (1 << bits) - 1;
     }
   }
-  if (bytes.length < 1 || bytes.length > maxBytes) {
+  return bytes;
+}
+
+function bytesToBigInt(value: Uint8Array): bigint {
+  let result = 0n;
+  for (const byte of value) result = (result << 8n) | BigInt(byte);
+  return result;
+}
+
+function positiveMod(value: bigint, modulus: bigint): bigint {
+  const remainder = value % modulus;
+  return remainder >= 0n ? remainder : remainder + modulus;
+}
+
+function isP256PointCoordinates(xValue: string, yValue: string): boolean {
+  const xBytes = decodeCanonicalBase64url(xValue);
+  const yBytes = decodeCanonicalBase64url(yValue);
+  const x = bytesToBigInt(xBytes);
+  const y = bytesToBigInt(yBytes);
+  if (x >= P256_PRIME || y >= P256_PRIME) return false;
+  return (
+    positiveMod(y * y, P256_PRIME) === positiveMod(x * x * x + P256_A * x + P256_B, P256_PRIME)
+  );
+}
+
+function plaintextBytes(value: unknown): Uint8Array {
+  if (!(value instanceof Uint8Array)) {
+    throw new DeviceCryptoError('device_crypto_native_failure');
+  }
+  if (value.byteLength < 1 || value.byteLength > CLOUD_RESULT_ENVELOPE_MAX_CIPHERTEXT_BYTES) {
     throw new DeviceCryptoError('cloud_result_plaintext_too_large');
   }
-  return bytes;
+  return value;
 }
 
 function publicKey(value: unknown): P256PublicKeyJwk {
@@ -151,7 +158,8 @@ function publicKey(value: unknown): P256PublicKeyJwk {
     value.kty !== 'EC' ||
     value.crv !== 'P-256' ||
     !isCanonicalBase64url(value.x, 32) ||
-    !isCanonicalBase64url(value.y, 32)
+    !isCanonicalBase64url(value.y, 32) ||
+    !isP256PointCoordinates(value.x, value.y)
   ) {
     throw new DeviceCryptoError('cloud_result_key_invalid');
   }
@@ -255,7 +263,7 @@ export function createDeviceCrypto(options: DeviceCryptoOptions = {}): DeviceCry
         throw new DeviceCryptoError(nativeFailureCode(error));
       }
       try {
-        return decodeBase64url(encoded, CLOUD_RESULT_ENVELOPE_MAX_CIPHERTEXT_BYTES);
+        return plaintextBytes(encoded);
       } catch (error) {
         if (error instanceof DeviceCryptoError) throw error;
         throw new DeviceCryptoError('device_crypto_native_failure');
@@ -266,18 +274,23 @@ export function createDeviceCrypto(options: DeviceCryptoOptions = {}): DeviceCry
 
 export type FakeDeviceCryptoOptions = {
   readonly publicKeyJwk?: P256PublicKeyJwk;
-  readonly plaintextBase64url?: string;
+  readonly plaintext?: Uint8Array;
 };
+
+/** Clears a caller-owned mutable plaintext buffer after use; JavaScript GC copies are not scrubbed. */
+export function clearDeviceCryptoBytes(value: Uint8Array): void {
+  value.fill(0);
+}
 
 /** A deterministic bridge fake for pure mobile tests; never selected by production composition. */
 export function createFakeDeviceCrypto(options: FakeDeviceCryptoOptions = {}): DeviceCrypto {
   const key = options.publicKeyJwk ?? {
     kty: 'EC' as const,
     crv: 'P-256' as const,
-    x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-    y: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    x: 'JuJMOEwg-R94trj8N3pdSjQs4hj2NjOyZmM7NnbeAVM',
+    y: 'iIE8qtvmlnTSYss7oBFIeirR-PC4U7Fh_QrepUrrB7Y',
   };
-  const plaintext = options.plaintextBase64url ?? 'ZmFrZS1kZXZpY2UtY3J5cHRv';
+  const plaintext = options.plaintext ?? new TextEncoder().encode('fake-device-crypto');
   return createDeviceCrypto({
     native: {
       getDevicePublicKeyJwk: () => key,

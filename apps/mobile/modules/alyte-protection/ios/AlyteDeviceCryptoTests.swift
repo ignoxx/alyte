@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Security
 import XCTest
 @testable import AlyteProtection
 
@@ -20,6 +21,63 @@ private final class MemoryDeviceKeyStore: AlyteDeviceCryptoKeyStore {
 }
 
 final class AlyteDeviceCryptoTests: XCTestCase {
+  func testProductionKeychainPersistsAcrossRecreationWithDeviceOnlyAccessibility() throws {
+    let namespace = UUID().uuidString
+    let serviceName = "app.alyte.test.device-crypto.\(namespace)"
+    let accountName = "cloud-result-decryption-key-v1"
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: serviceName,
+      kSecAttrAccount as String: accountName,
+    ]
+    SecItemDelete(query as CFDictionary)
+    defer { SecItemDelete(query as CFDictionary) }
+
+    let entitlementProbe: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: serviceName + ".probe",
+      kSecAttrAccount as String: accountName,
+      kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+      kSecValueData as String: Data([0x01]),
+    ]
+    let entitlementStatus = SecItemAdd(entitlementProbe as CFDictionary, nil)
+    if entitlementStatus == errSecMissingEntitlement {
+      throw XCTSkip("SwiftPM XCTest host has no application Keychain entitlement; use the signed Expo app smoke check")
+    }
+    XCTAssertEqual(entitlementStatus, errSecSuccess)
+    defer {
+      SecItemDelete([
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: serviceName + ".probe",
+        kSecAttrAccount as String: accountName,
+      ] as CFDictionary)
+    }
+
+    let first = try AlyteDeviceCrypto(
+      keyStore: AlyteDeviceCryptoKeychainStore(service: serviceName, account: accountName)
+    ).publicKeyJWK()
+    let second = try AlyteDeviceCrypto(
+      keyStore: AlyteDeviceCryptoKeychainStore(service: serviceName, account: accountName)
+    ).publicKeyJWK()
+
+    XCTAssertEqual(first, second)
+    XCTAssertEqual(Set(first.keys), ["kty", "crv", "x", "y"])
+    XCTAssertNil(first["d"])
+
+    var result: CFTypeRef?
+    let status = SecItemCopyMatching(
+      query.merging([kSecReturnAttributes as String: kCFBooleanTrue as Any]) { _, new in new }
+        as CFDictionary,
+      &result
+    )
+    XCTAssertEqual(status, errSecSuccess)
+    let attributes = try XCTUnwrap(result as? [String: Any])
+    XCTAssertEqual(
+      attributes[kSecAttrAccessible as String] as? String,
+      kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String
+    )
+  }
+
   func testPrivateKeyPersistsAcrossServiceRecreationAndOnlyPublicJWKLeavesBoundary() throws {
     let store = MemoryDeviceKeyStore()
     let first = try AlyteDeviceCrypto(keyStore: store).publicKeyJWK()
