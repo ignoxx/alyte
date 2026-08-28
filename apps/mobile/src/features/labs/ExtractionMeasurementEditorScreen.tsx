@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   useNavigation,
   useFocusEffect,
@@ -17,7 +16,7 @@ import {
 import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
+import { AppButton, AppIcon, AppText, StatusPill } from '../../ui/primitives';
 import { colors, spacing } from '../../theme';
 import {
   extractionSourcePresentation,
@@ -69,7 +68,6 @@ export function ExtractionMeasurementEditorScreen() {
   const navigation = useNavigation<EditorNavigation>();
   const route = useRoute<EditorRoute>();
   const { reports } = useServices();
-  const insets = useSafeAreaInsets();
   const [row, setRow] = useState<ExtractionDraftRow | null>(null);
   const [edit, setEdit] = useState<RowEdit | null>(null);
   const [busy, setBusy] = useState(false);
@@ -122,41 +120,19 @@ export function ExtractionMeasurementEditorScreen() {
     ]);
   });
 
-  useLayoutEffect(() => {
-    navigation.setOptions({
-      headerLeft: () => <AppButton label={t('labs.done')} onPress={closeEditor} tone="quiet" />,
-      ...(row !== null && edit !== null
-        ? {
-            unstable_sheetFooter: () => (
-              <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
-                <AppButton
-                  disabled={busy}
-                  label={included ? t('labs.extractionKeep') : t('labs.extractionInclude')}
-                  labelMaxFontSizeMultiplier={1.3}
-                  onPress={() => void choose(row?.reviewState === 'ready' ? 'resolve' : 'preserve')}
-                  tone={included ? 'primary' : 'secondary'}
-                  style={styles.action}
-                />
-                <AppButton
-                  disabled={busy}
-                  label={t('labs.extractionSkip')}
-                  labelMaxFontSizeMultiplier={1.3}
-                  onPress={() => void choose('skip')}
-                  tone={included ? 'secondary' : 'primary'}
-                  style={styles.action}
-                />
-              </View>
-            ),
-          }
-        : {}),
-    });
-  }, [busy, edit, included, insets.bottom, navigation, row?.reviewState, row]);
-
-  function closeEditor() {
+  const closeEditor = useCallback(() => {
     // The editor is mounted directly in the root form sheet. Its native navigation object owns
     // both the sheet dismissal and source-preview pushes, so no nested stack parent is needed.
     navigation.goBack();
-  }
+  }, [navigation]);
+
+  useLayoutEffect(() => {
+    // Keep the sheet's native header action, while leaving the entire body—including decisions—
+    // inside the one supported, keyboard-aware ScrollView below.
+    navigation.setOptions({
+      headerLeft: () => <AppButton label={t('labs.done')} onPress={closeEditor} tone="quiet" />,
+    });
+  }, [closeEditor, navigation]);
 
   async function save(): Promise<ExtractionDraftRow | null> {
     if (row === null || edit === null) return null;
@@ -268,103 +244,128 @@ export function ExtractionMeasurementEditorScreen() {
       automaticallyAdjustKeyboardInsets
       automaticallyAdjustsScrollIndicatorInsets
       contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={styles.content}
       key={`${route.key}-${row.id}`}
+      keyboardDismissMode="interactive"
       keyboardShouldPersistTaps="handled"
       style={styles.scroll}
     >
-      <View style={styles.content}>
-        {error && (
-          <AppText selectable style={styles.error}>
-            {t('labs.extractionSaveError')}
-          </AppText>
-        )}
-        <AppSurface tone="soft" style={styles.provenance}>
-          <View style={styles.sourceHeader}>
-            <View style={styles.provenanceTitle}>
-              <AppText variant="label">{t(sourcePresentation.labelKey)}</AppText>
-              <StatusPill tone="extracted">{t('labs.extracted')}</StatusPill>
-            </View>
-            <AppButton
-              disabled={sourcePresentation.artifactKind === 'unavailable' || busy || previewOpening}
-              label={t('labs.extractionViewInReport')}
-              onPress={viewInReport}
-              tone="quiet"
-            />
-          </View>
-          <AppText numberOfLines={2} selectable style={styles.muted}>
-            {`${row.sourceText} · ${t(sourcePresentation.regionKey).replace('{page}', String(row.source.pageIndex + 1))}`}
-          </AppText>
-        </AppSurface>
+      {error && (
+        <AppText selectable style={styles.error}>
+          {t('labs.extractionSaveError')}
+        </AppText>
+      )}
 
+      <View style={styles.introduction}>
+        <AppText selectable style={styles.muted}>
+          {t('labs.extractionEditorSubtitle')}
+        </AppText>
         {extractionReviewRequiresAttention(row) && attentionReasons.length > 0 && (
-          <AppSurface tone="soft" style={styles.reasons}>
+          <View style={styles.reviewSummary}>
             <StatusPill tone="reviewNeeded">{t('labs.extractionNeedsReview')}</StatusPill>
             <AppText selectable style={styles.muted}>
               {attentionReasons.map((reason) => t(`labs.extractionReason.${reason}`)).join(' · ')}
             </AppText>
-          </AppSurface>
+          </View>
         )}
+      </View>
 
-        <View style={styles.form}>
-          <AppText variant="label">{t('labs.extractionPrimaryFields')}</AppText>
+      <View style={styles.form}>
+        <AppText variant="label">{t('labs.extractionPrimaryFields')}</AppText>
+        <View style={styles.fieldGroup}>
+          <Field
+            label={t('labs.measurementLabel')}
+            value={edit.label}
+            onChangeText={(label) => setEdit({ ...edit, label })}
+          />
+          <Field
+            keyboardType="numeric"
+            label={t('labs.measurementValue')}
+            value={edit.value}
+            onChangeText={(value) => setEdit({ ...edit, value })}
+          />
+        </View>
+        <Pressable
+          accessibilityLabel={t(
+            secondaryExpanded
+              ? 'labs.extractionHideSecondaryFields'
+              : 'labs.extractionShowSecondaryFields',
+          )}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: secondaryExpanded }}
+          hitSlop={4}
+          onPress={() => setSecondaryExpanded((expanded) => !expanded)}
+          style={({ pressed }) => [styles.disclosure, pressed && styles.disclosurePressed]}
+        >
+          <View style={styles.disclosureCopy}>
+            <AppText variant="label">{t('labs.extractionSecondaryFields')}</AppText>
+            <AppText variant="caption" style={styles.muted}>
+              {t(
+                secondaryExpanded
+                  ? 'labs.extractionHideSecondaryFields'
+                  : secondaryFieldsNeedReview(row)
+                    ? 'labs.extractionSecondaryFieldsNeedsReview'
+                    : 'labs.extractionSecondaryFieldsOptional',
+              )}
+            </AppText>
+          </View>
+          <AppIcon
+            name="chevronRight"
+            size={16}
+            color={colors.mutedInk}
+            style={{ transform: [{ rotate: secondaryExpanded ? '90deg' : '0deg' }] }}
+          />
+        </Pressable>
+        {secondaryExpanded && (
           <View style={styles.fieldGroup}>
             <Field
-              label={t('labs.measurementLabel')}
-              value={edit.label}
-              onChangeText={(label) => setEdit({ ...edit, label })}
+              label={t('labs.measurementUnit')}
+              value={edit.unit}
+              onChangeText={(unit) => setEdit({ ...edit, unit })}
             />
             <Field
-              keyboardType="numeric"
-              label={t('labs.measurementValue')}
-              value={edit.value}
-              onChangeText={(value) => setEdit({ ...edit, value })}
+              label={t('labs.measurementReference')}
+              value={edit.reference}
+              onChangeText={(reference) => setEdit({ ...edit, reference })}
             />
           </View>
-          <Pressable
-            accessibilityLabel={t(
-              secondaryExpanded
-                ? 'labs.extractionHideSecondaryFields'
-                : 'labs.extractionShowSecondaryFields',
-            )}
-            accessibilityRole="button"
-            accessibilityState={{ expanded: secondaryExpanded }}
-            onPress={() => setSecondaryExpanded((expanded) => !expanded)}
-            style={({ pressed }) => [styles.disclosure, pressed && styles.disclosurePressed]}
-          >
-            <View style={styles.disclosureCopy}>
-              <AppText variant="label">{t('labs.extractionSecondaryFields')}</AppText>
-              <AppText variant="caption" style={styles.muted}>
-                {t(
-                  secondaryExpanded
-                    ? 'labs.extractionHideSecondaryFields'
-                    : secondaryFieldsNeedReview(row)
-                      ? 'labs.extractionSecondaryFieldsNeedsReview'
-                      : 'labs.extractionSecondaryFieldsOptional',
-                )}
-              </AppText>
-            </View>
-            <AppIcon
-              name="chevronRight"
-              size={16}
-              color={colors.mutedInk}
-              style={{ transform: [{ rotate: secondaryExpanded ? '90deg' : '0deg' }] }}
-            />
-          </Pressable>
-          {secondaryExpanded && (
-            <View style={styles.fieldGroup}>
-              <Field
-                label={t('labs.measurementUnit')}
-                value={edit.unit}
-                onChangeText={(unit) => setEdit({ ...edit, unit })}
-              />
-              <Field
-                label={t('labs.measurementReference')}
-                value={edit.reference}
-                onChangeText={(reference) => setEdit({ ...edit, reference })}
-              />
-            </View>
-          )}
+        )}
+      </View>
+
+      <View style={styles.provenance}>
+        <View style={styles.provenanceCopy}>
+          <View style={styles.provenanceTitle}>
+            <AppText variant="label">{t(sourcePresentation.labelKey)}</AppText>
+            <StatusPill tone="extracted">{t('labs.extracted')}</StatusPill>
+          </View>
+          <AppText numberOfLines={2} selectable style={styles.muted}>
+            {`${row.sourceText} · ${t(sourcePresentation.regionKey).replace('{page}', String(row.source.pageIndex + 1))}`}
+          </AppText>
         </View>
+        <AppButton
+          disabled={sourcePresentation.artifactKind === 'unavailable' || busy || previewOpening}
+          label={t('labs.extractionViewInReport')}
+          onPress={viewInReport}
+          tone="quiet"
+        />
+      </View>
+
+      <View style={styles.actions}>
+        <AppButton
+          disabled={busy}
+          label={included ? t('labs.extractionKeep') : t('labs.extractionInclude')}
+          labelMaxFontSizeMultiplier={1.3}
+          onPress={() => void choose(row.reviewState === 'ready' ? 'resolve' : 'preserve')}
+          style={styles.primaryAction}
+        />
+        <AppButton
+          disabled={busy}
+          label={t('labs.extractionSkip')}
+          labelMaxFontSizeMultiplier={1.3}
+          onPress={() => void choose('skip')}
+          style={styles.skipAction}
+          tone="quiet"
+        />
       </View>
     </ScrollView>
   );
@@ -404,11 +405,24 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     padding: spacing.lg,
   },
-  content: { gap: spacing.md, padding: spacing.lg, paddingBottom: spacing.xl },
-  provenance: { gap: spacing.xs },
-  provenanceTitle: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: spacing.sm },
-  sourceHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
-  reasons: { gap: spacing.sm },
+  content: { flexGrow: 1, gap: spacing.lg, padding: spacing.lg, paddingBottom: spacing.xxl },
+  introduction: { gap: spacing.sm },
+  reviewSummary: { gap: spacing.xs },
+  provenance: {
+    alignItems: 'center',
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingTop: spacing.md,
+  },
+  provenanceCopy: { flex: 1, gap: spacing.xs, minWidth: 0 },
+  provenanceTitle: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
   muted: { color: colors.mutedInk },
   error: { color: colors.danger },
   form: { gap: spacing.md },
@@ -435,14 +449,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
-  footer: {
-    backgroundColor: colors.elevatedSurface,
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    gap: spacing.sm,
-    padding: spacing.md,
-    paddingBottom: spacing.lg,
-  },
-  action: { flex: 1 },
+  actions: { gap: spacing.sm, paddingTop: spacing.xs },
+  primaryAction: { width: '100%' },
+  skipAction: { alignSelf: 'center' },
 });
