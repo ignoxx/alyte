@@ -96,15 +96,12 @@ export function ExtractionDraftScreen() {
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [saveError, setSaveError] = useState(false);
-  const [hasConfirmedRecords, setHasConfirmedRecords] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const next = await reports.getExtractionDraft(route.params.draftId);
       if (next === null) throw new Error('Extraction Draft unavailable');
-      const report = await reports.getReport(route.params.reportId);
       setDraft(next);
-      setHasConfirmedRecords((report?.labRecordIds.length ?? 0) > 0);
       setLoadError(false);
       setSaveError(false);
     } catch {
@@ -145,7 +142,16 @@ export function ExtractionDraftScreen() {
   const canConfirm = draft !== null && confirmation.canConfirm;
   const hasBottomAccessory = confirmation.included > 0;
   const canReprocess =
-    !hasConfirmedRecords && draft?.state === 'draft' && draft.pipelineStatus === 'older';
+    (draft?.state === 'draft' || draft?.state === 'confirmed') && draft.pipelineStatus === 'older';
+  const canImprove =
+    draft?.state === 'draft' &&
+    draft.rows.some(
+      (row) =>
+        row.editState === 'automatic' &&
+        row.source.observations !== undefined &&
+        row.source.observations.length > 0 &&
+        (row.proposedBiomarkerId === null || row.reviewReasons.length > 0),
+    );
 
   const reprocess = useCallback(() => {
     if (busy || draft === null || !canReprocess) return;
@@ -166,6 +172,25 @@ export function ExtractionDraftScreen() {
       },
     ]);
   }, [busy, canReprocess, draft, navigation, route.params.reportId]);
+
+  const improve = useCallback(() => {
+    if (busy || draft === null || !canImprove) return;
+    Alert.alert(t('labs.extractionImproveTitle'), t('labs.extractionImproveBody'), [
+      { text: t('labs.cancel'), style: 'cancel' },
+      {
+        text: t('labs.extractionImprove'),
+        onPress: () => {
+          setBusy(true);
+          setSaveError(false);
+          void reports
+            .improveExtraction(draft.id)
+            .then(() => load())
+            .catch(() => setSaveError(true))
+            .finally(() => setBusy(false));
+        },
+      },
+    ]);
+  }, [busy, canImprove, draft, load, reports]);
 
   const openRow = useCallback(
     (rowId: string, selectNeedsReview = false) => {
@@ -298,6 +323,11 @@ export function ExtractionDraftScreen() {
               {draft.hasUserEdits && (
                 <AppText style={styles.muted}>{`· ${t('labs.extractionEditedStatus')}`}</AppText>
               )}
+              {draft.hasUnknownEdits && (
+                <AppText
+                  style={styles.muted}
+                >{`· ${t('labs.extractionUnknownEditStatus')}`}</AppText>
+              )}
             </View>
             {canReprocess && (
               <View style={styles.reprocessCard}>
@@ -306,6 +336,17 @@ export function ExtractionDraftScreen() {
                   disabled={busy}
                   label={busy ? t('labs.extractionReprocessBusy') : t('labs.extractionReprocess')}
                   onPress={reprocess}
+                  tone="secondary"
+                />
+              </View>
+            )}
+            {canImprove && (
+              <View style={styles.reprocessCard}>
+                <AppText style={styles.muted}>{t('labs.extractionImproveBody')}</AppText>
+                <AppButton
+                  disabled={busy}
+                  label={busy ? t('labs.extractionImproveBusy') : t('labs.extractionImprove')}
+                  onPress={improve}
                   tone="secondary"
                 />
               </View>

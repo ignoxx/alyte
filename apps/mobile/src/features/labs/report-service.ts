@@ -289,9 +289,9 @@ export type LabReportsService = {
   deleteSanitizedReport(id: string): Promise<void>;
   deleteReport(id: string): Promise<void>;
   startExtraction(id: string, passwordRequest?: PasswordRequest): Promise<ExtractionDraft>;
-  /** Explicitly rebuilds one open draft from the immutable Original Report. */
+  /** Explicitly rebuilds the review revision from the immutable Original Report. */
   reprocessExtraction(id: string, passwordRequest?: PasswordRequest): Promise<ExtractionDraft>;
-  /** Reserved until a source-cell-compatible semantic-only pass is proven safe. */
+  /** Refines only stored, unresolved, automatic source-cell rows; never reruns OCR. */
   improveExtraction(id: string): Promise<ExtractionDraft>;
   listOpenExtractionDrafts(): Promise<readonly LabReportExtractionDraftReference[]>;
   countOpenExtractionDrafts(): Promise<number>;
@@ -2006,16 +2006,46 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     },
   ): GeometryExtractionRows {
     const sourceById = new Map(observations.map((observation) => [observation.id, observation]));
+    const specimenByObservationId = new Map<string, SpecimenType>();
+    for (const group of specimenContextGroups(observations)) {
+      for (const observation of group.observations)
+        specimenByObservationId.set(observation.id, group.specimenType);
+    }
+    const dateKeyFor = (observation: VisionTextObservation): string => {
+      const nearest = options.collectionDateContexts
+        .filter((context) => context.pageIndex === observation.pageIndex)
+        .sort(
+          (left, right) =>
+            Math.abs(left.centerY - observation.boundingBox.y) -
+            Math.abs(right.centerY - observation.boundingBox.y),
+        )[0];
+      if (nearest === undefined) return options.collectionDateDefaulted ? 'defaulted' : 'unscoped';
+      return `${nearest.pageIndex}:${nearest.observationId}:${nearest.collectionDate.kind === 'known' ? nearest.collectionDate.value : 'missing'}`;
+    };
     const lattice = reconstructGeometryLattice(
-      observations.map((observation): GeometrySourceObservation => ({
-        id: observation.id,
-        text: observation.text,
-        boundingBox: observation.boundingBox,
-        pageIndex: observation.pageIndex,
-        ...(observation.orientation === undefined ? {} : { orientation: observation.orientation }),
-        ...(observation.structure === undefined ? {} : { structure: observation.structure }),
-        ...(observation.spans === undefined ? {} : { spans: observation.spans }),
-      })),
+      observations.map((observation): GeometrySourceObservation => {
+        const tableId = observation.structure?.tableId ?? null;
+        return {
+          id: observation.id,
+          text: observation.text,
+          boundingBox: observation.boundingBox,
+          pageIndex: observation.pageIndex,
+          ...(observation.orientation === undefined
+            ? {}
+            : { orientation: observation.orientation }),
+          ...(observation.structure === undefined ? {} : { structure: observation.structure }),
+          ...(observation.spans === undefined ? {} : { spans: observation.spans }),
+          context: {
+            tableId,
+            sectionId:
+              tableId === null
+                ? `page:${observation.pageIndex}:loose`
+                : `${observation.pageIndex}:table:${tableId}`,
+            specimenKey: specimenByObservationId.get(observation.id) ?? 'unknown',
+            collectionDateKey: dateKeyFor(observation),
+          },
+        };
+      }),
     );
     const rows: ExtractionDraftRow[] = [];
     const semanticCandidateRowIds = new Set<string>();
@@ -2092,6 +2122,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     );
     const rowGroups = new Map<string, ExtractionDraftRow[]>();
     const allRowSourceIds = new Set(rows.flatMap((row) => row.source.observationIds));
+    const allRowParentIds = new Set(
+      rows.flatMap((row) =>
+        (row.source.observations ?? []).flatMap((observation) => {
+          const parentId = observation.sourceSpan?.parentObservationId;
+          return parentId === undefined ? [] : [parentId];
+        }),
+      ),
+    );
     for (const row of candidateRowsForMapping) {
       const first = row.source.observations?.[0];
       const table = first?.structure?.tableId ?? 'page';
@@ -2145,7 +2183,11 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const anchorTableId = anchor?.structure?.tableId ?? null;
       return observations.filter((observation) => {
         const structure = observation.structure;
-        if (allRowSourceIds.has(observation.id) || observation.pageIndex !== anchor?.pageIndex)
+        if (
+          allRowSourceIds.has(observation.id) ||
+          allRowParentIds.has(observation.id) ||
+          observation.pageIndex !== anchor?.pageIndex
+        )
           return false;
         if (structure?.kind === 'table-cell' && structure.tableId === anchorTableId) return true;
         const specimenHeading = specimenTypeFromText(observation.text) !== null;
@@ -2413,16 +2455,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           return existingDraft;
         }
         if (mode === 'reprocess') {
-          if (existingDraft === null || existingDraft.state !== 'draft') {
+          if (
+            existingDraft === null ||
+            (existingDraft.state !== 'draft' && existingDraft.state !== 'confirmed')
+          ) {
             throw new LabReportExtractionError(
               'persistence',
-              'Only an open Extraction Draft can be reprocessed',
-            );
-          }
-          if (await repo.hasConfirmedRecordsForReport(id)) {
-            throw new LabReportExtractionError(
-              'persistence',
-              'Confirmed Lab Records are immutable and cannot be reprocessed',
+              'Only an existing Extraction Draft can be reprocessed',
             );
           }
         }
@@ -2728,7 +2767,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           revision: extractionRevision,
         } as const;
         const draft =
-          mode === 'reprocess' && existingDraft !== null
+          mode === 'reprocess' && existingDraft?.state === 'draft'
             ? await repo.replaceExtractionDraft({
                 previousDraftId: existingDraft.id,
                 ...draftInput,
@@ -2737,23 +2776,38 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             : await repo.createExtractionDraft(draftInput);
         createdDraft = draft;
         // The source can change while SQLite is writing a large draft. Reverify immediately
-        // before exposing it; a stale result is never allowed to survive this race. A replacement
-        // is already the atomic commit point, so it must not be deleted on a cancellation that
-        // arrives after the old draft has been replaced.
-        if (mode === 'start') {
-          if ((await verifySource(id)) !== 'verified') {
+        // after the atomic commit as well as immediately before it. A replaced open draft is
+        // restored from the exact in-memory snapshot if this post-write check fails.
+        if ((await verifySource(id)) !== 'verified') {
+          if (mode === 'reprocess' && existingDraft?.state === 'draft') {
+            await repo.replaceExtractionDraft({
+              previousDraftId: draft.id,
+              id: existingDraft.id,
+              reportId: existingDraft.reportId,
+              collectionDate: existingDraft.collectionDate,
+              rows: existingDraft.rows,
+              sourceArtifact: existingDraft.sourceArtifact ?? null,
+              pipelineFingerprint: existingDraft.pipelineFingerprint,
+              revision: existingDraft.revision,
+              ocrContractVersion: existingDraft.ocrContractVersion,
+              parserVersion: existingDraft.parserVersion,
+              preserveRowIds: true,
+            });
+          } else {
             await repo.deleteExtractionDraft(draft.id);
-            createdDraft = null;
-            throw new LabReportExtractionError(
-              'original-source',
-              'The Original Report changed and must be imported again',
-            );
           }
-          if (isCancelled()) {
-            await repo.deleteExtractionDraft(draft.id);
-            createdDraft = null;
-            throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-          }
+          createdDraft = null;
+          throw new LabReportExtractionError(
+            'original-source',
+            'The Original Report changed and must be imported again',
+          );
+        }
+        // Cancellation at the write seam is a committed success. This avoids reporting failure
+        // while exposing a replacement or deleting the exact prior draft after atomic replace.
+        if (mode === 'start' && isCancelled()) {
+          await repo.deleteExtractionDraft(draft.id);
+          createdDraft = null;
+          throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         }
         await persistExtractionOperation(
           repo,
@@ -2768,11 +2822,9 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           extractionRevision,
         );
         extractionProgressEvent(id, mode, 'review', 'complete', 1, 1);
-        if (isCancelled()) {
-          if (mode !== 'reprocess') {
-            await repo.deleteExtractionDraft(draft.id);
-            createdDraft = null;
-          }
+        if (isCancelled() && mode !== 'reprocess') {
+          await repo.deleteExtractionDraft(draft.id);
+          createdDraft = null;
           await persistExtractionOperation(
             repo,
             id,
@@ -2863,12 +2915,118 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     return runExtraction(id, passwordRequest, 'reprocess');
   }
 
-  async function improveExtraction(_id: string): Promise<ExtractionDraft> {
-    await ensureInitialized();
-    throw new LabReportExtractionError(
-      'improve-deferred',
-      'Semantic-only improvement is deferred until source-cell compatibility is available',
-    );
+  async function improveExtraction(id: string): Promise<ExtractionDraft> {
+    const previousOperation = extractionOperations.get(id);
+    if (previousOperation !== undefined) cancelExtractionOperation(previousOperation);
+    const operationToken: ExtractionOperationToken = {
+      generation: ++nextExtractionOperation,
+      cancelled: false,
+      cancellationListeners: new Set(),
+    };
+    extractionOperations.set(id, operationToken);
+    return serialized(async () => {
+      const isCancelled = () =>
+        extractionOperations.get(id) !== operationToken || operationToken.cancelled;
+      const cancellation: ExtractionSemanticCancellation = {
+        isCancelled,
+        subscribe: (listener) => {
+          if (isCancelled()) {
+            listener();
+            return () => undefined;
+          }
+          operationToken.cancellationListeners.add(listener);
+          return () => operationToken.cancellationListeners.delete(listener);
+        },
+      };
+      try {
+        await ensureInitialized();
+        const repo = await repository();
+        const report = await repo.getReport(id);
+        if (report === null) throw new Error('Lab Report was not found');
+        const draft = await repo.getExtractionDraftForReport(
+          id,
+          extractionAliases,
+          currentExtractionPipelineFingerprint(report.sourceHash),
+        );
+        if (draft === null || draft.state !== 'draft')
+          throw new LabReportExtractionError('persistence', 'Only an open draft can be improved');
+        const sourceArtifact = draft.sourceArtifact ?? null;
+        if (
+          sourceArtifact === null ||
+          sourceArtifact.kind !== 'original' ||
+          sourceArtifact.hash !== report.sourceHash ||
+          (await verifySource(id)) !== 'verified'
+        ) {
+          throw new LabReportExtractionError(
+            'original-source',
+            'The Original Report is missing or has changed',
+          );
+        }
+        if (semanticMapper === undefined) return draft;
+        const eligibleIds = new Set(
+          draft.rows
+            .filter(
+              (row) =>
+                row.editState === 'automatic' &&
+                row.source.observations !== undefined &&
+                row.source.observations.length > 0 &&
+                (row.proposedBiomarkerId === null || row.reviewReasons.length > 0) &&
+                !row.reviewReasons.includes('incompatible-unit') &&
+                !row.reviewReasons.includes('incompatible-specimen'),
+            )
+            .map((row) => row.id),
+        );
+        if (eligibleIds.size === 0) return draft;
+        const observations = [
+          ...new Map(
+            draft.rows
+              .flatMap((row) => row.source.observations ?? [])
+              .map((observation) => [observation.id, observation] as const),
+          ).values(),
+        ];
+        const improvedRows = await applySemanticMappings(
+          draft.rows,
+          observations,
+          undefined,
+          cancellation,
+          eligibleIds,
+        );
+        if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Improvement cancelled');
+        if ((await verifySource(id)) !== 'verified')
+          throw new LabReportExtractionError('original-source', 'The Original Report changed');
+        const changedRows = improvedRows.filter((row, index) => {
+          const before = draft.rows[index];
+          return before !== undefined && JSON.stringify(before) !== JSON.stringify(row);
+        });
+        if (changedRows.length === 0) return draft;
+        const base = draft.pipelineFingerprint;
+        const fingerprint = createExtractionPipelineFingerprint(
+          {
+            sourceHash: report.sourceHash,
+            ocrContractVersion: base?.ocrContractVersion ?? null,
+            rowSegmentationVersion: base?.rowSegmentationVersion ?? null,
+            parserVersion: base?.parserVersion ?? null,
+            semanticAdapterVersion: semanticMapper.adapterVersion,
+            semanticSchemaVersion: semanticMapper.schemaVersion,
+            semanticChunkVersion: semanticMapper.provenance?.chunkVersion ?? null,
+            semanticPromptVersion: semanticMapper.provenance?.promptVersion ?? null,
+            modelVersion: semanticMapper.provenance?.modelVersion ?? null,
+            runtimeVersion: semanticMapper.provenance?.runtimeVersion ?? null,
+            catalogueVersion: semanticMapper.provenance?.catalogueVersion ?? CATALOGUE_VERSION,
+          },
+          draft.revision,
+        );
+        return await repo.updateExtractionDraftRows({
+          draftId: draft.id,
+          expectedRevision: draft.revision,
+          rows: changedRows,
+          pipelineFingerprint: fingerprint,
+        });
+      } finally {
+        operationToken.cancellationListeners.clear();
+        if (extractionOperations.get(id) === operationToken) extractionOperations.delete(id);
+      }
+    });
   }
 
   async function getExtractionDraft(id: string): Promise<ExtractionDraft | null> {

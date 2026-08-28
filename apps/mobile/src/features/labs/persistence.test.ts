@@ -665,6 +665,26 @@ describe('protected manual Lab Record persistence', () => {
       measurements: [],
     });
     assert.equal(await repository.hasConfirmedRecordsForReport(original.reportId), true);
+
+    // Confirmed history and a new open review revision coexist; the historical draft remains
+    // addressable while the partial unique index permits exactly one open path.
+    await repository.confirmExtractionDraft(replacement.id, [
+      {
+        id: 'biomarker.triglycerides',
+        aliases: ['Triglycerides'],
+        specimens: ['blood', 'unknown'],
+        units: ['mmol/L'],
+      },
+    ]);
+    const nextOpen = await repository.createExtractionDraft({
+      id: 'reprocess-after-confirmation',
+      reportId: original.reportId,
+      collectionDate: original.collectionDate,
+      rows: [row],
+      revision: 3,
+    });
+    assert.equal(nextOpen.state, 'draft');
+    assert.equal((await repository.getExtractionDraft(replacement.id))?.state, 'confirmed');
   });
 
   test('includes valid extraction by default and keeps source provenance through correction', async () => {

@@ -19,7 +19,7 @@ type CallbackMigration = {
 
 export type Migration = SqlMigration | CallbackMigration;
 
-export const CURRENT_SCHEMA_VERSION = 13;
+export const CURRENT_SCHEMA_VERSION = 14;
 
 const INTAKE_CAPTURE_RECOVERY_DDL = `
   CREATE TABLE IF NOT EXISTS intake_capture_recovery (
@@ -563,7 +563,7 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
         await addColumns('extraction_draft_rows', [
           [
             'edit_state',
-            "TEXT NOT NULL DEFAULT 'automatic' CHECK (edit_state IN ('automatic', 'user-edited'))",
+            "TEXT NOT NULL DEFAULT 'legacy-unknown' CHECK (edit_state IN ('automatic', 'user-edited', 'legacy-unknown'))",
           ],
         ]);
       }
@@ -579,5 +579,102 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
         ['revision', 'INTEGER NOT NULL DEFAULT 1'],
       ]);
     },
+  },
+  {
+    version: 14,
+    sql: `
+      -- v13 originally carried a single report-wide UNIQUE constraint. A confirmed historical
+      -- draft and one new open review must coexist for explicit reprocessing, so replace that
+      -- table constraint with a partial unique index over open drafts only.
+      DROP INDEX IF EXISTS extraction_drafts_report_id_idx;
+      DROP INDEX IF EXISTS extraction_draft_rows_draft_id_idx;
+      ALTER TABLE extraction_draft_rows RENAME TO extraction_draft_rows_v13;
+      ALTER TABLE extraction_drafts RENAME TO extraction_drafts_v13;
+      CREATE TABLE extraction_drafts (
+        id TEXT PRIMARY KEY NOT NULL,
+        report_id TEXT NOT NULL REFERENCES lab_reports(id) ON DELETE CASCADE,
+        state TEXT NOT NULL CHECK (state IN ('draft', 'confirmed', 'failed')),
+        ocr_contract_version TEXT NOT NULL,
+        parser_version TEXT NOT NULL,
+        collection_date TEXT,
+        date_state TEXT NOT NULL CHECK (date_state IN ('known', 'missing')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        confirmed_at TEXT,
+        source_artifact_kind TEXT CHECK (source_artifact_kind IN ('original', 'sanitized')),
+        source_artifact_id TEXT,
+        source_artifact_hash TEXT,
+        provenance_state TEXT NOT NULL DEFAULT 'current'
+          CHECK (provenance_state IN ('current', 'legacy-sanitized')),
+        failure_reason TEXT,
+        pipeline_fingerprint_json TEXT,
+        pipeline_fingerprint_hash TEXT,
+        revision INTEGER NOT NULL DEFAULT 1
+      );
+      INSERT INTO extraction_drafts
+        (id, report_id, state, ocr_contract_version, parser_version, collection_date, date_state,
+         created_at, updated_at, confirmed_at, source_artifact_kind, source_artifact_id,
+         source_artifact_hash, provenance_state, failure_reason, pipeline_fingerprint_json,
+         pipeline_fingerprint_hash, revision)
+      SELECT id, report_id, state, ocr_contract_version, parser_version, collection_date, date_state,
+        created_at, updated_at, confirmed_at, source_artifact_kind, source_artifact_id,
+        source_artifact_hash, provenance_state, failure_reason, pipeline_fingerprint_json,
+        pipeline_fingerprint_hash, revision
+      FROM extraction_drafts_v13;
+      CREATE TABLE extraction_draft_rows (
+        id TEXT PRIMARY KEY NOT NULL,
+        draft_id TEXT NOT NULL REFERENCES extraction_drafts(id) ON DELETE CASCADE,
+        row_order INTEGER NOT NULL,
+        panel_label TEXT,
+        source_text TEXT NOT NULL,
+        source_label TEXT NOT NULL,
+        source_value_string TEXT NOT NULL,
+        source_value_json TEXT NOT NULL,
+        source_unit TEXT,
+        source_reference_interval TEXT,
+        source_flag TEXT,
+        source_page_index INTEGER NOT NULL,
+        source_bbox_json TEXT NOT NULL,
+        source_orientation INTEGER NOT NULL,
+        proposed_label TEXT NOT NULL,
+        proposed_value_json TEXT NOT NULL,
+        proposed_unit TEXT,
+        proposed_reference_interval TEXT,
+        proposed_flag TEXT,
+        proposed_biomarker_id TEXT,
+        proposed_specimen_type TEXT NOT NULL,
+        collection_date TEXT,
+        date_state TEXT NOT NULL CHECK (date_state IN ('known', 'missing')),
+        date_context_json TEXT,
+        review_reasons_json TEXT NOT NULL,
+        review_state TEXT NOT NULL CHECK (review_state IN ('ready', 'needs-review')),
+        decision TEXT NOT NULL DEFAULT 'unresolved',
+        edit_state TEXT NOT NULL DEFAULT 'legacy-unknown'
+          CHECK (edit_state IN ('automatic', 'user-edited', 'legacy-unknown')),
+        UNIQUE(draft_id, row_order)
+      );
+      INSERT INTO extraction_draft_rows
+        (id, draft_id, row_order, panel_label, source_text, source_label, source_value_string,
+         source_value_json, source_unit, source_reference_interval, source_flag, source_page_index,
+         source_bbox_json, source_orientation, proposed_label, proposed_value_json, proposed_unit,
+         proposed_reference_interval, proposed_flag, proposed_biomarker_id, proposed_specimen_type,
+         collection_date, date_state, date_context_json, review_reasons_json, review_state, decision,
+         edit_state)
+      SELECT id, draft_id, row_order, panel_label, source_text, source_label, source_value_string,
+        source_value_json, source_unit, source_reference_interval, source_flag, source_page_index,
+        source_bbox_json, source_orientation, proposed_label, proposed_value_json, proposed_unit,
+        proposed_reference_interval, proposed_flag, proposed_biomarker_id, proposed_specimen_type,
+        collection_date, date_state, date_context_json, review_reasons_json, review_state, decision,
+        edit_state
+      FROM extraction_draft_rows_v13;
+      DROP TABLE extraction_draft_rows_v13;
+      DROP TABLE extraction_drafts_v13;
+      CREATE INDEX extraction_drafts_report_id_idx ON extraction_drafts(report_id);
+      CREATE INDEX extraction_draft_rows_draft_id_idx ON extraction_draft_rows(draft_id, row_order);
+      CREATE UNIQUE INDEX extraction_drafts_open_report_uq
+        ON extraction_drafts(report_id) WHERE state = 'draft';
+      UPDATE extraction_operations SET pipeline_fingerprint_json = NULL
+        WHERE pipeline_fingerprint_json IS NOT NULL;
+    `,
   },
 ];

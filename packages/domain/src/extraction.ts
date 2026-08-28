@@ -117,6 +117,12 @@ export function extractionDraftHasUserEdits(
   return rows.some((row) => row.editState === 'user-edited');
 }
 
+export function extractionDraftHasUnknownEdits(
+  rows: readonly Pick<ExtractionDraftRow, 'editState'>[],
+): boolean {
+  return rows.some((row) => row.editState === 'legacy-unknown');
+}
+
 const NUMERIC_TOKEN_PATTERN =
   '[<>≤≥]?\\s*[+-]?(?:(?:\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)|(?:\\d+(?:[.,]\\d+)?)|(?:\\.\\d+))';
 const PLAIN_NUMERIC_TOKEN_PATTERN =
@@ -329,7 +335,7 @@ export type ExtractionDraftRow = {
   readonly decision: ExtractionRowDecision;
   /** Independent from the pipeline status so a rerun can never silently erase a correction. */
   /** Optional only for in-memory legacy callers; persisted rows always decode this field. */
-  readonly editState?: 'automatic' | 'user-edited';
+  readonly editState?: 'automatic' | 'user-edited' | 'legacy-unknown';
 };
 
 export type ExtractionDraft = {
@@ -343,6 +349,7 @@ export type ExtractionDraft = {
   readonly pipelineStatus: 'current' | 'older';
   readonly revision: number;
   readonly hasUserEdits: boolean;
+  readonly hasUnknownEdits?: boolean;
   readonly sourceArtifact?: LabSourceArtifact | null;
   readonly collectionDate: LabDateState;
   readonly rows: readonly ExtractionDraftRow[];

@@ -17,7 +17,7 @@ import {
   SEMANTIC_MAPPER_SCHEMA_VERSION,
   SEMANTIC_OCR_CHUNK_VERSION,
   serializeSemanticMapperChunk,
-  validateSemanticMapperOutput,
+  validateSemanticMapperOutputWithState,
 } from './semantic-contract';
 
 const PROMPT_VERSION = SEMANTIC_MAPPER_PROMPT_VERSION;
@@ -324,21 +324,32 @@ export function createLocalSemanticMapper(
             return null;
           }
         };
-        let parsed = parse(await infer(prompt));
-        if (!isResponseEnvelope(parsed)) {
-          // One bounded retry repairs truncated/prose output. A valid partial response is never
-          // retried: the domain validator independently preserves valid sibling rows.
+        let currentRows = rows;
+        const accepted = [] as ReturnType<
+          typeof validateSemanticMapperOutputWithState
+        >['proposals'][number][];
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const parsed = parse(
+            attempt === 0
+              ? await infer(prompt)
+              : await infer(
+                  createSemanticMapperRetryPrompt(
+                    locale,
+                    serializeSemanticMapperChunk(currentRows, locale, []),
+                  ),
+                ),
+          );
+          const result = isResponseEnvelope(parsed)
+            ? validateSemanticMapperOutputWithState(parsed, currentRows, options.aliases)
+            : { proposals: [], rejectedRows: currentRows, malformedEnvelope: true };
+          accepted.push(...result.proposals);
+          if (result.rejectedRows.length === 0 || attempt === 1) return accepted;
+          // Retry only rows that were not accepted. Valid siblings are never sent again, even
+          // when one envelope entry is malformed, duplicated, or crosses a physical row.
+          currentRows = result.rejectedRows;
           if (cancellation?.isCancelled()) throw new Error('semantic-inference-cancelled');
-          let retryPrompt: string;
-          try {
-            retryPrompt = createSemanticMapperRetryPrompt(locale, serialized);
-          } catch {
-            return [];
-          }
-          parsed = parse(await infer(retryPrompt));
-          if (!isResponseEnvelope(parsed)) return [];
         }
-        return validateSemanticMapperOutput(parsed, rows, options.aliases);
+        return accepted;
       }),
   };
 }

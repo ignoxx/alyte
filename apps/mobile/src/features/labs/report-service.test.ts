@@ -1454,6 +1454,105 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(draft.rows[1]?.source.semantic, null);
   });
 
+  test('improves only unresolved automatic rows and preserves user decisions', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    let mapperCalls = 0;
+    const observations = ['improve-auto', 'improve-user'].map((id, index) => ({
+      id,
+      text: `Unknown marker ${index + 1}.2 mg/dL`,
+      alternatives: [],
+      boundingBox: { x: 0.1, y: 0.2 + index * 0.12, width: 0.6, height: 0.04 },
+      pageIndex: 0,
+      orientation: 0,
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: 0.8 },
+    }));
+    const service = createService(
+      repository,
+      files,
+      sanitizingPdf(files),
+      {
+        async recognize() {
+          return {
+            contractVersion: 'alyte.vision.document.v2',
+            pageIndex: 0,
+            orientation: 0,
+            observations,
+          };
+        },
+      },
+      {
+        adapterVersion: 'improve.mapper.v1',
+        schemaVersion: 'alyte.semantic-mapper.v1',
+        supports: () => true,
+        async map({ rows }) {
+          mapperCalls += 1;
+          if (mapperCalls === 1) return [];
+          return rows.length === 1
+            ? [{ sourceObservationIds: ['improve-auto'], proposedBiomarkerId: 'biomarker.ldl_c' }]
+            : [];
+        },
+      },
+    );
+    const report = (await service.importPdf(source('improve')))!.report;
+    const draft = await service.startExtraction(report.id);
+    const userRow = await service.updateExtractionRow(draft.rows[1]!.id, { decision: 'skip' });
+    const improved = await service.improveExtraction(report.id);
+    assert.equal(mapperCalls, 2);
+    assert.equal(improved.rows[0]?.proposedBiomarkerId, 'biomarker.ldl_c');
+    assert.deepEqual(improved.rows[1], userRow);
+    assert.equal(improved.rows[0]?.editState, 'automatic');
+  });
+
+  test('restores the exact open draft when the Original changes after reprocess replacement', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const ocr: VisionOCR = {
+      async recognize() {
+        return {
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'reprocess-preserve-source',
+              text: 'LDL-C 3.8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.6, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+            },
+          ],
+        };
+      },
+    };
+    const service = createService(repository, files, new FakePdf(), ocr);
+    const report = (await service.importImages(source('reprocess-preserve', 'image')))!.report;
+    const original = await service.startExtraction(report.id);
+    const edited = await service.updateExtractionRow(original.rows[0]!.id, { decision: 'skip' });
+    const replace = repository.replaceExtractionDraft.bind(repository);
+    let mutated = false;
+    repository.replaceExtractionDraft = async (input) => {
+      const replacement = await replace(input);
+      if (!mutated) {
+        mutated = true;
+        for (const [path, file] of files.files) {
+          if (path.includes('/originals/'))
+            files.files.set(path, { ...file, hash: 'changed-after-write' });
+        }
+      }
+      return replacement;
+    };
+    await assert.rejects(
+      service.reprocessExtraction(report.id),
+      /changed and must be imported again/,
+    );
+    const restored = await repository.getExtractionDraft(original.id);
+    assert.equal(restored?.id, original.id);
+    assert.deepEqual(restored?.rows[0], edited);
+  });
+
   test('bounds mapper input by candidate rows and keeps independent valid proposals on partial failure', async () => {
     const repository = createRepository();
     const files = new FakeFiles();

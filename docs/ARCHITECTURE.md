@@ -293,9 +293,11 @@ Files/Photos selection
 Extraction progress is durable but deliberately minimal: it stores only a report ID, stage,
 bounded counts, and typed failure category. An active marker is reconciled to `interrupted` on
 relaunch, preserving the Original and making retry explicit without retaining passwords, paths,
-OCR text, or model health details. Every draft root and row must carry the same validated artifact
-identity; pre-#75 drafts without that identity are marked legacy Sanitized-derived and require
-regeneration rather than being migrated as Original.
+OCR text, or model health details. A resumable operation may also retain one bounded opaque
+pipeline-fingerprint hash as a compatibility token; the complete fingerprint JSON, source hash,
+model/runtime detail, and health payload remain only on the Extraction Draft root. Every draft root
+and row must carry the same validated artifact identity; pre-#75 drafts without that identity are
+marked legacy Sanitized-derived and require regeneration rather than being migrated as Original.
 
 Recognition confidence is an internal routing signal. The user sees the precise field or row that
 needs review and why; they do not see a medical-looking confidence percentage.

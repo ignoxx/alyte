@@ -220,35 +220,59 @@ export const SEMANTIC_MAPPER_CONTEXT = Object.freeze({
   maxPromptTokens: 2_048 - SEMANTIC_MAPPER_LIMITS.outputTokenLimit,
 });
 
+export type SemanticMapperOutputValidation = {
+  readonly proposals: readonly ExtractionSemanticProposal[];
+  readonly rejectedRows: readonly ExtractionSemanticCandidateRow[];
+  readonly malformedEnvelope: boolean;
+};
+
+export function validateSemanticMapperOutputWithState(
+  raw: unknown,
+  candidateRows: readonly ExtractionSemanticCandidateRow[],
+  aliases: readonly ExtractionAliasEntry[],
+): SemanticMapperOutputValidation {
+  const rejectAll = (malformedEnvelope = true): SemanticMapperOutputValidation => ({
+    proposals: [],
+    rejectedRows: candidateRows,
+    malformedEnvelope,
+  });
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return rejectAll();
+  try {
+    const bytes = new TextEncoder().encode(JSON.stringify(raw)).byteLength;
+    if (bytes > SEMANTIC_MAPPER_LIMITS.maxOutputBytes) return rejectAll();
+  } catch {
+    return rejectAll();
+  }
+  const candidate = raw as Record<string, unknown>;
+  if (Object.keys(candidate).some((key) => !['schemaVersion', 'proposals'].includes(key)))
+    return rejectAll();
+  if (candidate.schemaVersion !== SEMANTIC_MAPPER_SCHEMA_VERSION) return rejectAll();
+  if (
+    !Array.isArray(candidate.proposals) ||
+    candidate.proposals.length > SEMANTIC_MAPPER_LIMITS.maxProposals
+  )
+    return rejectAll();
+  const proposals = validateSemanticProposals(candidate, candidateRows, aliases);
+  const acceptedSourceIds = new Set(
+    proposals.map((proposal) => proposal.sourceObservationIds.join('\u0000')),
+  );
+  return {
+    proposals,
+    // A valid sibling is removed from the retry set. Any malformed, duplicate, cross-row, or
+    // omitted entry remains deterministic review work and gets at most one compact retry.
+    rejectedRows: candidateRows.filter(
+      (row) => !acceptedSourceIds.has(row.sourceObservationIds.join('\u0000')),
+    ),
+    malformedEnvelope: false,
+  };
+}
+
 export function validateSemanticMapperOutput(
   raw: unknown,
   candidateRows: readonly ExtractionSemanticCandidateRow[],
   aliases: readonly ExtractionAliasEntry[],
 ): readonly ExtractionSemanticProposal[] {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return [];
-  try {
-    const bytes = new TextEncoder().encode(JSON.stringify(raw)).byteLength;
-    if (bytes > SEMANTIC_MAPPER_LIMITS.maxOutputBytes) return [];
-  } catch {
-    return [];
-  }
-  const candidate = raw as Record<string, unknown>;
-  if (Object.keys(candidate).some((key) => !['schemaVersion', 'proposals'].includes(key)))
-    return [];
-  if (candidate.schemaVersion !== SEMANTIC_MAPPER_SCHEMA_VERSION) return [];
-  if (
-    !Array.isArray(candidate.proposals) ||
-    candidate.proposals.length > SEMANTIC_MAPPER_LIMITS.maxProposals ||
-    candidate.proposals.some(
-      (proposal) =>
-        typeof proposal !== 'object' ||
-        proposal === null ||
-        Array.isArray(proposal) ||
-        typeof (proposal as Record<string, unknown>).rowKey !== 'string',
-    )
-  )
-    return [];
-  return validateSemanticProposals(candidate, candidateRows, aliases);
+  return validateSemanticMapperOutputWithState(raw, candidateRows, aliases).proposals;
 }
 
 export const localSemanticContractMetadata = Object.freeze({

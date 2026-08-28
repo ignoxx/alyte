@@ -94,6 +94,34 @@ describe('geometry-driven extraction primitives', () => {
     );
   });
 
+  it('does not merge adjacent cells across table sections, specimens, or dates', () => {
+    const base = {
+      tableId: 'report-table',
+      sectionId: 'lipids',
+      specimenKey: 'serum',
+      collectionDateKey: '2026-08-20',
+    };
+    const lattice = reconstructGeometryLattice([
+      observation('section-a-label', 'LDL-C', 0.08, 0.2, { context: base }),
+      observation('section-a-value', '3.8', 0.5, 0.2, { context: base }),
+      observation('section-b-unit', 'mmol/L', 0.68, 0.2, {
+        context: { ...base, sectionId: 'chemistry' },
+      }),
+      observation('other-specimen', '1.4', 0.5, 0.2, {
+        context: { ...base, specimenKey: 'plasma' },
+      }),
+      observation('other-date', 'H', 0.68, 0.2, {
+        context: { ...base, collectionDateKey: '2026-08-21' },
+      }),
+    ]);
+    assert.equal(lattice.rows.length, 4);
+    assert.deepEqual(
+      lattice.rows.find((row) => row.sourceObservationIds.includes('section-a-label'))
+        ?.sourceObservationIds,
+      ['section-a-label', 'section-a-value'],
+    );
+  });
+
   it('splits a parent into at most two clear y-bands using deterministic derived IDs', () => {
     const text = 'LDL-C\n3,8 mmol/L';
     const lattice = reconstructGeometryLattice([
