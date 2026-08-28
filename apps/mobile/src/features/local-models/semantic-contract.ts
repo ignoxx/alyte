@@ -20,12 +20,12 @@ export const SEMANTIC_OCR_CHUNK_VERSION = productionLocalModelManifest.compatibi
 export const SEMANTIC_MAPPER_GRAMMAR = ALYTE_SEMANTIC_MAPPER_GRAMMAR;
 
 export const SEMANTIC_MAPPER_LIMITS = Object.freeze({
-  maxRows: 4,
+  maxRows: 2,
   maxObservations: 24,
   maxHeadings: 4,
   maxObservationTextCharacters: 240,
   maxAlternativeCharacters: 120,
-  maxProposals: 4,
+  maxProposals: 2,
   maxOutputBytes: 8_192,
   maxInputBytes: 8_192,
   maxPromptBytes: 7_168,
@@ -156,13 +156,34 @@ export function serializeSemanticMapperChunk(
  * prompt. Compact row/cell keys keep one physical row within one bounded proposal. */
 export function createSemanticMapperPrompt(locale: string, serializedChunk: string): string {
   const prompt = `<bos><|turn>system
-Offline laboratory OCR mapper. compact row and cell keys are bookkeeping only. Return exactly one proposal per input row, keyed by row/cell, in any order, with grammar keys only and no extra fields. For every row select label, complete observed result (including comparator/range), unit, reference, and flag keys only from that row. Label is the test name only: exclude result, unit, range, flag, method, date, and metadata. measurement requires a checked-in biomarker; preserve is for unresolved, ambiguous, or unsupported rows and requires biomarkerId null; specimen-context is only a specimen heading and also has biomarkerId null. Never omit, duplicate, cross, invent, rewrite, reorder, or translate source cells; never author values, units, ranges, flags, conversions, explanations, confidence, dates, metadata, or medical copy. There is no ignore: uncertainty stays preserve.
+Offline laboratory OCR mapper. The input has one or two table-local candidate rows. Return zero or one proposal per row, keyed by row/cell, in any order, with grammar keys only and no extra fields. Omit or preserve an ambiguous or unresolved row; never force a choice. For each returned row select label, complete observed result (including comparator/range), unit, reference, and flag keys only from that row. Label is the test name only, excluding result, unit, range, flag, method, date, and metadata. measurement requires a checked-in biomarker; preserve is for unresolved, ambiguous, or unsupported rows and requires biomarkerId null; specimen-context is only a specimen heading and also has biomarkerId null. Never duplicate, cross, invent, rewrite, reorder, or translate source cells; never author values, units, ranges, flags, conversions, explanations, confidence, dates, metadata, or medical copy. There is no ignore: uncertainty stays preserve.
 <turn|>
 <|turn>user
 Schema version: ${SEMANTIC_MAPPER_SCHEMA_VERSION}. Locale: ${locale}.
 The chunk's biomarkers map provides canonical English labels and checked-in multilingual aliases. These are input matching hints only; never author a translation or replace source text.
 OCR chunk: ${serializedChunk}
-Return one compact proposal per row with exact source keys. Keep result, unit, reference, flag, and specimen context exact; preserve rather than guess.
+Return zero, one, or two compact proposals with exact source keys. Keep result, unit, reference, flag, and specimen context exact; omit or preserve rather than guess.
+<turn|>
+<|turn>model
+`;
+  if (
+    new TextEncoder().encode(prompt).byteLength > SEMANTIC_MAPPER_LIMITS.maxPromptBytes ||
+    estimateSemanticMapperTokens(prompt) + SEMANTIC_MAPPER_LIMITS.outputTokenLimit >
+      SEMANTIC_MAPPER_CONTEXT.maxTokens
+  ) {
+    throw new Error('semantic-inference-input-too-large');
+  }
+  return prompt;
+}
+
+/** A bounded second chance for malformed provider output; ambiguity remains a deterministic row. */
+export function createSemanticMapperRetryPrompt(locale: string, serializedChunk: string): string {
+  const prompt = `<bos><|turn>system
+Return JSON only for zero, one, or two table-local OCR rows. Use only exact rowKey/cell keys from the chunk. Omit any uncertain row; do not invent, translate, normalize, or explain anything.
+<turn|>
+<|turn>user
+Schema version: ${SEMANTIC_MAPPER_SCHEMA_VERSION}. Locale: ${locale}. OCR chunk: ${serializedChunk}
+Required shape: {"schemaVersion":"${SEMANTIC_MAPPER_SCHEMA_VERSION}","proposals":[...]}
 <turn|>
 <|turn>model
 `;
@@ -217,7 +238,6 @@ export function validateSemanticMapperOutput(
   if (candidate.schemaVersion !== SEMANTIC_MAPPER_SCHEMA_VERSION) return [];
   if (
     !Array.isArray(candidate.proposals) ||
-    candidate.proposals.length !== candidateRows.length ||
     candidate.proposals.length > SEMANTIC_MAPPER_LIMITS.maxProposals ||
     candidate.proposals.some(
       (proposal) =>
@@ -228,8 +248,7 @@ export function validateSemanticMapperOutput(
     )
   )
     return [];
-  const proposals = validateSemanticProposals(candidate, candidateRows, aliases);
-  return proposals.length === candidateRows.length ? proposals : [];
+  return validateSemanticProposals(candidate, candidateRows, aliases);
 }
 
 export const localSemanticContractMetadata = Object.freeze({

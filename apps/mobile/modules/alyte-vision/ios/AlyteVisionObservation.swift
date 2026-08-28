@@ -5,6 +5,7 @@ import Vision
 /// crossing the Expo bridge and the work needed to validate it later. Exceeding either limit keeps
 /// the complete parent observation and omits only its optional spans.
 let alyteVisionMaxTokenSpansPerObservation = 128
+let alyteVisionMaxTokenParentCharactersPerObservation = 8 * 1024
 let alyteVisionMaxTokenSpanSerializedBytesPerObservation = 16 * 1024
 let alyteVisionMaxTokenSpanSerializedBytesPerPage = 256 * 1024
 
@@ -147,7 +148,11 @@ func alyteExactTokenSpans(
   text: String,
   candidates: [AlyteVisionTokenCandidate]
 ) -> [[String: Any]]? {
-  guard !candidates.isEmpty, candidates.count <= alyteVisionMaxTokenSpansPerObservation else {
+  guard !text.isEmpty,
+    text.utf16.count <= alyteVisionMaxTokenParentCharactersPerObservation,
+    !candidates.isEmpty,
+    candidates.count <= alyteVisionMaxTokenSpansPerObservation
+  else {
     return nil
   }
 
@@ -283,10 +288,6 @@ private func alyteExactSubstringRange(
   guard !candidate.isEmpty, offset >= 0, offset <= text.utf16.count else { return nil }
   let lowerBound = String.Index(utf16Offset: offset, in: text)
   guard let range = text.range(of: candidate, range: lowerBound..<text.endIndex) else { return nil }
-  // Do not search past another non-whitespace source token. A later duplicate may have the same
-  // spelling but a different region; associating it with this Vision candidate would corrupt
-  // source provenance even though the substring itself is exact.
-  guard text[lowerBound..<range.lowerBound].allSatisfy({ $0.isWhitespace }) else { return nil }
   let before = range.lowerBound == text.startIndex ? nil : text[text.index(before: range.lowerBound)]
   let after = range.upperBound == text.endIndex ? nil : text[range.upperBound]
   guard before?.isWhitespace ?? true, after?.isWhitespace ?? true else { return nil }

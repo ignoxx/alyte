@@ -63,7 +63,7 @@ test('serializes candidate rows with compact keys and headings without source ID
     headings: readonly { key: string; text: string }[];
     observations?: unknown;
   };
-  assert.equal(serialized.version, 'alyte.semantic-ocr-chunk.v3');
+  assert.equal(serialized.version, 'alyte.semantic-ocr-chunk.v4');
   assert.equal('observations' in serialized, false);
   assert.equal(serialized.rows[0]?.key, 'r0');
   assert.deepEqual(
@@ -189,7 +189,7 @@ test('accepts both supported Polish candidate rows with their complete source ID
   );
 });
 
-test('rejects the complete response when any compact row key is invented', () => {
+test('keeps a valid sibling when one compact row proposal is malformed', () => {
   const first = row('first', 'lt', ['Feritinas', '42', 'ng/mL', '15–150']);
   const second = row('second', 'pl', ['Hematokryt', '42', '%', '36–46']);
   const accepted = validateSemanticMapperOutput(
@@ -223,7 +223,10 @@ test('rejects the complete response when any compact row key is invented', () =>
     [first, second],
     multilingualAliases,
   );
-  assert.deepEqual(accepted, []);
+  assert.deepEqual(
+    accepted.map((proposal) => proposal.sourceObservationIds),
+    [second.sourceObservationIds],
+  );
 });
 
 test('rejects partial, cross-row, reordered, and extra-ID proposals individually', () => {
@@ -330,14 +333,14 @@ test('bounds candidate rows, cells, headings, and the complete UTF-8 input', () 
   );
   assert.match(
     createSemanticMapperPrompt('lt', serializeSemanticMapperChunk([candidate], 'lt')),
-    /compact row(?:\/| and )cell keys/u,
+    /row\/cell/u,
   );
 });
 
 test('keeps production prompt, chunk, and manifest versions aligned', () => {
   assert.equal(SEMANTIC_MAPPER_SCHEMA_VERSION, 'alyte.semantic-mapper.v2');
-  assert.equal(SEMANTIC_MAPPER_PROMPT_VERSION, 'alyte.semantic-mapper.prompt.v5');
-  assert.equal(SEMANTIC_OCR_CHUNK_VERSION, 'alyte.semantic-ocr-chunk.v3');
+  assert.equal(SEMANTIC_MAPPER_PROMPT_VERSION, 'alyte.semantic-mapper.prompt.v6');
+  assert.equal(SEMANTIC_OCR_CHUNK_VERSION, 'alyte.semantic-ocr-chunk.v4');
   assert.equal(
     SEMANTIC_MAPPER_PROMPT_VERSION,
     productionLocalModelManifest.compatibility.promptBundle,

@@ -15,7 +15,9 @@ import {
 } from '@alyte/domain';
 import {
   groupObservationsIntoRows,
+  enumerateGeometryFieldCandidates,
   parseLabDate,
+  reconstructGeometryLattice,
   reparseExtractionRowFromSemanticFields,
   revalidateExtractionRow,
   validateSemanticProposals,
@@ -33,6 +35,9 @@ import {
   type VisionOCRResult,
   type SpecimenType,
   type ExtractionPipelineFingerprint,
+  type GeometryRow,
+  type GeometrySourceObservation,
+  type VisionSourceSpan,
   createExtractionPipelineFingerprint,
   EXTRACTION_ROW_SEGMENTATION_VERSION,
   EXTRACTION_PARSER_VERSION,
@@ -1940,11 +1945,130 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }));
   }
 
+  type GeometryExtractionRows = {
+    readonly rows: readonly ExtractionDraftRow[];
+    readonly semanticCandidateRowIds: ReadonlySet<string>;
+  };
+
+  /**
+   * Converts native v3 observations into exact source-cell observations before deterministic
+   * parsing. The synthetic cell keeps the parent's complete text and UTF-16 offsets, so a model
+   * can select a source cell without ever authoring or normalizing a value.
+   */
+  function geometryCellObservation(
+    cell: GeometryRow['cells'][number],
+    parent: VisionTextObservation,
+  ): VisionTextObservation {
+    const parentStructure = parent.structure;
+    return {
+      id: cell.id,
+      text: cell.text,
+      alternatives: parent.alternatives,
+      boundingBox: cell.boundingBox,
+      pageIndex: cell.pageIndex,
+      orientation: parent.orientation,
+      structure:
+        parentStructure?.kind === 'table-cell'
+          ? {
+              kind: 'table-cell',
+              tableId: parentStructure.tableId,
+              rowIndex: parentStructure.rowIndex,
+              columnIndex: parentStructure.columnIndex,
+            }
+          : {
+              kind: 'text',
+              tableId: parentStructure?.tableId ?? null,
+              rowIndex: null,
+              columnIndex: cell.columnIndex,
+            },
+      sourceSpan: {
+        id: `${cell.id}:source`,
+        parentObservationId: cell.parentId,
+        start: cell.sourceStart,
+        end: cell.sourceEnd,
+        text: cell.text,
+        boundingBox: cell.boundingBox,
+        parentText: parent.text,
+      } satisfies VisionSourceSpan,
+      recognition: parent.recognition,
+    };
+  }
+
+  function geometryRowsForExtraction(
+    observations: readonly VisionTextObservation[],
+    options: {
+      readonly locale: string;
+      readonly collectionDate: LabDateState;
+      readonly collectionDateDefaulted: boolean;
+      readonly collectionDateContexts: readonly ExtractionDateContext[];
+      readonly aliases: readonly ExtractionAliasEntry[];
+      readonly artifact: LabSourceArtifact;
+    },
+  ): GeometryExtractionRows {
+    const sourceById = new Map(observations.map((observation) => [observation.id, observation]));
+    const lattice = reconstructGeometryLattice(
+      observations.map((observation): GeometrySourceObservation => ({
+        id: observation.id,
+        text: observation.text,
+        boundingBox: observation.boundingBox,
+        pageIndex: observation.pageIndex,
+        ...(observation.orientation === undefined ? {} : { orientation: observation.orientation }),
+        ...(observation.structure === undefined ? {} : { structure: observation.structure }),
+        ...(observation.spans === undefined ? {} : { spans: observation.spans }),
+      })),
+    );
+    const rows: ExtractionDraftRow[] = [];
+    const semanticCandidateRowIds = new Set<string>();
+    for (const physicalRow of lattice.rows) {
+      const rowObservations =
+        physicalRow.cells.length === 0
+          ? physicalRow.sourceObservationIds.flatMap((id) => {
+              const source = sourceById.get(id);
+              return source === undefined ? [] : [source];
+            })
+          : physicalRow.cells.flatMap((cell) => {
+              const parent = sourceById.get(cell.sourceObservationId);
+              return parent === undefined ? [] : [geometryCellObservation(cell, parent)];
+            });
+      if (rowObservations.length === 0) continue;
+      const specimenType =
+        specimenTypeFromText(rowObservations.map((item) => item.text).join(' ')) ?? 'unknown';
+      const parsedRows = groupObservationsIntoRows(rowObservations, {
+        locale: options.locale,
+        collectionDate: options.collectionDate,
+        collectionDateDefaulted: options.collectionDateDefaulted,
+        collectionDateContexts: options.collectionDateContexts,
+        specimenType,
+        aliases: options.aliases,
+        artifact: options.artifact,
+      });
+      const candidates = enumerateGeometryFieldCandidates(physicalRow);
+      for (const parsedRow of parsedRows) {
+        rows.push(parsedRow);
+        if (candidates.requiresReview) semanticCandidateRowIds.add(parsedRow.id);
+      }
+    }
+    rows.sort((left, right) => {
+      const leftSource = left.source.observations?.[0];
+      const rightSource = right.source.observations?.[0];
+      return (
+        (leftSource?.pageIndex ?? 0) - (rightSource?.pageIndex ?? 0) ||
+        (leftSource?.boundingBox.y ?? 0) - (rightSource?.boundingBox.y ?? 0) ||
+        (leftSource?.boundingBox.x ?? 0) - (rightSource?.boundingBox.x ?? 0)
+      );
+    });
+    return {
+      rows: rows.map((row, order) => ({ ...row, order })),
+      semanticCandidateRowIds,
+    };
+  }
+
   async function applySemanticMappings(
     rows: readonly ExtractionDraftRow[],
     observations: readonly VisionTextObservation[],
     onProgress?: (completed: number, total: number) => void,
     cancellation?: ExtractionSemanticCancellation,
+    semanticCandidateRowIds?: ReadonlySet<string>,
   ): Promise<readonly ExtractionDraftRow[]> {
     if (semanticMapper === undefined) {
       onProgress?.(0, 0);
@@ -1952,8 +2076,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }
     // Deterministically complete rows do not benefit from semantic mapping. Keep them out of the
     // request entirely; unresolved, ambiguous, and unsupported rows remain eligible for refinement.
-    const candidateRowsForMapping = rows.filter(
-      (row) => row.proposedBiomarkerId === null || row.reviewReasons.length > 0,
+    const candidateRowsForMapping = rows.filter((row) =>
+      semanticCandidateRowIds === undefined
+        ? row.proposedBiomarkerId === null || row.reviewReasons.length > 0
+        : semanticCandidateRowIds.has(row.id),
     );
     if (candidateRowsForMapping.length === 0) {
       onProgress?.(0, 0);
@@ -1980,7 +2106,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }[] = [];
     // The production adapter advertises the compact-contract bound. Legacy test/provider seams
     // without an explicit bound retain their historical row limit until they migrate to v2.
-    const maxRowsPerChunk = Math.max(1, Math.floor(semanticMapper.maxRowsPerChunk ?? 12));
+    const maxRowsPerChunk = Math.max(
+      1,
+      Math.min(
+        semanticMapper.schemaVersion === 'alyte.semantic-mapper.v2' ? 2 : Number.MAX_SAFE_INTEGER,
+        Math.floor(semanticMapper.maxRowsPerChunk ?? 12),
+      ),
+    );
     const maxObservationsPerChunk = Math.max(
       1,
       Math.floor(semanticMapper.maxObservationsPerChunk ?? 48),
@@ -1989,10 +2121,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       rowChunk: readonly ExtractionDraftRow[],
     ): readonly ExtractionSemanticCandidateRow[] =>
       rowChunk.flatMap((row): ExtractionSemanticCandidateRow[] => {
-        const rowObservations = row.source.observationIds.flatMap((id) => {
-          const observation = observationById.get(id);
-          return observation === undefined ? [] : [observation];
-        });
+        const rowObservations =
+          row.source.observations === undefined
+            ? row.source.observationIds.flatMap((id) => {
+                const observation = observationById.get(id);
+                return observation === undefined ? [] : [observation];
+              })
+            : [...row.source.observations];
         return rowObservations.length === row.source.observationIds.length
           ? [
               {
@@ -2024,7 +2159,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       // their pre-v2 test contract and do not serialize this wire format.
       if (
         semanticMapper.maxRowsPerChunk === undefined ||
-        semanticMapper.schemaVersion !== 'alyte.semantic-mapper.v2'
+        semanticMapper.schemaVersion !== 'alyte.semantic-mapper.v2' ||
+        semanticMapper.adapterVersion !== 'alyte.gemma4-e2b.semantic-mapper.v1'
       )
         return true;
       const candidateRows = candidateRowsFor(rowChunk);
@@ -2484,28 +2620,43 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           id: null,
           hash: report.sourceHash,
         };
-        const deterministicRows = specimenContextGroups(observations)
-          .flatMap(({ observations: contextObservations, specimenType }) =>
-            groupObservationsIntoRows(contextObservations, {
-              locale: Intl.DateTimeFormat().resolvedOptions().locale,
+        const locale = Intl.DateTimeFormat().resolvedOptions().locale;
+        const geometryExtraction = results.some(
+          (result) => result.contractVersion === VISION_OCR_CONTRACT_VERSION,
+        )
+          ? geometryRowsForExtraction(observations, {
+              locale,
               collectionDate,
               collectionDateDefaulted,
               collectionDateContexts: dateContext.contexts,
-              specimenType,
               aliases: extractionAliases,
               artifact: sourceArtifact,
-            }),
-          )
-          .sort((left, right) => {
-            const leftSource = left.source.observations?.[0];
-            const rightSource = right.source.observations?.[0];
-            return (
-              (leftSource?.pageIndex ?? 0) - (rightSource?.pageIndex ?? 0) ||
-              (leftSource?.boundingBox.y ?? 0) - (rightSource?.boundingBox.y ?? 0) ||
-              (leftSource?.boundingBox.x ?? 0) - (rightSource?.boundingBox.x ?? 0)
-            );
-          })
-          .map((row, order) => ({ ...row, order }));
+            })
+          : null;
+        const deterministicRows =
+          geometryExtraction?.rows ??
+          specimenContextGroups(observations)
+            .flatMap(({ observations: contextObservations, specimenType }) =>
+              groupObservationsIntoRows(contextObservations, {
+                locale,
+                collectionDate,
+                collectionDateDefaulted,
+                collectionDateContexts: dateContext.contexts,
+                specimenType,
+                aliases: extractionAliases,
+                artifact: sourceArtifact,
+              }),
+            )
+            .sort((left, right) => {
+              const leftSource = left.source.observations?.[0];
+              const rightSource = right.source.observations?.[0];
+              return (
+                (leftSource?.pageIndex ?? 0) - (rightSource?.pageIndex ?? 0) ||
+                (leftSource?.boundingBox.y ?? 0) - (rightSource?.boundingBox.y ?? 0) ||
+                (leftSource?.boundingBox.x ?? 0) - (rightSource?.boundingBox.x ?? 0)
+              );
+            })
+            .map((row, order) => ({ ...row, order }));
         await persistExtractionOperation(
           repo,
           id,
@@ -2525,6 +2676,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           (completed, total) =>
             extractionProgressEvent(id, mode, 'model', 'active', completed, total),
           cancellation,
+          geometryExtraction?.semanticCandidateRowIds,
         );
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         const modelTotal = extractionProgress.get(id)?.total ?? 0;

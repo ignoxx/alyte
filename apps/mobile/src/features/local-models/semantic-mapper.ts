@@ -11,6 +11,7 @@ import { canStartAutomatedExtraction } from './model';
 import type { LocalModelService } from './native';
 import {
   createSemanticMapperPrompt,
+  createSemanticMapperRetryPrompt,
   SEMANTIC_MAPPER_LIMITS,
   SEMANTIC_MAPPER_PROMPT_VERSION,
   SEMANTIC_MAPPER_SCHEMA_VERSION,
@@ -259,49 +260,83 @@ export function createLocalSemanticMapper(
             : (languageCode(observations[0].recognition.language) ?? 'en');
         const serialized = serializeSemanticMapperChunk(rows, locale, headings ?? []);
         const prompt = createSemanticMapperPrompt(locale, serialized);
-        const generation = ++nextInferenceGeneration;
-        const nativeWork = Promise.resolve().then(() => options.models.infer(prompt));
-        const inference: ActiveInference = {
-          generation,
-          settled: nativeWork.then(
-            () => undefined,
-            () => undefined,
-          ),
-        };
-        activeInference = inference;
-        void inference.settled.then(() => {
-          if (activeInference !== inference) return;
-          activeInference = null;
-          runtimeQuarantined = false;
-        });
-        const cancelNative = () => {
-          if (activeInference?.generation !== generation) return;
-          try {
-            options.models.cancelInference();
-          } catch {
-            // A cancellation callback is advisory; timeout/quarantine still protects the context.
-          }
-        };
-        let raw: string;
-        try {
-          raw = await withTimeout(nativeWork, timeoutMs, cancelNative, cancellation, (settled) => {
-            if (!settled && activeInference === inference) runtimeQuarantined = true;
+        const infer = async (inferencePrompt: string): Promise<string> => {
+          const generation = ++nextInferenceGeneration;
+          const nativeWork = Promise.resolve().then(() => options.models.infer(inferencePrompt));
+          const inference: ActiveInference = {
+            generation,
+            settled: nativeWork.then(
+              () => undefined,
+              () => undefined,
+            ),
+          };
+          activeInference = inference;
+          void inference.settled.then(() => {
+            if (activeInference !== inference) return;
+            activeInference = null;
+            runtimeQuarantined = false;
           });
-        } catch (error) {
-          // Only the native typed missing/unloaded contract returns to model setup. Timeouts,
-          // malformed output, and runtime failures remain ordinary per-chunk deterministic fallback.
-          if (localModelFailureCategory(error) === 'unavailable') {
-            throw new SemanticModelUnavailableError(
-              'The verified Gemma model pack became unavailable during extraction',
+          const cancelNative = () => {
+            if (activeInference?.generation !== generation) return;
+            try {
+              options.models.cancelInference();
+            } catch {
+              // A cancellation callback is advisory; timeout/quarantine still protects the context.
+            }
+          };
+          try {
+            return await withTimeout(
+              nativeWork,
+              timeoutMs,
+              cancelNative,
+              cancellation,
+              (settled) => {
+                if (!settled && activeInference === inference) runtimeQuarantined = true;
+              },
             );
+          } catch (error) {
+            // Only the native typed missing/unloaded contract returns to model setup. Timeouts,
+            // malformed output, and runtime failures remain ordinary per-chunk deterministic fallback.
+            if (localModelFailureCategory(error) === 'unavailable') {
+              throw new SemanticModelUnavailableError(
+                'The verified Gemma model pack became unavailable during extraction',
+              );
+            }
+            throw error;
           }
-          throw error;
-        }
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(raw) as unknown;
-        } catch {
-          return [];
+        };
+        const isResponseEnvelope = (
+          value: unknown,
+        ): value is {
+          readonly schemaVersion: string;
+          readonly proposals: readonly unknown[];
+        } =>
+          typeof value === 'object' &&
+          value !== null &&
+          !Array.isArray(value) &&
+          Object.keys(value).every((key) => key === 'schemaVersion' || key === 'proposals') &&
+          (value as Record<string, unknown>).schemaVersion === SEMANTIC_MAPPER_SCHEMA_VERSION &&
+          Array.isArray((value as Record<string, unknown>).proposals);
+        const parse = (raw: string): unknown => {
+          try {
+            return JSON.parse(raw) as unknown;
+          } catch {
+            return null;
+          }
+        };
+        let parsed = parse(await infer(prompt));
+        if (!isResponseEnvelope(parsed)) {
+          // One bounded retry repairs truncated/prose output. A valid partial response is never
+          // retried: the domain validator independently preserves valid sibling rows.
+          if (cancellation?.isCancelled()) throw new Error('semantic-inference-cancelled');
+          let retryPrompt: string;
+          try {
+            retryPrompt = createSemanticMapperRetryPrompt(locale, serialized);
+          } catch {
+            return [];
+          }
+          parsed = parse(await infer(retryPrompt));
+          if (!isResponseEnvelope(parsed)) return [];
         }
         return validateSemanticMapperOutput(parsed, rows, options.aliases);
       }),

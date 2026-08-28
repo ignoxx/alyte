@@ -204,8 +204,8 @@ test('accepts only validated source selections and preserves versioned provenanc
       role: 'measurement',
     },
   ]);
-  assert.equal(mapper.provenance?.promptVersion, 'alyte.semantic-mapper.prompt.v5');
-  assert.equal(mapper.maxRowsPerChunk, 4);
+  assert.equal(mapper.provenance?.promptVersion, 'alyte.semantic-mapper.prompt.v6');
+  assert.equal(mapper.maxRowsPerChunk, 2);
 });
 
 test('rejects invented root keys before semantic validation', async () => {
@@ -222,7 +222,7 @@ test('rejects invented root keys before semantic validation', async () => {
   assert.deepEqual(await mapper.map({ pageIndex: 0, rows: [candidateRow] }), []);
 });
 
-test('rejects a partial envelope and times out without retaining model output', async () => {
+test('retries malformed output once, then preserves deterministic fallback on timeout', async () => {
   let calls = 0;
   let cancelled = 0;
   let finishSecondInference: (() => void) | undefined;
@@ -263,11 +263,11 @@ test('rejects a partial envelope and times out without retaining model output', 
     ),
     aliases,
   });
-  assert.deepEqual(await mapper.map({ pageIndex: 0, rows: [candidateRow] }), []);
   await assert.rejects(
     mapper.map({ pageIndex: 0, rows: [candidateRow] }),
     /semantic-inference-timeout/,
   );
+  assert.equal(calls, 2);
   // The timeout is a cooperative native cancellation request, not only a JS race.
   assert.equal(cancelled, 1);
 });

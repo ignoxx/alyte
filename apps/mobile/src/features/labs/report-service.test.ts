@@ -2124,7 +2124,7 @@ describe('protected Lab Report import lifecycle', () => {
     await prepareSanitizedExtraction(service, report.id);
     const draft = await service.startExtraction(report.id);
     assert.equal(draft.rows.length, 45);
-    assert.ok(Math.max(...chunks) <= 4);
+    assert.ok(Math.max(...chunks) <= 2);
     assert.ok(chunks.length > 0);
     assert.equal(draft.rows.filter(extractionReviewRequiresAttention).length, 3);
     assert.equal(draft.rows.filter((row) => row.source.semantic !== null).length, 9);
