@@ -3,11 +3,19 @@ import assert from 'node:assert/strict';
 import {
   APPLE_EXCHANGE_PATH,
   CLOUD_ALLOWANCES_PATH,
+  CLOUD_REQUEST_CANCEL_PATH,
+  CLOUD_REQUEST_MAX_BYTES,
+  CLOUD_REQUEST_MAX_PAGES,
+  CLOUD_REQUEST_STATUS_PATH,
+  CLOUD_REQUESTS_PATH,
   CLOUD_PLAN_OFFERS,
   CLOUD_PRODUCT_IDS,
   CONSENT_POLICY_VERSION,
   CONTRACT_VERSION,
   type AppleExchangeRequest,
+  type CloudRequestErrorCode,
+  type CloudRequestState,
+  type CloudRequestStatusResponse,
 } from './index.js';
 
 type RequiredProperty<T, K extends keyof T> = {} extends Pick<T, K> ? never : true;
@@ -41,5 +49,55 @@ describe('cloud contracts', () => {
     assert.equal(CLOUD_PLAN_OFFERS[0].reportAllowance, 1);
     assert.equal(CLOUD_PLAN_OFFERS[1].snapAllowance, 500);
     assert.equal(CLOUD_PLAN_OFFERS[1].reportAllowance, 4);
+  });
+
+  it('defines the bounded cloud admission/status/cancellation contract', () => {
+    assert.equal(CLOUD_REQUESTS_PATH, '/v1/cloud-requests');
+    assert.equal(CLOUD_REQUEST_STATUS_PATH, '/v1/cloud-requests/:requestId');
+    assert.equal(CLOUD_REQUEST_CANCEL_PATH, '/v1/cloud-requests/:requestId/cancel');
+    assert.equal(CLOUD_REQUEST_MAX_BYTES, 25 * 1024 * 1024);
+    assert.equal(CLOUD_REQUEST_MAX_PAGES, 20);
+
+    const states: readonly CloudRequestState[] = ['awaiting-upload', 'cancelled'];
+    assert.deepEqual(states, ['awaiting-upload', 'cancelled']);
+    const errors: readonly CloudRequestErrorCode[] = [
+      'cloud_request_invalid',
+      'cloud_request_operation_invalid',
+      'cloud_request_metadata_invalid',
+      'cloud_request_contract_version_unsupported',
+      'device_public_key_invalid',
+      'idempotency_key_required',
+      'idempotency_key_invalid',
+      'idempotency_key_conflict',
+      'cloud_request_not_found',
+      'cloud_request_not_cancellable',
+      'allowance_exhausted',
+    ];
+    assert.deepEqual(errors, [
+      'cloud_request_invalid',
+      'cloud_request_operation_invalid',
+      'cloud_request_metadata_invalid',
+      'cloud_request_contract_version_unsupported',
+      'device_public_key_invalid',
+      'idempotency_key_required',
+      'idempotency_key_invalid',
+      'idempotency_key_conflict',
+      'cloud_request_not_found',
+      'cloud_request_not_cancellable',
+      'allowance_exhausted',
+    ]);
+
+    const storedVersionStatus: CloudRequestStatusResponse = {
+      requestId: 'request-from-an-older-contract',
+      operation: 'intake-image',
+      state: 'awaiting-upload',
+      byteCount: 1,
+      pageCount: 1,
+      contractVersion: '2026-08-27',
+      createdAt: '2026-08-28T00:00:00.000Z',
+      updatedAt: '2026-08-28T00:00:00.000Z',
+      cancelledAt: null,
+    };
+    assert.equal(storedVersionStatus.contractVersion, '2026-08-27');
   });
 });

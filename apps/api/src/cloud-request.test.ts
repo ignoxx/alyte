@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { CLOUD_PRODUCT_IDS, CONTRACT_VERSION, type P256PublicKeyJwk } from '@alyte/contracts';
 import { AccountDatabase } from './database.js';
-import { CommerceService } from './commerce.js';
+import { CommerceFailure, CommerceService } from './commerce.js';
 import {
   CloudRequestFailure,
   CloudRequestService,
@@ -33,14 +33,27 @@ function publicKey(): P256PublicKeyJwk {
   return pair.publicKey.export({ format: 'jwk' }) as unknown as P256PublicKeyJwk;
 }
 
-function admission(key = publicKey()): Record<string, unknown> {
+function admission(
+  key = publicKey(),
+  operation: 'intake-image' | 'lab-report' = 'intake-image',
+): Record<string, unknown> {
   return {
-    operation: 'intake-image',
+    operation,
     byteCount: 1_024,
     pageCount: 1,
     devicePublicKeyJwk: key,
     contractVersion: CONTRACT_VERSION,
   };
+}
+
+function persistedCounts(database: AccountDatabase): { requests: number; ledger: number } {
+  const requests = database.sqlite
+    .prepare('SELECT COUNT(*) AS count FROM cloud_requests')
+    .get() as { count: number };
+  const ledger = database.sqlite
+    .prepare('SELECT COUNT(*) AS count FROM allowance_ledger')
+    .get() as { count: number };
+  return { requests: requests.count, ledger: ledger.count };
 }
 
 function grantStarter(database: AccountDatabase, accountId = ACCOUNT): void {
@@ -127,6 +140,18 @@ describe('P-256 admission representation', () => {
 });
 
 describe('cloud request admission service', () => {
+  it('reserves the matching allowance for each admitted operation', () => {
+    const { database, service } = serviceHarness();
+    try {
+      const snap = service.admit(ACCOUNT, admission(publicKey(), 'intake-image'), 'snap-key');
+      const report = service.admit(ACCOUNT, admission(publicKey(), 'lab-report'), 'report-key');
+      assert.equal(database.findAllowanceReservation(snap.requestId)?.kind, 'snap');
+      assert.equal(database.findAllowanceReservation(report.requestId)?.kind, 'report');
+    } finally {
+      database.close();
+    }
+  });
+
   it('reserves the operation-specific allowance and replays after reopening SQLite', () => {
     const directory = mkdtempSync(join(tmpdir(), 'alyte-cloud-request-'));
     const filename = join(directory, 'cloud.sqlite');
@@ -170,6 +195,26 @@ describe('cloud request admission service', () => {
       secondDatabase.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves the persisted contract version for status and replay responses', () => {
+    const { database, service } = serviceHarness();
+    try {
+      const request = admission();
+      const admitted = service.admit(ACCOUNT, request, 'version-key');
+      database.sqlite
+        .prepare('UPDATE cloud_requests SET contract_version = ? WHERE id = ?')
+        .run('2026-08-27', admitted.requestId);
+
+      assert.equal(service.status(ACCOUNT, admitted.requestId).contractVersion, '2026-08-27');
+      assert.equal(service.admit(ACCOUNT, request, 'version-key').contractVersion, '2026-08-27');
+      assert.equal(
+        service.cancel(ACCOUNT, admitted.requestId, 'version-cancel-key').contractVersion,
+        '2026-08-27',
+      );
+    } finally {
+      database.close();
     }
   });
 
@@ -227,6 +272,53 @@ describe('cloud request admission service', () => {
         0,
       );
       noAllowanceDatabase.close();
+    } finally {
+      database.close();
+    }
+  });
+
+  it('rejects unsupported and health-shaped metadata without durable side effects', () => {
+    const { database, service } = serviceHarness();
+    try {
+      const before = persistedCounts(database);
+      const rejectedInputs: readonly [Record<string, unknown>, string][] = [
+        [{ ...admission(), operation: 'unsupported-operation' }, 'cloud_request_operation_invalid'],
+        [{ ...admission(), health: { status: 'ok' } }, 'cloud_request_metadata_invalid'],
+        [
+          { ...admission(), devicePublicKeyJwk: { ...publicKey(), x: 'invalid' } },
+          'device_public_key_invalid',
+        ],
+      ];
+      for (const [request, code] of rejectedInputs) {
+        assert.throws(
+          () => service.admit(ACCOUNT, request, `reject-${code}`),
+          (error: unknown) => error instanceof CloudRequestFailure && error.code === code,
+        );
+        assert.deepEqual(persistedCounts(database), before);
+      }
+    } finally {
+      database.close();
+    }
+  });
+
+  it('rejects admission without allowance without writing a request or ledger entry', () => {
+    const database = new AccountDatabase({ filename: ':memory:' });
+    database.createAccountForAppleSubject('subject-empty', 'empty-account', NOW.toISOString());
+    const service = new CloudRequestService({
+      database,
+      commerce: new CommerceService({ database, now: () => NOW }),
+      hashSecret: HASH_SECRET,
+      clock: { now: () => NOW },
+      idFactory: () => 'no-allowance-request',
+    });
+    try {
+      const before = persistedCounts(database);
+      assert.throws(
+        () => service.admit('empty-account', admission(), 'no-allowance'),
+        (error: unknown) =>
+          error instanceof CommerceFailure && error.code === 'allowance_exhausted',
+      );
+      assert.deepEqual(persistedCounts(database), before);
     } finally {
       database.close();
     }
@@ -320,6 +412,55 @@ describe('cloud request admission service', () => {
 });
 
 describe('cloud request API', () => {
+  it('rejects invalid authentication before admission without durable side effects', async () => {
+    const { database } = serviceHarness();
+    const server = createServer({
+      database,
+      appleVerifier: new DeterministicAppleVerifier(),
+      hashSecret: HASH_SECRET,
+      clock: { now: () => NOW },
+    });
+    try {
+      const before = persistedCounts(database);
+      const response = await server.inject({
+        method: 'POST',
+        url: '/v1/cloud-requests',
+        payload: admission(),
+      });
+      assert.equal(response.statusCode, 401);
+      assert.deepEqual(persistedCounts(database), before);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('redacts Cloud Request bodies and device keys at the Fastify logging boundary', async () => {
+    const { database } = serviceHarness();
+    const lines: string[] = [];
+    const server = createServer({
+      database,
+      appleVerifier: new DeterministicAppleVerifier(),
+      hashSecret: HASH_SECRET,
+      clock: { now: () => NOW },
+      loggerStream: { write: (message) => lines.push(message) },
+    });
+    const key = publicKey();
+    try {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/v1/cloud-requests',
+        payload: admission(key),
+      });
+      assert.equal(response.statusCode, 401);
+      const output = lines.join('');
+      assert.match(output, /\[REDACTED\]/);
+      assert.equal(output.includes(key.x), false);
+      assert.equal(output.includes(key.y), false);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('authenticates admission/status/cancellation and rejects body health payloads', async () => {
     const { database } = serviceHarness();
     const server = createServer({
@@ -365,6 +506,12 @@ describe('cloud request API', () => {
       });
       assert.equal(cancelled.statusCode, 200);
       assert.equal(cancelled.json().state, 'cancelled');
+      const deleted = await server.inject({
+        method: 'DELETE',
+        url: `/v1/cloud-requests/${requestId}`,
+        headers: { authorization: `Bearer ${token}`, 'idempotency-key': 'delete-key' },
+      });
+      assert.equal(deleted.statusCode, 404);
     } finally {
       await server.close();
     }

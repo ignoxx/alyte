@@ -81,6 +81,9 @@ export type CloudRequestOperation = 'intake-image' | 'lab-report';
 /** This slice admits requests only until an upload can begin. Later states are owned by #14. */
 export type CloudRequestState = 'awaiting-upload' | 'cancelled';
 
+/** Persisted request rows keep the contract version they were admitted under. */
+export type CloudRequestContractVersion = string;
+
 export type CloudRequestErrorCode =
   | 'cloud_request_invalid'
   | 'cloud_request_operation_invalid'
@@ -115,7 +118,7 @@ export interface CloudRequestStatusResponse {
   readonly state: CloudRequestState;
   readonly byteCount: number;
   readonly pageCount: number;
-  readonly contractVersion: typeof CONTRACT_VERSION;
+  readonly contractVersion: CloudRequestContractVersion;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly cancelledAt: string | null;

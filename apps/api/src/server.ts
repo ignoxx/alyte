@@ -1,6 +1,10 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, {
+  type FastifyInstance,
+  type FastifyLoggerOptions,
+  type FastifyRequest,
+} from 'fastify';
 import {
   APPLE_EXCHANGE_PATH,
   CLOUD_ALLOWANCES_PATH,
@@ -51,6 +55,8 @@ export interface ServerOptions {
   readonly revenueCatWebhookSecret?: string;
   readonly cloudMaxEnabled?: boolean;
   readonly cloudRequestService?: CloudRequestService;
+  /** Test-only capture seam for proving the Fastify redaction boundary. */
+  readonly loggerStream?: { write(message: string): void };
 }
 
 function bodyObject(request: FastifyRequest): Record<string, unknown> {
@@ -140,38 +146,54 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     production,
     configured: options.hashSecret,
   });
+  const loggerOptions: FastifyLoggerOptions = {
+    level: 'info',
+    ...(options.loggerStream === undefined ? {} : { stream: options.loggerStream }),
+    serializers: {
+      req: (request) => ({
+        method: request.method,
+        url: request.url,
+        version:
+          typeof request.headers['accept-version'] === 'string'
+            ? request.headers['accept-version']
+            : undefined,
+        host: request.hostname,
+        remoteAddress: request.ip,
+        remotePort: request.socket?.remotePort,
+        body: request.body,
+      }),
+    },
+    redact: {
+      paths: [
+        'req.headers.authorization',
+        'req.headers.cookie',
+        'req.headers.idempotency-key',
+        'req.headers.x-apple-subject',
+        'req.body.identityToken',
+        'req.body.rawNonce',
+        'req.body.refreshToken',
+        'req.body.accessToken',
+        'req.body.idToken',
+        'req.body.idempotencyKey',
+        'req.body.appleSubject',
+        'req.body.subject',
+        'req.body.email',
+        'req.body.name',
+        // Cloud Request bodies contain only bounded operational metadata in this slice, but
+        // redact the complete body so a future field cannot accidentally enter request logs.
+        'req.body',
+        'req.body.operation',
+        'req.body.byteCount',
+        'req.body.pageCount',
+        'req.body.devicePublicKeyJwk',
+        'req.body.contractVersion',
+      ],
+      censor: '[REDACTED]',
+    },
+  } as FastifyLoggerOptions;
   const server = Fastify({
     bodyLimit: 512 * 1024,
-    logger: {
-      level: 'info',
-      redact: {
-        paths: [
-          'req.headers.authorization',
-          'req.headers.cookie',
-          'req.headers.idempotency-key',
-          'req.headers.x-apple-subject',
-          'req.body.identityToken',
-          'req.body.rawNonce',
-          'req.body.refreshToken',
-          'req.body.accessToken',
-          'req.body.idToken',
-          'req.body.idempotencyKey',
-          'req.body.appleSubject',
-          'req.body.subject',
-          'req.body.email',
-          'req.body.name',
-          // Cloud Request bodies contain only bounded operational metadata in this slice, but
-          // redact the complete body so a future field cannot accidentally enter request logs.
-          'req.body',
-          'req.body.operation',
-          'req.body.byteCount',
-          'req.body.pageCount',
-          'req.body.devicePublicKeyJwk',
-          'req.body.contractVersion',
-        ],
-        censor: '[REDACTED]',
-      },
-    },
+    logger: loggerOptions,
   });
   // The RevenueCat signature covers the exact incoming bytes. Parse JSON ourselves so the
   // webhook route receives those bytes while ordinary API routes retain their object body shape.
@@ -336,9 +358,6 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     );
   };
   server.post(CLOUD_REQUEST_CANCEL_PATH, cancelCloudRequest);
-  // DELETE is the resource-oriented spelling; POST /cancel remains available to clients whose
-  // transport only permits explicit action routes. Both share the same idempotent state change.
-  server.delete(CLOUD_REQUEST_STATUS_PATH, cancelCloudRequest);
 
   server.addHook('onClose', async () => {
     clearInterval(cleanupInterval);

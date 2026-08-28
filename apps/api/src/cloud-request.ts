@@ -119,15 +119,6 @@ export function parseP256PublicKeyJwk(value: unknown): P256PublicKeyJwk {
   return jwk;
 }
 
-export function isValidP256PublicKeyJwk(value: unknown): value is P256PublicKeyJwk {
-  try {
-    parseP256PublicKeyJwk(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function parseIdempotencyKey(value: unknown): string {
   if (value === undefined || value === null) {
     throw new CloudRequestFailure(400, 'idempotency_key_required');
@@ -190,7 +181,7 @@ function toStatus(row: CloudRequestRow): CloudRequestStatusResponse {
     state: row.state,
     byteCount: row.byte_count,
     pageCount: row.page_count,
-    contractVersion: CONTRACT_VERSION,
+    contractVersion: row.contract_version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     cancelledAt: row.cancelled_at,
