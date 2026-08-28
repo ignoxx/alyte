@@ -78,6 +78,7 @@ export function ExtractionMeasurementEditorScreen() {
   const [secondaryExpanded, setSecondaryExpanded] = useState(false);
   const previewRequestPending = useRef(false);
   const [previewOpening, setPreviewOpening] = useState(false);
+  const included = row?.decision !== 'skip';
   const initialEdit = useMemo(() => (row === null ? null : editFrom(row)), [row]);
   const dirty =
     edit !== null && initialEdit !== null && JSON.stringify(edit) !== JSON.stringify(initialEdit);
@@ -124,8 +125,32 @@ export function ExtractionMeasurementEditorScreen() {
   useLayoutEffect(() => {
     navigation.setOptions({
       headerLeft: () => <AppButton label={t('labs.done')} onPress={closeEditor} tone="quiet" />,
+      ...(row !== null && edit !== null
+        ? {
+            unstable_sheetFooter: () => (
+              <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
+                <AppButton
+                  disabled={busy}
+                  label={included ? t('labs.extractionKeep') : t('labs.extractionInclude')}
+                  labelMaxFontSizeMultiplier={1.3}
+                  onPress={() => void choose(row?.reviewState === 'ready' ? 'resolve' : 'preserve')}
+                  tone={included ? 'primary' : 'secondary'}
+                  style={styles.action}
+                />
+                <AppButton
+                  disabled={busy}
+                  label={t('labs.extractionSkip')}
+                  labelMaxFontSizeMultiplier={1.3}
+                  onPress={() => void choose('skip')}
+                  tone={included ? 'secondary' : 'primary'}
+                  style={styles.action}
+                />
+              </View>
+            ),
+          }
+        : {}),
     });
-  }, [navigation]);
+  }, [busy, edit, included, insets.bottom, navigation, row?.reviewState, row]);
 
   function closeEditor() {
     // The editor is mounted directly in the root form sheet. Its native navigation object owns
@@ -233,23 +258,21 @@ export function ExtractionMeasurementEditorScreen() {
       </View>
     );
 
-  const included = row.decision !== 'skip';
   const sourcePresentation = extractionSourcePresentation(row);
   const attentionReasons = row.reviewReasons.filter(
     (reason) => reason !== 'defaulted-collection-date',
   );
   return (
-    <View style={styles.safe}>
-      <ScrollView
-        automaticallyAdjustContentInsets
-        automaticallyAdjustKeyboardInsets
-        automaticallyAdjustsScrollIndicatorInsets
-        contentContainerStyle={styles.content}
-        contentInsetAdjustmentBehavior="automatic"
-        key={`${route.key}-${row.id}`}
-        keyboardShouldPersistTaps="handled"
-        style={styles.scroll}
-      >
+    <ScrollView
+      automaticallyAdjustContentInsets
+      automaticallyAdjustKeyboardInsets
+      automaticallyAdjustsScrollIndicatorInsets
+      contentInsetAdjustmentBehavior="automatic"
+      key={`${route.key}-${row.id}`}
+      keyboardShouldPersistTaps="handled"
+      style={styles.scroll}
+    >
+      <View style={styles.content}>
         {error && (
           <AppText selectable style={styles.error}>
             {t('labs.extractionSaveError')}
@@ -342,26 +365,8 @@ export function ExtractionMeasurementEditorScreen() {
             </View>
           )}
         </View>
-      </ScrollView>
-      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
-        <AppButton
-          disabled={busy}
-          label={included ? t('labs.extractionKeep') : t('labs.extractionInclude')}
-          labelMaxFontSizeMultiplier={1.3}
-          onPress={() => void choose(row.reviewState === 'ready' ? 'resolve' : 'preserve')}
-          tone={included ? 'primary' : 'secondary'}
-          style={styles.action}
-        />
-        <AppButton
-          disabled={busy}
-          label={t('labs.extractionSkip')}
-          labelMaxFontSizeMultiplier={1.3}
-          onPress={() => void choose('skip')}
-          tone={included ? 'secondary' : 'primary'}
-          style={styles.action}
-        />
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -391,7 +396,6 @@ function Field({
 }
 
 const styles = StyleSheet.create({
-  safe: { backgroundColor: colors.canvas, flex: 1 },
   scroll: { flex: 1 },
   center: {
     flex: 1,
