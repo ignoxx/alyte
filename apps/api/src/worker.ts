@@ -74,7 +74,7 @@ export interface JobRunnerOptions {
   readonly clock?: JobRunnerClock;
   readonly ownerId?: string;
   readonly handler?: AnalysisJobHandler;
-  /** Optional typed processing seam; production provider activation is intentionally separate. */
+  /** Required with handler; omission keeps the runner dormant and prevents blind requeueing. */
   readonly failureProcessor?: AnalysisJobFailureProcessor;
   readonly logger?: JobRunnerLogger;
   readonly timer?: JobRunnerTimer;
@@ -82,6 +82,12 @@ export interface JobRunnerOptions {
   readonly heartbeatIntervalMs?: number;
   readonly leaseDurationMs?: number;
 }
+
+type ConfiguredJobRunnerOptions = JobRunnerOptions & {
+  readonly database: AccountDatabase;
+  readonly handler: AnalysisJobHandler;
+  readonly failureProcessor: AnalysisJobFailureProcessor;
+};
 
 const systemClock: JobRunnerClock = { now: () => new Date() };
 const systemTimer: JobRunnerTimer = {
@@ -163,7 +169,7 @@ class DurableJobRunner implements JobRunner {
   private readonly clock: JobRunnerClock;
   private readonly ownerId: string;
   private readonly handler: AnalysisJobHandler;
-  private readonly failureProcessor: AnalysisJobFailureProcessor | undefined;
+  private readonly failureProcessor: AnalysisJobFailureProcessor;
   private readonly logger: JobRunnerLogger;
   private readonly timer: JobRunnerTimer;
   private readonly pollIntervalMs: number;
@@ -176,12 +182,12 @@ class DurableJobRunner implements JobRunner {
   private stopPromise: Promise<void> | undefined;
   private running = false;
 
-  constructor(options: JobRunnerOptions & { readonly database: AccountDatabase }) {
+  constructor(options: ConfiguredJobRunnerOptions) {
     this.database = options.database;
     this.clock = options.clock ?? systemClock;
     this.ownerId = options.ownerId ?? `runner-${randomUUID()}`;
     if (!validOwner(this.ownerId)) throw new Error('analysis_job_owner_invalid');
-    this.handler = options.handler ?? (async () => undefined);
+    this.handler = options.handler;
     this.failureProcessor = options.failureProcessor;
     this.logger = options.logger ?? quietLogger;
     this.timer = options.timer ?? systemTimer;
@@ -253,10 +259,6 @@ class DurableJobRunner implements JobRunner {
           this.logWarn(claimed.handler_version, 'failure_recovery_category_invalid');
           return;
         }
-        if (this.failureProcessor === undefined) {
-          this.logWarn(claimed.handler_version, 'failure_recovery_unconfigured', { category });
-          return;
-        }
         try {
           await this.failureProcessor({ jobId: claimed.id, leaseOwner: this.ownerId }, category);
           this.logInfo(claimed.handler_version, 'failure_recovered', { category });
@@ -279,14 +281,19 @@ class DurableJobRunner implements JobRunner {
         // Reject unknown values before they reach the failure service or operational logs.
         if (!isProcessingFailureCategory(handlerOutcome.category)) {
           this.logWarn(claimed.handler_version, 'failure_category_invalid');
-          this.requeueAfterHandler(active);
-          return;
-        }
-        if (this.failureProcessor === undefined) {
-          this.logWarn(claimed.handler_version, 'failure_processor_unconfigured', {
-            category: handlerOutcome.category,
-          });
-          this.requeueAfterHandler(active);
+          try {
+            await this.failureProcessor(
+              { jobId: claimed.id, leaseOwner: this.ownerId },
+              'malformed_output',
+            );
+            this.logInfo(claimed.handler_version, 'failure_processed', {
+              category: 'malformed_output',
+            });
+          } catch {
+            this.logWarn(claimed.handler_version, 'failure_processing_failed', {
+              category: 'malformed_output',
+            });
+          }
           return;
         }
         try {
@@ -308,24 +315,18 @@ class DurableJobRunner implements JobRunner {
       }
       this.requeueAfterHandler(active);
     } catch {
-      if (this.failureProcessor === undefined) {
-        // Until a provider child supplies the typed processor, preserve the old safe requeue
-        // behavior. No exception detail enters logs or durable metadata.
-        this.requeueAfterHandler(active);
-      } else {
-        try {
-          await this.failureProcessor(
-            { jobId: claimed.id, leaseOwner: this.ownerId },
-            'provider_failure',
-          );
-          this.logInfo(claimed.handler_version, 'failure_processed', {
-            category: 'provider_failure',
-          });
-        } catch {
-          this.logWarn(claimed.handler_version, 'failure_processing_failed', {
-            category: 'provider_failure',
-          });
-        }
+      try {
+        await this.failureProcessor(
+          { jobId: claimed.id, leaseOwner: this.ownerId },
+          'provider_failure',
+        );
+        this.logInfo(claimed.handler_version, 'failure_processed', {
+          category: 'provider_failure',
+        });
+      } catch {
+        this.logWarn(claimed.handler_version, 'failure_processing_failed', {
+          category: 'provider_failure',
+        });
       }
     } finally {
       this.clearHeartbeat(active);
@@ -522,14 +523,18 @@ class DurableJobRunner implements JobRunner {
  * health payload crosses this lifecycle seam.
  */
 export function createJobRunner(options: JobRunnerOptions = {}): JobRunner {
-  // A database alone is not enough to activate processing.  Keeping the runner inert until an
-  // explicit handler is supplied prevents a production process from claiming and churning work
-  // while provider configuration is absent.
-  if (options.database === undefined || options.handler === undefined) {
+  // A database alone is not enough to activate processing. Keeping the runner inert until both an
+  // explicit handler and its closed-taxonomy failure processor are supplied prevents a production
+  // process from claiming and churning work while provider configuration is absent.
+  if (
+    options.database === undefined ||
+    options.handler === undefined ||
+    options.failureProcessor === undefined
+  ) {
     return {
       start: () => undefined,
       stop: async () => undefined,
     };
   }
-  return new DurableJobRunner(options as JobRunnerOptions & { readonly database: AccountDatabase });
+  return new DurableJobRunner(options as ConfiguredJobRunnerOptions);
 }

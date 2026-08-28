@@ -13,13 +13,13 @@ import { AccountDatabase, type AnalysisJobRow } from './database.js';
 import { CloudProcessingFailureService } from './cloud-processing.js';
 import {
   CloudProcessingAdapterFailure,
-  createCloudProcessingHandler,
+  createSyntheticCloudProcessingHandler,
   decodeSyntheticResult,
   serializeSyntheticResult,
-  SYNTHETIC_RESULT_SCHEMA_VERSION,
   type CloudProcessingAdapter,
   type CloudProcessingAdapterContext,
 } from './cloud-processing-handler.js';
+import { SYNTHETIC_RESULT_SCHEMA_VERSION } from './cloud-processing-schema.js';
 import { CloudRequestService } from './cloud-request.js';
 import { CommerceService } from './commerce.js';
 import { decryptCloudResultForReference, encryptCloudResult } from './cloud-result-crypto.js';
@@ -44,6 +44,17 @@ class TestClock {
 
   advance(milliseconds: number): void {
     this.current = new Date(this.current.getTime() + milliseconds);
+  }
+}
+
+class Deferred {
+  readonly promise: Promise<void>;
+  resolve!: () => void;
+
+  constructor() {
+    this.promise = new Promise<void>((resolve) => {
+      this.resolve = resolve;
+    });
   }
 }
 
@@ -106,6 +117,14 @@ type Harness = {
   readonly privateKey: unknown;
   readonly bytes: Buffer;
 };
+
+async function waitFor(check: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() >= deadline) throw new Error('synthetic_runner_timeout');
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
 
 function harness(options: { readonly bytes?: Buffer } = {}): Harness {
   const directory = mkdtempSync(join(tmpdir(), 'alyte-cloud-handler-'));
@@ -199,6 +218,41 @@ function heartbeat(h: Harness, expected = 'synthetic-owner') {
     });
 }
 
+function queueForRunner(h: Harness): void {
+  h.database.sqlite
+    .prepare(
+      `UPDATE analysis_jobs
+       SET state = 'queued', attempts = 0, lease_owner = NULL, lease_expires_at = NULL,
+           available_at = ?, failure_category = NULL
+       WHERE id = ?`,
+    )
+    .run(h.clock.now().toISOString(), h.job.id);
+}
+
+function runnerFor(
+  h: Harness,
+  handler: ReturnType<typeof createSyntheticCloudProcessingHandler>,
+  events: unknown[] = [],
+) {
+  queueForRunner(h);
+  return createJobRunner({
+    database: h.database,
+    clock: h.clock,
+    ownerId: 'synthetic-runner',
+    handler,
+    failureProcessor: (lease, category) => {
+      h.failures.handleFailure(lease, category);
+    },
+    logger: {
+      info: (event, attributes) => events.push({ event, attributes }),
+      warn: (event, attributes) => events.push({ event, attributes }),
+    },
+    pollIntervalMs: 1,
+    heartbeatIntervalMs: 10,
+    leaseDurationMs: 60_000,
+  });
+}
+
 function successfulAdapter(): CloudProcessingAdapter {
   return {
     process(bytes, context) {
@@ -216,12 +270,46 @@ function successfulAdapter(): CloudProcessingAdapter {
 }
 
 describe('synthetic cloud processing composition', () => {
+  it('serializes only the reviewed synthetic schema in canonical field order', () => {
+    const plaintext = serializeSyntheticResult(
+      {
+        schemaVersion: SYNTHETIC_RESULT_SCHEMA_VERSION,
+        operation: 'intake-image',
+        inputByteCount: 4,
+        accepted: true,
+      },
+      { operation: 'intake-image', inputByteCount: 4 },
+    );
+    try {
+      assert.equal(
+        plaintext.toString('utf8'),
+        `{"schemaVersion":"${SYNTHETIC_RESULT_SCHEMA_VERSION}","operation":"intake-image","inputByteCount":4,"accepted":true}`,
+      );
+      assert.throws(
+        () =>
+          serializeSyntheticResult(
+            {
+              schemaVersion: SYNTHETIC_RESULT_SCHEMA_VERSION,
+              operation: 'intake-image',
+              inputByteCount: 4,
+              accepted: true,
+              message: 'not allowed',
+            },
+            { operation: 'intake-image', inputByteCount: 4 },
+          ),
+        /synthetic_result_invalid/,
+      );
+    } finally {
+      plaintext.fill(0);
+    }
+  });
+
   it('completes, encrypts, survives restart, and retrieves exactly once', async () => {
     const h = harness();
     let restarted: AccountDatabase | undefined;
     try {
       const calls: Array<{ bytes: number[]; context: CloudProcessingAdapterContext }> = [];
-      const handler = createCloudProcessingHandler({
+      const handler = createSyntheticCloudProcessingHandler({
         database: h.database,
         uploadStore: h.uploads,
         results: h.results,
@@ -240,7 +328,7 @@ describe('synthetic cloud processing composition', () => {
           context: {
             operation: 'intake-image',
             contractVersion: CONTRACT_VERSION,
-            resultSchemaVersion: CONTRACT_VERSION,
+            resultSchemaVersion: SYNTHETIC_RESULT_SCHEMA_VERSION,
             handlerVersion: 1,
           },
         },
@@ -249,6 +337,10 @@ describe('synthetic cloud processing composition', () => {
       assert.equal(h.database.findAnalysisJobByRequest(h.requestId)?.state, 'succeeded');
       assert.equal(h.database.findCloudResultCache(h.requestId)?.state, 'ready');
       assert.equal(
+        h.database.findCloudResultCache(h.requestId)?.result_schema_version,
+        SYNTHETIC_RESULT_SCHEMA_VERSION,
+      );
+      assert.equal(
         h.database
           .listAllowanceLedger(ACCOUNT, 'snap')
           .filter((row) => row.entry_type === 'consume').length,
@@ -256,7 +348,7 @@ describe('synthetic cloud processing composition', () => {
       );
 
       const resultFile = readFileSync(join(h.directory, 'cloud-results', `${h.requestId}.json`));
-      assert.equal(resultFile.toString('utf8').includes(SYNTHETIC_RESULT_SCHEMA_VERSION), false);
+      assert.equal(resultFile.toString('utf8').includes('"accepted":true'), false);
       restarted = new AccountDatabase({ filename: join(h.directory, 'cloud.sqlite') });
       const restartedResults = new CloudResultService({
         database: restarted,
@@ -273,7 +365,7 @@ describe('synthetic cloud processing composition', () => {
         context: {
           requestId: h.requestId,
           contractVersion: CONTRACT_VERSION,
-          resultSchemaVersion: CONTRACT_VERSION,
+          resultSchemaVersion: SYNTHETIC_RESULT_SCHEMA_VERSION,
           handlerVersion: 1,
         },
       });
@@ -292,10 +384,259 @@ describe('synthetic cloud processing composition', () => {
     }
   });
 
+  it('runs the queued request through the real runner and failure processor', async () => {
+    const h = harness();
+    try {
+      const events: unknown[] = [];
+      const calls: number[] = [];
+      const runner = runnerFor(
+        h,
+        createSyntheticCloudProcessingHandler({
+          database: h.database,
+          uploadStore: h.uploads,
+          results: h.results,
+          adapter: {
+            process(bytes, context) {
+              calls.push(bytes.byteLength);
+              return successfulAdapter().process(bytes, context);
+            },
+          },
+        }),
+        events,
+      );
+      runner.start();
+      await waitFor(() => h.database.findAnalysisJobByRequest(h.requestId)?.state === 'succeeded');
+      await runner.stop({ gracePeriodMs: 1_000 });
+      assert.deepEqual(calls, [h.bytes.byteLength]);
+      assert.equal(h.database.findCloudResultCache(h.requestId)?.state, 'ready');
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'consume').length,
+        1,
+      );
+      const serializedEvents = JSON.stringify(events);
+      assert.equal(serializedEvents.includes(h.requestId), false);
+      assert.equal(serializedEvents.includes(h.bytes.toString('hex')), false);
+    } finally {
+      close(h);
+    }
+  });
+
+  it('runs every adapter failure category through #122 without provider churn', async () => {
+    for (const category of [
+      'provider_failure',
+      'timeout',
+      'safety_refusal',
+      'malformed_output',
+      'unusable_output',
+    ] as const) {
+      const h = harness();
+      let runner: ReturnType<typeof createJobRunner> | undefined;
+      try {
+        let adapterCalls = 0;
+        let processed = false;
+        const handler = createSyntheticCloudProcessingHandler({
+          database: h.database,
+          uploadStore: h.uploads,
+          results: h.results,
+          adapter: {
+            process: async () => {
+              adapterCalls += 1;
+              if (category === 'timeout') throw new CloudProcessingAdapterFailure(category);
+              return { type: 'failure' as const, category };
+            },
+          },
+        });
+        runner = runnerFor(h, handler);
+        const originalHandleFailure = h.failures.handleFailure.bind(h.failures);
+        h.failures.handleFailure = ((lease, value) => {
+          const result = originalHandleFailure(lease, value);
+          processed = true;
+          return result;
+        }) as typeof h.failures.handleFailure;
+        runner.start();
+        await waitFor(() => processed);
+        await runner.stop({ gracePeriodMs: 1_000 });
+        assert.equal(adapterCalls, 1);
+        const row = h.database.findAnalysisJobByRequest(h.requestId);
+        if (category === 'provider_failure' || category === 'timeout') {
+          assert.equal(row?.state, 'queued');
+          assert.equal(h.uploads.hasCompleteArtifact(h.requestId), true);
+        } else {
+          assert.equal(row?.state, 'failed');
+          assert.equal(h.uploads.hasCompleteArtifact(h.requestId), false);
+          assert.equal(
+            h.database
+              .listAllowanceLedger(ACCOUNT, 'snap')
+              .filter((entry) => entry.entry_type === 'release').length,
+            1,
+          );
+        }
+      } finally {
+        if (runner !== undefined) await runner.stop({ gracePeriodMs: 1_000 });
+        close(h);
+      }
+    }
+  });
+
+  it('keeps runner logs free of request bytes, keys, envelopes, and provider messages', async () => {
+    const h = harness();
+    let runner: ReturnType<typeof createJobRunner> | undefined;
+    try {
+      const events: unknown[] = [];
+      const providerMessage = 'private provider response';
+      let processed = false;
+      const originalHandleFailure = h.failures.handleFailure.bind(h.failures);
+      h.failures.handleFailure = ((lease, value) => {
+        const result = originalHandleFailure(lease, value);
+        processed = true;
+        return result;
+      }) as typeof h.failures.handleFailure;
+      runner = runnerFor(
+        h,
+        createSyntheticCloudProcessingHandler({
+          database: h.database,
+          uploadStore: h.uploads,
+          results: h.results,
+          adapter: {
+            process: async () => {
+              throw new Error(providerMessage);
+            },
+          },
+        }),
+        events,
+      );
+      runner.start();
+      await waitFor(() => processed);
+      await runner.stop({ gracePeriodMs: 1_000 });
+      const serializedEvents = JSON.stringify(events);
+      assert.equal(serializedEvents.includes(h.requestId), false);
+      assert.equal(serializedEvents.includes(h.bytes.toString('hex')), false);
+      assert.equal(serializedEvents.includes(providerMessage), false);
+      assert.equal(serializedEvents.includes('devicePublicKey'), false);
+      assert.equal(serializedEvents.includes('ciphertext'), false);
+    } finally {
+      if (runner !== undefined) await runner.stop({ gracePeriodMs: 1_000 });
+      close(h);
+    }
+  });
+
+  it('uses the actual runner to stop before provider work when the lease is lost', async () => {
+    const h = harness();
+    let runner: ReturnType<typeof createJobRunner> | undefined;
+    try {
+      const heartbeatCalled = new Deferred();
+      let adapterCalls = 0;
+      h.database.heartbeatAnalysisJob = (input) => {
+        h.database.sqlite
+          .prepare(
+            "UPDATE analysis_jobs SET lease_owner = 'other-runner', lease_expires_at = ? WHERE id = ?",
+          )
+          .run('2026-08-28T11:59:00.000Z', input.jobId);
+        heartbeatCalled.resolve();
+        return 'not-live';
+      };
+      runner = runnerFor(
+        h,
+        createSyntheticCloudProcessingHandler({
+          database: h.database,
+          uploadStore: h.uploads,
+          results: h.results,
+          adapter: {
+            process: async () => {
+              adapterCalls += 1;
+              return { type: 'failure' as const, category: 'unusable_output' as const };
+            },
+          },
+        }),
+      );
+      runner.start();
+      await heartbeatCalled.promise;
+      await runner.stop({ gracePeriodMs: 1_000 });
+      assert.equal(adapterCalls, 0);
+      assert.equal(h.database.findCloudResultCache(h.requestId), undefined);
+      assert.equal(h.uploads.hasCompleteArtifact(h.requestId), true);
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((entry) => entry.entry_type === 'consume').length,
+        0,
+      );
+    } finally {
+      if (runner !== undefined) await runner.stop({ gracePeriodMs: 1_000 });
+      close(h);
+    }
+  });
+
+  it('uses the actual runner to requeue safely when the lease is lost after the adapter', async () => {
+    const h = harness();
+    let runner: ReturnType<typeof createJobRunner> | undefined;
+    try {
+      const postAdapterHeartbeat = new Deferred();
+      const originalHeartbeat = h.database.heartbeatAnalysisJob.bind(h.database);
+      let heartbeatCalls = 0;
+      let adapterCalls = 0;
+      h.database.heartbeatAnalysisJob = (input) => {
+        heartbeatCalls += 1;
+        if (heartbeatCalls === 1) return originalHeartbeat(input);
+        h.database.sqlite
+          .prepare(
+            "UPDATE analysis_jobs SET lease_owner = 'other-runner', lease_expires_at = ? WHERE id = ?",
+          )
+          .run('2026-08-28T11:59:00.000Z', input.jobId);
+        postAdapterHeartbeat.resolve();
+        return 'not-live';
+      };
+      runner = runnerFor(
+        h,
+        createSyntheticCloudProcessingHandler({
+          database: h.database,
+          uploadStore: h.uploads,
+          results: h.results,
+          adapter: {
+            process: async () => {
+              adapterCalls += 1;
+              return successfulAdapter().process(h.bytes, {
+                operation: 'intake-image',
+                contractVersion: CONTRACT_VERSION,
+                resultSchemaVersion: SYNTHETIC_RESULT_SCHEMA_VERSION,
+                handlerVersion: 1,
+              });
+            },
+          },
+        }),
+      );
+      runner.start();
+      await postAdapterHeartbeat.promise;
+      await runner.stop({ gracePeriodMs: 1_000 });
+      assert.equal(adapterCalls, 1);
+      assert.equal(h.database.findCloudResultCache(h.requestId), undefined);
+      assert.equal(h.uploads.hasCompleteArtifact(h.requestId), true);
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((entry) => entry.entry_type === 'consume').length,
+        0,
+      );
+      h.clock.advance(1);
+      const reclaimed = h.database.claimAnalysisJob({
+        now: h.clock.now().toISOString(),
+        leaseOwner: 'reclaimer',
+        leaseExpiresAt: new Date(h.clock.now().getTime() + 60_000).toISOString(),
+      });
+      assert.ok(reclaimed);
+      assert.equal(reclaimed.attempts, 2);
+    } finally {
+      if (runner !== undefined) await runner.stop({ gracePeriodMs: 1_000 });
+      close(h);
+    }
+  });
+
   it('keeps retrieval owner-bound and ciphertext-only', async () => {
     const h = harness();
     try {
-      const handler = createCloudProcessingHandler({
+      const handler = createSyntheticCloudProcessingHandler({
         database: h.database,
         uploadStore: h.uploads,
         results: h.results,
@@ -317,19 +658,82 @@ describe('synthetic cloud processing composition', () => {
     const h = harness();
     try {
       let plaintext: Uint8Array | undefined;
-      const handler = createCloudProcessingHandler({
+      let adapterBytes: Uint8Array | undefined;
+      const handler = createSyntheticCloudProcessingHandler({
+        database: h.database,
+        uploadStore: h.uploads,
+        results: h.results,
+        adapter: {
+          process(bytes, context) {
+            adapterBytes = bytes;
+            return successfulAdapter().process(bytes, context);
+          },
+        },
+        encrypt: (input) => {
+          plaintext = input.plaintext;
+          assert.ok(adapterBytes);
+          assert.deepEqual([...adapterBytes], new Array(adapterBytes.byteLength).fill(0));
+          return encryptCloudResult(input);
+        },
+      });
+      assert.deepEqual(await handler(h.job, { heartbeat: heartbeat(h) }), { type: 'completed' });
+      assert.ok(adapterBytes);
+      assert.deepEqual([...adapterBytes], new Array(adapterBytes.byteLength).fill(0));
+      assert.ok(plaintext);
+      assert.deepEqual([...plaintext], new Array(plaintext.byteLength).fill(0));
+    } finally {
+      close(h);
+    }
+  });
+
+  it('zeros the adapter alias when provider execution throws', async () => {
+    const h = harness();
+    try {
+      let adapterBytes: Uint8Array | undefined;
+      const handler = createSyntheticCloudProcessingHandler({
+        database: h.database,
+        uploadStore: h.uploads,
+        results: h.results,
+        adapter: {
+          process(bytes) {
+            adapterBytes = bytes;
+            throw new Error('private provider message');
+          },
+        },
+      });
+      assert.deepEqual(await handler(h.job, { heartbeat: heartbeat(h) }), {
+        type: 'failure',
+        category: 'provider_failure',
+      });
+      assert.ok(adapterBytes);
+      assert.deepEqual([...adapterBytes], new Array(adapterBytes.byteLength).fill(0));
+    } finally {
+      close(h);
+    }
+  });
+
+  it('zeros the canonical plaintext when encryption fails', async () => {
+    const h = harness();
+    try {
+      let plaintext: Uint8Array | undefined;
+      const handler = createSyntheticCloudProcessingHandler({
         database: h.database,
         uploadStore: h.uploads,
         results: h.results,
         adapter: successfulAdapter(),
         encrypt: (input) => {
           plaintext = input.plaintext;
-          return encryptCloudResult(input);
+          throw new Error('private crypto failure');
         },
       });
-      assert.deepEqual(await handler(h.job, { heartbeat: heartbeat(h) }), { type: 'completed' });
+      assert.deepEqual(await handler(h.job, { heartbeat: heartbeat(h) }), {
+        type: 'failure',
+        category: 'malformed_output',
+      });
       assert.ok(plaintext);
       assert.deepEqual([...plaintext], new Array(plaintext.byteLength).fill(0));
+      assert.equal(h.database.findCloudResultCache(h.requestId), undefined);
+      assert.equal(h.uploads.hasCompleteArtifact(h.requestId), true);
     } finally {
       close(h);
     }
@@ -347,7 +751,7 @@ describe('synthetic cloud processing composition', () => {
     ]) {
       const h = harness();
       try {
-        const handler = createCloudProcessingHandler({
+        const handler = createSyntheticCloudProcessingHandler({
           database: h.database,
           uploadStore: h.uploads,
           results: h.results,
@@ -378,7 +782,7 @@ describe('synthetic cloud processing composition', () => {
     const h = harness();
     try {
       const providerMessage = 'private provider response';
-      const handler = createCloudProcessingHandler({
+      const handler = createSyntheticCloudProcessingHandler({
         database: h.database,
         uploadStore: h.uploads,
         results: h.results,
@@ -409,7 +813,7 @@ describe('synthetic cloud processing composition', () => {
     ] as const) {
       const h = harness();
       try {
-        const handler = createCloudProcessingHandler({
+        const handler = createSyntheticCloudProcessingHandler({
           database: h.database,
           uploadStore: h.uploads,
           results: h.results,
@@ -447,7 +851,7 @@ describe('synthetic cloud processing composition', () => {
     const h = harness();
     try {
       let calls = 0;
-      const handler = createCloudProcessingHandler({
+      const handler = createSyntheticCloudProcessingHandler({
         database: h.database,
         uploadStore: h.uploads,
         results: h.results,
@@ -457,7 +861,7 @@ describe('synthetic cloud processing composition', () => {
             return successfulAdapter().process(h.bytes, {
               operation: 'intake-image',
               contractVersion: CONTRACT_VERSION,
-              resultSchemaVersion: CONTRACT_VERSION,
+              resultSchemaVersion: SYNTHETIC_RESULT_SCHEMA_VERSION,
               handlerVersion: 1,
             });
           },
@@ -478,7 +882,7 @@ describe('synthetic cloud processing composition', () => {
     try {
       let heartbeatCalls = 0;
       let calls = 0;
-      const handler = createCloudProcessingHandler({
+      const handler = createSyntheticCloudProcessingHandler({
         database: h.database,
         uploadStore: h.uploads,
         results: h.results,
@@ -488,7 +892,7 @@ describe('synthetic cloud processing composition', () => {
             return successfulAdapter().process(h.bytes, {
               operation: 'intake-image',
               contractVersion: CONTRACT_VERSION,
-              resultSchemaVersion: CONTRACT_VERSION,
+              resultSchemaVersion: SYNTHETIC_RESULT_SCHEMA_VERSION,
               handlerVersion: 1,
             });
           },
@@ -533,10 +937,11 @@ describe('synthetic cloud processing composition', () => {
     let restarted: AccountDatabase | undefined;
     try {
       const adapterCalls: number[] = [];
+      let encryptionCalls = 0;
       const context = {
         operation: 'intake-image' as const,
         contractVersion: CONTRACT_VERSION,
-        resultSchemaVersion: CONTRACT_VERSION,
+        resultSchemaVersion: SYNTHETIC_RESULT_SCHEMA_VERSION,
         handlerVersion: 1,
       };
       const plaintext = serializeSyntheticResult(
@@ -576,10 +981,14 @@ describe('synthetic cloud processing composition', () => {
         leaseExpiresAt: new Date(h.clock.now().getTime() + 60_000).toISOString(),
       });
       assert.ok(reclaimed);
-      const handler = createCloudProcessingHandler({
+      const handler = createSyntheticCloudProcessingHandler({
         database: restarted,
         uploadStore: restartedUploads,
         results: restartedResults,
+        encrypt: (input) => {
+          encryptionCalls += 1;
+          return encryptCloudResult(input);
+        },
         adapter: {
           process: async () => {
             adapterCalls.push(1);
@@ -598,6 +1007,7 @@ describe('synthetic cloud processing composition', () => {
       });
       assert.deepEqual(outcome, { type: 'completed' });
       assert.deepEqual(adapterCalls, []);
+      assert.equal(encryptionCalls, 0);
       assert.equal(reopened.findAnalysisJobByRequest(h.requestId)?.state, 'succeeded');
       assert.equal(
         reopened.listAllowanceLedger(ACCOUNT, 'snap').filter((row) => row.entry_type === 'consume')
@@ -616,7 +1026,7 @@ describe('synthetic cloud processing composition', () => {
       h.database.sqlite
         .prepare('UPDATE cloud_requests SET device_public_key_jwk = ? WHERE id = ?')
         .run('{"not":"a-key"}', h.requestId);
-      const handler = createCloudProcessingHandler({
+      const handler = createSyntheticCloudProcessingHandler({
         database: h.database,
         uploadStore: h.uploads,
         results: h.results,
@@ -636,6 +1046,46 @@ describe('synthetic cloud processing composition', () => {
           .filter((row) => row.entry_type === 'consume').length,
         0,
       );
+    } finally {
+      close(h);
+    }
+  });
+
+  it('fails closed when a queued handler job carries the transport contract as its schema', async () => {
+    const h = harness();
+    try {
+      h.database.sqlite
+        .prepare('UPDATE analysis_jobs SET schema_version = ? WHERE id = ?')
+        .run(CONTRACT_VERSION, h.job.id);
+      let adapterCalls = 0;
+      const handler = createSyntheticCloudProcessingHandler({
+        database: h.database,
+        uploadStore: h.uploads,
+        results: h.results,
+        adapter: {
+          process: async () => {
+            adapterCalls += 1;
+            return successfulAdapter().process(h.bytes, {
+              operation: 'intake-image',
+              contractVersion: CONTRACT_VERSION,
+              resultSchemaVersion: SYNTHETIC_RESULT_SCHEMA_VERSION,
+              handlerVersion: 1,
+            });
+          },
+        },
+      });
+      const result = await handler(
+        { ...h.job, schema_version: CONTRACT_VERSION },
+        { heartbeat: heartbeat(h) },
+      );
+      assert.deepEqual(result, { type: 'failure', category: 'malformed_output' });
+      assert.equal(adapterCalls, 0);
+      h.failures.handleFailure(
+        { jobId: h.job.id, leaseOwner: h.job.lease_owner as string },
+        'malformed_output',
+      );
+      assert.equal(h.database.findAnalysisJobByRequest(h.requestId)?.state, 'failed');
+      assert.equal(h.uploads.hasCompleteArtifact(h.requestId), false);
     } finally {
       close(h);
     }

@@ -20,6 +20,7 @@ import {
   type P256PublicKeyJwk,
 } from '@alyte/contracts';
 import { AccountDatabase } from './database.js';
+import { SYNTHETIC_RESULT_SCHEMA_VERSION } from './cloud-processing-schema.js';
 import { CommerceService } from './commerce.js';
 import {
   CLOUD_UPLOAD_CLEANUP_INTERVAL_MS,
@@ -330,6 +331,7 @@ describe('transient upload lifecycle', () => {
       assert.ok(job);
       assert.equal(job.state, 'queued');
       assert.equal(job.handler_version, 1);
+      assert.equal(job.schema_version, SYNTHETIC_RESULT_SCHEMA_VERSION);
       assert.equal(job.request_id, admitted.requestId);
       assert.deepEqual(
         h.service.completeUpload(ACCOUNT, admitted.requestId, 'complete-key'),

@@ -36,6 +36,7 @@ import {
   type CloudResultLease,
 } from './cloud-result.js';
 import { CloudResultStore, CloudResultStoreFailure } from './cloud-result-store.js';
+import { SYNTHETIC_RESULT_SCHEMA_VERSION } from './cloud-processing-schema.js';
 import { TransientUploadStore } from './transient-upload-store.js';
 import { createServer } from './server.js';
 import type { AppleIdentityVerifier } from './apple-verifier.js';
@@ -165,7 +166,7 @@ function envelope(requestId: string): CloudResultEnvelope {
     ...decodeCloudResultEnvelopeJson(vector.serializedEnvelope),
     requestId,
     contractVersion: CONTRACT_VERSION,
-    resultSchemaVersion: CONTRACT_VERSION,
+    resultSchemaVersion: SYNTHETIC_RESULT_SCHEMA_VERSION,
     handlerVersion: 1,
   });
 }

@@ -20,6 +20,7 @@ import {
   type CloudRequestRow,
 } from './database.js';
 import type { CommerceService } from './commerce.js';
+import { SYNTHETIC_RESULT_SCHEMA_VERSION } from './cloud-processing-schema.js';
 import type { TransientArtifact, TransientUploadStore } from './transient-upload-store.js';
 
 export { CLOUD_UPLOAD_CLEANUP_INTERVAL_MS } from './database.js';
@@ -490,7 +491,7 @@ export class CloudRequestService {
         lease_expires_at: null,
         handler_version: 1,
         request_contract_version: current.contract_version,
-        schema_version: current.contract_version,
+        schema_version: SYNTHETIC_RESULT_SCHEMA_VERSION,
         prompt_version: null,
         failure_category: null,
         created_at: queuedAt,

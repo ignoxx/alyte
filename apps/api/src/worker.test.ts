@@ -16,6 +16,7 @@ import {
 
 const NOW = '2026-08-28T12:00:00.000Z';
 const ACCOUNT = 'lease-account';
+const noopFailureProcessor = async (): Promise<void> => undefined;
 
 function seedJob(
   database: AccountDatabase,
@@ -392,6 +393,37 @@ describe('analysis job runner lifecycle', () => {
     }
   });
 
+  it('keeps a configured handler dormant when failure processing is absent', async () => {
+    const database = createDatabase();
+    let handled = 0;
+    seedJob(database, { id: 'missing-failure-processor' });
+    const runner = createJobRunner({
+      database,
+      ownerId: 'missing-failure-processor-runner',
+      handler: async () => {
+        handled += 1;
+      },
+      pollIntervalMs: 1,
+    });
+    runner.start();
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      await runner.stop({ gracePeriodMs: 0 });
+      assert.equal(handled, 0);
+      assert.equal(
+        database.findAnalysisJobByRequest('request-missing-failure-processor')?.state,
+        'queued',
+      );
+      assert.equal(
+        database.findAnalysisJobByRequest('request-missing-failure-processor')?.attempts,
+        0,
+      );
+    } finally {
+      await runner.stop({ gracePeriodMs: 0 });
+      database.close();
+    }
+  });
+
   it('clears fast-handler timers and prevents a later claim after stop', async () => {
     const database = createDatabase();
     const timer = new TrackingTimer();
@@ -407,6 +439,7 @@ describe('analysis job runner lifecycle', () => {
         handled += 1;
         handledOnce.resolve();
       },
+      failureProcessor: noopFailureProcessor,
       pollIntervalMs: 50,
       heartbeatIntervalMs: 10,
       leaseDurationMs: 40,
@@ -436,6 +469,7 @@ describe('analysis job runner lifecycle', () => {
       database,
       ownerId: 'failing-runner',
       handler: async () => undefined,
+      failureProcessor: noopFailureProcessor,
       logger: logger(events),
       timer,
       pollIntervalMs: 10,
@@ -473,6 +507,7 @@ describe('analysis job runner lifecycle', () => {
       clock,
       ownerId: 'runner-owner',
       handler,
+      failureProcessor: noopFailureProcessor,
       logger: logger(events),
       pollIntervalMs: 5,
       heartbeatIntervalMs: 10,
@@ -507,6 +542,7 @@ describe('analysis job runner lifecycle', () => {
       clock: new MutableClock(),
       ownerId: 'runner-owner',
       handler: async () => undefined,
+      failureProcessor: noopFailureProcessor,
       logger: logger(events),
       pollIntervalMs: 5,
     });
@@ -573,10 +609,12 @@ describe('analysis job runner lifecycle', () => {
     }
   });
 
-  it('does not log or dispatch an untrusted provider category value', async () => {
+  it('maps an untrusted provider category to malformed output without logging it', async () => {
     const database = createDatabase();
     const events: Array<{ event: string; version?: number; outcome?: string; category?: string }> =
       [];
+    const categories: string[] = [];
+    const processed = new Deferred();
     seedJob(database, { id: 'invalid-category' });
     const providerMessage = 'provider response secret';
     const runner = createJobRunner({
@@ -590,16 +628,25 @@ describe('analysis job runner lifecycle', () => {
       leaseDurationMs: 40,
       handler: async () =>
         ({ type: 'failure', category: providerMessage }) as unknown as AnalysisJobOutcome,
+      failureProcessor: async (_lease, category) => {
+        categories.push(category);
+        processed.resolve();
+      },
     });
     runner.start();
     try {
-      await new Promise((resolve) => setTimeout(resolve, 15));
+      await processed.promise;
+      await runner.stop({ gracePeriodMs: 0 });
       assert.equal(JSON.stringify(events).includes(providerMessage), false);
       assert.equal(
         events.some((entry) => entry.outcome === 'failure_category_invalid'),
         true,
       );
-      assert.equal(database.findAnalysisJobByRequest('request-invalid-category')?.state, 'queued');
+      assert.deepEqual(categories, ['malformed_output']);
+      assert.equal(
+        database.findAnalysisJobByRequest('request-invalid-category')?.state,
+        'processing',
+      );
     } finally {
       await runner.stop({ gracePeriodMs: 0 });
       database.close();

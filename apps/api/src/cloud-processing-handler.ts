@@ -20,19 +20,17 @@ import {
 } from './cloud-result.js';
 import type { TransientUploadStore } from './transient-upload-store.js';
 import { isCloudProcessingFailureCategory } from './cloud-processing.js';
+import { SYNTHETIC_RESULT_SCHEMA_VERSION } from './cloud-processing-schema.js';
 import type {
   AnalysisJobHandler,
   AnalysisJobHandlerContext,
   AnalysisJobOutcome,
 } from './worker.js';
 
-/** The fixture-only schema used to prove the shared worker/result lifecycle. */
-export const SYNTHETIC_RESULT_SCHEMA_VERSION = 'alyte.synthetic.result.v1' as const;
-
 export interface CloudProcessingAdapterContext {
   readonly operation: CloudRequestOperation;
   readonly contractVersion: string;
-  readonly resultSchemaVersion: string;
+  readonly resultSchemaVersion: typeof SYNTHETIC_RESULT_SCHEMA_VERSION;
   readonly handlerVersion: number;
 }
 
@@ -205,7 +203,7 @@ function adapterContext(
   return Object.freeze({
     operation,
     contractVersion,
-    resultSchemaVersion: job.schema_version,
+    resultSchemaVersion: SYNTHETIC_RESULT_SCHEMA_VERSION,
     handlerVersion: job.handler_version,
   });
 }
@@ -219,7 +217,7 @@ function validVersion(value: string): boolean {
  * boundaries. No instance is created by the production server; a real provider must be supplied
  * explicitly by a later operation ticket.
  */
-export function createCloudProcessingHandler(
+export function createSyntheticCloudProcessingHandler(
   options: CloudProcessingHandlerOptions,
 ): AnalysisJobHandler {
   const encrypt = options.encrypt ?? encryptCloudResult;
@@ -240,7 +238,7 @@ export function createCloudProcessingHandler(
     if (
       (request.operation !== 'intake-image' && request.operation !== 'lab-report') ||
       !validVersion(request.contract_version) ||
-      !validVersion(job.schema_version) ||
+      job.schema_version !== SYNTHETIC_RESULT_SCHEMA_VERSION ||
       !Number.isSafeInteger(job.handler_version) ||
       job.handler_version < 1 ||
       job.handler_version > 1_000
@@ -274,27 +272,35 @@ export function createCloudProcessingHandler(
         return failure('provider_failure');
       }
 
+      const inputByteCount = bytes.byteLength;
       const context = adapterContext(job, request.operation, request.contract_version);
-      let adapterOutcome: CloudProcessingAdapterOutcome;
+      let rawAdapterOutcome: unknown;
       try {
-        adapterOutcome = decodeAdapterOutcome(await options.adapter.process(bytes, context));
+        rawAdapterOutcome = await options.adapter.process(bytes, context);
       } catch (error) {
         return failure(adapterFailureCategory(error));
+      } finally {
+        // Adapter execution is the only point that needs readable source bytes. Drop Alyte's
+        // exact transient buffer immediately after the provider settles, before any validation or
+        // encryption work begins. Provider-owned objects are outside this memory contract.
+        bytes.fill(0);
+        bytes = undefined;
       }
+      const adapterOutcome = decodeAdapterOutcome(rawAdapterOutcome);
       if (adapterOutcome.type === 'failure') return adapterOutcome;
 
       // Validate and canonicalize before encryption. No readable provider output reaches the
       // crypto or result-store boundary.
       let plaintext: Buffer | undefined;
       try {
-        try {
-          plaintext = serializeSyntheticResult(adapterOutcome.output, {
-            operation: request.operation,
-            inputByteCount: bytes.byteLength,
-          });
-        } catch {
-          return failure('malformed_output');
-        }
+        plaintext = serializeSyntheticResult(adapterOutcome.output, {
+          operation: request.operation,
+          inputByteCount,
+        });
+      } catch {
+        return failure('malformed_output');
+      }
+      try {
         if (handlerContext.heartbeat() !== 'renewed') return;
         let envelope: CloudResultEnvelope;
         try {
@@ -302,7 +308,7 @@ export function createCloudProcessingHandler(
           envelope = encrypt({
             requestId: request.id,
             contractVersion: request.contract_version,
-            resultSchemaVersion: job.schema_version,
+            resultSchemaVersion: SYNTHETIC_RESULT_SCHEMA_VERSION,
             handlerVersion: job.handler_version,
             devicePublicKeyJwk,
             plaintext,
@@ -312,6 +318,11 @@ export function createCloudProcessingHandler(
           // at the provider policy boundary and cannot expose the underlying error text.
           if (error instanceof CloudResultCryptoFailure) return failure('malformed_output');
           return failure('malformed_output');
+        } finally {
+          // The crypto implementation also clears its defensive copy. This clears the canonical
+          // serializer buffer before heartbeat, stage, or finalize can retain the envelope.
+          plaintext.fill(0);
+          plaintext = undefined;
         }
         // Do not stage an encrypted result after the lease has been lost. The envelope is only
         // in memory here and will be reclaimed safely without charging.
@@ -348,16 +359,15 @@ export function createCloudProcessingHandler(
           throw error;
         }
       } finally {
+        // Covers a lost lease after validation but before encryption, when the inner crypto finally
+        // has not run yet.
         plaintext?.fill(0);
         plaintext = undefined;
       }
     } finally {
-      // The uploaded source and adapter-owned readable output never cross this process boundary.
+      // Covers read/adapter setup failures before the immediate adapter-settlement scrub.
       bytes?.fill(0);
       bytes = undefined;
     }
   };
 }
-
-/** Explicit name for callers/tests that want to emphasize this is fixture-only composition. */
-export const createSyntheticCloudProcessingHandler = createCloudProcessingHandler;

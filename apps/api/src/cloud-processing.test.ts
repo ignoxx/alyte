@@ -22,6 +22,7 @@ import {
 } from './cloud-processing.js';
 import { CloudResultService } from './cloud-result.js';
 import { CloudResultStore } from './cloud-result-store.js';
+import { SYNTHETIC_RESULT_SCHEMA_VERSION } from './cloud-processing-schema.js';
 import { TransientUploadStore } from './transient-upload-store.js';
 import { createJobRunner } from './worker.js';
 
@@ -593,7 +594,7 @@ describe('cloud processing failure policy', () => {
         ...decodeCloudResultEnvelopeJson(vector.serializedEnvelope),
         requestId: h.requestId,
         contractVersion: CONTRACT_VERSION,
-        resultSchemaVersion: CONTRACT_VERSION,
+        resultSchemaVersion: SYNTHETIC_RESULT_SCHEMA_VERSION,
         handlerVersion: 1,
       });
       results.stage(h.lease, envelope);
