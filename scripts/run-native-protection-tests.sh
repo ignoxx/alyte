@@ -6,6 +6,7 @@ readonly module_root="${repo_root}/apps/mobile/modules/alyte-protection"
 readonly package_template="${repo_root}/scripts/native-tests/Package.swift"
 readonly package_lock="${repo_root}/scripts/native-tests/Package.resolved"
 readonly pod_lock="${repo_root}/apps/mobile/ios/Podfile.lock"
+readonly cloud_result_vector="${repo_root}/packages/contracts/test-vectors/cloud-result-envelope-v1.json"
 readonly requested_simulator_name="${ALYTE_IOS_SIMULATOR_NAME:-}"
 readonly zipfoundation_version="0.9.20"
 readonly zipfoundation_revision="22787ffb59de99e5dc1fbfe80b19c97a904ad48d"
@@ -234,11 +235,14 @@ cp "${package_lock}" "${harness_root}/Package.resolved"
 cp "${module_root}/ios/AlyteProtectionArchive.swift" \
   "${module_root}/ios/AlyteProtectionFilePolicy.swift" \
   "${module_root}/ios/AlyteProtectionSnapshotShield.swift" \
+  "${module_root}/ios/AlyteDeviceCrypto.swift" \
   "${harness_root}/Sources/AlyteProtection/"
 cp "${module_root}/ios/AlyteProtectionArchiveTests.swift" \
   "${module_root}/ios/AlyteProtectionFilePolicyTests.swift" \
   "${module_root}/ios/AlyteProtectionSnapshotShieldTests.swift" \
+  "${module_root}/ios/AlyteDeviceCryptoTests.swift" \
   "${harness_root}/Tests/AlyteProtectionTests/"
+cp "${cloud_result_vector}" "${harness_root}/Tests/AlyteProtectionTests/cloud-result-envelope-v1.json"
 
 echo "Running AlyteProtection XCTest fixtures on ${simulator_name} (iOS Simulator ${simulator_runtime_version})"
 result_bundle="${harness_root}/TestResults.xcresult"

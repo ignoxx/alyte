@@ -3,9 +3,39 @@ import Foundation
 
 public final class AlyteProtectionModule: Module {
   private static let archiveAdapter = AlyteProtectionArchive()
+  private static let deviceCrypto = AlyteDeviceCrypto()
 
   public func definition() -> ModuleDefinition {
     Name("AlyteProtection")
+
+    AsyncFunction("getDevicePublicKeyJwk") { () throws -> [String: String] in
+      do {
+        return try Self.deviceCrypto.publicKeyJWK()
+      } catch {
+        throw Self.deviceCryptoError(error, message: "Could not access the device crypto key", code: 7)
+      }
+    }
+
+    AsyncFunction("decryptCloudResult") {
+      (
+        envelopeJSON: String,
+        requestId: String,
+        contractVersion: String,
+        resultSchemaVersion: String,
+        handlerVersion: Int
+      ) throws -> String in
+      do {
+        return try Self.deviceCrypto.decryptBase64url(
+          envelopeJSON: envelopeJSON,
+          requestId: requestId,
+          contractVersion: contractVersion,
+          resultSchemaVersion: resultSchemaVersion,
+          handlerVersion: handlerVersion
+        )
+      } catch {
+        throw Self.deviceCryptoError(error, message: "Could not decrypt the cloud result", code: 8)
+      }
+    }
 
     Function("clearSnapshotShield") {
       AlyteSnapshotShield.shared.clear()
@@ -183,6 +213,21 @@ public final class AlyteProtectionModule: Module {
 
   private static func nativeError(_ error: Error, message: String, code: Int) -> NSError {
     let category = failureCategory(for: error)
+    return NSError(
+      domain: "AlyteProtection",
+      code: code,
+      userInfo: [
+        NSLocalizedDescriptionKey: message,
+        NSLocalizedFailureReasonErrorKey: category,
+        "failureCategory": category,
+      ]
+    )
+  }
+
+  private static func deviceCryptoError(_ error: Error, message: String, code: Int) -> NSError {
+    let category =
+      (error as? AlyteDeviceCryptoError)?.failureCategory.rawValue
+      ?? AlyteDeviceCryptoFailureCategory.nativeFailure.rawValue
     return NSError(
       domain: "AlyteProtection",
       code: code,

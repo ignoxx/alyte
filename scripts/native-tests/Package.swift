@@ -18,11 +18,26 @@ let package = Package(
       name: "AlyteProtection",
       dependencies: [
         .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+      ],
+      sources: [
+        "AlyteProtectionArchive.swift",
+        "AlyteProtectionFilePolicy.swift",
+        "AlyteProtectionSnapshotShield.swift",
+        "AlyteDeviceCrypto.swift",
       ]
     ),
     .testTarget(
       name: "AlyteProtectionTests",
-      dependencies: ["AlyteProtection"]
+      dependencies: ["AlyteProtection"],
+      sources: [
+        "AlyteProtectionArchiveTests.swift",
+        "AlyteProtectionFilePolicyTests.swift",
+        "AlyteProtectionSnapshotShieldTests.swift",
+        "AlyteDeviceCryptoTests.swift",
+      ],
+      resources: [
+        .copy("cloud-result-envelope-v1.json"),
+      ]
     ),
   ]
 )
