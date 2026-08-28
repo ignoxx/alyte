@@ -20,5 +20,5 @@ test('contracts build emits the package runtime and declarations before consumer
     ],
     { encoding: 'utf8' },
   );
-  assert.equal(version, '2026-08-01');
+  assert.equal(version, '2026-08-27');
 });
