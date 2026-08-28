@@ -340,9 +340,6 @@ export function FullExportScreen() {
             </AppText>
             <AppSurface tone="soft" style={styles.warningSurface}>
               <AppText>{t('settings.exportPreviewBody')}</AppText>
-              <AppText variant="label" style={styles.warningText}>
-                {t('settings.exportWarning')}
-              </AppText>
             </AppSurface>
             <View style={styles.previewList}>
               <AppText>{t('settings.exportStructured')}</AppText>
@@ -456,7 +453,6 @@ const styles = StyleSheet.create({
   },
   warningSurface: { gap: spacing.md, marginBottom: spacing.lg },
   unavailableSurface: { gap: spacing.sm, marginBottom: spacing.lg },
-  warningText: { color: colors.danger },
   previewList: { gap: spacing.md, marginBottom: spacing.lg },
   progressSurface: { alignItems: 'center', marginBottom: spacing.lg, paddingVertical: spacing.xl },
 });

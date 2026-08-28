@@ -885,7 +885,6 @@
     "exportMediaRetry": "Retry media check",
     "exportPreviewTitle": "Review before sharing",
     "exportPreviewBody": "The selected files will leave Alyte protection when you share this archive. Share only with a destination you trust.",
-    "exportWarning": "Shared exports are no longer protected by Alyte.",
     "exportCreate": "Create Export",
     "exportCreating": "Creating your export…",
     "exportProgress": "Preparing a protected archive on this iPhone.",
