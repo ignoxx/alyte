@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { metabolicMicronutrientBiomarkers } from '@alyte/catalogue';
 import {
   buildExtractionConfirmationPlan,
+  classifyExtractionPipelineFingerprint,
+  createExtractionPipelineFingerprint,
   decodeVisionOCRResult,
   EXTRACTION_PARSER_VERSION,
   extractionReviewBlocksConfirmation,
@@ -24,6 +26,31 @@ const aliases: readonly ExtractionAliasEntry[] = [
     units: ['mmol/L', 'mg/dL'],
   },
 ];
+
+it('fingerprints classify complete extraction inputs without treating a revision as a pipeline change', () => {
+  const input = {
+    sourceHash: 'synthetic-source-hash',
+    ocrContractVersion: 'ocr.v2',
+    rowSegmentationVersion: 'rows.v1',
+    parserVersion: 'parser.v5',
+    semanticAdapterVersion: null,
+    semanticSchemaVersion: null,
+    semanticChunkVersion: null,
+    semanticPromptVersion: null,
+    modelVersion: null,
+    runtimeVersion: null,
+    catalogueVersion: 'catalogue.v1',
+  } as const;
+  const first = createExtractionPipelineFingerprint(input, 1);
+  const laterRevision = createExtractionPipelineFingerprint(input, 2);
+  const changedParser = createExtractionPipelineFingerprint(
+    { ...input, parserVersion: 'parser.v6' },
+    1,
+  );
+  assert.equal(classifyExtractionPipelineFingerprint(first, laterRevision), 'current');
+  assert.equal(classifyExtractionPipelineFingerprint(first, changedParser), 'older');
+  assert.equal(first.hash.length, 32);
+});
 
 const tableAliases: readonly ExtractionAliasEntry[] = [
   {
@@ -280,6 +307,10 @@ describe('local extraction domain', () => {
       createdAt: '2026-08-22T00:00:00.000Z',
       updatedAt: '2026-08-22T00:00:00.000Z',
       confirmedAt: null,
+      pipelineFingerprint: null,
+      pipelineStatus: 'older' as const,
+      revision: 1,
+      hasUserEdits: false,
     };
     assert.equal(rows[0]?.decision, 'preserve');
     const defaultPlan = buildExtractionConfirmationPlan(base, {
@@ -400,6 +431,10 @@ describe('local extraction domain', () => {
           createdAt: '2026-08-20T00:00:00.000Z',
           updatedAt: '2026-08-20T00:00:00.000Z',
           confirmedAt: null,
+          pipelineFingerprint: null,
+          pipelineStatus: 'older' as const,
+          revision: 1,
+          hasUserEdits: false,
         },
         { record: () => 'record', measurement: () => 'measurement' },
       ).records.length,
@@ -439,6 +474,10 @@ describe('local extraction domain', () => {
           createdAt: '2026-08-20T00:00:00.000Z',
           updatedAt: '2026-08-20T00:00:00.000Z',
           confirmedAt: null,
+          pipelineFingerprint: null,
+          pipelineStatus: 'older' as const,
+          revision: 1,
+          hasUserEdits: false,
         },
         { record: () => 'record', measurement: () => 'measurement' },
       ).records.length,
@@ -486,6 +525,10 @@ describe('local extraction domain', () => {
           createdAt: '2026-08-20T00:00:00.000Z',
           updatedAt: '2026-08-20T00:00:00.000Z',
           confirmedAt: null,
+          pipelineFingerprint: null,
+          pipelineStatus: 'older' as const,
+          revision: 1,
+          hasUserEdits: false,
         },
         { record: () => 'record', measurement: () => 'measurement' },
       ).records.length,
@@ -627,6 +670,10 @@ describe('local extraction domain', () => {
       createdAt: '2026-08-22T00:00:00.000Z',
       updatedAt: '2026-08-22T00:00:00.000Z',
       confirmedAt: null,
+      pipelineFingerprint: null,
+      pipelineStatus: 'older' as const,
+      revision: 1,
+      hasUserEdits: false,
     };
     const plan = buildExtractionConfirmationPlan(draft, {
       record: () => 'record-1',
@@ -912,6 +959,10 @@ describe('local extraction domain', () => {
         createdAt: '2026-08-22T00:00:00.000Z',
         updatedAt: '2026-08-22T00:00:00.000Z',
         confirmedAt: null,
+        pipelineFingerprint: null,
+        pipelineStatus: 'older' as const,
+        revision: 1,
+        hasUserEdits: false,
       },
       { record: () => 'record', measurement: () => 'measurement' },
     );

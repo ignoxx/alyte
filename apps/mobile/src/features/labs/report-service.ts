@@ -32,8 +32,13 @@ import {
   type VisionTextObservation,
   type VisionOCRResult,
   type SpecimenType,
+  type ExtractionPipelineFingerprint,
+  createExtractionPipelineFingerprint,
+  EXTRACTION_ROW_SEGMENTATION_VERSION,
+  EXTRACTION_PARSER_VERSION,
+  VISION_OCR_CONTRACT_VERSION,
 } from '@alyte/domain';
-import { comparableBiomarkers } from '@alyte/catalogue';
+import { CATALOGUE_VERSION, comparableBiomarkers } from '@alyte/catalogue';
 import {
   openProtectedLabDatabase,
   type LabReportExtractionOperation,
@@ -165,12 +170,15 @@ export type LabReportExtractionReadiness = {
 
 export type LabReportExtractionProgress = {
   readonly reportId: string;
+  readonly mode: LabReportExtractionMode;
   readonly stage: 'import' | 'ocr' | 'model' | 'review';
   readonly status: 'active' | 'complete' | 'failed' | 'cancelled' | 'interrupted';
   readonly completed: number;
   readonly total: number;
   readonly error?: LabReportExtractionError['reason'];
 };
+
+export type LabReportExtractionMode = 'start' | 'reprocess' | 'improve';
 
 export type SanitizationEditorState = {
   readonly report: LabReport;
@@ -228,7 +236,8 @@ export class LabReportExtractionError extends Error {
       | 'persistence'
       | 'wrong-password'
       | 'cancelled'
-      | 'interrupted',
+      | 'interrupted'
+      | 'improve-deferred',
     message: string,
     options?: { readonly cause?: unknown },
   ) {
@@ -275,6 +284,10 @@ export type LabReportsService = {
   deleteSanitizedReport(id: string): Promise<void>;
   deleteReport(id: string): Promise<void>;
   startExtraction(id: string, passwordRequest?: PasswordRequest): Promise<ExtractionDraft>;
+  /** Explicitly rebuilds one open draft from the immutable Original Report. */
+  reprocessExtraction(id: string, passwordRequest?: PasswordRequest): Promise<ExtractionDraft>;
+  /** Reserved until a source-cell-compatible semantic-only pass is proven safe. */
+  improveExtraction(id: string): Promise<ExtractionDraft>;
   listOpenExtractionDrafts(): Promise<readonly LabReportExtractionDraftReference[]>;
   countOpenExtractionDrafts(): Promise<number>;
   getExtractionDraft(id: string): Promise<ExtractionDraft | null>;
@@ -560,6 +573,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
 
   function extractionProgressEvent(
     reportId: string,
+    mode: LabReportExtractionMode,
     stage: LabReportExtractionProgress['stage'],
     status: LabReportExtractionProgress['status'],
     completed: number,
@@ -568,6 +582,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   ): void {
     publishExtractionProgress({
       reportId,
+      mode,
       stage,
       status,
       completed,
@@ -591,6 +606,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       'wrong-password',
       'cancelled',
       'interrupted',
+      'improve-deferred',
     ];
     return value !== null && supported.includes(value as LabReportExtractionError['reason'])
       ? (value as LabReportExtractionError['reason'])
@@ -600,15 +616,19 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   async function persistExtractionOperation(
     repo: LabRepository,
     reportId: string,
+    mode: LabReportExtractionMode,
     state: LabReportExtractionOperation['state'],
     stage: LabReportExtractionProgress['stage'],
     completed: number,
     total: number,
     error: string | null = null,
+    pipelineFingerprint: ExtractionPipelineFingerprint | null = null,
+    revision = pipelineFingerprint?.revision ?? 1,
   ): Promise<void> {
     const current = await repo.getExtractionOperation(reportId);
     await repo.upsertExtractionOperation({
       reportId,
+      mode,
       state,
       stage,
       completed,
@@ -616,7 +636,32 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       error,
       createdAt: current?.createdAt ?? now(),
       updatedAt: now(),
+      pipelineFingerprint,
+      pipelineFingerprintHash: pipelineFingerprint?.hash ?? null,
+      revision,
     });
+  }
+
+  function currentExtractionPipelineFingerprint(
+    sourceHash: string | null,
+    revision = 1,
+  ): ExtractionPipelineFingerprint {
+    return createExtractionPipelineFingerprint(
+      {
+        sourceHash,
+        ocrContractVersion: VISION_OCR_CONTRACT_VERSION,
+        rowSegmentationVersion: EXTRACTION_ROW_SEGMENTATION_VERSION,
+        parserVersion: EXTRACTION_PARSER_VERSION,
+        semanticAdapterVersion: semanticMapper?.adapterVersion ?? null,
+        semanticSchemaVersion: semanticMapper?.schemaVersion ?? null,
+        semanticChunkVersion: semanticMapper?.provenance?.chunkVersion ?? null,
+        semanticPromptVersion: semanticMapper?.provenance?.promptVersion ?? null,
+        modelVersion: semanticMapper?.provenance?.modelVersion ?? null,
+        runtimeVersion: semanticMapper?.provenance?.runtimeVersion ?? null,
+        catalogueVersion: semanticMapper?.provenance?.catalogueVersion ?? CATALOGUE_VERSION,
+      },
+      revision,
+    );
   }
 
   function persistedPath(path: string): string {
@@ -1674,6 +1719,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     const durableError = progressError(durable.error, durable.state);
     const progress: LabReportExtractionProgress = {
       reportId: id,
+      mode: durable.mode ?? 'start',
       stage: durable.stage,
       status:
         durable.state === 'active'
@@ -2179,9 +2225,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     });
   }
 
-  async function startExtraction(
+  async function runExtraction(
     id: string,
     passwordRequest?: PasswordRequest,
+    mode: LabReportExtractionMode = 'start',
   ): Promise<ExtractionDraft> {
     const previousOperation = extractionOperations.get(id);
     if (previousOperation !== undefined) cancelExtractionOperation(previousOperation);
@@ -2195,6 +2242,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       let password = '';
       let createdDraft: ExtractionDraft | null = null;
       let activeRepo: LabRepository | null = null;
+      let operationPipelineFingerprint: ExtractionPipelineFingerprint | null = null;
+      let extractionRevision = 1;
       const isCancelled = () =>
         extractionOperations.get(id) !== operationToken || operationToken.cancelled;
       const cancellation: ExtractionSemanticCancellation = {
@@ -2217,9 +2266,50 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         if (report.importState !== 'imported' || report.originalPath === null) {
           throw new Error('Only an imported Lab Report can be extracted');
         }
-        await persistExtractionOperation(repo, id, 'active', 'import', 0, 1);
+        const existingDraft = await repo.getExtractionDraftForReport(
+          id,
+          extractionAliases,
+          currentExtractionPipelineFingerprint(report.sourceHash),
+        );
+        // Starting extraction is intentionally idempotent. Returning the existing draft before
+        // touching durable progress avoids a fake OCR/model pass and makes cached work explicit.
+        if (mode === 'start' && existingDraft !== null && existingDraft.state !== 'failed') {
+          return existingDraft;
+        }
+        if (mode === 'reprocess') {
+          if (existingDraft === null || existingDraft.state !== 'draft') {
+            throw new LabReportExtractionError(
+              'persistence',
+              'Only an open Extraction Draft can be reprocessed',
+            );
+          }
+          if (await repo.hasConfirmedRecordsForReport(id)) {
+            throw new LabReportExtractionError(
+              'persistence',
+              'Confirmed Lab Records are immutable and cannot be reprocessed',
+            );
+          }
+        }
+        extractionRevision = mode === 'reprocess' ? (existingDraft?.revision ?? 0) + 1 : 1;
+        const pipelineFingerprint = currentExtractionPipelineFingerprint(
+          report.sourceHash,
+          extractionRevision,
+        );
+        operationPipelineFingerprint = pipelineFingerprint;
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'import',
+          0,
+          1,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-        extractionProgressEvent(id, 'import', 'complete', 1, 1);
+        extractionProgressEvent(id, mode, 'import', 'complete', 1, 1);
         if ((await verifySource(id)) !== 'verified') {
           throw new LabReportExtractionError(
             'original-source',
@@ -2227,15 +2317,6 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           );
         }
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-        const existingDraft = await repo.getExtractionDraftForReport(id, extractionAliases);
-        if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-        if (existingDraft !== null && existingDraft.state !== 'failed') {
-          await persistExtractionOperation(repo, id, 'complete', 'review', 1, 1);
-          extractionProgressEvent(id, 'review', 'complete', 1, 1);
-          if (isCancelled())
-            throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-          return existingDraft;
-        }
         if (existingDraft?.state === 'failed') {
           // v11 drafts have no trustworthy artifact identity. They are explicitly invalidated by
           // migration and are removed only when a user requests regeneration.
@@ -2306,8 +2387,19 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         if (pages.length === 0) {
           throw new LabReportExtractionError('recognition', 'The report has no readable pages');
         }
-        await persistExtractionOperation(repo, id, 'active', 'ocr', 0, pages.length);
-        extractionProgressEvent(id, 'ocr', 'active', 0, pages.length);
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'ocr',
+          0,
+          pages.length,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'ocr', 'active', 0, pages.length);
         const results: VisionOCRResult[] = [];
         for (const [pageNumber, page] of pages.entries()) {
           if (isCancelled())
@@ -2343,11 +2435,33 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           }
           if (isCancelled())
             throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-          await persistExtractionOperation(repo, id, 'active', 'ocr', pageNumber, pages.length);
-          extractionProgressEvent(id, 'ocr', 'active', pageNumber + 1, pages.length);
+          await persistExtractionOperation(
+            repo,
+            id,
+            mode,
+            'active',
+            'ocr',
+            pageNumber,
+            pages.length,
+            null,
+            pipelineFingerprint,
+            extractionRevision,
+          );
+          extractionProgressEvent(id, mode, 'ocr', 'active', pageNumber + 1, pages.length);
         }
-        await persistExtractionOperation(repo, id, 'active', 'ocr', pages.length, pages.length);
-        extractionProgressEvent(id, 'ocr', 'complete', pages.length, pages.length);
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'ocr',
+          pages.length,
+          pages.length,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'ocr', 'complete', pages.length, pages.length);
 
         const dateContext = dateContextFromOCR(results);
         // A report with no collection-date context gets one captured local-day fallback. The
@@ -2392,26 +2506,60 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             );
           })
           .map((row, order) => ({ ...row, order }));
-        await persistExtractionOperation(repo, id, 'active', 'model', 0, 0);
-        extractionProgressEvent(id, 'model', 'active', 0, 0);
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'model',
+          0,
+          0,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'model', 'active', 0, 0);
         const rows = await applySemanticMappings(
           deterministicRows,
           observations,
-          (completed, total) => extractionProgressEvent(id, 'model', 'active', completed, total),
+          (completed, total) =>
+            extractionProgressEvent(id, mode, 'model', 'active', completed, total),
           cancellation,
         );
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         const modelTotal = extractionProgress.get(id)?.total ?? 0;
-        await persistExtractionOperation(repo, id, 'active', 'model', modelTotal, modelTotal);
-        extractionProgressEvent(id, 'model', 'complete', modelTotal, modelTotal);
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'model',
+          modelTotal,
+          modelTotal,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'model', 'complete', modelTotal, modelTotal);
         if (rows.length === 0) {
           throw new LabReportExtractionError(
             'no-reviewable-measurements',
             'Local OCR found no reviewable Measurements',
           );
         }
-        await persistExtractionOperation(repo, id, 'active', 'review', 0, 1);
-        extractionProgressEvent(id, 'review', 'active', 0, 1);
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'review',
+          0,
+          1,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'review', 'active', 0, 1);
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         if ((await verifySource(id)) !== 'verified') {
           throw new LabReportExtractionError(
@@ -2419,34 +2567,72 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             'The Original Report changed and must be imported again',
           );
         }
-        const draft = await repo.createExtractionDraft({
+        const draftInput = {
           reportId: id,
           collectionDate,
           rows,
           sourceArtifact,
-        });
+          pipelineFingerprint,
+          revision: extractionRevision,
+        } as const;
+        const draft =
+          mode === 'reprocess' && existingDraft !== null
+            ? await repo.replaceExtractionDraft({
+                previousDraftId: existingDraft.id,
+                ...draftInput,
+                revision: extractionRevision,
+              })
+            : await repo.createExtractionDraft(draftInput);
         createdDraft = draft;
         // The source can change while SQLite is writing a large draft. Reverify immediately
-        // before exposing it; a stale result is never allowed to survive this race.
-        if ((await verifySource(id)) !== 'verified') {
-          await repo.deleteExtractionDraft(draft.id);
-          createdDraft = null;
-          throw new LabReportExtractionError(
-            'original-source',
-            'The Original Report changed and must be imported again',
+        // before exposing it; a stale result is never allowed to survive this race. A replacement
+        // is already the atomic commit point, so it must not be deleted on a cancellation that
+        // arrives after the old draft has been replaced.
+        if (mode === 'start') {
+          if ((await verifySource(id)) !== 'verified') {
+            await repo.deleteExtractionDraft(draft.id);
+            createdDraft = null;
+            throw new LabReportExtractionError(
+              'original-source',
+              'The Original Report changed and must be imported again',
+            );
+          }
+          if (isCancelled()) {
+            await repo.deleteExtractionDraft(draft.id);
+            createdDraft = null;
+            throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
+          }
+        }
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'complete',
+          'review',
+          1,
+          1,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'review', 'complete', 1, 1);
+        if (isCancelled()) {
+          if (mode !== 'reprocess') {
+            await repo.deleteExtractionDraft(draft.id);
+            createdDraft = null;
+          }
+          await persistExtractionOperation(
+            repo,
+            id,
+            mode,
+            'cancelled',
+            'review',
+            1,
+            1,
+            'cancelled',
+            pipelineFingerprint,
+            extractionRevision,
           );
-        }
-        if (isCancelled()) {
-          await repo.deleteExtractionDraft(draft.id);
-          createdDraft = null;
-          throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-        }
-        await persistExtractionOperation(repo, id, 'complete', 'review', 1, 1);
-        extractionProgressEvent(id, 'review', 'complete', 1, 1);
-        if (isCancelled()) {
-          await repo.deleteExtractionDraft(draft.id);
-          createdDraft = null;
-          await persistExtractionOperation(repo, id, 'cancelled', 'review', 1, 1, 'cancelled');
           throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         }
         return draft;
@@ -2463,7 +2649,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
                 { cause: error },
               );
         const cancelled = isCancelled() || extractionError.reason === 'cancelled';
-        if (cancelled && createdDraft !== null) {
+        if (cancelled && createdDraft !== null && mode !== 'reprocess') {
           try {
             await activeRepo?.deleteExtractionDraft(createdDraft.id);
           } catch {
@@ -2477,11 +2663,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             await persistExtractionOperation(
               activeRepo,
               id,
+              mode,
               cancelled ? 'cancelled' : 'failed',
               extractionProgress.get(id)?.stage ?? 'import',
               extractionProgress.get(id)?.completed ?? 0,
               extractionProgress.get(id)?.total ?? 0,
               terminalReason,
+              operationPipelineFingerprint,
+              extractionRevision,
             );
         } catch {
           // A terminal UI state is still safe if the database is unavailable; relaunch will
@@ -2489,6 +2678,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         }
         extractionProgressEvent(
           id,
+          mode,
           extractionProgress.get(id)?.stage ?? 'import',
           cancelled ? 'cancelled' : 'failed',
           extractionProgress.get(id)?.completed ?? 0,
@@ -2507,9 +2697,39 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     });
   }
 
+  async function startExtraction(
+    id: string,
+    passwordRequest?: PasswordRequest,
+  ): Promise<ExtractionDraft> {
+    return runExtraction(id, passwordRequest, 'start');
+  }
+
+  async function reprocessExtraction(
+    id: string,
+    passwordRequest?: PasswordRequest,
+  ): Promise<ExtractionDraft> {
+    return runExtraction(id, passwordRequest, 'reprocess');
+  }
+
+  async function improveExtraction(_id: string): Promise<ExtractionDraft> {
+    await ensureInitialized();
+    throw new LabReportExtractionError(
+      'improve-deferred',
+      'Semantic-only improvement is deferred until source-cell compatibility is available',
+    );
+  }
+
   async function getExtractionDraft(id: string): Promise<ExtractionDraft | null> {
     await ensureInitialized();
-    return (await repository()).getExtractionDraft(id, extractionAliases);
+    const repo = await repository();
+    const draft = await repo.getExtractionDraft(id, extractionAliases);
+    if (draft === null) return null;
+    const report = await repo.getReport(draft.reportId);
+    return repo.getExtractionDraft(
+      id,
+      extractionAliases,
+      currentExtractionPipelineFingerprint(report?.sourceHash ?? null, draft.revision),
+    );
   }
 
   async function countOpenExtractionDrafts(): Promise<number> {
@@ -2598,6 +2818,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     deleteSanitizedReport,
     deleteReport,
     startExtraction,
+    reprocessExtraction,
+    improveExtraction,
     listOpenExtractionDrafts,
     countOpenExtractionDrafts,
     getExtractionDraft,

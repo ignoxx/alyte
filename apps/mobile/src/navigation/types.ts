@@ -48,7 +48,10 @@ export type RootStackParamList = {
   SnapCapture: undefined;
   PrivacyWorkspace: { readonly reportId: string };
   OriginalSourcePreview: { readonly reportId: string; readonly pageIndex?: number };
-  ExtractionProgress: { readonly reportId: string };
+  ExtractionProgress: {
+    readonly reportId: string;
+    readonly mode?: 'start' | 'reprocess' | 'improve';
+  };
   ExtractionMeasurementEditor: {
     readonly reportId: string;
     readonly draftId: string;

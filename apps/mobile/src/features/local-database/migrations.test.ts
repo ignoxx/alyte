@@ -817,8 +817,25 @@ describe('local schema forward migrations', () => {
     const extractionColumns = await firstDatabase.getAllAsync<{ name: string }>(
       'PRAGMA table_info(extraction_draft_rows);',
     );
-    for (const name of ['source_value_json', 'date_context_json', 'decision']) {
+    for (const name of ['source_value_json', 'date_context_json', 'decision', 'edit_state']) {
       assert.ok(extractionColumns.some((column) => column.name === name));
+    }
+    const extractionDraftColumns = await firstDatabase.getAllAsync<{ name: string }>(
+      'PRAGMA table_info(extraction_drafts);',
+    );
+    for (const name of ['pipeline_fingerprint_json', 'pipeline_fingerprint_hash', 'revision']) {
+      assert.ok(extractionDraftColumns.some((column) => column.name === name));
+    }
+    const extractionOperationColumns = await firstDatabase.getAllAsync<{ name: string }>(
+      'PRAGMA table_info(extraction_operations);',
+    );
+    for (const name of [
+      'mode',
+      'pipeline_fingerprint_json',
+      'pipeline_fingerprint_hash',
+      'revision',
+    ]) {
+      assert.ok(extractionOperationColumns.some((column) => column.name === name));
     }
     const columns = await firstDatabase.getAllAsync<{ name: string }>(
       'PRAGMA table_info(intake_events);',

@@ -13,6 +13,108 @@ export { normalizeAlias } from './text';
 
 export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.document.v2' as const;
 export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v5' as const;
+/**
+ * The physical-row grouping contract is deliberately independent from the parser version.  The
+ * geometry/token-lattice work can advance this seam in a later phase without making a parser
+ * version look current by accident.
+ */
+export const EXTRACTION_ROW_SEGMENTATION_VERSION = 'alyte.row-segmentation.v1' as const;
+
+export const EXTRACTION_PIPELINE_FINGERPRINT_SCHEMA =
+  'alyte.extraction-pipeline-fingerprint.v1' as const;
+
+export type ExtractionPipelineFingerprintInput = {
+  readonly sourceHash: string | null;
+  readonly ocrContractVersion: string | null;
+  readonly rowSegmentationVersion: string | null;
+  readonly parserVersion: string | null;
+  readonly semanticAdapterVersion: string | null;
+  readonly semanticSchemaVersion: ExtractionSemanticSchemaVersion | null;
+  readonly semanticChunkVersion: string | null;
+  readonly semanticPromptVersion: string | null;
+  readonly modelVersion: string | null;
+  readonly runtimeVersion: string | null;
+  readonly catalogueVersion: string | null;
+};
+
+export type ExtractionPipelineFingerprint = ExtractionPipelineFingerprintInput & {
+  readonly schemaVersion: typeof EXTRACTION_PIPELINE_FINGERPRINT_SCHEMA;
+  /** Monotonic extraction revision for one report; a full reprocess increments it. */
+  readonly revision: number;
+  /** Stable identity of the complete compatibility input, not a source-data hash. */
+  readonly hash: string;
+};
+
+/**
+ * Keep fingerprint serialization independent of object insertion order. The digest is a stable
+ * compatibility identity; the Original Report's SHA-256 remains the authoritative artifact hash.
+ */
+export function extractionPipelineFingerprintCanonicalJson(
+  input: ExtractionPipelineFingerprintInput,
+): string {
+  return JSON.stringify({
+    sourceHash: input.sourceHash,
+    ocrContractVersion: input.ocrContractVersion,
+    rowSegmentationVersion: input.rowSegmentationVersion,
+    parserVersion: input.parserVersion,
+    semanticAdapterVersion: input.semanticAdapterVersion,
+    semanticSchemaVersion: input.semanticSchemaVersion,
+    semanticChunkVersion: input.semanticChunkVersion,
+    semanticPromptVersion: input.semanticPromptVersion,
+    modelVersion: input.modelVersion,
+    runtimeVersion: input.runtimeVersion,
+    catalogueVersion: input.catalogueVersion,
+  });
+}
+
+/**
+ * A small dependency-free digest makes the fingerprint usable in domain and mobile tests without
+ * importing Node or a provider runtime. It is intentionally not used for artifact integrity.
+ */
+function extractionFingerprintDigest(value: string): string {
+  const seeds = [2166136261, 2246822519, 3266489917, 668265263] as const;
+  return seeds
+    .map((seed) => {
+      let hash: number = seed;
+      for (const character of value) {
+        hash ^= character.charCodeAt(0);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(16).padStart(8, '0');
+    })
+    .join('');
+}
+
+export function createExtractionPipelineFingerprint(
+  input: ExtractionPipelineFingerprintInput,
+  revision = 1,
+): ExtractionPipelineFingerprint {
+  if (!Number.isSafeInteger(revision) || revision < 1) {
+    throw new Error('Extraction pipeline revision must be a positive integer');
+  }
+  const canonical = extractionPipelineFingerprintCanonicalJson(input);
+  return {
+    schemaVersion: EXTRACTION_PIPELINE_FINGERPRINT_SCHEMA,
+    revision,
+    ...input,
+    hash: extractionFingerprintDigest(canonical),
+  };
+}
+
+export function classifyExtractionPipelineFingerprint(
+  stored: ExtractionPipelineFingerprint | null | undefined,
+  current: ExtractionPipelineFingerprint,
+): 'current' | 'older' {
+  return stored !== null && stored !== undefined && stored.hash === current.hash
+    ? 'current'
+    : 'older';
+}
+
+export function extractionDraftHasUserEdits(
+  rows: readonly Pick<ExtractionDraftRow, 'editState'>[],
+): boolean {
+  return rows.some((row) => row.editState === 'user-edited');
+}
 
 const NUMERIC_TOKEN_PATTERN =
   '[<>≤≥]?\\s*[+-]?(?:(?:\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)|(?:\\d+(?:[.,]\\d+)?)|(?:\\.\\d+))';
@@ -201,14 +303,22 @@ export type ExtractionDraftRow = {
   readonly reviewReasons: readonly ExtractionReviewReason[];
   readonly reviewState: 'ready' | 'needs-review';
   readonly decision: ExtractionRowDecision;
+  /** Independent from the pipeline status so a rerun can never silently erase a correction. */
+  /** Optional only for in-memory legacy callers; persisted rows always decode this field. */
+  readonly editState?: 'automatic' | 'user-edited';
 };
 
 export type ExtractionDraft = {
   readonly id: string;
   readonly reportId: string;
   readonly state: 'draft' | 'confirmed' | 'failed';
-  readonly ocrContractVersion: typeof VISION_OCR_CONTRACT_VERSION;
-  readonly parserVersion: typeof EXTRACTION_PARSER_VERSION;
+  /** Stored values remain readable across parser releases; compatibility is surfaced separately. */
+  readonly ocrContractVersion: string;
+  readonly parserVersion: string;
+  readonly pipelineFingerprint: ExtractionPipelineFingerprint | null;
+  readonly pipelineStatus: 'current' | 'older';
+  readonly revision: number;
+  readonly hasUserEdits: boolean;
   readonly sourceArtifact?: LabSourceArtifact | null;
   readonly collectionDate: LabDateState;
   readonly rows: readonly ExtractionDraftRow[];
@@ -1530,6 +1640,7 @@ function parseSourceRow(
     reviewReasons: [...new Set(reasons)],
     reviewState: extractionReviewHasOnlyNonBlockingReasons(reasons) ? 'ready' : 'needs-review',
     decision: defaultExtractionDecision([...new Set(reasons)]),
+    editState: 'automatic',
   };
 }
 

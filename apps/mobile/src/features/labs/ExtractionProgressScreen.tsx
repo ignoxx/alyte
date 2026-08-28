@@ -69,6 +69,7 @@ export function ExtractionProgressScreen() {
   const route = useRoute<Route>();
   const isFocused = useIsFocused();
   const { reports, models } = useServices();
+  const extractionMode = route.params.mode ?? 'start';
   const [progress, setProgress] = useState<LabReportExtractionProgress | null>(() =>
     reports.getExtractionProgress(route.params.reportId),
   );
@@ -89,7 +90,10 @@ export function ExtractionProgressScreen() {
     () =>
       new ExtractionProgressController({
         reportId: route.params.reportId,
-        startExtraction: (reportId) => reports.startExtraction(reportId, passwordRequest()),
+        startExtraction: (reportId) =>
+          extractionMode === 'reprocess'
+            ? reports.reprocessExtraction(reportId, passwordRequest())
+            : reports.startExtraction(reportId, passwordRequest()),
         classifyFailure: (error) =>
           error instanceof LabReportExtractionError ? error.reason : 'recognition',
         openModelSetup: () => navigation.navigate('ModelInstall'),
@@ -102,7 +106,7 @@ export function ExtractionProgressScreen() {
           setFailure(null);
         },
       }),
-    [navigation, reports, route.params.reportId],
+    [extractionMode, navigation, reports, route.params.reportId],
   );
 
   useEffect(() => {
@@ -143,6 +147,15 @@ export function ExtractionProgressScreen() {
       .then((durable) => {
         if (!active) return;
         setDurableLoaded(true);
+        if (extractionMode === 'reprocess') {
+          // A reprocess is an explicit fresh run. Ignore the previous start operation's terminal
+          // marker so the controller cannot short-circuit back to the old draft.
+          setProgress(null);
+          setRestoredProgress(null);
+          setRestoredDraftId(undefined);
+          setRestoredDraftLookupFailed(false);
+          return;
+        }
         if (durable === null) return;
         setProgress(durable);
         setRestoredProgress(durable);
@@ -192,7 +205,7 @@ export function ExtractionProgressScreen() {
       active = false;
       unsubscribe();
     };
-  }, [controller, reports, route.params.reportId]);
+  }, [controller, extractionMode, reports, route.params.reportId]);
 
   useEffect(() => {
     const destination = terminalDestination;
@@ -269,13 +282,14 @@ export function ExtractionProgressScreen() {
       modelReady,
       hasFailure: failure !== null,
       cancellationRequested,
-      restoredProgress,
+      restoredProgress: extractionMode === 'reprocess' ? null : restoredProgress,
       restoredDraftId,
     });
   }, [
     cancellationRequested,
     controller,
     durableLoaded,
+    extractionMode,
     failure,
     isFocused,
     modelReady,
@@ -324,9 +338,19 @@ export function ExtractionProgressScreen() {
     <SafeAreaView style={styles.safe} edges={['top', 'bottom', 'left', 'right']}>
       <View style={styles.content}>
         <AppText variant="heading" accessibilityRole="header" style={styles.title}>
-          {t('labs.extractionProgressTitle')}
+          {t(
+            extractionMode === 'reprocess'
+              ? 'labs.extractionReprocessProgressTitle'
+              : 'labs.extractionProgressTitle',
+          )}
         </AppText>
-        <AppText style={styles.body}>{t('labs.extractionProgressBody')}</AppText>
+        <AppText style={styles.body}>
+          {t(
+            extractionMode === 'reprocess'
+              ? 'labs.extractionReprocessProgressBody'
+              : 'labs.extractionProgressBody',
+          )}
+        </AppText>
         <AppSurface
           tone="soft"
           accessibilityLabel={t('labs.extractionProgressJourneyLabel')}

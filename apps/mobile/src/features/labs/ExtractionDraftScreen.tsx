@@ -96,12 +96,15 @@ export function ExtractionDraftScreen() {
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [saveError, setSaveError] = useState(false);
+  const [hasConfirmedRecords, setHasConfirmedRecords] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const next = await reports.getExtractionDraft(route.params.draftId);
       if (next === null) throw new Error('Extraction Draft unavailable');
+      const report = await reports.getReport(route.params.reportId);
       setDraft(next);
+      setHasConfirmedRecords((report?.labRecordIds.length ?? 0) > 0);
       setLoadError(false);
       setSaveError(false);
     } catch {
@@ -109,7 +112,7 @@ export function ExtractionDraftScreen() {
     } finally {
       setLoading(false);
     }
-  }, [reports, route.params.draftId]);
+  }, [reports, route.params.draftId, route.params.reportId]);
 
   useEffect(() => {
     void load();
@@ -141,6 +144,28 @@ export function ExtractionDraftScreen() {
   const included = confirmation.included;
   const canConfirm = draft !== null && confirmation.canConfirm;
   const hasBottomAccessory = confirmation.included > 0;
+  const canReprocess =
+    !hasConfirmedRecords && draft?.state === 'draft' && draft.pipelineStatus === 'older';
+
+  const reprocess = useCallback(() => {
+    if (busy || draft === null || !canReprocess) return;
+    Alert.alert(t('labs.extractionReprocessTitle'), t('labs.extractionReprocessBody'), [
+      { text: t('labs.cancel'), style: 'cancel' },
+      {
+        text: t('labs.extractionReprocess'),
+        style: 'destructive',
+        onPress: () => {
+          navigation
+            .getParent()
+            ?.getParent<NativeStackNavigationProp<RootStackParamList>>()
+            ?.navigate('ExtractionProgress', {
+              reportId: route.params.reportId,
+              mode: 'reprocess',
+            });
+        },
+      },
+    ]);
+  }, [busy, canReprocess, draft, navigation, route.params.reportId]);
 
   const openRow = useCallback(
     (rowId: string, selectNeedsReview = false) => {
@@ -264,6 +289,27 @@ export function ExtractionDraftScreen() {
               )}`}
             </AppText>
             <AppText style={styles.intro}>{t('labs.extractionCompactIntro')}</AppText>
+            <View style={styles.pipelineStatus}>
+              <StatusPill tone={draft.pipelineStatus === 'current' ? 'neutral' : 'reviewNeeded'}>
+                {draft.pipelineStatus === 'current'
+                  ? t('labs.extractionCurrentStatus')
+                  : t('labs.extractionOlderStatus')}
+              </StatusPill>
+              {draft.hasUserEdits && (
+                <AppText style={styles.muted}>{`· ${t('labs.extractionEditedStatus')}`}</AppText>
+              )}
+            </View>
+            {canReprocess && (
+              <View style={styles.reprocessCard}>
+                <AppText style={styles.muted}>{t('labs.extractionReprocessBody')}</AppText>
+                <AppButton
+                  disabled={busy}
+                  label={busy ? t('labs.extractionReprocessBusy') : t('labs.extractionReprocess')}
+                  onPress={reprocess}
+                  tone="secondary"
+                />
+              </View>
+            )}
             {loadError && (
               <AppText selectable style={styles.loadError}>
                 {t('labs.extractionLoadError')}
@@ -448,6 +494,13 @@ const styles = StyleSheet.create({
   },
   summary: { flexShrink: 1, fontVariant: ['tabular-nums'], width: '100%' },
   intro: { color: colors.mutedInk, flexShrink: 1, width: '100%' },
+  pipelineStatus: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
+  reprocessCard: {
+    backgroundColor: colors.accentSoft,
+    borderRadius: 14,
+    gap: spacing.sm,
+    padding: spacing.md,
+  },
   loadError: { color: colors.danger },
   muted: { color: colors.mutedInk },
   filters: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingTop: spacing.xs },

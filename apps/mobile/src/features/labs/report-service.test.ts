@@ -794,6 +794,10 @@ describe('protected Lab Report import lifecycle', () => {
         createdAt: '2026-08-20T00:00:00.000Z',
         updatedAt: '2026-08-20T00:00:00.000Z',
         confirmedAt: null,
+        pipelineFingerprint: null,
+        pipelineStatus: 'older' as const,
+        revision: 1,
+        hasUserEdits: false,
       };
       const confirmationPlan = buildExtractionConfirmationPlan(draft, {
         record: (key) => `${fixture.id}-record-${key}`,
@@ -3214,12 +3218,14 @@ describe('protected Lab Report import lifecycle', () => {
     const repository = createRepository();
     const files = new FakeFiles();
     const image = new SanitizingImage(files);
+    let recognitionCalls = 0;
     const service = createService(
       repository,
       files,
       new FakePdf(),
       {
         async recognize(): Promise<VisionOCRResult> {
+          recognitionCalls += 1;
           return decodeVisionOCRResult({
             contractVersion: 'alyte.vision.document.v2',
             pageIndex: 0,
@@ -3247,6 +3253,7 @@ describe('protected Lab Report import lifecycle', () => {
       (await service.openSanitizationEditor(imported.id)).recipe,
     );
     const draft = await service.startExtraction(imported.id);
+    assert.equal(recognitionCalls, 1);
     await repository.updateSanitizedReport(saved.id, {
       verification: {
         ...saved.verification!,
@@ -3259,6 +3266,7 @@ describe('protected Lab Report import lifecycle', () => {
       status: 'unverified',
     });
     assert.equal((await service.startExtraction(imported.id)).id, draft.id);
+    assert.equal(recognitionCalls, 1, 'cached start performs no second OCR pass');
     assert.equal((await repository.getExtractionDraftForReport(imported.id))?.id, draft.id);
     assert.equal(await files.exists(saved.artifactPath!), true);
   });

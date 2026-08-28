@@ -19,7 +19,7 @@ type CallbackMigration = {
 
 export type Migration = SqlMigration | CallbackMigration;
 
-export const CURRENT_SCHEMA_VERSION = 12;
+export const CURRENT_SCHEMA_VERSION = 13;
 
 const INTAKE_CAPTURE_RECOVERY_DDL = `
   CREATE TABLE IF NOT EXISTS intake_capture_recovery (
@@ -527,6 +527,57 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
         `UPDATE extraction_operations SET state = 'interrupted', error = 'interrupted-after-relaunch'
          WHERE state = 'active';`,
       );
+    },
+  },
+  {
+    version: 13,
+    apply: async (database) => {
+      const draftTables = await database.getAllAsync<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'extraction_drafts';",
+      );
+      if (draftTables.length === 0) return;
+
+      const addColumns = async (
+        table: string,
+        columns: readonly (readonly [string, string])[],
+      ): Promise<void> => {
+        const existingColumns = await database.getAllAsync<{ name: string }>(
+          `PRAGMA table_info(${table});`,
+        );
+        const existing = new Set(existingColumns.map((column) => column.name));
+        for (const [name, type] of columns) {
+          if (!existing.has(name))
+            await database.execAsync(`ALTER TABLE ${table} ADD COLUMN ${name} ${type};`);
+        }
+      };
+
+      await addColumns('extraction_drafts', [
+        ['pipeline_fingerprint_json', 'TEXT'],
+        ['pipeline_fingerprint_hash', 'TEXT'],
+        ['revision', 'INTEGER NOT NULL DEFAULT 1'],
+      ]);
+      const rowTables = await database.getAllAsync<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'extraction_draft_rows';",
+      );
+      if (rowTables.length > 0) {
+        await addColumns('extraction_draft_rows', [
+          [
+            'edit_state',
+            "TEXT NOT NULL DEFAULT 'automatic' CHECK (edit_state IN ('automatic', 'user-edited'))",
+          ],
+        ]);
+      }
+
+      const operationTables = await database.getAllAsync<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'extraction_operations';",
+      );
+      if (operationTables.length === 0) return;
+      await addColumns('extraction_operations', [
+        ['mode', "TEXT NOT NULL DEFAULT 'start' CHECK (mode IN ('start', 'reprocess', 'improve'))"],
+        ['pipeline_fingerprint_json', 'TEXT'],
+        ['pipeline_fingerprint_hash', 'TEXT'],
+        ['revision', 'INTEGER NOT NULL DEFAULT 1'],
+      ]);
     },
   },
 ];

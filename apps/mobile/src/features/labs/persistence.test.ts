@@ -9,7 +9,6 @@ import {
   buildMeasuredTrend,
   canonicalId,
   createSanitizationRecipe,
-  EXTRACTION_PARSER_VERSION,
   groupObservationsIntoRows,
   type ExtractionAliasEntry,
 } from '@alyte/domain';
@@ -530,7 +529,7 @@ describe('protected manual Lab Record persistence', () => {
     await second.repository.close();
   });
 
-  test('revalidates open drafts created by the previous parser policy before confirmation', async () => {
+  test('reads an older parser draft without rewriting its rows or parser version', async () => {
     const { repository, database } = createRepository();
     await repository.createReport({
       id: 'report-stale-parser',
@@ -577,14 +576,12 @@ describe('protected manual Lab Record persistence', () => {
       draft.id,
     );
 
-    await assert.rejects(
-      repository.confirmExtractionDraft(draft.id, aliases),
-      /At least one extraction row must be included/,
-    );
     const reopened = await repository.getExtractionDraft(draft.id, aliases);
-    assert.equal(reopened?.parserVersion, EXTRACTION_PARSER_VERSION);
-    assert.ok(reopened?.rows[0]?.reviewReasons.includes('unsupported-layout'));
-    assert.equal(reopened?.rows[0]?.decision, 'skip');
+    assert.equal(reopened?.parserVersion, 'alyte.local-parser.v2');
+    assert.deepEqual(reopened?.rows[0]?.reviewReasons, []);
+    assert.equal(reopened?.rows[0]?.decision, 'resolve');
+    assert.equal(reopened?.pipelineStatus, 'older');
+    assert.equal(reopened?.pipelineFingerprint, null);
     assert.equal(
       (
         await database.getAllAsync<{ parser_version: string }>(
@@ -592,8 +589,82 @@ describe('protected manual Lab Record persistence', () => {
           draft.id,
         )
       )[0]?.parser_version,
-      EXTRACTION_PARSER_VERSION,
+      'alyte.local-parser.v2',
     );
+  });
+
+  test('replaces an open draft atomically and leaves it intact when replacement validation fails', async () => {
+    const { repository } = createRepository();
+    await repository.createReport({
+      id: 'report-reprocess-atomic',
+      sourceType: 'image',
+      originalFilename: 'synthetic-reprocess.png',
+      mimeType: 'image/png',
+      importState: 'imported',
+      originalPath: 'protected://original/synthetic-reprocess.png',
+      sourceHash: 'synthetic-reprocess-hash',
+      pageCount: 1,
+    });
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'reprocess-source',
+          text: 'Triglycerides 1.9 mmol/L',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.7, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+      ],
+      {
+        aliases: [
+          {
+            id: 'biomarker.triglycerides',
+            aliases: ['Triglycerides'],
+            specimens: ['blood'],
+            units: ['mmol/L'],
+          },
+        ],
+        collectionDate: { kind: 'known', value: '2026-08-22' },
+        specimenType: 'blood',
+      },
+    );
+    assert.ok(row);
+    const original = await repository.createExtractionDraft({
+      id: 'reprocess-original',
+      reportId: 'report-reprocess-atomic',
+      collectionDate: { kind: 'known', value: '2026-08-22' },
+      rows: [row],
+    });
+    await assert.rejects(
+      repository.replaceExtractionDraft({
+        previousDraftId: original.id,
+        reportId: original.reportId,
+        collectionDate: original.collectionDate,
+        rows: [],
+        revision: 2,
+      }),
+      /at least one source row/,
+    );
+    assert.equal((await repository.getExtractionDraft(original.id))?.id, original.id);
+    const replacement = await repository.replaceExtractionDraft({
+      previousDraftId: original.id,
+      reportId: original.reportId,
+      collectionDate: original.collectionDate,
+      rows: [row],
+      revision: 2,
+    });
+    assert.notEqual(replacement.id, original.id);
+    assert.equal(replacement.revision, 2);
+    assert.equal(await repository.getExtractionDraft(original.id), null);
+    await repository.createRecord({
+      labReportId: original.reportId,
+      collectionDate: { kind: 'known', value: '2026-08-22' },
+      specimenType: 'blood',
+      measurements: [],
+    });
+    assert.equal(await repository.hasConfirmedRecordsForReport(original.reportId), true);
   });
 
   test('includes valid extraction by default and keeps source provenance through correction', async () => {
@@ -641,6 +712,7 @@ describe('protected manual Lab Record persistence', () => {
       rows,
     });
     assert.equal(draft.rows[0]?.decision, 'resolve');
+    assert.equal(draft.rows[0]?.editState, 'automatic');
     const invalidReference = await repository.updateExtractionDraftRow(
       draft.rows[0]!.id,
       { proposedReferenceInterval: 'not-a-range' },
@@ -657,6 +729,14 @@ describe('protected manual Lab Record persistence', () => {
       aliases,
     );
     assert.equal(corrected.decision, 'resolve');
+    assert.equal(corrected.editState, 'user-edited');
+    const decisionEdited = await repository.updateExtractionDraftRow(
+      corrected.id,
+      { decision: 'resolve' },
+      aliases,
+    );
+    assert.equal(decisionEdited.editState, 'user-edited');
+    assert.equal(decisionEdited.source.semantic, corrected.source.semantic);
     const records = await repository.confirmExtractionDraft(draft.id);
     const measurement = records[0]!.measurements[0]!;
     assert.equal(measurement.original.valueString, '3,8');
@@ -729,6 +809,9 @@ describe('protected manual Lab Record persistence', () => {
         { kind: 'known', value: '2026-08-23' },
       ],
     );
+    assert.equal(updated.rows[0]?.editState, 'user-edited');
+    assert.equal(updated.rows[1]?.editState, 'user-edited');
+    assert.equal(updated.rows[2]?.editState, 'automatic');
     assert.equal(updated.rows[0]?.reviewReasons.includes('defaulted-collection-date'), false);
     assert.equal(updated.rows[1]?.reviewReasons.includes('defaulted-collection-date'), false);
     assert.equal(updated.rows[2]?.reviewReasons.includes('defaulted-collection-date'), false);
