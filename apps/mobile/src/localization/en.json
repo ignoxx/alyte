@@ -336,6 +336,8 @@
     "extractionProgressFailureTitle": "Processing could not finish",
     "extractionProgressRetry": "Try again",
     "extractionProgressBackToReport": "Back to report",
+    "extractionProgressCompleteTitle": "Report preparation is complete",
+    "extractionProgressCompleteBody": "Your extraction draft is ready, or you can return to the report.",
     "extractionProgressModelRequired": "Prepare the verified on-device model to continue.",
     "extractionProgressPasswordError": "That password did not unlock the Original Report. Try again; the password is not saved.",
     "extractionProgressSourceError": "The protected Original Report changed or is unavailable. Import it again before retrying.",

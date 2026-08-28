@@ -128,9 +128,9 @@ export function ExtractionMeasurementEditorScreen() {
   }, [navigation]);
 
   function closeEditor() {
-    const parent = navigation.getParent<NativeStackNavigationProp<RootStackParamList>>();
-    if (parent !== undefined) parent.goBack();
-    else navigation.goBack();
+    // The editor is mounted directly in the root form sheet. Its native navigation object owns
+    // both the sheet dismissal and source-preview pushes, so no nested stack parent is needed.
+    navigation.goBack();
   }
 
   async function save(): Promise<ExtractionDraftRow | null> {
@@ -227,7 +227,11 @@ export function ExtractionMeasurementEditorScreen() {
     );
   }
   if (row === null || edit === null)
-    return <AppText style={styles.loading}>{t('labs.loading')}</AppText>;
+    return (
+      <View style={styles.center}>
+        <AppText>{t('labs.loading')}</AppText>
+      </View>
+    );
 
   const included = row.decision !== 'skip';
   const sourcePresentation = extractionSourcePresentation(row);

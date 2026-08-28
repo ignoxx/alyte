@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ExtractionProgressController } from './extraction-progress-controller';
+import {
+  ExtractionProgressController,
+  type ExtractionProgressControllerInput,
+} from './extraction-progress-controller';
 import { LabReportExtractionError } from './report-service';
 
 function deferred<T>() {
@@ -17,7 +20,9 @@ function flushController(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-function readyInput(overrides: Record<string, boolean> = {}) {
+function readyInput(
+  overrides: Partial<ExtractionProgressControllerInput> = {},
+): ExtractionProgressControllerInput {
   return {
     focused: true,
     durableLoaded: true,
@@ -25,6 +30,8 @@ function readyInput(overrides: Record<string, boolean> = {}) {
     modelReady: true,
     hasFailure: false,
     cancellationRequested: false,
+    restoredProgress: null,
+    restoredDraftId: null,
     ...overrides,
   };
 }
@@ -43,6 +50,7 @@ test('not-ready routes once, then setup completion starts the same report once',
     classifyFailure: () => 'recognition',
     openModelSetup: () => setupRoutes.push('setup'),
     openDraft: (reportId, draftId) => draftRoutes.push({ reportId, draftId }),
+    openReport: () => assert.fail('a newly completed extraction has a draft'),
     setActiveOperation: () => undefined,
     setFailure: () => undefined,
     setModelUnavailable: () => undefined,
@@ -78,6 +86,7 @@ test('mid-operation unavailable opens setup once and ignores the late rejection'
       setupRoutes += 1;
     },
     openDraft: () => assert.fail('an unavailable operation must not open a draft'),
+    openReport: () => assert.fail('an unavailable operation must not open the report'),
     setActiveOperation: () => undefined,
     setFailure: () => undefined,
     setModelUnavailable: () => {
@@ -116,6 +125,7 @@ test('dispose prevents late completion and repeated evaluation from navigating',
     openDraft: () => {
       draftRoutes += 1;
     },
+    openReport: () => assert.fail('an unmounted operation must not open the report'),
     setActiveOperation: () => undefined,
     setFailure: () => undefined,
     setModelUnavailable: () => undefined,
@@ -132,4 +142,83 @@ test('dispose prevents late completion and repeated evaluation from navigating',
   controller.evaluate(readyInput());
   assert.equal(starts, 1);
   assert.equal(draftRoutes, 0);
+});
+
+test('restored complete progress opens its existing draft without restarting extraction', () => {
+  let starts = 0;
+  let activeOperation = false;
+  const draftRoutes: Array<{ reportId: string; draftId: string }> = [];
+  const controller = new ExtractionProgressController({
+    reportId: 'report-restored',
+    startExtraction: async () => {
+      starts += 1;
+      return { id: 'unexpected-draft' };
+    },
+    classifyFailure: () => 'recognition',
+    openModelSetup: () => assert.fail('a complete operation must not reopen model setup'),
+    openDraft: (reportId, draftId) => draftRoutes.push({ reportId, draftId }),
+    openReport: () => assert.fail('the existing open draft should be preferred'),
+    setActiveOperation: (active) => {
+      activeOperation = active;
+    },
+    setFailure: () => undefined,
+    setModelUnavailable: () => assert.fail('a complete operation does not need a model'),
+  });
+
+  controller.evaluate(
+    readyInput({
+      restoredProgress: {
+        reportId: 'report-restored',
+        stage: 'review',
+        status: 'complete',
+        completed: 1,
+        total: 1,
+      },
+      restoredDraftId: 'draft-restored',
+    }),
+  );
+
+  assert.equal(starts, 0);
+  assert.equal(activeOperation, false);
+  assert.deepEqual(draftRoutes, [{ reportId: 'report-restored', draftId: 'draft-restored' }]);
+});
+
+test('restored complete progress with no draft offers the report fallback', () => {
+  let starts = 0;
+  let reportRoutes = 0;
+  const activeTransitions: boolean[] = [];
+  const controller = new ExtractionProgressController({
+    reportId: 'report-restored-no-draft',
+    startExtraction: async () => {
+      starts += 1;
+      return { id: 'unexpected-draft' };
+    },
+    classifyFailure: () => 'recognition',
+    openModelSetup: () => assert.fail('a complete operation must not reopen model setup'),
+    openDraft: () => assert.fail('there is no restored draft'),
+    openReport: (reportId) => {
+      assert.equal(reportId, 'report-restored-no-draft');
+      reportRoutes += 1;
+    },
+    setActiveOperation: (active) => activeTransitions.push(active),
+    setFailure: () => undefined,
+    setModelUnavailable: () => assert.fail('a complete operation does not need a model'),
+  });
+
+  controller.evaluate(
+    readyInput({
+      restoredProgress: {
+        reportId: 'report-restored-no-draft',
+        stage: 'review',
+        status: 'complete',
+        completed: 1,
+        total: 1,
+      },
+      restoredDraftId: null,
+    }),
+  );
+
+  assert.equal(starts, 0);
+  assert.equal(reportRoutes, 1);
+  assert.deepEqual(activeTransitions, [false]);
 });

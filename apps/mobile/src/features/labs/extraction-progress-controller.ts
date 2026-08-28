@@ -1,4 +1,4 @@
-import type { LabReportExtractionError } from './report-service';
+import type { LabReportExtractionError, LabReportExtractionProgress } from './report-service';
 
 export type ExtractionProgressControllerInput = {
   readonly focused: boolean;
@@ -7,6 +7,10 @@ export type ExtractionProgressControllerInput = {
   readonly modelReady: boolean;
   readonly hasFailure: boolean;
   readonly cancellationRequested: boolean;
+  /** The durable operation loaded for this report, if one exists. */
+  readonly restoredProgress: LabReportExtractionProgress | null;
+  /** Undefined while a restored complete operation's draft lookup is still pending. */
+  readonly restoredDraftId: string | null | undefined;
 };
 
 type ExtractionProgressControllerDependencies = {
@@ -15,6 +19,7 @@ type ExtractionProgressControllerDependencies = {
   readonly classifyFailure: (error: unknown) => LabReportExtractionError['reason'];
   readonly openModelSetup: () => void;
   readonly openDraft: (reportId: string, draftId: string) => void;
+  readonly openReport: (reportId: string) => void;
   readonly setActiveOperation: (active: boolean) => void;
   readonly setFailure: (failure: LabReportExtractionError['reason'] | null) => void;
   readonly setModelUnavailable: () => void;
@@ -46,6 +51,23 @@ export class ExtractionProgressController {
       input.cancellationRequested ||
       this.completed
     ) {
+      return;
+    }
+    // A complete durable operation is already finished. It can be restored after relaunch while
+    // the report-progress route is still on the stack, so never start extraction a second time.
+    // Wait for the screen to resolve its open draft before choosing the draft or report fallback.
+    if (!this.started && input.restoredProgress?.status === 'complete') {
+      if (input.restoredDraftId === undefined) return;
+      this.completed = true;
+      this.dependencies.setActiveOperation(false);
+      this.dependencies.setFailure(null);
+      if (this.focused) {
+        if (input.restoredDraftId === null) {
+          this.dependencies.openReport(this.dependencies.reportId);
+        } else {
+          this.dependencies.openDraft(this.dependencies.reportId, input.restoredDraftId);
+        }
+      }
       return;
     }
     if (!input.modelReady) {

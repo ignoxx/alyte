@@ -1,10 +1,4 @@
-import {
-  DarkTheme,
-  DefaultTheme,
-  NavigationContainer,
-  type RouteProp,
-  type Theme,
-} from '@react-navigation/native';
+import { DarkTheme, DefaultTheme, NavigationContainer, type Theme } from '@react-navigation/native';
 import { createNativeBottomTabNavigator } from '@react-navigation/bottom-tabs/unstable';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Pressable, useColorScheme } from 'react-native';
@@ -33,11 +27,6 @@ import { LabRecordFormRoute } from '../features/labs/LabRecordFormRoute';
 import { CloudPaywallScreen } from '../features/commerce/CloudPaywallScreen';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
-type ExtractionEditorStackParamList = Pick<
-  RootStackParamList,
-  'ExtractionMeasurementEditor' | 'OriginalSourcePreview' | 'SanitizedSourcePreview'
->;
-const ExtractionEditorStack = createNativeStackNavigator<ExtractionEditorStackParamList>();
 const MainTabs = createNativeBottomTabNavigator<MainTabParamList>();
 const FeatureStack = createNativeStackNavigator<Record<string, object | undefined>>();
 const [homeTabName, labsTabName, settingsTabName] = preGateTabNames;
@@ -76,52 +65,6 @@ function navigationTheme(dark: boolean): Theme {
       text: colors.ink as string,
     },
   };
-}
-
-function ExtractionMeasurementEditorModal({
-  route,
-}: {
-  route: RouteProp<RootStackParamList, 'ExtractionMeasurementEditor'>;
-}) {
-  return (
-    <ExtractionEditorStack.Navigator
-      screenOptions={{
-        ...stackScreenOptions,
-        // The sheet owns the outer presentation; keep the inner native header opaque so source
-        // text never competes with a translucent canvas while the keyboard or preview moves.
-        headerTransparent: false,
-      }}
-    >
-      <ExtractionEditorStack.Screen
-        name="ExtractionMeasurementEditor"
-        component={ExtractionMeasurementEditorScreen}
-        initialParams={route.params}
-        options={{
-          headerLargeTitle: false,
-          headerShown: true,
-          title: t('labs.extractionEditorTitle'),
-        }}
-      />
-      <ExtractionEditorStack.Screen
-        name="OriginalSourcePreview"
-        component={OriginalSourcePreviewScreen}
-        options={{
-          headerShown: true,
-          presentation: 'card',
-          title: t('labs.reportPreviewTitle'),
-        }}
-      />
-      <ExtractionEditorStack.Screen
-        name="SanitizedSourcePreview"
-        component={SanitizedSourcePreviewScreen}
-        options={{
-          headerShown: true,
-          presentation: 'card',
-          title: t('labs.extractionSourcePreviewTitle'),
-        }}
-      />
-    </ExtractionEditorStack.Navigator>
-  );
 }
 
 function FeatureStackNavigator({
@@ -336,14 +279,15 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
         />
         <RootStack.Screen
           name={extractionEditorDestination.route}
-          component={ExtractionMeasurementEditorModal}
+          component={ExtractionMeasurementEditorScreen}
           options={{
             presentation: extractionEditorDestination.presentation,
             sheetAllowedDetents: [0.92],
             sheetInitialDetentIndex: 0,
             sheetGrabberVisible: true,
             headerLargeTitle: false,
-            headerShown: false,
+            headerShown: true,
+            title: t('labs.extractionEditorTitle'),
           }}
         />
         <RootStack.Screen

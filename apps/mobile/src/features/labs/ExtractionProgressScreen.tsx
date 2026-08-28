@@ -73,6 +73,10 @@ export function ExtractionProgressScreen() {
   const [activeOperation, setActiveOperation] = useState(false);
   const [cancellationRequested, setCancellationRequested] = useState(false);
   const [durableLoaded, setDurableLoaded] = useState(false);
+  const [restoredProgress, setRestoredProgress] = useState<LabReportExtractionProgress | null>(
+    null,
+  );
+  const [restoredDraftId, setRestoredDraftId] = useState<string | null | undefined>(undefined);
   const [modelStateLoaded, setModelStateLoaded] = useState(false);
   const controller = useMemo(
     () =>
@@ -82,14 +86,34 @@ export function ExtractionProgressScreen() {
         classifyFailure: (error) =>
           error instanceof LabReportExtractionError ? error.reason : 'recognition',
         openModelSetup: () => navigation.navigate('ModelInstall'),
-        openDraft: (reportId, draftId) =>
-          navigation.navigate('MainTabs', {
-            screen: 'Labs',
-            params: {
-              screen: 'ExtractionDraft',
-              params: { reportId, draftId },
+        openDraft: (reportId, draftId) => {
+          navigation.navigate(
+            'MainTabs',
+            {
+              screen: 'Labs',
+              params: {
+                screen: 'ExtractionDraft',
+                params: { reportId, draftId },
+                pop: true,
+              },
             },
-          }),
+            { pop: true },
+          );
+        },
+        openReport: (reportId) => {
+          navigation.navigate(
+            'MainTabs',
+            {
+              screen: 'Labs',
+              params: {
+                screen: 'LabReportDetail',
+                params: { reportId },
+                pop: true,
+              },
+            },
+            { pop: true },
+          );
+        },
         setActiveOperation,
         setFailure,
         setModelUnavailable: () => {
@@ -141,7 +165,22 @@ export function ExtractionProgressScreen() {
         setDurableLoaded(true);
         if (durable === null) return;
         setProgress(durable);
+        setRestoredProgress(durable);
         if (durable.status === 'active') setActiveOperation(true);
+        if (durable.status !== 'complete') setRestoredDraftId(null);
+        if (durable.status === 'complete') {
+          void reports
+            .listOpenExtractionDrafts()
+            .then((drafts) => {
+              if (!active) return;
+              setRestoredDraftId(
+                drafts.find((draft) => draft.reportId === route.params.reportId)?.draftId ?? null,
+              );
+            })
+            .catch(() => {
+              if (active) setRestoredDraftId(null);
+            });
+        }
         if (
           durable.status === 'failed' ||
           durable.status === 'cancelled' ||
@@ -202,6 +241,8 @@ export function ExtractionProgressScreen() {
       modelReady,
       hasFailure: failure !== null,
       cancellationRequested,
+      restoredProgress,
+      restoredDraftId,
     });
   }, [
     cancellationRequested,
@@ -211,6 +252,8 @@ export function ExtractionProgressScreen() {
     isFocused,
     modelReady,
     modelStateLoaded,
+    restoredDraftId,
+    restoredProgress,
   ]);
 
   const currentStageIndex = useMemo(
@@ -278,21 +321,37 @@ export function ExtractionProgressScreen() {
         </AppSurface>
         {failurePresentation === null ? (
           <>
-            {modelStateLoaded && !modelReady && (
-              <>
-                <AppText style={styles.muted}>{t('labs.extractionProgressModelRequired')}</AppText>
+            {progress?.status === 'complete' ? (
+              <AppSurface tone="soft" style={styles.failure}>
+                <AppText variant="label">{t('labs.extractionProgressCompleteTitle')}</AppText>
+                <AppText style={styles.muted}>{t('labs.extractionProgressCompleteBody')}</AppText>
                 <AppButton
-                  label={t('labs.extractionModelAction')}
-                  onPress={() => controller.requestModelSetup(isFocused)}
+                  label={t('labs.extractionProgressBackToReport')}
+                  onPress={() => navigation.goBack()}
+                  tone="quiet"
+                />
+              </AppSurface>
+            ) : (
+              <>
+                {modelStateLoaded && !modelReady && (
+                  <>
+                    <AppText style={styles.muted}>
+                      {t('labs.extractionProgressModelRequired')}
+                    </AppText>
+                    <AppButton
+                      label={t('labs.extractionModelAction')}
+                      onPress={() => controller.requestModelSetup(isFocused)}
+                    />
+                  </>
+                )}
+                <AppButton
+                  label={t('labs.extractionProgressCancel')}
+                  tone="quiet"
+                  disabled={cancellationRequested || !activeOperation}
+                  onPress={() => void cancel()}
                 />
               </>
             )}
-            <AppButton
-              label={t('labs.extractionProgressCancel')}
-              tone="quiet"
-              disabled={cancellationRequested || !activeOperation}
-              onPress={() => void cancel()}
-            />
           </>
         ) : (
           <AppSurface tone="soft" style={styles.failure}>

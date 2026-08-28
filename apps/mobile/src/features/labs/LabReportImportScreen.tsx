@@ -73,20 +73,28 @@ export function LabReportImportScreen() {
     destination: LabReportImportDestination = { kind: 'report-detail' },
   ) {
     if (destination.kind === 'extraction-draft') {
-      navigation.navigate('MainTabs', {
-        screen: 'Labs',
-        params: {
-          screen: 'ExtractionDraft',
-          params: { reportId: report.id, draftId: destination.draftId },
-          pop: true,
+      navigation.navigate(
+        'MainTabs',
+        {
+          screen: 'Labs',
+          params: {
+            screen: 'ExtractionDraft',
+            params: { reportId: report.id, draftId: destination.draftId },
+            pop: true,
+          },
         },
-      });
+        { pop: true },
+      );
       return;
     }
-    navigation.navigate('MainTabs', {
-      screen: 'Labs',
-      params: { screen: 'LabReportDetail', params: { reportId: report.id }, pop: true },
-    });
+    navigation.navigate(
+      'MainTabs',
+      {
+        screen: 'Labs',
+        params: { screen: 'LabReportDetail', params: { reportId: report.id }, pop: true },
+      },
+      { pop: true },
+    );
     if (destination.kind === 'extraction-progress') {
       navigation.navigate('ExtractionProgress', { reportId: report.id });
     }

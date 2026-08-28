@@ -302,3 +302,48 @@ test('multi-record confirmation can pop to Labs without stacking another root', 
     ['LabsRoot'],
   );
 });
+
+test('root terminal handoff removes extraction progress before opening the existing MainTabs', () => {
+  const router = StackRouter({ initialRouteName: 'MainTabs' });
+  const options = {
+    routeNames: ['MainTabs', 'ExtractionProgress'],
+    routeParamList: {},
+    routeGetIdList: {},
+  };
+  let state = router.getInitialState(options) as StackNavigationState<ParamListBase>;
+  state = router.getStateForAction(
+    state,
+    StackActions.push('ExtractionProgress', { reportId: 'report-progress' }) as never,
+    options,
+  ) as StackNavigationState<ParamListBase>;
+
+  const terminal = router.getStateForAction(
+    state,
+    CommonActions.navigate(
+      'MainTabs',
+      {
+        screen: 'Labs',
+        params: {
+          screen: 'ExtractionDraft',
+          params: { reportId: 'report-progress', draftId: 'draft-progress' },
+          pop: true,
+        },
+      },
+      { pop: true },
+    ) as never,
+    options,
+  );
+
+  assert.deepEqual(
+    terminal?.routes.map((route) => route.name),
+    ['MainTabs'],
+  );
+  assert.deepEqual(terminal?.routes[0]?.params, {
+    screen: 'Labs',
+    params: {
+      screen: 'ExtractionDraft',
+      params: { reportId: 'report-progress', draftId: 'draft-progress' },
+      pop: true,
+    },
+  });
+});
