@@ -8,6 +8,7 @@ import { AccountDatabase } from './database.js';
 import {
   ANALYSIS_JOB_HANDLER_VERSION,
   createJobRunner,
+  type AnalysisJobOutcome,
   type AnalysisJobHandler,
   type JobRunnerLogger,
   type JobRunnerTimer,
@@ -122,15 +123,22 @@ class TrackingTimer implements JobRunnerTimer {
 }
 
 function logger(
-  events: Array<{ event: string; version?: number; outcome?: string }>,
+  events: Array<{ event: string; version?: number; outcome?: string; category?: string }>,
 ): JobRunnerLogger {
   const record = (
     event: string,
-    attributes: { readonly handlerVersion?: number; readonly outcome?: string },
+    attributes: {
+      readonly handlerVersion?: number;
+      readonly outcome?: string;
+      readonly category?: string;
+    },
   ): void => {
-    const entry: { event: string; version?: number; outcome?: string } = { event };
+    const entry: { event: string; version?: number; outcome?: string; category?: string } = {
+      event,
+    };
     if (attributes.handlerVersion !== undefined) entry.version = attributes.handlerVersion;
     if (attributes.outcome !== undefined) entry.outcome = attributes.outcome;
+    if (attributes.category !== undefined) entry.category = attributes.category;
     events.push(entry);
   };
   return {
@@ -510,6 +518,86 @@ describe('analysis job runner lifecycle', () => {
       const row = database.findAnalysisJobByRequest('request-runner-unsupported');
       assert.equal(row?.state, 'queued');
       assert.equal(row?.attempts, 0);
+    } finally {
+      await runner.stop({ gracePeriodMs: 0 });
+      database.close();
+    }
+  });
+
+  it('dispatches typed provider outcomes without requeueing before the failure policy acts', async () => {
+    const database = createDatabase();
+    const events: Array<{ event: string; version?: number; outcome?: string; category?: string }> =
+      [];
+    const timer = new TrackingTimer();
+    const handled = new Deferred();
+    const categories: string[] = [];
+    seedJob(database, { id: 'typed-failure' });
+    const runner = createJobRunner({
+      database,
+      ownerId: 'typed-runner',
+      clock: new MutableClock(),
+      timer,
+      pollIntervalMs: 5,
+      heartbeatIntervalMs: 10,
+      leaseDurationMs: 40,
+      handler: async () => ({ type: 'failure' as const, category: 'safety_refusal' as const }),
+      failureProcessor: async (_lease, category) => {
+        categories.push(category);
+        handled.resolve();
+      },
+      logger: logger(events),
+    });
+    runner.start();
+    try {
+      await handled.promise;
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(categories, ['safety_refusal']);
+      assert.deepEqual(
+        events.filter((entry) => entry.outcome === 'failure_processed'),
+        [
+          {
+            event: 'analysis_job',
+            version: 1,
+            outcome: 'failure_processed',
+            category: 'safety_refusal',
+          },
+        ],
+      );
+      assert.equal(JSON.stringify(events).includes('typed-failure'), false);
+      assert.equal(database.findAnalysisJobByRequest('request-typed-failure')?.state, 'processing');
+    } finally {
+      await runner.stop({ gracePeriodMs: 0 });
+      database.close();
+    }
+  });
+
+  it('does not log or dispatch an untrusted provider category value', async () => {
+    const database = createDatabase();
+    const events: Array<{ event: string; version?: number; outcome?: string; category?: string }> =
+      [];
+    seedJob(database, { id: 'invalid-category' });
+    const providerMessage = 'provider response secret';
+    const runner = createJobRunner({
+      database,
+      ownerId: 'invalid-category-runner',
+      clock: new MutableClock(),
+      timer: new TrackingTimer(),
+      logger: logger(events),
+      pollIntervalMs: 5,
+      heartbeatIntervalMs: 10,
+      leaseDurationMs: 40,
+      handler: async () =>
+        ({ type: 'failure', category: providerMessage }) as unknown as AnalysisJobOutcome,
+    });
+    runner.start();
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      assert.equal(JSON.stringify(events).includes(providerMessage), false);
+      assert.equal(
+        events.some((entry) => entry.outcome === 'failure_category_invalid'),
+        true,
+      );
+      assert.equal(database.findAnalysisJobByRequest('request-invalid-category')?.state, 'queued');
     } finally {
       await runner.stop({ gracePeriodMs: 0 });
       database.close();

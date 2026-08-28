@@ -542,6 +542,16 @@ A completed result consumes allowance even when the device never retrieves it. P
 failure does not. Retries cannot double-charge because the ledger transaction is unique by request
 ID and operation.
 
+Processing failures use a closed, non-sensitive taxonomy: `provider_failure`, `timeout`,
+`safety_refusal`, `malformed_output`, and `unusable_output`. Only provider failure and timeout
+retry, for at most three total attempts. Retry availability uses deterministic one- and two-second
+backoff for that three-attempt limit (with a 30-second policy cap), and is scheduled
+only when the next attempt remains strictly before transient upload expiry. Permanent failures and
+exhausted retries remove the transient upload before a short transaction marks the job failed and
+releases its reservation.
+Cleanup failure leaves the live job, upload, and reservation retryable; it cannot publish a failed
+status or release early.
+
 ### Result encryption
 
 The device registers a per-installation public key with each request. After validation, the worker

@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { AccountDatabase, AnalysisJobLeaseOutcome, AnalysisJobRow } from './database.js';
+import type {
+  AccountDatabase,
+  AnalysisJobLeaseOutcome,
+  AnalysisJobRow,
+  CloudProcessingFailureCategory,
+} from './database.js';
+import { CLOUD_PROCESSING_FAILURE_CATEGORIES } from './database.js';
 
 export const ANALYSIS_JOB_HANDLER_VERSION = 1;
 /** A job is recoverable after one minute without a heartbeat. */
@@ -28,13 +34,25 @@ export interface JobRunnerTimer {
 export interface JobRunnerLogger {
   info(
     event: string,
-    attributes: { readonly handlerVersion?: number; readonly outcome?: string },
+    attributes: {
+      readonly handlerVersion?: number;
+      readonly outcome?: string;
+      readonly category?: CloudProcessingFailureCategory;
+    },
   ): void;
   warn(
     event: string,
-    attributes: { readonly handlerVersion?: number; readonly outcome?: string },
+    attributes: {
+      readonly handlerVersion?: number;
+      readonly outcome?: string;
+      readonly category?: CloudProcessingFailureCategory;
+    },
   ): void;
 }
+
+export type AnalysisJobOutcome =
+  | { readonly type: 'completed' }
+  | { readonly type: 'failure'; readonly category: CloudProcessingFailureCategory };
 
 export interface AnalysisJobHandlerContext {
   /** Renew the current lease. The operation is owner- and state-bound and is fail-closed. */
@@ -44,6 +62,11 @@ export interface AnalysisJobHandlerContext {
 export type AnalysisJobHandler = (
   job: AnalysisJobRow,
   context: AnalysisJobHandlerContext,
+) => void | AnalysisJobOutcome | Promise<void | AnalysisJobOutcome>;
+
+export type AnalysisJobFailureProcessor = (
+  lease: { readonly jobId: string; readonly leaseOwner: string },
+  category: CloudProcessingFailureCategory,
 ) => void | Promise<void>;
 
 export interface JobRunnerOptions {
@@ -51,6 +74,8 @@ export interface JobRunnerOptions {
   readonly clock?: JobRunnerClock;
   readonly ownerId?: string;
   readonly handler?: AnalysisJobHandler;
+  /** Optional typed processing seam; production provider activation is intentionally separate. */
+  readonly failureProcessor?: AnalysisJobFailureProcessor;
   readonly logger?: JobRunnerLogger;
   readonly timer?: JobRunnerTimer;
   readonly pollIntervalMs?: number;
@@ -67,6 +92,12 @@ const quietLogger: JobRunnerLogger = {
   info: () => undefined,
   warn: () => undefined,
 };
+
+const processingFailureCategories = new Set<string>(CLOUD_PROCESSING_FAILURE_CATEGORIES);
+
+function isProcessingFailureCategory(value: unknown): value is CloudProcessingFailureCategory {
+  return typeof value === 'string' && processingFailureCategories.has(value);
+}
 
 interface CancellableWait {
   readonly promise: Promise<void>;
@@ -132,6 +163,7 @@ class DurableJobRunner implements JobRunner {
   private readonly clock: JobRunnerClock;
   private readonly ownerId: string;
   private readonly handler: AnalysisJobHandler;
+  private readonly failureProcessor: AnalysisJobFailureProcessor | undefined;
   private readonly logger: JobRunnerLogger;
   private readonly timer: JobRunnerTimer;
   private readonly pollIntervalMs: number;
@@ -150,6 +182,7 @@ class DurableJobRunner implements JobRunner {
     this.ownerId = options.ownerId ?? `runner-${randomUUID()}`;
     if (!validOwner(this.ownerId)) throw new Error('analysis_job_owner_invalid');
     this.handler = options.handler ?? (async () => undefined);
+    this.failureProcessor = options.failureProcessor;
     this.logger = options.logger ?? quietLogger;
     this.timer = options.timer ?? systemTimer;
     this.pollIntervalMs = boundedPositiveMilliseconds(
@@ -212,14 +245,66 @@ class DurableJobRunner implements JobRunner {
     try {
       this.logInfo(claimed.handler_version, 'claimed');
       this.scheduleHeartbeat(active);
-      await this.handler(claimed, {
+      const handlerOutcome = await this.handler(claimed, {
         heartbeat: () => this.heartbeat(active),
       });
+      if (handlerOutcome?.type === 'completed') {
+        this.logInfo(claimed.handler_version, 'completed');
+        return;
+      }
+      if (handlerOutcome?.type === 'failure') {
+        // Provider adapters are an untrusted boundary at runtime even though the seam is typed.
+        // Reject unknown values before they reach the failure service or operational logs.
+        if (!isProcessingFailureCategory(handlerOutcome.category)) {
+          this.logWarn(claimed.handler_version, 'failure_category_invalid');
+          this.requeueAfterHandler(active);
+          return;
+        }
+        if (this.failureProcessor === undefined) {
+          this.logWarn(claimed.handler_version, 'failure_processor_unconfigured', {
+            category: handlerOutcome.category,
+          });
+          this.requeueAfterHandler(active);
+          return;
+        }
+        try {
+          await this.failureProcessor(
+            { jobId: claimed.id, leaseOwner: this.ownerId },
+            handlerOutcome.category,
+          );
+          this.logInfo(claimed.handler_version, 'failure_processed', {
+            category: handlerOutcome.category,
+          });
+        } catch {
+          // Cleanup failure or a stale lease must remain retryable. Do not relinquish here: the
+          // current lease can expire and a later owner can retry without losing the upload.
+          this.logWarn(claimed.handler_version, 'failure_processing_failed', {
+            category: handlerOutcome.category,
+          });
+        }
+        return;
+      }
       this.requeueAfterHandler(active);
     } catch {
-      // This slice has no terminal completion/failure policy. Requeueing leaves the job
-      // retryable; later provider/result work owns terminal transitions and error categories.
-      this.requeueAfterHandler(active);
+      if (this.failureProcessor === undefined) {
+        // Until a provider child supplies the typed processor, preserve the old safe requeue
+        // behavior. No exception detail enters logs or durable metadata.
+        this.requeueAfterHandler(active);
+      } else {
+        try {
+          await this.failureProcessor(
+            { jobId: claimed.id, leaseOwner: this.ownerId },
+            'provider_failure',
+          );
+          this.logInfo(claimed.handler_version, 'failure_processed', {
+            category: 'provider_failure',
+          });
+        } catch {
+          this.logWarn(claimed.handler_version, 'failure_processing_failed', {
+            category: 'provider_failure',
+          });
+        }
+      }
     } finally {
       this.clearHeartbeat(active);
       if (this.active.get(claimed.id) === active) this.active.delete(claimed.id);
@@ -366,9 +451,20 @@ class DurableJobRunner implements JobRunner {
     for (const pending of this.pendingWaits) pending.cancel();
   }
 
-  private logInfo(handlerVersion: number | undefined, outcome: string): void {
+  private logInfo(
+    handlerVersion: number | undefined,
+    outcome: string,
+    extra: { readonly category?: CloudProcessingFailureCategory } = {},
+  ): void {
     try {
-      const attributes = { outcome } as { handlerVersion?: number; outcome: string };
+      const attributes = {
+        outcome,
+        ...(extra.category === undefined ? {} : { category: extra.category }),
+      } as {
+        handlerVersion?: number;
+        outcome: string;
+        category?: CloudProcessingFailureCategory;
+      };
       if (handlerVersion !== undefined) attributes.handlerVersion = handlerVersion;
       this.logger.info('analysis_job', attributes);
     } catch {
@@ -376,9 +472,20 @@ class DurableJobRunner implements JobRunner {
     }
   }
 
-  private logWarn(handlerVersion: number | undefined, outcome: string): void {
+  private logWarn(
+    handlerVersion: number | undefined,
+    outcome: string,
+    extra: { readonly category?: CloudProcessingFailureCategory } = {},
+  ): void {
     try {
-      const attributes = { outcome } as { handlerVersion?: number; outcome: string };
+      const attributes = {
+        outcome,
+        ...(extra.category === undefined ? {} : { category: extra.category }),
+      } as {
+        handlerVersion?: number;
+        outcome: string;
+        category?: CloudProcessingFailureCategory;
+      };
       if (handlerVersion !== undefined) attributes.handlerVersion = handlerVersion;
       this.logger.warn('analysis_job', attributes);
     } catch {

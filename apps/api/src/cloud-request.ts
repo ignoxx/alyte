@@ -13,6 +13,7 @@ import {
   type P256PublicKeyJwk,
 } from '@alyte/contracts';
 import {
+  CLOUD_PROCESSING_FAILURE_CATEGORIES,
   CLOUD_UPLOAD_RETENTION_MS,
   type AccountDatabase,
   type AnalysisJobRow,
@@ -174,6 +175,18 @@ function allowanceKind(operation: CloudRequestOperation): CloudAllowanceKind {
   return operation === 'intake-image' ? 'snap' : 'report';
 }
 
+const PUBLIC_PROCESSING_FAILURES = new Set<string>(CLOUD_PROCESSING_FAILURE_CATEGORIES);
+const PUBLIC_RESULT_FAILURES = new Set([
+  'cloud_result_cache_missing',
+  'cloud_result_cache_invalid',
+  'cloud_result_cache_conflict',
+]);
+
+function allowlistedFailure(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  return PUBLIC_PROCESSING_FAILURES.has(value) || PUBLIC_RESULT_FAILURES.has(value) ? value : null;
+}
+
 function canonicalAdmission(admission: CloudRequestAdmissionRequest): string {
   return JSON.stringify({
     operation: admission.operation,
@@ -187,11 +200,18 @@ function canonicalAdmission(admission: CloudRequestAdmissionRequest): string {
 export function toStatus(row: CloudRequestRow): CloudRequestStatusResponse {
   const resultState = row.result_state ?? null;
   const visibleResult = resultState === 'ready';
+  const failedProcessing = row.job_state === 'failed';
   const publicState = visibleResult
     ? resultState
     : resultState === 'staged'
       ? row.state
-      : resultState;
+      : (resultState ?? (failedProcessing ? 'failed' : row.state));
+  const failureCategory =
+    resultState === 'failed'
+      ? allowlistedFailure(row.result_failure_category)
+      : failedProcessing
+        ? allowlistedFailure(row.job_failure_category)
+        : null;
   return {
     requestId: row.id,
     operation: row.operation,
@@ -206,7 +226,7 @@ export function toStatus(row: CloudRequestRow): CloudRequestStatusResponse {
     queuedAt: row.queued_at,
     resultAvailable: visibleResult,
     resultExpiresAt: visibleResult ? (row.result_expires_at ?? null) : null,
-    failureCategory: resultState === 'failed' ? (row.result_failure_category ?? null) : null,
+    failureCategory,
     expiresAt: row.upload_expires_at,
     expiredAt: row.expired_at,
   };

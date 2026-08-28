@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import type { CloudRequestOperation, CloudRequestState } from '@alyte/contracts';
 
-export const CURRENT_SCHEMA_VERSION = 11;
+export const CURRENT_SCHEMA_VERSION = 12;
 
 export const SESSION_RETENTION_MS = 24 * 60 * 60 * 1_000;
 export const OPERATION_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -155,11 +155,38 @@ export interface CloudRequestRow {
   readonly result_retrieved_at?: string | null;
   readonly result_expired_at?: string | null;
   readonly result_failure_category?: CloudResultFailureCategory | null;
+  /** Joined operational job state used to expose terminal processing outcomes. */
+  readonly job_state?: AnalysisJobRow['state'] | null;
+  readonly job_failure_category?: string | null;
 }
 
 export type CloudResultState = 'staged' | 'ready' | 'retrieved' | 'failed' | 'expired';
 export type CloudResultFailureCategory =
   'cloud_result_cache_missing' | 'cloud_result_cache_invalid' | 'cloud_result_cache_conflict';
+
+/** Closed, non-sensitive provider outcome categories persisted by the processing boundary. */
+export type CloudProcessingFailureCategory =
+  'provider_failure' | 'timeout' | 'safety_refusal' | 'malformed_output' | 'unusable_output';
+
+export const CLOUD_PROCESSING_FAILURE_CATEGORIES: readonly CloudProcessingFailureCategory[] = [
+  'provider_failure',
+  'timeout',
+  'safety_refusal',
+  'malformed_output',
+  'unusable_output',
+];
+
+export type AnalysisJobOutcomeKind = 'retry' | 'failed';
+
+/** One bounded replay marker for the last authorized processing transition. */
+export interface AnalysisJobOutcomeRow {
+  readonly job_id: string;
+  readonly request_id: string;
+  readonly outcome: AnalysisJobOutcomeKind;
+  readonly category: CloudProcessingFailureCategory;
+  readonly lease_owner: string;
+  readonly recorded_at: string;
+}
 
 /** Allowlisted metadata for one ciphertext-only result cache entry. */
 export interface CloudResultCacheRow {
@@ -541,6 +568,21 @@ const migrations: readonly string[] = [
     -- replay from a stale or wrong-owner caller. Existing result history remains unchanged.
     ALTER TABLE cloud_result_cache ADD COLUMN completion_job_id TEXT;
     ALTER TABLE cloud_result_cache ADD COLUMN completion_lease_owner TEXT;
+  `,
+  `
+    -- Keep the existing queue row shape stable while retaining one bounded outcome marker for
+    -- exact retry/failure replays. The marker contains no payload or provider detail and cascades
+    -- with its request/job on account deletion.
+    CREATE TABLE analysis_job_outcomes (
+      job_id TEXT PRIMARY KEY NOT NULL REFERENCES analysis_jobs(id) ON DELETE CASCADE,
+      request_id TEXT NOT NULL UNIQUE REFERENCES cloud_requests(id) ON DELETE CASCADE,
+      outcome TEXT NOT NULL CHECK (outcome IN ('retry', 'failed')),
+      category TEXT NOT NULL CHECK (
+        category IN ('provider_failure', 'timeout', 'safety_refusal', 'malformed_output', 'unusable_output')
+      ),
+      lease_owner TEXT NOT NULL,
+      recorded_at TEXT NOT NULL
+    );
   `,
 ];
 
@@ -1176,6 +1218,36 @@ export class AccountDatabase {
     );
   }
 
+  findAnalysisJobOutcome(jobId: string): AnalysisJobOutcomeRow | undefined {
+    return this.sqlite
+      .prepare('SELECT * FROM analysis_job_outcomes WHERE job_id = ?')
+      .get(jobId) as AnalysisJobOutcomeRow | undefined;
+  }
+
+  /** Record the latest outcome while the caller owns the surrounding SQLite transaction. */
+  recordAnalysisJobOutcome(outcome: AnalysisJobOutcomeRow): void {
+    this.sqlite
+      .prepare(
+        `INSERT INTO analysis_job_outcomes
+          (job_id, request_id, outcome, category, lease_owner, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(job_id) DO UPDATE SET
+           request_id = excluded.request_id,
+           outcome = excluded.outcome,
+           category = excluded.category,
+           lease_owner = excluded.lease_owner,
+           recorded_at = excluded.recorded_at`,
+      )
+      .run(
+        outcome.job_id,
+        outcome.request_id,
+        outcome.outcome,
+        outcome.category,
+        outcome.lease_owner,
+        outcome.recorded_at,
+      );
+  }
+
   findCloudRequest(accountId: string, requestId: string): CloudRequestRow | undefined {
     return this.sqlite
       .prepare(
@@ -1194,8 +1266,11 @@ export class AccountDatabase {
                 cloud_result_cache.expires_at AS result_expires_at,
                 cloud_result_cache.retrieved_at AS result_retrieved_at,
                 cloud_result_cache.expired_at AS result_expired_at,
-                cloud_result_cache.failure_category AS result_failure_category
+                cloud_result_cache.failure_category AS result_failure_category,
+                analysis_jobs.state AS job_state,
+                analysis_jobs.failure_category AS job_failure_category
          FROM cloud_requests
+         LEFT JOIN analysis_jobs ON analysis_jobs.request_id = cloud_requests.id
          LEFT JOIN cloud_result_cache ON cloud_result_cache.request_id = cloud_requests.id
          WHERE cloud_requests.account_id = ? AND cloud_requests.id = ?`,
       )
@@ -1235,8 +1310,11 @@ export class AccountDatabase {
                 cloud_result_cache.expires_at AS result_expires_at,
                 cloud_result_cache.retrieved_at AS result_retrieved_at,
                 cloud_result_cache.expired_at AS result_expired_at,
-                cloud_result_cache.failure_category AS result_failure_category
+                cloud_result_cache.failure_category AS result_failure_category,
+                analysis_jobs.state AS job_state,
+                analysis_jobs.failure_category AS job_failure_category
          FROM cloud_requests
+         LEFT JOIN analysis_jobs ON analysis_jobs.request_id = cloud_requests.id
          LEFT JOIN cloud_result_cache ON cloud_result_cache.request_id = cloud_requests.id
          WHERE cloud_requests.account_id = ? AND cloud_requests.idempotency_key_hash = ?`,
       )
@@ -1446,7 +1524,8 @@ export class AccountDatabase {
       this.sqlite
         .prepare(
           `UPDATE analysis_jobs
-           SET state = 'succeeded', lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+           SET state = 'succeeded', lease_owner = NULL, lease_expires_at = NULL,
+               failure_category = NULL, updated_at = ?
            WHERE id = ? AND request_id = ? AND state = 'processing' AND lease_owner = ?
              AND lease_expires_at IS NOT NULL AND lease_expires_at > ?`,
         )
@@ -1484,6 +1563,49 @@ export class AccountDatabase {
            WHERE id = ? AND request_id = ? AND state IN ('queued', 'processing')`,
         )
         .run(now, jobId, requestId).changes === 1
+    );
+  }
+
+  /** Requeue one live owner-bound attempt; the caller records the matching replay marker. */
+  markAnalysisJobRetried(
+    jobId: string,
+    requestId: string,
+    leaseOwner: string,
+    category: CloudProcessingFailureCategory,
+    now: string,
+    availableAt: string,
+  ): boolean {
+    return (
+      this.sqlite
+        .prepare(
+          `UPDATE analysis_jobs
+           SET state = 'queued', available_at = ?, lease_owner = NULL,
+               lease_expires_at = NULL, failure_category = ?, updated_at = ?
+           WHERE id = ? AND request_id = ? AND state = 'processing' AND lease_owner = ?
+             AND lease_expires_at IS NOT NULL AND lease_expires_at > ?`,
+        )
+        .run(availableAt, category, now, jobId, requestId, leaseOwner, now).changes === 1
+    );
+  }
+
+  /** Terminalize one live owner-bound attempt; the caller has already removed transient media. */
+  markAnalysisJobProcessingFailed(
+    jobId: string,
+    requestId: string,
+    leaseOwner: string,
+    category: CloudProcessingFailureCategory,
+    now: string,
+  ): boolean {
+    return (
+      this.sqlite
+        .prepare(
+          `UPDATE analysis_jobs
+           SET state = 'failed', lease_owner = NULL, lease_expires_at = NULL,
+               failure_category = ?, updated_at = ?
+           WHERE id = ? AND request_id = ? AND state = 'processing' AND lease_owner = ?
+             AND lease_expires_at IS NOT NULL AND lease_expires_at > ?`,
+        )
+        .run(category, now, jobId, requestId, leaseOwner, now).changes === 1
     );
   }
 
