@@ -21,6 +21,11 @@ export const REVENUECAT_WEBHOOK_PATH = '/v1/webhooks/revenuecat';
 export const CLOUD_REQUESTS_PATH = '/v1/cloud-requests';
 export const CLOUD_REQUEST_STATUS_PATH = '/v1/cloud-requests/:requestId';
 export const CLOUD_REQUEST_CANCEL_PATH = '/v1/cloud-requests/:requestId/cancel';
+/** Binary upload is intentionally a separate route from JSON admission. */
+export const CLOUD_REQUEST_UPLOAD_PATH = '/v1/cloud-requests/:requestId/upload';
+/** Sealing an uploaded artifact is a distinct idempotent mutation. */
+export const CLOUD_REQUEST_COMPLETE_UPLOAD_PATH = '/v1/cloud-requests/:requestId/complete-upload';
+export const CLOUD_REQUEST_UPLOAD_CONTENT_TYPE = 'application/octet-stream';
 
 export const CLOUD_REQUEST_MAX_BYTES = 25 * 1024 * 1024;
 export const CLOUD_REQUEST_MAX_PAGES = 20;
@@ -78,8 +83,8 @@ export type CloudAllowanceWarning = 'normal' | 'near-limit' | 'critical' | 'exha
 
 export type CloudRequestOperation = 'intake-image' | 'lab-report';
 
-/** This slice admits requests only until an upload can begin. Later states are owned by #14. */
-export type CloudRequestState = 'awaiting-upload' | 'cancelled';
+/** States owned by the admission/upload/queue frontier. */
+export type CloudRequestState = 'awaiting-upload' | 'uploaded' | 'queued' | 'cancelled' | 'expired';
 
 /** Persisted request rows keep the contract version they were admitted under. */
 export type CloudRequestContractVersion = string;
@@ -95,7 +100,17 @@ export type CloudRequestErrorCode =
   | 'idempotency_key_conflict'
   | 'cloud_request_not_found'
   | 'cloud_request_not_cancellable'
-  | 'allowance_exhausted';
+  | 'allowance_exhausted'
+  | 'cloud_upload_content_type_invalid'
+  | 'cloud_upload_body_invalid'
+  | 'cloud_upload_too_large'
+  | 'cloud_upload_too_small'
+  | 'cloud_upload_conflict'
+  | 'cloud_upload_filesystem_failure'
+  | 'cloud_upload_artifact_missing'
+  | 'cloud_upload_not_completeable'
+  | 'cloud_upload_required'
+  | 'cloud_request_expired';
 
 export interface P256PublicKeyJwk {
   readonly kty: 'EC';
@@ -122,6 +137,13 @@ export interface CloudRequestStatusResponse {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly cancelledAt: string | null;
+  /** Null until the exact artifact has been atomically promoted. */
+  readonly uploadedAt?: string | null;
+  /** Null until complete-upload inserts the durable handler-v1 job. */
+  readonly queuedAt?: string | null;
+  /** Unsealed requests expire no later than this timestamp. */
+  readonly expiresAt?: string;
+  readonly expiredAt?: string | null;
 }
 
 export type CloudRequestAdmissionResponse = CloudRequestStatusResponse;

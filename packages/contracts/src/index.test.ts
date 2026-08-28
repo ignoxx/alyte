@@ -4,6 +4,8 @@ import {
   APPLE_EXCHANGE_PATH,
   CLOUD_ALLOWANCES_PATH,
   CLOUD_REQUEST_CANCEL_PATH,
+  CLOUD_REQUEST_COMPLETE_UPLOAD_PATH,
+  CLOUD_REQUEST_UPLOAD_PATH,
   CLOUD_REQUEST_MAX_BYTES,
   CLOUD_REQUEST_MAX_PAGES,
   CLOUD_REQUEST_STATUS_PATH,
@@ -55,11 +57,22 @@ describe('cloud contracts', () => {
     assert.equal(CLOUD_REQUESTS_PATH, '/v1/cloud-requests');
     assert.equal(CLOUD_REQUEST_STATUS_PATH, '/v1/cloud-requests/:requestId');
     assert.equal(CLOUD_REQUEST_CANCEL_PATH, '/v1/cloud-requests/:requestId/cancel');
+    assert.equal(CLOUD_REQUEST_UPLOAD_PATH, '/v1/cloud-requests/:requestId/upload');
+    assert.equal(
+      CLOUD_REQUEST_COMPLETE_UPLOAD_PATH,
+      '/v1/cloud-requests/:requestId/complete-upload',
+    );
     assert.equal(CLOUD_REQUEST_MAX_BYTES, 25 * 1024 * 1024);
     assert.equal(CLOUD_REQUEST_MAX_PAGES, 20);
 
-    const states: readonly CloudRequestState[] = ['awaiting-upload', 'cancelled'];
-    assert.deepEqual(states, ['awaiting-upload', 'cancelled']);
+    const states: readonly CloudRequestState[] = [
+      'awaiting-upload',
+      'uploaded',
+      'queued',
+      'cancelled',
+      'expired',
+    ];
+    assert.deepEqual(states, ['awaiting-upload', 'uploaded', 'queued', 'cancelled', 'expired']);
     const errors: readonly CloudRequestErrorCode[] = [
       'cloud_request_invalid',
       'cloud_request_operation_invalid',
@@ -72,6 +85,16 @@ describe('cloud contracts', () => {
       'cloud_request_not_found',
       'cloud_request_not_cancellable',
       'allowance_exhausted',
+      'cloud_upload_content_type_invalid',
+      'cloud_upload_body_invalid',
+      'cloud_upload_too_large',
+      'cloud_upload_too_small',
+      'cloud_upload_conflict',
+      'cloud_upload_filesystem_failure',
+      'cloud_upload_artifact_missing',
+      'cloud_upload_not_completeable',
+      'cloud_upload_required',
+      'cloud_request_expired',
     ];
     assert.deepEqual(errors, [
       'cloud_request_invalid',
@@ -85,6 +108,16 @@ describe('cloud contracts', () => {
       'cloud_request_not_found',
       'cloud_request_not_cancellable',
       'allowance_exhausted',
+      'cloud_upload_content_type_invalid',
+      'cloud_upload_body_invalid',
+      'cloud_upload_too_large',
+      'cloud_upload_too_small',
+      'cloud_upload_conflict',
+      'cloud_upload_filesystem_failure',
+      'cloud_upload_artifact_missing',
+      'cloud_upload_not_completeable',
+      'cloud_upload_required',
+      'cloud_request_expired',
     ]);
 
     const storedVersionStatus: CloudRequestStatusResponse = {

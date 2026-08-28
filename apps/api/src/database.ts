@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import type { CloudRequestOperation, CloudRequestState } from '@alyte/contracts';
 
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 export const SESSION_RETENTION_MS = 24 * 60 * 60 * 1_000;
 export const OPERATION_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -137,7 +137,29 @@ export interface CloudRequestRow {
   readonly contract_version: string;
   readonly created_at: string;
   readonly updated_at: string;
+  readonly upload_expires_at: string;
+  readonly uploaded_at: string | null;
+  readonly queued_at: string | null;
+  readonly expired_at: string | null;
   readonly cancelled_at: string | null;
+}
+
+/** Operational metadata for one queued analysis handler invocation. No payload is stored here. */
+export interface AnalysisJobRow {
+  readonly id: string;
+  readonly request_id: string;
+  readonly state: 'queued' | 'processing' | 'succeeded' | 'failed' | 'expired' | 'cancelled';
+  readonly available_at: string;
+  readonly attempts: number;
+  readonly lease_owner: string | null;
+  readonly lease_expires_at: string | null;
+  readonly handler_version: number;
+  readonly request_contract_version: string;
+  readonly schema_version: string;
+  readonly prompt_version: string | null;
+  readonly failure_category: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
 }
 
 export interface SessionExportRow {
@@ -335,6 +357,70 @@ const migrations: readonly string[] = [
       ON cloud_requests(account_id, idempotency_key_hash);
     CREATE INDEX cloud_requests_account_idx
       ON cloud_requests(account_id, created_at, id);
+  `,
+  `
+    -- SQLite cannot alter a CHECK constraint in place. Rebuild the v7 request table while
+    -- preserving every admitted request, then add only operational upload/queue metadata.
+    -- A very early development database may contain only the released session table; keeping
+    -- this compatibility guard makes the forward migration safe for that partial fixture too.
+    CREATE TABLE IF NOT EXISTS accounts (
+      id TEXT PRIMARY KEY NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE cloud_requests_v8 (
+      id TEXT PRIMARY KEY NOT NULL,
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      operation TEXT NOT NULL CHECK (operation IN ('intake-image', 'lab-report')),
+      state TEXT NOT NULL CHECK (state IN ('awaiting-upload', 'uploaded', 'queued', 'cancelled', 'expired')),
+      byte_count INTEGER NOT NULL CHECK (byte_count > 0 AND byte_count <= 26214400),
+      page_count INTEGER NOT NULL CHECK (page_count > 0 AND page_count <= 20),
+      device_public_key_jwk TEXT NOT NULL,
+      idempotency_key_hash TEXT NOT NULL,
+      request_fingerprint TEXT NOT NULL,
+      contract_version TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      upload_expires_at TEXT NOT NULL,
+      uploaded_at TEXT,
+      queued_at TEXT,
+      expired_at TEXT,
+      cancelled_at TEXT
+    );
+    INSERT INTO cloud_requests_v8
+      (id, account_id, operation, state, byte_count, page_count,
+       device_public_key_jwk, idempotency_key_hash, request_fingerprint,
+       contract_version, created_at, updated_at, upload_expires_at,
+       uploaded_at, queued_at, expired_at, cancelled_at)
+    SELECT id, account_id, operation, state, byte_count, page_count,
+           device_public_key_jwk, idempotency_key_hash, request_fingerprint,
+           contract_version, created_at, updated_at,
+           strftime('%Y-%m-%dT%H:%M:%fZ', datetime(created_at, '+86400 seconds')),
+           NULL, NULL, NULL, cancelled_at
+      FROM cloud_requests;
+    DROP TABLE cloud_requests;
+    ALTER TABLE cloud_requests_v8 RENAME TO cloud_requests;
+    CREATE UNIQUE INDEX cloud_requests_account_key_idx
+      ON cloud_requests(account_id, idempotency_key_hash);
+    CREATE INDEX cloud_requests_account_idx
+      ON cloud_requests(account_id, created_at, id);
+
+    CREATE TABLE analysis_jobs (
+      id TEXT PRIMARY KEY NOT NULL,
+      request_id TEXT NOT NULL UNIQUE REFERENCES cloud_requests(id) ON DELETE CASCADE,
+      state TEXT NOT NULL CHECK (state IN ('queued', 'processing', 'succeeded', 'failed', 'expired', 'cancelled')),
+      available_at TEXT NOT NULL,
+      attempts INTEGER NOT NULL CHECK (attempts >= 0),
+      lease_owner TEXT,
+      lease_expires_at TEXT,
+      handler_version INTEGER NOT NULL CHECK (handler_version > 0),
+      request_contract_version TEXT NOT NULL,
+      schema_version TEXT NOT NULL,
+      prompt_version TEXT,
+      failure_category TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX analysis_jobs_ready_idx ON analysis_jobs(state, available_at, id);
   `,
 ];
 
@@ -975,7 +1061,8 @@ export class AccountDatabase {
       .prepare(
         `SELECT id, account_id, operation, state, byte_count, page_count,
                 device_public_key_jwk, idempotency_key_hash, request_fingerprint,
-                contract_version, created_at, updated_at, cancelled_at
+                contract_version, created_at, updated_at, upload_expires_at,
+                uploaded_at, queued_at, expired_at, cancelled_at
          FROM cloud_requests WHERE account_id = ? AND id = ?`,
       )
       .get(accountId, requestId) as CloudRequestRow | undefined;
@@ -989,7 +1076,8 @@ export class AccountDatabase {
       .prepare(
         `SELECT id, account_id, operation, state, byte_count, page_count,
                 device_public_key_jwk, idempotency_key_hash, request_fingerprint,
-                contract_version, created_at, updated_at, cancelled_at
+                contract_version, created_at, updated_at, upload_expires_at,
+                uploaded_at, queued_at, expired_at, cancelled_at
          FROM cloud_requests WHERE account_id = ? AND idempotency_key_hash = ?`,
       )
       .get(accountId, idempotencyKeyHash) as CloudRequestRow | undefined;
@@ -1001,8 +1089,9 @@ export class AccountDatabase {
         `INSERT INTO cloud_requests
           (id, account_id, operation, state, byte_count, page_count,
            device_public_key_jwk, idempotency_key_hash, request_fingerprint,
-           contract_version, created_at, updated_at, cancelled_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           contract_version, created_at, updated_at, upload_expires_at,
+           uploaded_at, queued_at, expired_at, cancelled_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         request.id,
@@ -1017,8 +1106,22 @@ export class AccountDatabase {
         request.contract_version,
         request.created_at,
         request.updated_at,
+        request.upload_expires_at,
+        request.uploaded_at,
+        request.queued_at,
+        request.expired_at,
         request.cancelled_at,
       );
+  }
+
+  markCloudRequestUploaded(accountId: string, requestId: string, uploadedAt: string): void {
+    this.sqlite
+      .prepare(
+        `UPDATE cloud_requests
+         SET state = 'uploaded', uploaded_at = COALESCE(uploaded_at, ?), updated_at = ?
+         WHERE account_id = ? AND id = ? AND state = 'awaiting-upload'`,
+      )
+      .run(uploadedAt, uploadedAt, accountId, requestId);
   }
 
   cancelCloudRequest(accountId: string, requestId: string, cancelledAt: string): void {
@@ -1026,8 +1129,72 @@ export class AccountDatabase {
       .prepare(
         `UPDATE cloud_requests
          SET state = 'cancelled', cancelled_at = COALESCE(cancelled_at, ?), updated_at = ?
-         WHERE account_id = ? AND id = ? AND state = 'awaiting-upload'`,
+         WHERE account_id = ? AND id = ? AND state IN ('awaiting-upload', 'uploaded')`,
       )
       .run(cancelledAt, cancelledAt, accountId, requestId);
+  }
+
+  markCloudRequestExpired(requestId: string, expiredAt: string): void {
+    this.sqlite
+      .prepare(
+        `UPDATE cloud_requests
+         SET state = 'expired', expired_at = COALESCE(expired_at, ?), updated_at = ?
+         WHERE id = ? AND state IN ('awaiting-upload', 'uploaded')`,
+      )
+      .run(expiredAt, expiredAt, requestId);
+  }
+
+  queueCloudRequest(requestId: string, queuedAt: string, job: AnalysisJobRow): void {
+    this.sqlite
+      .prepare(
+        `UPDATE cloud_requests
+         SET state = 'queued',
+             queued_at = COALESCE(queued_at, ?), updated_at = ?
+         WHERE id = ? AND state = 'uploaded'`,
+      )
+      .run(queuedAt, queuedAt, requestId);
+    this.sqlite
+      .prepare(
+        `INSERT INTO analysis_jobs
+          (id, request_id, state, available_at, attempts, lease_owner, lease_expires_at,
+           handler_version, request_contract_version, schema_version, prompt_version,
+           failure_category, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(request_id) DO NOTHING`,
+      )
+      .run(
+        job.id,
+        job.request_id,
+        job.state,
+        job.available_at,
+        job.attempts,
+        job.lease_owner,
+        job.lease_expires_at,
+        job.handler_version,
+        job.request_contract_version,
+        job.schema_version,
+        job.prompt_version,
+        job.failure_category,
+        job.created_at,
+        job.updated_at,
+      );
+  }
+
+  findAnalysisJobByRequest(requestId: string): AnalysisJobRow | undefined {
+    return this.sqlite
+      .prepare('SELECT * FROM analysis_jobs WHERE request_id = ?')
+      .get(requestId) as AnalysisJobRow | undefined;
+  }
+
+  listCloudRequests(): readonly CloudRequestRow[] {
+    return this.sqlite
+      .prepare(
+        `SELECT id, account_id, operation, state, byte_count, page_count,
+                device_public_key_jwk, idempotency_key_hash, request_fingerprint,
+                contract_version, created_at, updated_at, upload_expires_at,
+                uploaded_at, queued_at, expired_at, cancelled_at
+         FROM cloud_requests ORDER BY created_at ASC, id ASC`,
+      )
+      .all() as CloudRequestRow[];
   }
 }

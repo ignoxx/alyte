@@ -12,14 +12,16 @@ import {
   type CloudRequestStatusResponse,
   type P256PublicKeyJwk,
 } from '@alyte/contracts';
-import type { AccountDatabase, CloudRequestRow } from './database.js';
+import type { AccountDatabase, AnalysisJobRow, CloudRequestRow } from './database.js';
 import type { CommerceService } from './commerce.js';
+import type { TransientUploadStore } from './transient-upload-store.js';
 
 const MAX_IDEMPOTENCY_KEY_LENGTH = 256;
 const MAX_REQUEST_ID_LENGTH = 128;
 const MAX_ACCOUNT_ID_LENGTH = 256;
 const MIN_PUBLIC_COORDINATE_LENGTH = 43;
 const HASH_SECRET_MINIMUM_LENGTH = 32;
+export const CLOUD_UPLOAD_EXPIRY_MS = 24 * 60 * 60 * 1_000;
 
 export interface CloudRequestClock {
   now(): Date;
@@ -31,6 +33,7 @@ export type CloudRequestServiceOptions = {
   readonly hashSecret: string | Uint8Array;
   readonly clock?: CloudRequestClock;
   readonly idFactory?: () => string;
+  readonly uploadStore?: TransientUploadStore;
 };
 
 export class CloudRequestFailure extends Error {
@@ -185,6 +188,10 @@ function toStatus(row: CloudRequestRow): CloudRequestStatusResponse {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     cancelledAt: row.cancelled_at,
+    uploadedAt: row.uploaded_at,
+    queuedAt: row.queued_at,
+    expiresAt: row.upload_expires_at,
+    expiredAt: row.expired_at,
   };
 }
 
@@ -194,12 +201,14 @@ export class CloudRequestService {
   private readonly clock: CloudRequestClock;
   private readonly idFactory: () => string;
   private readonly hashSecret: Uint8Array;
+  private readonly uploadStore: TransientUploadStore | undefined;
 
   constructor(options: CloudRequestServiceOptions) {
     this.database = options.database;
     this.commerce = options.commerce;
     this.clock = options.clock ?? systemClock;
     this.idFactory = options.idFactory ?? randomUUID;
+    this.uploadStore = options.uploadStore;
     this.hashSecret =
       typeof options.hashSecret === 'string'
         ? new TextEncoder().encode(options.hashSecret)
@@ -249,6 +258,12 @@ export class CloudRequestService {
         contract_version: admission.contractVersion,
         created_at: now,
         updated_at: now,
+        upload_expires_at: new Date(
+          this.clock.now().getTime() + CLOUD_UPLOAD_EXPIRY_MS,
+        ).toISOString(),
+        uploaded_at: null,
+        queued_at: null,
+        expired_at: null,
         cancelled_at: null,
       };
       // Insert before reserving so malformed/insufficient allowance rolls back this row too.
@@ -268,7 +283,181 @@ export class CloudRequestService {
     const id = this.parseRequestId(requestId);
     const row = this.database.findCloudRequest(accountId as string, id);
     if (row === undefined) throw new CloudRequestFailure(404, 'cloud_request_not_found');
-    return toStatus(row);
+    return toStatus(this.expireIfDue(row));
+  }
+
+  /**
+   * Receive one bounded binary artifact. The store promotes only an exact body; a replay compares
+   * bytes transiently and never persists a content digest.
+   */
+  upload(
+    accountId: unknown,
+    requestId: unknown,
+    bytes: unknown,
+    contentType: unknown,
+    idempotencyKey: unknown,
+  ): CloudRequestStatusResponse {
+    this.requireAccount(accountId);
+    const id = this.parseRequestId(requestId);
+    // Upload retries are bound to a caller capability at the transport boundary. The byte
+    // comparison below remains the durable artifact idempotency guard; the key itself is never
+    // persisted for this per-request mutation.
+    parseIdempotencyKey(idempotencyKey);
+    const row = this.database.findCloudRequest(accountId as string, id);
+    if (row === undefined) throw new CloudRequestFailure(404, 'cloud_request_not_found');
+    const current = this.expireIfDue(row);
+    if (current.state === 'expired') {
+      throw new CloudRequestFailure(409, 'cloud_request_expired');
+    }
+    if (contentType !== 'application/octet-stream') {
+      throw new CloudRequestFailure(415, 'cloud_upload_content_type_invalid');
+    }
+    if (!Buffer.isBuffer(bytes) && !(bytes instanceof Uint8Array)) {
+      throw new CloudRequestFailure(400, 'cloud_upload_body_invalid');
+    }
+    const body = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+    if (body.byteLength > row.byte_count) {
+      throw new CloudRequestFailure(413, 'cloud_upload_too_large');
+    }
+    if (body.byteLength < row.byte_count) {
+      throw new CloudRequestFailure(400, 'cloud_upload_too_small');
+    }
+    const uploadStore = this.uploadStore;
+    if (uploadStore === undefined) {
+      throw new CloudRequestFailure(503, 'cloud_upload_filesystem_failure');
+    }
+    if (row.state === 'cancelled' || row.state === 'expired') {
+      throw new CloudRequestFailure(409, 'cloud_request_expired');
+    }
+    if (row.state === 'queued') {
+      if (uploadStore.hasExactBytes(id, body)) return toStatus(row);
+      if (!uploadStore.hasExactSize(id, row.byte_count)) {
+        throw new CloudRequestFailure(409, 'cloud_upload_artifact_missing');
+      }
+      throw new CloudRequestFailure(409, 'cloud_upload_conflict');
+    }
+    if (row.state === 'uploaded') {
+      if (uploadStore.hasExactBytes(id, body)) return toStatus(row);
+      if (uploadStore.hasExactSize(id, row.byte_count)) {
+        throw new CloudRequestFailure(409, 'cloud_upload_conflict');
+      }
+      // The durable state can win a crash race with filesystem promotion. Once the complete
+      // artifact is absent or has the wrong size, remove only that unusable artifact and allow a
+      // fresh exact upload; a same-sized different artifact remains a conflict above.
+      try {
+        uploadStore.remove(id);
+        uploadStore.write(id, body, row.byte_count);
+        const uploadedAt = this.clock.now().toISOString();
+        this.database.transaction(() => {
+          this.database.markCloudRequestUploaded(accountId as string, id, uploadedAt);
+        });
+        const repaired = this.database.findCloudRequest(accountId as string, id);
+        if (repaired === undefined) throw new Error('cloud_upload_request_missing_after_repair');
+        return toStatus(repaired);
+      } catch (error) {
+        this.cleanupFailedUpload(uploadStore, id, row.byte_count);
+        if (error instanceof CloudRequestFailure) throw error;
+        throw new CloudRequestFailure(500, 'cloud_upload_filesystem_failure');
+      }
+    }
+    // A crash can leave a successfully promoted file just before the state update. Recover that
+    // exact artifact, but never overwrite a complete artifact from another upload attempt.
+    if (uploadStore.hasCompleteArtifact(id)) {
+      if (uploadStore.hasExactBytes(id, body)) {
+        const uploadedAt = this.clock.now().toISOString();
+        this.database.transaction(() => {
+          this.database.markCloudRequestUploaded(accountId as string, id, uploadedAt);
+        });
+        const recovered = this.database.findCloudRequest(accountId as string, id);
+        if (recovered === undefined) throw new Error('cloud_upload_request_missing_after_recovery');
+        return toStatus(recovered);
+      }
+      throw new CloudRequestFailure(409, 'cloud_upload_conflict');
+    }
+    try {
+      uploadStore.write(id, body, row.byte_count);
+      const uploadedAt = this.clock.now().toISOString();
+      this.database.transaction(() => {
+        this.database.markCloudRequestUploaded(accountId as string, id, uploadedAt);
+      });
+      const uploaded = this.database.findCloudRequest(accountId as string, id);
+      if (uploaded === undefined) throw new Error('cloud_upload_request_missing_after_write');
+      return toStatus(uploaded);
+    } catch (error) {
+      this.cleanupFailedUpload(uploadStore, id, row.byte_count);
+      if (error instanceof CloudRequestFailure) throw error;
+      throw new CloudRequestFailure(500, 'cloud_upload_filesystem_failure');
+    }
+  }
+
+  completeUpload(
+    accountId: unknown,
+    requestId: unknown,
+    idempotencyKey: unknown,
+  ): CloudRequestStatusResponse {
+    this.requireAccount(accountId);
+    const id = this.parseRequestId(requestId);
+    parseIdempotencyKey(idempotencyKey);
+    const row = this.database.findCloudRequest(accountId as string, id);
+    if (row === undefined) throw new CloudRequestFailure(404, 'cloud_request_not_found');
+    const current = this.expireIfDue(row);
+    if (current.state === 'expired') {
+      throw new CloudRequestFailure(409, 'cloud_upload_not_completeable');
+    }
+    if (current.state === 'queued') {
+      if (this.database.findAnalysisJobByRequest(id) === undefined) {
+        throw new CloudRequestFailure(500, 'cloud_upload_artifact_missing');
+      }
+      if (
+        this.uploadStore === undefined ||
+        !this.uploadStore.hasExactSize(id, current.byte_count)
+      ) {
+        throw new CloudRequestFailure(409, 'cloud_upload_artifact_missing');
+      }
+      return toStatus(current);
+    }
+    if (current.state !== 'uploaded') {
+      if (current.state === 'awaiting-upload') {
+        throw new CloudRequestFailure(409, 'cloud_upload_required');
+      }
+      throw new CloudRequestFailure(409, 'cloud_upload_not_completeable');
+    }
+    if (this.uploadStore === undefined || !this.uploadStore.hasExactSize(id, current.byte_count)) {
+      throw new CloudRequestFailure(409, 'cloud_upload_artifact_missing');
+    }
+    return this.database.transaction(() => {
+      const current = this.database.findCloudRequest(accountId as string, id);
+      if (current === undefined) throw new CloudRequestFailure(404, 'cloud_request_not_found');
+      if (current.state === 'queued') {
+        return toStatus(current);
+      }
+      if (current.state !== 'uploaded') {
+        throw new CloudRequestFailure(409, 'cloud_upload_not_completeable');
+      }
+      const queuedAt = this.clock.now().toISOString();
+      const jobId = this.idFactory();
+      if (!validOpaqueId(jobId)) throw new Error('cloud_analysis_job_id_factory_invalid');
+      const job: AnalysisJobRow = {
+        id: jobId,
+        request_id: id,
+        state: 'queued',
+        available_at: queuedAt,
+        attempts: 0,
+        lease_owner: null,
+        lease_expires_at: null,
+        handler_version: 1,
+        request_contract_version: current.contract_version,
+        schema_version: current.contract_version,
+        prompt_version: null,
+        failure_category: null,
+        created_at: queuedAt,
+        updated_at: queuedAt,
+      };
+      this.database.queueCloudRequest(id, queuedAt, job);
+      const queued = this.database.findCloudRequest(accountId as string, id);
+      if (queued === undefined) throw new Error('cloud_upload_queue_write_failed');
+      return toStatus(queued);
+    });
   }
 
   cancel(
@@ -281,11 +470,39 @@ export class CloudRequestService {
     // Cancellation is idempotent by request state. The key is still required at the transport
     // boundary so every mutating endpoint has a retry capability, but is deliberately not stored.
     parseIdempotencyKey(idempotencyKey);
+    const row = this.database.findCloudRequest(accountId as string, id);
+    if (row === undefined) throw new CloudRequestFailure(404, 'cloud_request_not_found');
+    const current = this.expireIfDue(row);
+    if (current.state === 'cancelled' || current.state === 'expired') {
+      // A retry after cancellation/expiry is still a cleanup opportunity. Do not leave an
+      // artifact behind merely because the state transition happened in an earlier process.
+      if (this.uploadStore !== undefined) {
+        try {
+          this.uploadStore.remove(id);
+        } catch {
+          throw new CloudRequestFailure(500, 'cloud_upload_filesystem_failure');
+        }
+      }
+      return toStatus(current);
+    }
+    if (current.state === 'queued') {
+      throw new CloudRequestFailure(409, 'cloud_request_not_cancellable');
+    }
+    if (this.uploadStore === undefined && current.state !== 'awaiting-upload') {
+      throw new CloudRequestFailure(503, 'cloud_upload_filesystem_failure');
+    }
+    if (this.uploadStore !== undefined) {
+      try {
+        this.uploadStore.remove(id);
+      } catch {
+        throw new CloudRequestFailure(500, 'cloud_upload_filesystem_failure');
+      }
+    }
     return this.database.transaction(() => {
-      const row = this.database.findCloudRequest(accountId as string, id);
-      if (row === undefined) throw new CloudRequestFailure(404, 'cloud_request_not_found');
-      if (row.state === 'cancelled') return toStatus(row);
-      if (row.state !== 'awaiting-upload') {
+      const current = this.database.findCloudRequest(accountId as string, id);
+      if (current === undefined) throw new CloudRequestFailure(404, 'cloud_request_not_found');
+      if (current.state === 'cancelled' || current.state === 'expired') return toStatus(current);
+      if (current.state === 'queued') {
         throw new CloudRequestFailure(409, 'cloud_request_not_cancellable');
       }
       const cancelledAt = this.clock.now().toISOString();
@@ -295,6 +512,110 @@ export class CloudRequestService {
       if (cancelled === undefined) throw new Error('cloud_request_cancel_write_failed');
       return toStatus(cancelled);
     });
+  }
+
+  /** Reconcile volume artifacts and expire every unsealed request at most 24 hours after admission. */
+  reconcile(): void {
+    if (this.uploadStore === undefined) return;
+    const now = this.clock.now();
+    const nowMs = now.getTime();
+    const rows = this.database.listCloudRequests();
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const artifacts = this.uploadStore.list();
+    const remove = new Set<string>();
+    this.database.transaction(() => {
+      for (const row of rows) {
+        if (row.state === 'awaiting-upload' || row.state === 'uploaded') {
+          if (Date.parse(row.upload_expires_at) <= nowMs) {
+            this.database.markCloudRequestExpired(row.id, now.toISOString());
+            this.commerce.releaseInTransaction(row.id);
+            remove.add(row.id);
+          } else if (
+            row.state === 'awaiting-upload' &&
+            artifacts.some(
+              (artifact) =>
+                artifact.requestId === row.id &&
+                artifact.kind === 'complete' &&
+                artifact.regular &&
+                artifact.size === row.byte_count,
+            )
+          ) {
+            this.database.markCloudRequestUploaded(row.account_id, row.id, now.toISOString());
+          }
+        } else if (row.state === 'cancelled' || row.state === 'expired') {
+          remove.add(row.id);
+        }
+      }
+    });
+    for (const artifact of artifacts) {
+      const row = byId.get(artifact.requestId);
+      if (
+        row === undefined ||
+        remove.has(artifact.requestId) ||
+        artifact.kind === 'partial' ||
+        !artifact.regular ||
+        (artifact.kind === 'complete' &&
+          row.state === 'awaiting-upload' &&
+          artifact.size !== row.byte_count) ||
+        (artifact.kind === 'complete' &&
+          row.state === 'uploaded' &&
+          artifact.size !== row.byte_count)
+      ) {
+        try {
+          this.uploadStore.removeEntry(artifact);
+        } catch {
+          // A later periodic pass retries failed unlink/permission operations.
+        }
+      }
+    }
+    try {
+      this.uploadStore.removeUnknownEntries(new Set(rows.map((row) => row.id)));
+    } catch {
+      // A later periodic pass retries failed unlink/permission operations.
+    }
+  }
+
+  private cleanupFailedUpload(
+    uploadStore: TransientUploadStore,
+    requestId: string,
+    expectedBytes: number,
+  ): void {
+    try {
+      for (const artifact of uploadStore.list()) {
+        if (
+          artifact.requestId === requestId &&
+          (artifact.kind === 'partial' || !artifact.regular || artifact.size !== expectedBytes)
+        ) {
+          uploadStore.removeEntry(artifact);
+        }
+      }
+    } catch {
+      // A later periodic pass retries failed unlink/permission operations.
+    }
+  }
+
+  private expireIfDue(row: CloudRequestRow): CloudRequestRow {
+    if (
+      (row.state !== 'awaiting-upload' && row.state !== 'uploaded') ||
+      Date.parse(row.upload_expires_at) > this.clock.now().getTime()
+    ) {
+      return row;
+    }
+    const expiredAt = this.clock.now().toISOString();
+    this.database.transaction(() => {
+      this.database.markCloudRequestExpired(row.id, expiredAt);
+      this.commerce.releaseInTransaction(row.id);
+    });
+    if (this.uploadStore !== undefined) {
+      try {
+        this.uploadStore.remove(row.id);
+      } catch {
+        // Reconciliation retries failed filesystem cleanup without reopening the request.
+      }
+    }
+    const expired = this.database.findCloudRequest(row.account_id, row.id);
+    if (expired === undefined) throw new Error('cloud_request_missing_after_expiry');
+    return expired;
   }
 
   private replay(row: CloudRequestRow, requestFingerprint: string): CloudRequestStatusResponse {

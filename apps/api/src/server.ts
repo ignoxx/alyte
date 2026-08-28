@@ -10,8 +10,12 @@ import {
   CLOUD_ALLOWANCES_PATH,
   CLOUD_ALLOWANCES_RECONCILE_PATH,
   CLOUD_REQUEST_CANCEL_PATH,
+  CLOUD_REQUEST_COMPLETE_UPLOAD_PATH,
   CLOUD_REQUEST_STATUS_PATH,
   CLOUD_REQUESTS_PATH,
+  CLOUD_REQUEST_UPLOAD_CONTENT_TYPE,
+  CLOUD_REQUEST_UPLOAD_PATH,
+  CLOUD_REQUEST_MAX_BYTES,
   CONTRACT_VERSION,
   REVENUECAT_WEBHOOK_PATH,
   type AccountDeletionResponse,
@@ -33,6 +37,7 @@ import { AuthFailure, AuthService, type AuthLogger, type Clock } from './auth.js
 import { AccountDatabase } from './database.js';
 import { CommerceFailure, CommerceService, cloudMaxEnabledFromEnvironment } from './commerce.js';
 import { CloudRequestFailure, CloudRequestService } from './cloud-request.js';
+import { TransientUploadStore } from './transient-upload-store.js';
 import { createRevenueCatAuthority, type RevenueCatAuthority } from './revenuecat.js';
 import {
   DEFAULT_LOCAL_RUNTIME_PATH,
@@ -55,6 +60,7 @@ export interface ServerOptions {
   readonly revenueCatWebhookSecret?: string;
   readonly cloudMaxEnabled?: boolean;
   readonly cloudRequestService?: CloudRequestService;
+  readonly uploadStore?: TransientUploadStore;
   /** Test-only capture seam for proving the Fastify redaction boundary. */
   readonly loggerStream?: { write(message: string): void };
 }
@@ -160,7 +166,10 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
         host: request.hostname,
         remoteAddress: request.ip,
         remotePort: request.socket?.remotePort,
-        body: request.body,
+        // Body and headers are always redacted, including binary uploads. This keeps the
+        // serializer safe if a future request adds a health-bearing field.
+        headers: '[REDACTED]',
+        body: '[REDACTED]',
       }),
     },
     redact: {
@@ -181,6 +190,7 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
         'req.body.name',
         // Cloud Request bodies contain only bounded operational metadata in this slice, but
         // redact the complete body so a future field cannot accidentally enter request logs.
+        'req.headers',
         'req.body',
         'req.body.operation',
         'req.body.byteCount',
@@ -192,7 +202,7 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     },
   } as FastifyLoggerOptions;
   const server = Fastify({
-    bodyLimit: 512 * 1024,
+    bodyLimit: CLOUD_REQUEST_MAX_BYTES,
     logger: loggerOptions,
   });
   // The RevenueCat signature covers the exact incoming bytes. Parse JSON ourselves so the
@@ -209,6 +219,18 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     } catch {
       done(new Error('invalid_json'));
     }
+  });
+  server.addContentTypeParser(
+    CLOUD_REQUEST_UPLOAD_CONTENT_TYPE,
+    { parseAs: 'buffer' },
+    (_request, body, done) => {
+      done(null, body);
+    },
+  );
+  // Unknown media types still reach the authenticated handler, which can return the same bounded
+  // content-type error without revealing whether a request ID belongs to another account.
+  server.addContentTypeParser('*', { parseAs: 'buffer' }, (_request, body, done) => {
+    done(null, body);
   });
   const authLogger: AuthLogger = options.authLogger ?? {
     info(event, attributes) {
@@ -245,10 +267,15 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
       commerce,
       hashSecret: secret,
       ...(options.clock === undefined ? {} : { clock: options.clock }),
+      uploadStore: options.uploadStore ?? new TransientUploadStore(runtimePath),
     });
   database.cleanupExpired(options.clock?.now() ?? new Date());
+  cloudRequests.reconcile();
   const cleanupInterval = setInterval(
-    () => database.cleanupExpired(options.clock?.now() ?? new Date()),
+    () => {
+      database.cleanupExpired(options.clock?.now() ?? new Date());
+      cloudRequests.reconcile();
+    },
     options.cleanupIntervalMs ?? 15 * 60 * 1_000,
   );
   cleanupInterval.unref();
@@ -267,6 +294,29 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     if (error instanceof CloudRequestFailure) {
       server.log.warn({ event: 'api.request_rejected', outcome: error.code }, 'request rejected');
       void reply.status(error.statusCode).send(errorResponse(error.code, error.code));
+      return;
+    }
+    const fastifyCode = (error as { code?: unknown }).code;
+    if (fastifyCode === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+      server.log.warn(
+        { event: 'api.request_rejected', outcome: 'cloud_upload_too_large' },
+        'request rejected',
+      );
+      void reply
+        .status(413)
+        .send(errorResponse('cloud_upload_too_large', 'cloud_upload_too_large'));
+      return;
+    }
+    if (fastifyCode === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') {
+      server.log.warn(
+        { event: 'api.request_rejected', outcome: 'cloud_upload_content_type_invalid' },
+        'request rejected',
+      );
+      void reply
+        .status(415)
+        .send(
+          errorResponse('cloud_upload_content_type_invalid', 'cloud_upload_content_type_invalid'),
+        );
       return;
     }
     server.log.error({ event: 'api.request_failed', outcome: 'internal_error' }, 'request failed');
@@ -310,9 +360,13 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     auth.exportAccount(bearerToken(request)),
   );
 
-  server.delete('/v1/account', async (request): Promise<AccountDeletionResponse> =>
-    auth.deleteAccount(bearerToken(request), idempotencyKey(request)),
-  );
+  server.delete('/v1/account', async (request): Promise<AccountDeletionResponse> => {
+    const response = auth.deleteAccount(bearerToken(request), idempotencyKey(request));
+    // Account deletion cascades SQLite rows first; reconciliation immediately removes any
+    // transient artifacts that cannot participate in that transaction.
+    cloudRequests.reconcile();
+    return response;
+  });
 
   server.get(CLOUD_ALLOWANCES_PATH, async (request) => {
     const authenticated = auth.authenticateAccess(bearerToken(request));
@@ -347,6 +401,28 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
   server.get(CLOUD_REQUEST_STATUS_PATH, async (request) => {
     const authenticated = auth.authenticateAccess(bearerToken(request));
     return cloudRequests.status(authenticated.accountId, requestIdParam(request));
+  });
+
+  const uploadCloudRequest = async (request: FastifyRequest) => {
+    const authenticated = auth.authenticateAccess(bearerToken(request));
+    return cloudRequests.upload(
+      authenticated.accountId,
+      requestIdParam(request),
+      request.body,
+      request.headers['content-type'],
+      headerIdempotencyKey(request),
+    );
+  };
+  server.put(CLOUD_REQUEST_UPLOAD_PATH, uploadCloudRequest);
+  server.post(CLOUD_REQUEST_UPLOAD_PATH, uploadCloudRequest);
+
+  server.post(CLOUD_REQUEST_COMPLETE_UPLOAD_PATH, async (request) => {
+    const authenticated = auth.authenticateAccess(bearerToken(request));
+    return cloudRequests.completeUpload(
+      authenticated.accountId,
+      requestIdParam(request),
+      headerIdempotencyKey(request),
+    );
   });
 
   const cancelCloudRequest = async (request: FastifyRequest) => {
