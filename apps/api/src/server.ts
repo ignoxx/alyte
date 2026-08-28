@@ -36,7 +36,11 @@ import {
 import { AuthFailure, AuthService, type AuthLogger, type Clock } from './auth.js';
 import { AccountDatabase } from './database.js';
 import { CommerceFailure, CommerceService, cloudMaxEnabledFromEnvironment } from './commerce.js';
-import { CloudRequestFailure, CloudRequestService } from './cloud-request.js';
+import {
+  CLOUD_UPLOAD_CLEANUP_INTERVAL_MS,
+  CloudRequestFailure,
+  CloudRequestService,
+} from './cloud-request.js';
 import { TransientUploadStore } from './transient-upload-store.js';
 import { createRevenueCatAuthority, type RevenueCatAuthority } from './revenuecat.js';
 import {
@@ -64,6 +68,8 @@ export interface ServerOptions {
   /** Test-only capture seam for proving the Fastify redaction boundary. */
   readonly loggerStream?: { write(message: string): void };
 }
+
+const API_BODY_LIMIT_BYTES = 512 * 1024;
 
 function bodyObject(request: FastifyRequest): Record<string, unknown> {
   if (typeof request.body !== 'object' || request.body === null || Array.isArray(request.body)) {
@@ -202,7 +208,7 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     },
   } as FastifyLoggerOptions;
   const server = Fastify({
-    bodyLimit: CLOUD_REQUEST_MAX_BYTES,
+    bodyLimit: API_BODY_LIMIT_BYTES,
     logger: loggerOptions,
   });
   // The RevenueCat signature covers the exact incoming bytes. Parse JSON ourselves so the
@@ -276,7 +282,10 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
       database.cleanupExpired(options.clock?.now() ?? new Date());
       cloudRequests.reconcile();
     },
-    options.cleanupIntervalMs ?? 15 * 60 * 1_000,
+    Math.min(
+      options.cleanupIntervalMs ?? CLOUD_UPLOAD_CLEANUP_INTERVAL_MS,
+      CLOUD_UPLOAD_CLEANUP_INTERVAL_MS,
+    ),
   );
   cleanupInterval.unref();
 
@@ -362,9 +371,9 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
 
   server.delete('/v1/account', async (request): Promise<AccountDeletionResponse> => {
     const response = auth.deleteAccount(bearerToken(request), idempotencyKey(request));
-    // Account deletion cascades SQLite rows first; reconciliation immediately removes any
-    // transient artifacts that cannot participate in that transaction.
-    cloudRequests.reconcile();
+    // Account deletion cascades SQLite rows first; strict reconciliation must verify that the
+    // corresponding orphaned transient artifacts are gone before returning a success response.
+    cloudRequests.reconcile({ strict: true });
     return response;
   });
 
@@ -413,8 +422,12 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
       headerIdempotencyKey(request),
     );
   };
-  server.put(CLOUD_REQUEST_UPLOAD_PATH, uploadCloudRequest);
-  server.post(CLOUD_REQUEST_UPLOAD_PATH, uploadCloudRequest);
+  server.put(CLOUD_REQUEST_UPLOAD_PATH, { bodyLimit: CLOUD_REQUEST_MAX_BYTES }, uploadCloudRequest);
+  server.post(
+    CLOUD_REQUEST_UPLOAD_PATH,
+    { bodyLimit: CLOUD_REQUEST_MAX_BYTES },
+    uploadCloudRequest,
+  );
 
   server.post(CLOUD_REQUEST_COMPLETE_UPLOAD_PATH, async (request) => {
     const authenticated = auth.authenticateAccess(bearerToken(request));

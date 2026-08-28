@@ -209,6 +209,14 @@ export class TransientUploadStore {
       .filter((entry): entry is TransientArtifact => entry !== null);
   }
 
+  listEntryNames(): readonly string[] {
+    try {
+      return readdirSync(this.root, { withFileTypes: true }).map((entry) => entry.name);
+    } catch {
+      throw new TransientUploadFailure();
+    }
+  }
+
   removeEntry(entry: TransientArtifact): void {
     const path = this.path(entry.requestId, entry.kind);
     try {

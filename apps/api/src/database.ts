@@ -5,6 +5,9 @@ export const CURRENT_SCHEMA_VERSION = 8;
 
 export const SESSION_RETENTION_MS = 24 * 60 * 60 * 1_000;
 export const OPERATION_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1_000;
+/** The scheduler runs at most every fifteen minutes; reserve that headroom below the 24-hour cap. */
+export const CLOUD_UPLOAD_CLEANUP_INTERVAL_MS = 15 * 60 * 1_000;
+export const CLOUD_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1_000 - CLOUD_UPLOAD_CLEANUP_INTERVAL_MS;
 
 export type OperationName =
   'auth.apple.exchange' | 'auth.refresh' | 'auth.sign-out' | 'account.delete';
@@ -394,7 +397,10 @@ const migrations: readonly string[] = [
     SELECT id, account_id, operation, state, byte_count, page_count,
            device_public_key_jwk, idempotency_key_hash, request_fingerprint,
            contract_version, created_at, updated_at,
-           strftime('%Y-%m-%dT%H:%M:%fZ', datetime(created_at, '+86400 seconds')),
+           strftime(
+             '%Y-%m-%dT%H:%M:%fZ',
+             datetime(created_at, '+${CLOUD_UPLOAD_RETENTION_MS / 1_000} seconds')
+           ),
            NULL, NULL, NULL, cancelled_at
       FROM cloud_requests;
     DROP TABLE cloud_requests;

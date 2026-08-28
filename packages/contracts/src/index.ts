@@ -110,7 +110,8 @@ export type CloudRequestErrorCode =
   | 'cloud_upload_artifact_missing'
   | 'cloud_upload_not_completeable'
   | 'cloud_upload_required'
-  | 'cloud_request_expired';
+  | 'cloud_request_expired'
+  | 'cloud_account_cleanup_incomplete';
 
 export interface P256PublicKeyJwk {
   readonly kty: 'EC';

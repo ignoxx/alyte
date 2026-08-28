@@ -12,9 +12,16 @@ import {
   type CloudRequestStatusResponse,
   type P256PublicKeyJwk,
 } from '@alyte/contracts';
-import type { AccountDatabase, AnalysisJobRow, CloudRequestRow } from './database.js';
+import {
+  CLOUD_UPLOAD_RETENTION_MS,
+  type AccountDatabase,
+  type AnalysisJobRow,
+  type CloudRequestRow,
+} from './database.js';
 import type { CommerceService } from './commerce.js';
-import type { TransientUploadStore } from './transient-upload-store.js';
+import type { TransientArtifact, TransientUploadStore } from './transient-upload-store.js';
+
+export { CLOUD_UPLOAD_CLEANUP_INTERVAL_MS } from './database.js';
 
 const MAX_IDEMPOTENCY_KEY_LENGTH = 256;
 const MAX_REQUEST_ID_LENGTH = 128;
@@ -259,7 +266,7 @@ export class CloudRequestService {
         created_at: now,
         updated_at: now,
         upload_expires_at: new Date(
-          this.clock.now().getTime() + CLOUD_UPLOAD_EXPIRY_MS,
+          this.clock.now().getTime() + CLOUD_UPLOAD_RETENTION_MS,
         ).toISOString(),
         uploaded_at: null,
         queued_at: null,
@@ -514,15 +521,29 @@ export class CloudRequestService {
     });
   }
 
-  /** Reconcile volume artifacts and expire every unsealed request at most 24 hours after admission. */
-  reconcile(): void {
-    if (this.uploadStore === undefined) return;
+  /**
+   * Reconcile volume artifacts and expire every unsealed request at most 24 hours after admission.
+   * Scheduled reconciliation is best effort. Account deletion passes strict=true so it cannot
+   * report success while an orphaned health artifact or cleanup failure remains.
+   */
+  reconcile(options: { readonly strict?: boolean } = {}): void {
+    if (this.uploadStore === undefined) {
+      if (options.strict) throw new CloudRequestFailure(500, 'cloud_account_cleanup_incomplete');
+      return;
+    }
     const now = this.clock.now();
     const nowMs = now.getTime();
     const rows = this.database.listCloudRequests();
     const byId = new Map(rows.map((row) => [row.id, row]));
-    const artifacts = this.uploadStore.list();
+    let artifacts: readonly TransientArtifact[];
+    try {
+      artifacts = this.uploadStore.list();
+    } catch {
+      if (options.strict) throw new CloudRequestFailure(500, 'cloud_account_cleanup_incomplete');
+      return;
+    }
     const remove = new Set<string>();
+    let cleanupFailed = false;
     this.database.transaction(() => {
       for (const row of rows) {
         if (row.state === 'awaiting-upload' || row.state === 'uploaded') {
@@ -565,6 +586,7 @@ export class CloudRequestService {
           this.uploadStore.removeEntry(artifact);
         } catch {
           // A later periodic pass retries failed unlink/permission operations.
+          cleanupFailed = true;
         }
       }
     }
@@ -572,6 +594,40 @@ export class CloudRequestService {
       this.uploadStore.removeUnknownEntries(new Set(rows.map((row) => row.id)));
     } catch {
       // A later periodic pass retries failed unlink/permission operations.
+      cleanupFailed = true;
+    }
+    if (options.strict) {
+      let remainingNames: readonly string[];
+      let remainingArtifacts: readonly (typeof artifacts)[number][];
+      try {
+        remainingNames = this.uploadStore.listEntryNames();
+        remainingArtifacts = this.uploadStore.list();
+      } catch {
+        throw new CloudRequestFailure(500, 'cloud_account_cleanup_incomplete');
+      }
+      const remainingRows = new Map(this.database.listCloudRequests().map((row) => [row.id, row]));
+      const allowedNames = new Set(
+        remainingArtifacts
+          .filter((artifact) => {
+            const row = remainingRows.get(artifact.requestId);
+            return (
+              artifact.kind === 'complete' &&
+              artifact.regular &&
+              row !== undefined &&
+              (row.state === 'awaiting-upload' ||
+                row.state === 'uploaded' ||
+                row.state === 'queued') &&
+              artifact.size === row.byte_count
+            );
+          })
+          .map(
+            (artifact) =>
+              `${artifact.requestId}.${artifact.kind === 'partial' ? 'partial' : 'bin'}`,
+          ),
+      );
+      if (cleanupFailed || remainingNames.some((name) => !allowedNames.has(name))) {
+        throw new CloudRequestFailure(500, 'cloud_account_cleanup_incomplete');
+      }
     }
   }
 
