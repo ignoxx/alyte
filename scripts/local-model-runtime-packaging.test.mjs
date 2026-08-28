@@ -9,10 +9,7 @@ import test from 'node:test';
 const root = process.cwd();
 const podspec = join(root, 'apps/mobile/modules/alyte-local-models/ios/AlyteLocalModels.podspec');
 const stagingHelper = join(root, 'apps/mobile/modules/alyte-local-models/ios/stage-runtime.rb');
-const stagedRuntime = join(
-  root,
-  'apps/mobile/modules/alyte-local-models/ios/Vendor',
-);
+const stagedRuntime = join(root, 'apps/mobile/modules/alyte-local-models/ios/Vendor');
 const revision = 'bb4caa7540188872173c44d161602d9271386413';
 
 function makeRuntime(binaryContents = 'synthetic pinned llama runtime') {
@@ -117,7 +114,10 @@ test('podspec exposes a relative staged framework and keeps external provenance 
     assert.equal(spec.license.type, 'Proprietary');
     assert.equal(spec.vendored_frameworks, 'Vendor/llama.framework');
     assert.equal(isAbsolute(spec.vendored_frameworks), false);
-    assert.equal(spec.vendored_frameworks.split('/').some((part) => part.startsWith('.')), false);
+    assert.equal(
+      spec.vendored_frameworks.split('/').some((part) => part.startsWith('.')),
+      false,
+    );
     assert.equal(
       (spec.exclude_files ?? []).some((pattern) => pattern.includes('Vendor')),
       false,
