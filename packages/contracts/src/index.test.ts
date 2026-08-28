@@ -15,7 +15,7 @@ type RequiredProperty<T, K extends keyof T> = {} extends Pick<T, K> ? never : tr
 describe('cloud contracts', () => {
   it('has an explicit version', () => {
     assert.match(CONTRACT_VERSION, /^\d{4}-\d{2}-\d{2}$/);
-    assert.equal(CONTRACT_VERSION, '2026-08-27');
+    assert.equal(CONTRACT_VERSION, '2026-08-28');
     assert.equal(APPLE_EXCHANGE_PATH, '/v2/auth/apple/exchange');
   });
 

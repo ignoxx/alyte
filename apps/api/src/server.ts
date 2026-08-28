@@ -5,6 +5,9 @@ import {
   APPLE_EXCHANGE_PATH,
   CLOUD_ALLOWANCES_PATH,
   CLOUD_ALLOWANCES_RECONCILE_PATH,
+  CLOUD_REQUEST_CANCEL_PATH,
+  CLOUD_REQUEST_STATUS_PATH,
+  CLOUD_REQUESTS_PATH,
   CONTRACT_VERSION,
   REVENUECAT_WEBHOOK_PATH,
   type AccountDeletionResponse,
@@ -25,6 +28,7 @@ import {
 import { AuthFailure, AuthService, type AuthLogger, type Clock } from './auth.js';
 import { AccountDatabase } from './database.js';
 import { CommerceFailure, CommerceService, cloudMaxEnabledFromEnvironment } from './commerce.js';
+import { CloudRequestFailure, CloudRequestService } from './cloud-request.js';
 import { createRevenueCatAuthority, type RevenueCatAuthority } from './revenuecat.js';
 import {
   DEFAULT_LOCAL_RUNTIME_PATH,
@@ -46,6 +50,7 @@ export interface ServerOptions {
   readonly revenueCatAuthority?: RevenueCatAuthority;
   readonly revenueCatWebhookSecret?: string;
   readonly cloudMaxEnabled?: boolean;
+  readonly cloudRequestService?: CloudRequestService;
 }
 
 function bodyObject(request: FastifyRequest): Record<string, unknown> {
@@ -71,6 +76,17 @@ function idempotencyKey(request: FastifyRequest): string | undefined {
   }
   const body = bodyObject(request) as Partial<AccountDeletionRequest>;
   return body.idempotencyKey;
+}
+
+function headerIdempotencyKey(request: FastifyRequest): string | undefined {
+  const value = request.headers['idempotency-key'];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function requestIdParam(request: FastifyRequest): unknown {
+  const params = request.params;
+  if (typeof params !== 'object' || params === null || Array.isArray(params)) return undefined;
+  return (params as Record<string, unknown>).requestId;
 }
 
 function errorResponse(code: string, message: string): ApiErrorResponse {
@@ -144,6 +160,14 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
           'req.body.subject',
           'req.body.email',
           'req.body.name',
+          // Cloud Request bodies contain only bounded operational metadata in this slice, but
+          // redact the complete body so a future field cannot accidentally enter request logs.
+          'req.body',
+          'req.body.operation',
+          'req.body.byteCount',
+          'req.body.pageCount',
+          'req.body.devicePublicKeyJwk',
+          'req.body.contractVersion',
         ],
         censor: '[REDACTED]',
       },
@@ -192,6 +216,14 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     cloudMaxEnabled: options.cloudMaxEnabled ?? cloudMaxEnabledFromEnvironment(),
     ...(revenueCatWebhookSecret === undefined ? {} : { webhookSecret: revenueCatWebhookSecret }),
   });
+  const cloudRequests =
+    options.cloudRequestService ??
+    new CloudRequestService({
+      database,
+      commerce,
+      hashSecret: secret,
+      ...(options.clock === undefined ? {} : { clock: options.clock }),
+    });
   database.cleanupExpired(options.clock?.now() ?? new Date());
   const cleanupInterval = setInterval(
     () => database.cleanupExpired(options.clock?.now() ?? new Date()),
@@ -206,6 +238,11 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
       return;
     }
     if (error instanceof CommerceFailure) {
+      server.log.warn({ event: 'api.request_rejected', outcome: error.code }, 'request rejected');
+      void reply.status(error.statusCode).send(errorResponse(error.code, error.code));
+      return;
+    }
+    if (error instanceof CloudRequestFailure) {
       server.log.warn({ event: 'api.request_rejected', outcome: error.code }, 'request rejected');
       void reply.status(error.statusCode).send(errorResponse(error.code, error.code));
       return;
@@ -275,6 +312,33 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
       typeof signature === 'string' ? signature : undefined,
     );
   });
+
+  server.post(CLOUD_REQUESTS_PATH, async (request) => {
+    const authenticated = auth.authenticateAccess(bearerToken(request));
+    return cloudRequests.admit(
+      authenticated.accountId,
+      bodyObject(request),
+      headerIdempotencyKey(request),
+    );
+  });
+
+  server.get(CLOUD_REQUEST_STATUS_PATH, async (request) => {
+    const authenticated = auth.authenticateAccess(bearerToken(request));
+    return cloudRequests.status(authenticated.accountId, requestIdParam(request));
+  });
+
+  const cancelCloudRequest = async (request: FastifyRequest) => {
+    const authenticated = auth.authenticateAccess(bearerToken(request));
+    return cloudRequests.cancel(
+      authenticated.accountId,
+      requestIdParam(request),
+      headerIdempotencyKey(request),
+    );
+  };
+  server.post(CLOUD_REQUEST_CANCEL_PATH, cancelCloudRequest);
+  // DELETE is the resource-oriented spelling; POST /cancel remains available to clients whose
+  // transport only permits explicit action routes. Both share the same idempotent state change.
+  server.delete(CLOUD_REQUEST_STATUS_PATH, cancelCloudRequest);
 
   server.addHook('onClose', async () => {
     clearInterval(cleanupInterval);

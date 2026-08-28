@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
+import type { CloudRequestOperation, CloudRequestState } from '@alyte/contracts';
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 export const SESSION_RETENTION_MS = 24 * 60 * 60 * 1_000;
 export const OPERATION_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -118,6 +119,25 @@ export interface AllowanceLedgerRow {
   readonly grant_period_start: string | null;
   readonly period_end: string | null;
   readonly created_at: string;
+}
+
+export interface CloudRequestRow {
+  readonly id: string;
+  readonly account_id: string;
+  readonly operation: CloudRequestOperation;
+  readonly state: CloudRequestState;
+  readonly byte_count: number;
+  readonly page_count: number;
+  /** Canonical P-256 public JWK. This is operational metadata, never request payload. */
+  readonly device_public_key_jwk: string;
+  /** HMAC digest of the on-device idempotency capability; raw keys are never persisted. */
+  readonly idempotency_key_hash: string;
+  /** HMAC digest of the canonical bounded admission input. */
+  readonly request_fingerprint: string;
+  readonly contract_version: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly cancelled_at: string | null;
 }
 
 export interface SessionExportRow {
@@ -294,6 +314,27 @@ const migrations: readonly string[] = [
     ALTER TABLE allowance_ledger ADD COLUMN grant_period_start TEXT;
     CREATE INDEX allowance_ledger_grant_source_idx
       ON allowance_ledger(account_id, kind, grant_source_id);
+  `,
+  `
+    CREATE TABLE cloud_requests (
+      id TEXT PRIMARY KEY NOT NULL,
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      operation TEXT NOT NULL CHECK (operation IN ('intake-image', 'lab-report')),
+      state TEXT NOT NULL CHECK (state IN ('awaiting-upload', 'cancelled')),
+      byte_count INTEGER NOT NULL CHECK (byte_count > 0 AND byte_count <= 26214400),
+      page_count INTEGER NOT NULL CHECK (page_count > 0 AND page_count <= 20),
+      device_public_key_jwk TEXT NOT NULL,
+      idempotency_key_hash TEXT NOT NULL,
+      request_fingerprint TEXT NOT NULL,
+      contract_version TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      cancelled_at TEXT
+    );
+    CREATE UNIQUE INDEX cloud_requests_account_key_idx
+      ON cloud_requests(account_id, idempotency_key_hash);
+    CREATE INDEX cloud_requests_account_idx
+      ON cloud_requests(account_id, created_at, id);
   `,
 ];
 
@@ -927,5 +968,66 @@ export class AccountDatabase {
           entry.created_at,
         ).changes > 0
     );
+  }
+
+  findCloudRequest(accountId: string, requestId: string): CloudRequestRow | undefined {
+    return this.sqlite
+      .prepare(
+        `SELECT id, account_id, operation, state, byte_count, page_count,
+                device_public_key_jwk, idempotency_key_hash, request_fingerprint,
+                contract_version, created_at, updated_at, cancelled_at
+         FROM cloud_requests WHERE account_id = ? AND id = ?`,
+      )
+      .get(accountId, requestId) as CloudRequestRow | undefined;
+  }
+
+  findCloudRequestByIdempotencyHash(
+    accountId: string,
+    idempotencyKeyHash: string,
+  ): CloudRequestRow | undefined {
+    return this.sqlite
+      .prepare(
+        `SELECT id, account_id, operation, state, byte_count, page_count,
+                device_public_key_jwk, idempotency_key_hash, request_fingerprint,
+                contract_version, created_at, updated_at, cancelled_at
+         FROM cloud_requests WHERE account_id = ? AND idempotency_key_hash = ?`,
+      )
+      .get(accountId, idempotencyKeyHash) as CloudRequestRow | undefined;
+  }
+
+  createCloudRequest(request: CloudRequestRow): void {
+    this.sqlite
+      .prepare(
+        `INSERT INTO cloud_requests
+          (id, account_id, operation, state, byte_count, page_count,
+           device_public_key_jwk, idempotency_key_hash, request_fingerprint,
+           contract_version, created_at, updated_at, cancelled_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        request.id,
+        request.account_id,
+        request.operation,
+        request.state,
+        request.byte_count,
+        request.page_count,
+        request.device_public_key_jwk,
+        request.idempotency_key_hash,
+        request.request_fingerprint,
+        request.contract_version,
+        request.created_at,
+        request.updated_at,
+        request.cancelled_at,
+      );
+  }
+
+  cancelCloudRequest(accountId: string, requestId: string, cancelledAt: string): void {
+    this.sqlite
+      .prepare(
+        `UPDATE cloud_requests
+         SET state = 'cancelled', cancelled_at = COALESCE(cancelled_at, ?), updated_at = ?
+         WHERE account_id = ? AND id = ? AND state = 'awaiting-upload'`,
+      )
+      .run(cancelledAt, cancelledAt, accountId, requestId);
   }
 }

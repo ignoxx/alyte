@@ -9,7 +9,7 @@ describe('API foundation', () => {
     assert.equal(response.statusCode, 200);
     assert.deepEqual(response.json(), {
       status: 'ok',
-      contractVersion: '2026-08-27',
+      contractVersion: '2026-08-28',
       environment: 'local',
     });
     await server.close();

@@ -13,7 +13,13 @@ operation-scoped `Idempotency-Key` header (the JSON `idempotencyKey` fallback is
 trusted internal callers). Access tokens use `Authorization: Bearer`; refresh secrets are opaque
 and never returned by export. Apple exchange requires the disclosed `consentPolicyVersion` and a
 fresh 32-character raw nonce. Apple receives only its SHA-256 digest; Alyte retains only keyed
-digests for bounded replay prevention and never stores the raw nonce or identity token. The former
+digests for bounded replay prevention and never stores the raw nonce or identity token. The
+backend-only Cloud Request admission frontier accepts bounded non-health metadata at
+`POST /v1/cloud-requests`, exposes owner-only status at `GET /v1/cloud-requests/{requestId}`, and
+supports pre-upload cancellation at `POST /v1/cloud-requests/{requestId}/cancel` (or the equivalent
+`DELETE` resource route). Cloud requests retain only keyed idempotency/fingerprint digests and
+canonical device-key metadata; no media, filenames, OCR, Measurements, intake content, prompts,
+or model output enter this path. The former
 `/v1/auth/apple` routes reject with `auth_contract_version_unsupported`.
 
 For local development, SQLite defaults to `$TMPDIR/alyte-api/alyte.sqlite`; its stable session-hash

@@ -287,63 +287,71 @@ export class CommerceService {
   }
 
   reserve(accountId: string, kind: CloudAllowanceKind, requestId: string): ReservationResult {
+    return this.database.transaction(() => this.reserveInTransaction(accountId, kind, requestId));
+  }
+
+  /**
+   * Reserve one allowance unit while the caller owns the database transaction. Cloud Request
+   * admission uses this seam so request creation and reservation commit or roll back together.
+   */
+  reserveInTransaction(
+    accountId: string,
+    kind: CloudAllowanceKind,
+    requestId: string,
+  ): ReservationResult {
     if (!GRANT_KINDS.includes(kind) || !boundedString(requestId, 256)) {
       throw new CommerceFailure(400, 'allowance_request_invalid');
     }
     this.requireAccount(accountId);
-    return this.database.transaction(() => {
-      const existing = this.database.findAllowanceLedgerEntry(
-        accountId,
-        kind,
-        'reserve',
-        requestId,
-      );
-      if (existing !== undefined) {
-        return { requestId, kind, reserved: true };
-      }
-      const summary = this.summary(accountId);
-      const allowance = summary.allowances.find((item) => item.kind === kind);
-      if (allowance === undefined || allowance.remaining < 1) {
-        throw new CommerceFailure(409, 'allowance_exhausted');
-      }
-      const allocation = this.periodForReservation(accountId, kind);
-      this.database.addAllowanceLedgerEntry({
-        id: entryId(this.idFactory),
-        account_id: accountId,
-        kind,
-        entry_type: 'reserve',
-        units: 1,
-        source_id: requestId,
-        grant_source_id: allocation.grant.source_id,
-        grant_period_start: allocation.grant.grant_period_start,
-        period_end: allocation.grant.period_end,
-        created_at: this.now().toISOString(),
-      });
+    const existing = this.database.findAllowanceLedgerEntry(accountId, kind, 'reserve', requestId);
+    if (existing !== undefined) {
       return { requestId, kind, reserved: true };
+    }
+    const summary = this.summary(accountId);
+    const allowance = summary.allowances.find((item) => item.kind === kind);
+    if (allowance === undefined || allowance.remaining < 1) {
+      throw new CommerceFailure(409, 'allowance_exhausted');
+    }
+    const allocation = this.periodForReservation(accountId, kind);
+    this.database.addAllowanceLedgerEntry({
+      id: entryId(this.idFactory),
+      account_id: accountId,
+      kind,
+      entry_type: 'reserve',
+      units: 1,
+      source_id: requestId,
+      grant_source_id: allocation.grant.source_id,
+      grant_period_start: allocation.grant.grant_period_start,
+      period_end: allocation.grant.period_end,
+      created_at: this.now().toISOString(),
     });
+    return { requestId, kind, reserved: true };
   }
 
   release(requestId: string): void {
+    this.database.transaction(() => this.releaseInTransaction(requestId));
+  }
+
+  /** Release a reservation while the caller owns the database transaction. */
+  releaseInTransaction(requestId: string): void {
     const reservation = this.findReservation(requestId);
     if (reservation === undefined) return;
-    this.database.transaction(() => {
-      if (
-        this.database.findAllowanceLedgerEntry(
-          reservation.account_id,
-          reservation.kind,
-          'release',
-          requestId,
-        ) !== undefined ||
-        this.database.findAllowanceLedgerEntry(
-          reservation.account_id,
-          reservation.kind,
-          'consume',
-          requestId,
-        ) !== undefined
-      )
-        return;
-      this.addLedger(reservation.account_id, reservation.kind, 'release', requestId, reservation);
-    });
+    if (
+      this.database.findAllowanceLedgerEntry(
+        reservation.account_id,
+        reservation.kind,
+        'release',
+        requestId,
+      ) !== undefined ||
+      this.database.findAllowanceLedgerEntry(
+        reservation.account_id,
+        reservation.kind,
+        'consume',
+        requestId,
+      ) !== undefined
+    )
+      return;
+    this.addLedger(reservation.account_id, reservation.kind, 'release', requestId, reservation);
   }
 
   consume(requestId: string): void {

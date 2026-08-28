@@ -1,5 +1,5 @@
 /** Version of the shared API/contract artifact. */
-export const CONTRACT_VERSION = '2026-08-27';
+export const CONTRACT_VERSION = '2026-08-28';
 
 /** Consent copy remains independently versioned from transport/schema compatibility. */
 export const CONSENT_POLICY_VERSION = '2026-08-01';
@@ -16,6 +16,14 @@ export const APPLE_EXCHANGE_PATH = '/v2/auth/apple/exchange';
 export const CLOUD_ALLOWANCES_PATH = '/v1/cloud/allowances';
 export const CLOUD_ALLOWANCES_RECONCILE_PATH = '/v1/cloud/allowances/reconcile';
 export const REVENUECAT_WEBHOOK_PATH = '/v1/webhooks/revenuecat';
+
+/** Versioned admission frontier for the first asynchronous cloud request slice. */
+export const CLOUD_REQUESTS_PATH = '/v1/cloud-requests';
+export const CLOUD_REQUEST_STATUS_PATH = '/v1/cloud-requests/:requestId';
+export const CLOUD_REQUEST_CANCEL_PATH = '/v1/cloud-requests/:requestId/cancel';
+
+export const CLOUD_REQUEST_MAX_BYTES = 25 * 1024 * 1024;
+export const CLOUD_REQUEST_MAX_PAGES = 20;
 
 export const CLOUD_PRODUCT_IDS = {
   starterPack: 'alyte_starter_pack',
@@ -67,6 +75,54 @@ export type CloudPlanId = 'starter_pack' | 'cloud_plus' | 'cloud_max';
 export type CloudAllowanceKind = 'snap' | 'report';
 export type CloudEntitlementStatus = 'pending' | 'active' | 'exhausted' | 'expired' | 'revoked';
 export type CloudAllowanceWarning = 'normal' | 'near-limit' | 'critical' | 'exhausted';
+
+export type CloudRequestOperation = 'intake-image' | 'lab-report';
+
+/** This slice admits requests only until an upload can begin. Later states are owned by #14. */
+export type CloudRequestState = 'awaiting-upload' | 'cancelled';
+
+export type CloudRequestErrorCode =
+  | 'cloud_request_invalid'
+  | 'cloud_request_operation_invalid'
+  | 'cloud_request_metadata_invalid'
+  | 'cloud_request_contract_version_unsupported'
+  | 'device_public_key_invalid'
+  | 'idempotency_key_required'
+  | 'idempotency_key_invalid'
+  | 'idempotency_key_conflict'
+  | 'cloud_request_not_found'
+  | 'cloud_request_not_cancellable'
+  | 'allowance_exhausted';
+
+export interface P256PublicKeyJwk {
+  readonly kty: 'EC';
+  readonly crv: 'P-256';
+  readonly x: string;
+  readonly y: string;
+}
+
+export interface CloudRequestAdmissionRequest {
+  readonly operation: CloudRequestOperation;
+  readonly byteCount: number;
+  readonly pageCount: number;
+  readonly devicePublicKeyJwk: P256PublicKeyJwk;
+  readonly contractVersion: typeof CONTRACT_VERSION;
+}
+
+export interface CloudRequestStatusResponse {
+  readonly requestId: string;
+  readonly operation: CloudRequestOperation;
+  readonly state: CloudRequestState;
+  readonly byteCount: number;
+  readonly pageCount: number;
+  readonly contractVersion: typeof CONTRACT_VERSION;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly cancelledAt: string | null;
+}
+
+export type CloudRequestAdmissionResponse = CloudRequestStatusResponse;
+export type CloudRequestCancellationResponse = CloudRequestStatusResponse;
 
 export interface CloudAllowanceSummary {
   readonly kind: CloudAllowanceKind;
