@@ -23,6 +23,7 @@ import {
 import { CloudResultService } from './cloud-result.js';
 import { CloudResultStore } from './cloud-result-store.js';
 import { TransientUploadStore } from './transient-upload-store.js';
+import { createJobRunner } from './worker.js';
 
 const NOW = new Date('2026-08-28T12:00:00.000Z');
 const HASH_SECRET = 'p'.repeat(32);
@@ -168,7 +169,10 @@ function close(h: { directory: string; database: AccountDatabase }): void {
   rmSync(h.directory, { recursive: true, force: true });
 }
 
-function ledgerCounts(h: ReturnType<typeof harness>): { releases: number; consumes: number } {
+function ledgerCounts(h: { readonly database: AccountDatabase }): {
+  releases: number;
+  consumes: number;
+} {
   const ledger = h.database.listAllowanceLedger(ACCOUNT, 'snap');
   return {
     releases: ledger.filter((entry) => entry.entry_type === 'release').length,
@@ -231,6 +235,7 @@ describe('cloud processing failure policy', () => {
           category,
           lease_owner: h.lease.leaseOwner,
           recorded_at: NOW.toISOString(),
+          cleanup_pending: 0,
         });
       } finally {
         close(h);
@@ -258,6 +263,27 @@ describe('cloud processing failure policy', () => {
       assert.equal(h.uploads.hasCompleteArtifact(h.requestId), true);
       assert.equal(h.database.findAnalysisJobByRequest(h.requestId)?.attempts, 2);
       assert.deepEqual(ledgerCounts(h), { releases: 0, consumes: 0 });
+    } finally {
+      close(h);
+    }
+  });
+
+  it('computes retry delay from the clock after the SQLite write lock is acquired', () => {
+    const h = harness();
+    try {
+      const immediate = h.database.immediateTransaction.bind(h.database);
+      h.database.immediateTransaction = <T>(callback: () => T): T => {
+        // Model a write-lock wait during which the service clock advances. The transaction must
+        // derive available_at from this later instant, not from the pre-lock observation.
+        h.clock.advance(5_000);
+        return immediate(callback);
+      };
+      const transition = h.failures.handleFailure(h.lease, 'provider_failure');
+      assert.equal(transition.availableAt, '2026-08-28T12:00:06.000Z');
+      assert.equal(
+        h.database.findAnalysisJobByRequest(h.requestId)?.available_at,
+        transition.availableAt,
+      );
     } finally {
       close(h);
     }
@@ -366,36 +392,6 @@ describe('cloud processing failure policy', () => {
     }
   });
 
-  it('converges competing terminal finalizations to one failed transition and release', () => {
-    const h = harness();
-    try {
-      const competing = new CloudProcessingFailureService({
-        database: h.database,
-        uploadStore: h.uploads,
-        commerce: h.commerce,
-        clock: h.clock,
-      });
-      const remove = h.uploads.remove.bind(h.uploads);
-      let nested = false;
-      h.uploads.remove = (requestId: string): void => {
-        remove(requestId);
-        if (!nested) {
-          nested = true;
-          const winner = competing.handleFailure(h.lease, 'malformed_output');
-          assert.equal(winner.outcome, 'failed');
-        }
-      };
-
-      const result = h.failures.handleFailure(h.lease, 'malformed_output');
-      assert.equal(result.outcome, 'failed');
-      assert.equal(result.status.failureCategory, 'malformed_output');
-      assert.deepEqual(ledgerCounts(h), { releases: 1, consumes: 0 });
-      assert.equal(h.database.findAnalysisJobByRequest(h.requestId)?.state, 'failed');
-    } finally {
-      close(h);
-    }
-  });
-
   it('leaves state and accounting untouched when upload cleanup fails, then retries after reclaim', () => {
     const h = harness();
     try {
@@ -410,11 +406,20 @@ describe('cloud processing failure policy', () => {
           error.code === 'cloud_processing_cleanup_failed',
       );
       assert.equal(h.database.findAnalysisJobByRequest(h.requestId)?.state, 'processing');
+      assert.equal(h.database.findAnalysisJobOutcome(h.lease.jobId)?.cleanup_pending, 1);
       assert.equal(h.uploads.hasCompleteArtifact(h.requestId), true);
       assert.deepEqual(ledgerCounts(h), { releases: 0, consumes: 0 });
 
       h.uploads.remove = originalRemove;
       h.clock.advance(60_001);
+      assert.throws(
+        () => h.failures.handleFailure(h.lease, 'malformed_output'),
+        (error: unknown) =>
+          error instanceof CloudProcessingFailure &&
+          error.code === 'cloud_processing_context_mismatch',
+      );
+      assert.equal(h.uploads.hasCompleteArtifact(h.requestId), true);
+      assert.deepEqual(ledgerCounts(h), { releases: 0, consumes: 0 });
       const reclaimed = claim(h, 'processing-reclaimer');
       const terminal = h.failures.handleFailure(reclaimed, 'safety_refusal');
       assert.equal(terminal.status.state, 'failed');
@@ -448,6 +453,127 @@ describe('cloud processing failure policy', () => {
       assert.equal(terminal.status.state, 'failed');
       assert.deepEqual(ledgerCounts(h), { releases: 1, consumes: 0 });
     } finally {
+      close(h);
+    }
+  });
+
+  it('recovers a durable terminal intent after close, reopen, reclaim, and runner dispatch', async () => {
+    const h = harness();
+    let recovered: AccountDatabase | undefined;
+    try {
+      const originalMark = h.database.markAnalysisJobProcessingFailed;
+      h.database.markAnalysisJobProcessingFailed = () => {
+        throw new Error('crash after upload cleanup');
+      };
+      assert.throws(
+        () => h.failures.handleFailure(h.lease, 'unusable_output'),
+        (error: unknown) =>
+          error instanceof CloudProcessingFailure && error.code === 'cloud_processing_conflict',
+      );
+      assert.equal(h.database.findAnalysisJobOutcome(h.lease.jobId)?.cleanup_pending, 1);
+      assert.equal(h.uploads.hasCompleteArtifact(h.requestId), false);
+      h.database.markAnalysisJobProcessingFailed = originalMark;
+      h.database.close();
+
+      h.clock.advance(60_001);
+      recovered = new AccountDatabase({ filename: join(h.directory, 'cloud.sqlite') });
+      const uploads = new TransientUploadStore(h.directory);
+      const commerce = new CommerceService({ database: recovered, now: h.clock.now });
+      const failures = new CloudProcessingFailureService({
+        database: recovered,
+        uploadStore: uploads,
+        commerce,
+        clock: h.clock,
+      });
+      let providerCalls = 0;
+      let recoveryCalls = 0;
+      let resolveRecovery!: () => void;
+      const recovery = new Promise<void>((resolve) => {
+        resolveRecovery = resolve;
+      });
+      const runner = createJobRunner({
+        database: recovered,
+        clock: h.clock,
+        ownerId: 'recovery-runner',
+        pollIntervalMs: 1,
+        heartbeatIntervalMs: 10,
+        leaseDurationMs: 60_000,
+        handler: async () => {
+          providerCalls += 1;
+        },
+        failureProcessor: (lease, category) => {
+          recoveryCalls += 1;
+          failures.handleFailure(lease, category);
+          resolveRecovery();
+        },
+      });
+      runner.start();
+      await Promise.race([
+        recovery,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('recovery_runner_timeout')), 1_000),
+        ),
+      ]);
+      await runner.stop({ gracePeriodMs: 1_000 });
+      assert.equal(providerCalls, 0);
+      assert.equal(recoveryCalls, 1);
+      assert.equal(recovered.findAnalysisJobByRequest(h.requestId)?.state, 'failed');
+      assert.equal(recovered.findAnalysisJobOutcome(h.lease.jobId)?.cleanup_pending, 0);
+      assert.deepEqual(ledgerCounts({ database: recovered }), {
+        releases: 1,
+        consumes: 0,
+      });
+      assert.equal(uploads.hasCompleteArtifact(h.requestId), false);
+    } finally {
+      if (recovered?.sqlite.open) recovered.close();
+      close(h);
+    }
+  });
+
+  it('converges terminal intent and release across independent SQLite service owners', () => {
+    const h = harness();
+    const secondDatabase = new AccountDatabase({ filename: join(h.directory, 'cloud.sqlite') });
+    try {
+      const secondUploads = new TransientUploadStore(h.directory);
+      const secondCommerce = new CommerceService({
+        database: secondDatabase,
+        now: h.clock.now,
+      });
+      const competing = new CloudProcessingFailureService({
+        database: secondDatabase,
+        uploadStore: secondUploads,
+        commerce: secondCommerce,
+        clock: h.clock,
+      });
+      const remove = h.uploads.remove.bind(h.uploads);
+      let nested = false;
+      h.uploads.remove = (requestId: string): void => {
+        remove(requestId);
+        if (!nested) {
+          nested = true;
+          const winner = competing.handleFailure(h.lease, 'malformed_output');
+          assert.equal(winner.outcome, 'failed');
+        }
+      };
+
+      const result = h.failures.handleFailure(h.lease, 'malformed_output');
+      assert.equal(result.outcome, 'failed');
+      assert.deepEqual(secondDatabase.findAnalysisJobOutcome(h.lease.jobId), {
+        job_id: h.lease.jobId,
+        request_id: h.requestId,
+        outcome: 'failed',
+        category: 'malformed_output',
+        lease_owner: h.lease.leaseOwner,
+        recorded_at: NOW.toISOString(),
+        cleanup_pending: 0,
+      });
+      assert.equal(secondDatabase.findAnalysisJobByRequest(h.requestId)?.state, 'failed');
+      assert.deepEqual(ledgerCounts({ database: secondDatabase }), {
+        releases: 1,
+        consumes: 0,
+      });
+    } finally {
+      secondDatabase.close();
       close(h);
     }
   });
@@ -551,16 +677,42 @@ describe('cloud processing migration', () => {
                    'migration-grant', 'migration-grant', NULL, NULL, ?)`,
         )
         .run(NOW.toISOString());
+      legacy.sqlite
+        .prepare(
+          `INSERT INTO analysis_job_outcomes
+            (job_id, request_id, outcome, category, lease_owner, recorded_at, cleanup_pending)
+           VALUES ('migration-job', 'migration-request', 'failed', 'safety_refusal',
+                   'migration-owner', ?, 0)`,
+        )
+        .run(NOW.toISOString());
       const before = {
         requests: legacy.sqlite.prepare('SELECT * FROM cloud_requests').all(),
         jobs: legacy.sqlite.prepare('SELECT * FROM analysis_jobs').all(),
         results: legacy.sqlite.prepare('SELECT * FROM cloud_result_cache').all(),
         ledger: legacy.sqlite.prepare('SELECT * FROM allowance_ledger').all(),
+        outcomes: legacy.sqlite.prepare('SELECT * FROM analysis_job_outcomes').all(),
       };
-      // Reopen this populated pre-v12 shape so the test exercises the forward migration rather
-      // than merely checking a freshly created database.
-      legacy.sqlite.exec('DROP TABLE analysis_job_outcomes');
-      legacy.sqlite.prepare('DELETE FROM schema_migrations WHERE version = 12').run();
+      // Reopen this populated pre-v13 shape so the test exercises the additive forward migration
+      // rather than merely checking a freshly created database.
+      legacy.sqlite.exec(`
+        ALTER TABLE analysis_job_outcomes RENAME TO analysis_job_outcomes_v12;
+        CREATE TABLE analysis_job_outcomes (
+          job_id TEXT PRIMARY KEY NOT NULL REFERENCES analysis_jobs(id) ON DELETE CASCADE,
+          request_id TEXT NOT NULL UNIQUE REFERENCES cloud_requests(id) ON DELETE CASCADE,
+          outcome TEXT NOT NULL CHECK (outcome IN ('retry', 'failed')),
+          category TEXT NOT NULL CHECK (
+            category IN ('provider_failure', 'timeout', 'safety_refusal', 'malformed_output', 'unusable_output')
+          ),
+          lease_owner TEXT NOT NULL,
+          recorded_at TEXT NOT NULL
+        );
+        INSERT INTO analysis_job_outcomes
+          (job_id, request_id, outcome, category, lease_owner, recorded_at)
+          SELECT job_id, request_id, outcome, category, lease_owner, recorded_at
+            FROM analysis_job_outcomes_v12;
+        DROP TABLE analysis_job_outcomes_v12;
+      `);
+      legacy.sqlite.prepare('DELETE FROM schema_migrations WHERE version = 13').run();
       legacy.close();
 
       const migrated = new AccountDatabase({ filename });
@@ -576,6 +728,10 @@ describe('cloud processing migration', () => {
       assert.deepEqual(
         migrated.sqlite.prepare('SELECT * FROM allowance_ledger').all(),
         before.ledger,
+      );
+      assert.deepEqual(
+        migrated.sqlite.prepare('SELECT * FROM analysis_job_outcomes').all(),
+        before.outcomes.map((row) => ({ ...(row as object), cleanup_pending: 0 })),
       );
       assert.deepEqual(
         migrated.sqlite

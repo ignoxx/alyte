@@ -245,6 +245,28 @@ class DurableJobRunner implements JobRunner {
     try {
       this.logInfo(claimed.handler_version, 'claimed');
       this.scheduleHeartbeat(active);
+      if (claimed.failure_cleanup_pending === 1) {
+        // A terminal intent is durable before media cleanup. Reclaimed jobs go straight to the
+        // typed cleanup/finalization seam; the ordinary provider handler is never replayed.
+        const category = claimed.failure_cleanup_category;
+        if (!isProcessingFailureCategory(category)) {
+          this.logWarn(claimed.handler_version, 'failure_recovery_category_invalid');
+          return;
+        }
+        if (this.failureProcessor === undefined) {
+          this.logWarn(claimed.handler_version, 'failure_recovery_unconfigured', { category });
+          return;
+        }
+        try {
+          await this.failureProcessor({ jobId: claimed.id, leaseOwner: this.ownerId }, category);
+          this.logInfo(claimed.handler_version, 'failure_recovered', { category });
+        } catch {
+          // Keep the recovery lease until expiry. The durable intent is the only source of the
+          // category, so a later owner can retry cleanup without provider replay.
+          this.logWarn(claimed.handler_version, 'failure_recovery_failed', { category });
+        }
+        return;
+      }
       const handlerOutcome = await this.handler(claimed, {
         heartbeat: () => this.heartbeat(active),
       });

@@ -106,7 +106,7 @@ describe('cloud identity database migrations', () => {
             version: number;
           }
         ).version,
-        12,
+        13,
       );
       assert.deepEqual(
         first.sqlite

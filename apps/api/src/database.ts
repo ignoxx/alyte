@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import type { CloudRequestOperation, CloudRequestState } from '@alyte/contracts';
 
-export const CURRENT_SCHEMA_VERSION = 12;
+export const CURRENT_SCHEMA_VERSION = 13;
 
 export const SESSION_RETENTION_MS = 24 * 60 * 60 * 1_000;
 export const OPERATION_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -186,6 +186,8 @@ export interface AnalysisJobOutcomeRow {
   readonly category: CloudProcessingFailureCategory;
   readonly lease_owner: string;
   readonly recorded_at: string;
+  /** A failed terminal intent remains pending until transient media cleanup and finalization commit. */
+  readonly cleanup_pending: number;
 }
 
 /** Allowlisted metadata for one ciphertext-only result cache entry. */
@@ -224,6 +226,9 @@ export interface AnalysisJobRow {
   readonly failure_category: string | null;
   readonly created_at: string;
   readonly updated_at: string;
+  /** Joined claim-only projection for durable terminal-failure recovery. */
+  readonly failure_cleanup_pending?: number;
+  readonly failure_cleanup_category?: CloudProcessingFailureCategory | null;
 }
 
 export type AnalysisJobLeaseOutcome =
@@ -584,6 +589,12 @@ const migrations: readonly string[] = [
       recorded_at TEXT NOT NULL
     );
   `,
+  `
+    -- A terminal intent is durable before transient media deletion. Existing replay markers are
+    -- already complete; only the new failed-intent rows use cleanup_pending = 1.
+    ALTER TABLE analysis_job_outcomes
+      ADD COLUMN cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1));
+  `,
 ];
 
 export class AccountDatabase {
@@ -630,6 +641,11 @@ export class AccountDatabase {
 
   transaction<T>(callback: () => T): T {
     return this.sqlite.transaction(callback)();
+  }
+
+  /** Acquire SQLite's write lock before reading time-sensitive state. Never hold this over I/O. */
+  immediateTransaction<T>(callback: () => T): T {
+    return this.sqlite.transaction(callback).immediate();
   }
 
   findAccountByAppleSubject(subject: string): AccountRow | undefined {
@@ -1229,14 +1245,15 @@ export class AccountDatabase {
     this.sqlite
       .prepare(
         `INSERT INTO analysis_job_outcomes
-          (job_id, request_id, outcome, category, lease_owner, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+          (job_id, request_id, outcome, category, lease_owner, recorded_at, cleanup_pending)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(job_id) DO UPDATE SET
            request_id = excluded.request_id,
            outcome = excluded.outcome,
            category = excluded.category,
            lease_owner = excluded.lease_owner,
-           recorded_at = excluded.recorded_at`,
+           recorded_at = excluded.recorded_at,
+           cleanup_pending = excluded.cleanup_pending`,
       )
       .run(
         outcome.job_id,
@@ -1245,6 +1262,7 @@ export class AccountDatabase {
         outcome.category,
         outcome.lease_owner,
         outcome.recorded_at,
+        outcome.cleanup_pending,
       );
   }
 
@@ -1631,10 +1649,27 @@ export class AccountDatabase {
     const claim = this.sqlite.transaction(() => {
       const candidate = this.sqlite
         .prepare(
-          `SELECT * FROM analysis_jobs
+          `SELECT analysis_jobs.*,
+                  CASE WHEN EXISTS (
+                    SELECT 1 FROM analysis_job_outcomes
+                    WHERE analysis_job_outcomes.job_id = analysis_jobs.id
+                      AND analysis_job_outcomes.outcome = 'failed'
+                      AND analysis_job_outcomes.cleanup_pending = 1
+                  ) THEN 1 ELSE 0 END AS failure_cleanup_pending,
+                  (SELECT category FROM analysis_job_outcomes
+                   WHERE analysis_job_outcomes.job_id = analysis_jobs.id
+                     AND analysis_job_outcomes.outcome = 'failed'
+                     AND analysis_job_outcomes.cleanup_pending = 1
+                   LIMIT 1) AS failure_cleanup_category
+           FROM analysis_jobs
            WHERE handler_version IN (${placeholders})
              AND (
-               (state = 'queued' AND available_at <= ?)
+               (state = 'queued' AND available_at <= ? AND NOT EXISTS (
+                 SELECT 1 FROM analysis_job_outcomes
+                 WHERE analysis_job_outcomes.job_id = analysis_jobs.id
+                   AND analysis_job_outcomes.outcome = 'failed'
+                   AND analysis_job_outcomes.cleanup_pending = 1
+               ))
                OR (state = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
              )
            ORDER BY available_at ASC, id ASC
@@ -1668,8 +1703,28 @@ export class AccountDatabase {
           options.now,
         );
       if (updated.changes !== 1) return undefined;
+      // A retry marker authorizes only an exact replay of the attempt that produced it. Once a
+      // different owner claims the next attempt, it must receive a fresh provider category; a
+      // durable terminal-intent marker is never removed here.
+      this.sqlite
+        .prepare("DELETE FROM analysis_job_outcomes WHERE job_id = ? AND outcome = 'retry'")
+        .run(candidate.id);
       return this.sqlite
-        .prepare('SELECT * FROM analysis_jobs WHERE id = ?')
+        .prepare(
+          `SELECT analysis_jobs.*,
+                  CASE WHEN EXISTS (
+                    SELECT 1 FROM analysis_job_outcomes
+                    WHERE analysis_job_outcomes.job_id = analysis_jobs.id
+                      AND analysis_job_outcomes.outcome = 'failed'
+                      AND analysis_job_outcomes.cleanup_pending = 1
+                  ) THEN 1 ELSE 0 END AS failure_cleanup_pending,
+                  (SELECT category FROM analysis_job_outcomes
+                   WHERE analysis_job_outcomes.job_id = analysis_jobs.id
+                     AND analysis_job_outcomes.outcome = 'failed'
+                     AND analysis_job_outcomes.cleanup_pending = 1
+                   LIMIT 1) AS failure_cleanup_category
+           FROM analysis_jobs WHERE analysis_jobs.id = ?`,
+        )
         .get(candidate.id) as AnalysisJobRow;
     });
     // Acquire the SQLite write lock before reading the candidate. Two runner processes then

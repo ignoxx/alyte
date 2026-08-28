@@ -89,6 +89,10 @@ export interface CloudProcessingFailureServiceOptions {
 
 const systemClock = { now: () => new Date() };
 
+type RetryDecision =
+  | { readonly kind: 'retry'; readonly transition: CloudProcessingTransition }
+  | { readonly kind: 'terminal' };
+
 /**
  * Owns the non-usable processing path. Provider code supplies only a typed category; this class
  * decides whether the live attempt can be retried or must be cleaned up and released. It never
@@ -123,36 +127,43 @@ export class CloudProcessingFailureService {
     }
 
     // A usable staged/ready envelope wins over any late provider failure. This check is before
-    // cleanup, and the same guard is repeated inside the transaction for a cleanup race.
-    const existingResult = this.database.findCloudResultCache(request.id);
-    if (existingResult !== undefined) {
+    // cleanup, and the same guard is repeated inside the finalization transaction.
+    if (this.database.findCloudResultCache(request.id) !== undefined) {
       throw new CloudProcessingFailure(409, 'cloud_processing_conflict');
     }
 
     const previous = this.database.findAnalysisJobOutcome(job.id);
-    if (
-      previous !== undefined &&
-      previous.request_id === request.id &&
-      previous.category !== category &&
-      (job.state === 'queued' || job.state === 'failed')
-    ) {
+    if (previous !== undefined && previous.request_id === request.id) {
+      if (
+        previous.category !== category &&
+        previous.outcome === 'failed' &&
+        (previous.cleanup_pending === 1 || job.state === 'failed')
+      ) {
+        throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
+      }
+      if (previous.outcome === 'failed' && previous.cleanup_pending === 1) {
+        // The intent is authoritative. A reclaimed owner must finish this path and must never
+        // invoke the ordinary provider handler or require a provider response again.
+        const now = this.clock.now();
+        if (!isLive(job, lease, now.getTime())) {
+          throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
+        }
+        return this.finishPendingFailure(lease, request.id, category);
+      }
+      if (
+        previous.category === category &&
+        previous.lease_owner === lease.leaseOwner &&
+        ((previous.outcome === 'retry' && job.state === 'queued') ||
+          (previous.outcome === 'failed' && job.state === 'failed'))
+      ) {
+        return {
+          outcome: previous.outcome,
+          category,
+          status: this.status(request.account_id, request.id),
+          availableAt: previous.outcome === 'retry' ? job.available_at : null,
+        };
+      }
       throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
-    }
-    if (
-      previous !== undefined &&
-      previous.request_id === request.id &&
-      previous.category === category &&
-      previous.lease_owner === lease.leaseOwner &&
-      ((previous.outcome === 'retry' && job.state === 'queued') ||
-        (previous.outcome === 'failed' && job.state === 'failed'))
-    ) {
-      const status = this.status(request.account_id, request.id);
-      return {
-        outcome: previous.outcome,
-        category,
-        status,
-        availableAt: previous.outcome === 'retry' ? job.available_at : null,
-      };
     }
 
     const now = this.clock.now();
@@ -160,44 +171,34 @@ export class CloudProcessingFailureService {
       throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
     }
 
-    const uploadExpiryMs = Date.parse(request.upload_expires_at);
-    const nextAvailableMs = now.getTime() + retryDelayMs(job.attempts);
-    const canRetry =
-      retryable.has(category) &&
-      job.attempts < CLOUD_PROCESSING_MAX_ATTEMPTS &&
-      Number.isFinite(uploadExpiryMs) &&
-      nextAvailableMs < uploadExpiryMs;
-    if (canRetry) {
+    if (retryable.has(category)) {
       try {
         // A retry is useful only while the exact submitted artifact is still available. A
-        // missing/wrong-sized artifact converges through the same cleanup-before-failure path.
+        // missing/wrong-sized artifact converges through the durable terminal-intent path.
         if (!this.uploadStore.hasExactSize(request.id, request.byte_count)) {
-          return this.failAfterCleanup(lease, request.id, category);
+          return this.terminalFailure(lease, request.id, category);
         }
       } catch {
         throw new CloudProcessingFailure(503, 'cloud_processing_cleanup_failed');
       }
-      return this.retry(lease, request.id, category, new Date(nextAvailableMs).toISOString());
+      const decision = this.retryOrTerminal(lease, request.id, category);
+      if (decision.kind === 'retry') return decision.transition;
     }
-    return this.failAfterCleanup(lease, request.id, category);
+    return this.terminalFailure(lease, request.id, category);
   }
 
-  /** Alias kept explicit for the provider child that will call this typed outcome seam. */
-  processFailure(lease: CloudProcessingLease, categoryValue: unknown): CloudProcessingTransition {
-    return this.handleFailure(lease, categoryValue);
-  }
-
-  private retry(
+  private retryOrTerminal(
     lease: CloudProcessingLease,
     requestId: string,
     category: CloudProcessingFailureCategory,
-    availableAt: string,
-  ): CloudProcessingTransition {
+  ): RetryDecision {
     try {
-      return this.database.transaction(() => {
-        // Read the lease clock inside the guarded transaction. A write-lock wait must not turn
-        // a lease that expired during the wait into an authorized mutation.
-        const now = this.clock.now().toISOString();
+      return this.database.immediateTransaction(() => {
+        // All retry eligibility, expiry comparison, and timestamp arithmetic happen after the
+        // SQLite write lock is acquired. A lock wait or clock advance cannot erase the delay.
+        const now = this.clock.now();
+        const nowIso = now.toISOString();
+        const nowMs = now.getTime();
         const request = this.database.findCloudRequestById(requestId);
         const job = this.database.findAnalysisJobById(lease.jobId);
         if (request === undefined || job === undefined || job.request_id !== requestId) {
@@ -209,22 +210,27 @@ export class CloudProcessingFailureService {
         if (this.database.findCloudResultCache(requestId) !== undefined) {
           throw new CloudProcessingFailure(409, 'cloud_processing_conflict');
         }
-        if (!isLive(job, lease, Date.parse(now))) {
+        if (!isLive(job, lease, nowMs)) {
           throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
         }
-        if (Date.parse(availableAt) >= Date.parse(request.upload_expires_at)) {
-          throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
+        const uploadExpiryMs = Date.parse(request.upload_expires_at);
+        const availableAtMs = nowMs + retryDelayMs(job.attempts);
+        if (
+          !Number.isFinite(uploadExpiryMs) ||
+          nowMs >= uploadExpiryMs ||
+          job.attempts >= CLOUD_PROCESSING_MAX_ATTEMPTS ||
+          availableAtMs >= uploadExpiryMs
+        ) {
+          return { kind: 'terminal' as const };
         }
-        if (Date.parse(now) >= Date.parse(request.upload_expires_at)) {
-          throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
-        }
+        const availableAt = new Date(availableAtMs).toISOString();
         if (
           !this.database.markAnalysisJobRetried(
             job.id,
             requestId,
             lease.leaseOwner,
             category,
-            now,
+            nowIso,
             availableAt,
           )
         ) {
@@ -236,17 +242,21 @@ export class CloudProcessingFailureService {
           outcome: 'retry',
           category,
           lease_owner: lease.leaseOwner,
-          recorded_at: now,
+          recorded_at: nowIso,
+          cleanup_pending: 0,
         });
         const current = this.database.findCloudRequest(request.account_id, requestId);
         if (current === undefined) {
           throw new CloudProcessingFailure(404, 'cloud_processing_not_available');
         }
         return {
-          outcome: 'retry' as const,
-          category,
-          status: toStatus(current),
-          availableAt,
+          kind: 'retry' as const,
+          transition: {
+            outcome: 'retry' as const,
+            category,
+            status: toStatus(current),
+            availableAt,
+          },
         };
       });
     } catch (error) {
@@ -255,19 +265,32 @@ export class CloudProcessingFailureService {
     }
   }
 
-  private failAfterCleanup(
+  private terminalFailure(
     lease: CloudProcessingLease,
     requestId: string,
     category: CloudProcessingFailureCategory,
   ): CloudProcessingTransition {
-    // Removal is deliberately outside SQLite. If it fails, no public state or ledger row moves;
-    // the processing lease expires and a later owner can retry this category without a response.
-    this.removeTransientUpload(requestId);
+    const intent = this.acceptTerminalIntent(lease, requestId, category);
+    if (intent === 'replayed') {
+      return {
+        outcome: 'failed',
+        category,
+        status: this.statusForRequest(requestId),
+        availableAt: null,
+      };
+    }
+    return this.finishPendingFailure(lease, requestId, category);
+  }
+
+  private acceptTerminalIntent(
+    lease: CloudProcessingLease,
+    requestId: string,
+    category: CloudProcessingFailureCategory,
+  ): 'accepted' | 'replayed' {
     try {
-      return this.database.transaction(() => {
-        // Revalidate against the clock inside the transaction after cleanup and any write-lock
-        // wait, so an expired owner can never commit a terminal transition.
-        const now = this.clock.now().toISOString();
+      return this.database.immediateTransaction(() => {
+        const now = this.clock.now();
+        const nowIso = now.toISOString();
         const request = this.database.findCloudRequestById(requestId);
         const job = this.database.findAnalysisJobById(lease.jobId);
         if (request === undefined || job === undefined || job.request_id !== requestId) {
@@ -276,8 +299,72 @@ export class CloudProcessingFailureService {
         if (request.state !== 'queued') {
           throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
         }
-        const result = this.database.findCloudResultCache(requestId);
-        if (result !== undefined) {
+        if (this.database.findCloudResultCache(requestId) !== undefined) {
+          throw new CloudProcessingFailure(409, 'cloud_processing_conflict');
+        }
+        const previous = this.database.findAnalysisJobOutcome(job.id);
+        if (previous !== undefined) {
+          if (previous.request_id !== requestId || previous.category !== category) {
+            throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
+          }
+          if (previous.outcome === 'failed' && previous.cleanup_pending === 1) {
+            if (!isLive(job, lease, now.getTime())) {
+              throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
+            }
+            return 'accepted';
+          }
+          if (
+            previous.outcome === 'failed' &&
+            previous.lease_owner === lease.leaseOwner &&
+            job.state === 'failed'
+          ) {
+            return 'replayed';
+          }
+          throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
+        }
+        if (!isLive(job, lease, now.getTime())) {
+          throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
+        }
+        // This is the durable authority for terminal category and outcome. It is committed
+        // separately from filesystem I/O so a crash after this point is recoverable by reclaim.
+        this.database.recordAnalysisJobOutcome({
+          job_id: job.id,
+          request_id: requestId,
+          outcome: 'failed',
+          category,
+          lease_owner: lease.leaseOwner,
+          recorded_at: nowIso,
+          cleanup_pending: 1,
+        });
+        return 'accepted';
+      });
+    } catch (error) {
+      if (error instanceof CloudProcessingFailure) throw error;
+      throw new CloudProcessingFailure(503, 'cloud_processing_conflict');
+    }
+  }
+
+  private finishPendingFailure(
+    lease: CloudProcessingLease,
+    requestId: string,
+    category: CloudProcessingFailureCategory,
+  ): CloudProcessingTransition {
+    // Cleanup remains outside SQLite. The durable pending intent means a cleanup failure or
+    // process crash leaves a bounded recovery state without charging or losing the category.
+    this.removeTransientUpload(requestId);
+    try {
+      return this.database.immediateTransaction(() => {
+        const now = this.clock.now();
+        const nowIso = now.toISOString();
+        const request = this.database.findCloudRequestById(requestId);
+        const job = this.database.findAnalysisJobById(lease.jobId);
+        if (request === undefined || job === undefined || job.request_id !== requestId) {
+          throw new CloudProcessingFailure(404, 'cloud_processing_not_available');
+        }
+        if (request.state !== 'queued') {
+          throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
+        }
+        if (this.database.findCloudResultCache(requestId) !== undefined) {
           throw new CloudProcessingFailure(409, 'cloud_processing_conflict');
         }
 
@@ -286,8 +373,9 @@ export class CloudProcessingFailureService {
           previous !== undefined &&
           previous.request_id === requestId &&
           previous.category === category &&
-          previous.lease_owner === lease.leaseOwner &&
           previous.outcome === 'failed' &&
+          previous.cleanup_pending === 0 &&
+          previous.lease_owner === lease.leaseOwner &&
           job.state === 'failed'
         ) {
           const current = this.database.findCloudRequest(request.account_id, requestId);
@@ -301,7 +389,17 @@ export class CloudProcessingFailureService {
             availableAt: null,
           };
         }
-        if (!isLive(job, lease, Date.parse(now))) {
+        if (
+          previous === undefined ||
+          previous.request_id !== requestId ||
+          previous.category !== category ||
+          previous.outcome !== 'failed' ||
+          previous.cleanup_pending !== 1
+        ) {
+          throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
+        }
+        if (!isLive(job, lease, now.getTime())) {
+          // Intent stays pending for the owner that successfully reclaims the job.
           throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
         }
         if (
@@ -310,7 +408,7 @@ export class CloudProcessingFailureService {
             requestId,
             lease.leaseOwner,
             category,
-            now,
+            nowIso,
           )
         ) {
           throw new CloudProcessingFailure(409, 'cloud_processing_context_mismatch');
@@ -320,8 +418,10 @@ export class CloudProcessingFailureService {
           request_id: requestId,
           outcome: 'failed',
           category,
+          // The finalizing owner is the only one allowed to replay the completed transition.
           lease_owner: lease.leaseOwner,
-          recorded_at: now,
+          recorded_at: nowIso,
+          cleanup_pending: 0,
         });
         this.commerce.releaseInTransaction(requestId);
         const current = this.database.findCloudRequest(request.account_id, requestId);
@@ -337,8 +437,8 @@ export class CloudProcessingFailureService {
       });
     } catch (error) {
       if (error instanceof CloudProcessingFailure) throw error;
-      // The upload was already removed, but the reservation and processing row remain intact;
-      // retrying after lease reclaim is safe and cannot consume the allowance.
+      // The upload may already be removed, but the pending intent and reservation remain intact;
+      // reclaiming the lease safely retries cleanup/finalization without provider replay.
       throw new CloudProcessingFailure(503, 'cloud_processing_conflict');
     }
   }
@@ -354,6 +454,14 @@ export class CloudProcessingFailureService {
     }
   }
 
+  private statusForRequest(requestId: string): CloudRequestStatusResponse {
+    const request = this.database.findCloudRequestById(requestId);
+    if (request === undefined) {
+      throw new CloudProcessingFailure(404, 'cloud_processing_not_available');
+    }
+    return this.status(request.account_id, requestId);
+  }
+
   private status(accountId: string, requestId: string): CloudRequestStatusResponse {
     const row = this.database.findCloudRequest(accountId, requestId);
     if (row === undefined) {
@@ -362,6 +470,3 @@ export class CloudProcessingFailureService {
     return toStatus(row);
   }
 }
-
-/** Short name for callers that do not need to distinguish the failure policy from its seam. */
-export { CloudProcessingFailureService as CloudFailureService };

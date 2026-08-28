@@ -499,8 +499,9 @@ finish, its lease expires for the new process. Volume-backed releases may have b
 is accepted for the MVP. Configure a health endpoint, restart policy, and deployment draining time.
 
 Temporary uploads live on the same persistent volume and are deleted immediately after provider use
-plus by defensive expiry cleanup. Filesystem deletion cannot be atomic with SQLite, so completion
-records cleanup intent and the scheduler removes any orphan. Scheduled volume backups and a tested
+plus by defensive expiry cleanup. Filesystem deletion cannot be atomic with SQLite, so terminal
+failure first records a bounded cleanup-pending intent and the scheduler or reclaimed runner
+finishes that persisted category without replaying the provider. Scheduled volume backups and a tested
 encrypted off-platform SQLite backup protect durable operational state; transient health uploads do
 not need long-term backup retention.
 
@@ -530,8 +531,8 @@ All mutating endpoints accept an idempotency key generated on-device.
 3. `POST /v1/cloud-requests/{id}/complete-upload` seals admission and atomically inserts a durable
    SQLite job.
 4. The runner reads the artifact from transient volume storage, invokes the configured model adapter, validates the response,
-   deletes the upload, and either records a non-chargeable failure or atomically consumes one unit
-   when a usable schema-valid result exists.
+   commits an allowlisted non-chargeable failure intent before deleting a failed upload, and then
+   either finalizes that failure or atomically consumes one unit when a usable schema-valid result exists.
 5. The worker encrypts the result for the requesting device, removes plaintext process buffers as
    practical, and stores only the envelope in the TTL result store.
 6. `GET /v1/cloud-requests/{id}` returns status and non-sensitive failure categories.
@@ -547,8 +548,9 @@ Processing failures use a closed, non-sensitive taxonomy: `provider_failure`, `t
 retry, for at most three total attempts. Retry availability uses deterministic one- and two-second
 backoff for that three-attempt limit (with a 30-second policy cap), and is scheduled
 only when the next attempt remains strictly before transient upload expiry. Permanent failures and
-exhausted retries remove the transient upload before a short transaction marks the job failed and
-releases its reservation.
+exhausted retries commit their allowlisted terminal intent before removing the transient upload;
+after cleanup, a short transaction marks the job failed and releases its reservation. Retry
+eligibility and timestamps are calculated after the SQLite write lock is acquired.
 Cleanup failure leaves the live job, upload, and reservation retryable; it cannot publish a failed
 status or release early.
 
