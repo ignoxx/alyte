@@ -21,6 +21,7 @@ import {
   decodeCloudResultEnvelope,
   decodeCloudResultEnvelopeJson,
   serializeCloudResultEnvelope,
+  type CloudRequestStatusResponse,
   type CloudResultEnvelope,
   type P256PublicKeyJwk,
 } from '@alyte/contracts';
@@ -32,6 +33,7 @@ import {
   CLOUD_RESULT_RETENTION_MS,
   CloudResultFailure,
   CloudResultService,
+  type CloudResultLease,
 } from './cloud-result.js';
 import { CloudResultStore, CloudResultStoreFailure } from './cloud-result-store.js';
 import { TransientUploadStore } from './transient-upload-store.js';
@@ -196,6 +198,30 @@ function claim(
   return job;
 }
 
+function lease(
+  job: NonNullable<ReturnType<AccountDatabase['claimAnalysisJob']>>,
+): CloudResultLease {
+  assert.ok(job.lease_owner);
+  return { jobId: job.id, leaseOwner: job.lease_owner };
+}
+
+function completeResult(
+  h: ReturnType<typeof harness>,
+  requestId: string,
+  owner = 'result-worker',
+): {
+  readonly job: NonNullable<ReturnType<AccountDatabase['claimAnalysisJob']>>;
+  readonly result: CloudResultEnvelope;
+  readonly lease: CloudResultLease;
+} {
+  const job = claim(h, owner);
+  const result = envelope(requestId);
+  const resultLease = lease(job);
+  h.results.stage(resultLease, result);
+  h.results.finalize(resultLease);
+  return { job, result, lease: resultLease };
+}
+
 describe('cloud result cache', () => {
   it('keeps a staged envelope invisible, removes upload, and atomically consumes once on finalize', () => {
     const h = harness();
@@ -203,7 +229,8 @@ describe('cloud result cache', () => {
       const requestId = admitAndQueue(h);
       const job = claim(h);
       const result = envelope(requestId);
-      const staged = h.results.stage(result, { jobId: job.id, leaseOwner: 'result-worker' });
+      const resultLease = lease(job);
+      const staged = h.results.stage(resultLease, result);
       assert.equal(staged.state, 'queued');
       assert.equal(staged.resultAvailable, false);
       assert.equal(staged.resultExpiresAt, null);
@@ -216,7 +243,7 @@ describe('cloud result cache', () => {
         0,
       );
 
-      const ready = h.results.finalize({ jobId: job.id, leaseOwner: 'result-worker' });
+      const ready = h.results.finalize(resultLease);
       assert.equal(ready.state, 'ready');
       assert.equal(ready.resultAvailable, true);
       assert.equal(h.uploadStore.hasCompleteArtifact(requestId), false);
@@ -227,7 +254,10 @@ describe('cloud result cache', () => {
           .filter((row) => row.entry_type === 'consume').length,
         1,
       );
-      assert.deepEqual(h.results.finalize({ jobId: job.id, leaseOwner: 'result-worker' }), ready);
+      const completion = h.database.findCloudResultCache(requestId);
+      assert.equal(completion?.completion_job_id, resultLease.jobId);
+      assert.equal(completion?.completion_lease_owner, resultLease.leaseOwner);
+      assert.deepEqual(h.results.finalize(resultLease), ready);
       assert.equal(
         h.database
           .listAllowanceLedger(ACCOUNT, 'snap')
@@ -237,6 +267,72 @@ describe('cloud result cache', () => {
       assert.deepEqual(h.results.retrieve(ACCOUNT, requestId), serialized(result));
       assert.equal(h.database.findCloudResultCache(requestId)?.state, 'retrieved');
     } finally {
+      close(h);
+    }
+  });
+
+  it('accepts only the exact authorized completion replay across result service owners', async () => {
+    const h = harness();
+    let secondDatabase: AccountDatabase | undefined;
+    try {
+      const requestId = admitAndQueue(h);
+      const job = claim(h, 'completion-owner');
+      const resultLease = lease(job);
+      const result = envelope(requestId);
+      h.results.stage(resultLease, result);
+
+      secondDatabase = new AccountDatabase({ filename: join(h.directory, 'cloud.sqlite') });
+      const secondCommerce = new CommerceService({ database: secondDatabase, now: h.clock.now });
+      const secondResults = new CloudResultService({
+        database: secondDatabase,
+        resultStore: new CloudResultStore(h.directory),
+        uploadStore: new TransientUploadStore(h.directory),
+        commerce: secondCommerce,
+        clock: h.clock,
+      });
+      const attempts = await Promise.all(
+        [h.results, secondResults].map(
+          (service) =>
+            new Promise<CloudRequestStatusResponse>((resolve, reject) => {
+              setImmediate(() => {
+                try {
+                  resolve(service.finalize(resultLease));
+                } catch (error) {
+                  reject(error);
+                }
+              });
+            }),
+        ),
+      );
+      assert.deepEqual(attempts[0], attempts[1]);
+      assert.equal(h.database.findCloudResultCache(requestId)?.state, 'ready');
+      assert.equal(h.database.findAnalysisJobByRequest(requestId)?.state, 'succeeded');
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'consume').length,
+        1,
+      );
+      assert.deepEqual(h.results.finalize(resultLease), attempts[0]);
+
+      assert.throws(
+        () => h.results.finalize({ jobId: resultLease.jobId, leaseOwner: 'stale-owner' }),
+        (error: unknown) =>
+          error instanceof CloudResultFailure && error.code === 'cloud_result_context_mismatch',
+      );
+      assert.throws(
+        () => h.results.finalize({ jobId: 'wrong-job', leaseOwner: resultLease.leaseOwner }),
+        (error: unknown) =>
+          error instanceof CloudResultFailure && error.code === 'cloud_result_not_available',
+      );
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'consume').length,
+        1,
+      );
+    } finally {
+      secondDatabase?.close();
       close(h);
     }
   });
@@ -252,14 +348,14 @@ describe('cloud result cache', () => {
         { jobId: 'other-job', leaseOwner: 'result-worker' },
       ]) {
         assert.throws(
-          () => h.results.stage(result, lease),
+          () => h.results.stage(lease, result),
           (error: unknown) =>
             error instanceof CloudResultFailure && error.code === 'cloud_result_context_mismatch',
         );
       }
       h.clock.advance(60_001);
       assert.throws(
-        () => h.results.stage(result, { jobId: job.id, leaseOwner: 'result-worker' }),
+        () => h.results.stage({ jobId: job.id, leaseOwner: 'result-worker' }, result),
         (error: unknown) =>
           error instanceof CloudResultFailure && error.code === 'cloud_result_context_mismatch',
       );
@@ -276,13 +372,13 @@ describe('cloud result cache', () => {
       const requestId = admitAndQueue(h);
       const job = claim(h);
       const result = envelope(requestId);
-      h.results.stage(result, job);
+      h.results.stage(lease(job), result);
       const originalRemove = h.uploadStore.remove;
       h.uploadStore.remove = () => {
         throw new Error('unlink_failed');
       };
       assert.throws(
-        () => h.results.finalize(job),
+        () => h.results.finalize(lease(job)),
         (error: unknown) =>
           error instanceof CloudResultFailure && error.code === 'cloud_result_storage_failure',
       );
@@ -296,7 +392,7 @@ describe('cloud result cache', () => {
         0,
       );
       h.uploadStore.remove = originalRemove;
-      assert.equal(h.results.finalize(job).state, 'ready');
+      assert.equal(h.results.finalize(lease(job)).state, 'ready');
       assert.equal(h.uploadStore.hasCompleteArtifact(requestId), false);
     } finally {
       close(h);
@@ -308,10 +404,10 @@ describe('cloud result cache', () => {
     try {
       const requestId = admitAndQueue(h);
       const job = claim(h);
-      h.results.stage(envelope(requestId), job);
+      h.results.stage(lease(job), envelope(requestId));
       h.clock.advance(60_001);
       assert.throws(
-        () => h.results.finalize(job),
+        () => h.results.finalize(lease(job)),
         (error: unknown) =>
           error instanceof CloudResultFailure && error.code === 'cloud_result_context_mismatch',
       );
@@ -336,11 +432,123 @@ describe('cloud result cache', () => {
       const job = claim(h);
       const result = envelope(requestId);
       h.resultStore.write(requestId, serialized(result));
-      h.results.reconcile();
-      assert.equal(h.database.findCloudResultCache(requestId)?.state, 'staged');
-      assert.equal(h.results.status(ACCOUNT, requestId).state, 'queued');
-      assert.equal(h.results.finalize(job).state, 'ready');
+      h.database.close();
+      const restartedDatabase = new AccountDatabase({
+        filename: join(h.directory, 'cloud.sqlite'),
+      });
+      try {
+        const restartedCommerce = new CommerceService({
+          database: restartedDatabase,
+          now: h.clock.now,
+        });
+        const restarted = new CloudResultService({
+          database: restartedDatabase,
+          resultStore: new CloudResultStore(h.directory),
+          uploadStore: new TransientUploadStore(h.directory),
+          commerce: restartedCommerce,
+          clock: h.clock,
+        });
+        restarted.reconcile();
+        assert.equal(restartedDatabase.findCloudResultCache(requestId)?.state, 'staged');
+        assert.equal(restarted.status(ACCOUNT, requestId).state, 'queued');
+        assert.equal(restarted.finalize(lease(job)).state, 'ready');
+        assert.equal(
+          new CloudResultStore(h.directory).read(requestId).equals(serialized(result)),
+          true,
+        );
+        assert.equal(new TransientUploadStore(h.directory).hasCompleteArtifact(requestId), false);
+      } finally {
+        restartedDatabase.close();
+      }
+    } finally {
+      close(h);
+    }
+  });
+
+  it('recovers after staged metadata was committed before upload cleanup', () => {
+    const h = harness();
+    try {
+      const requestId = admitAndQueue(h);
+      const job = claim(h);
+      const result = envelope(requestId);
+      h.results.stage(lease(job), result);
+      const stagedBytes = h.resultStore.read(requestId);
+      h.database.close();
+
+      const restartedDatabase = new AccountDatabase({
+        filename: join(h.directory, 'cloud.sqlite'),
+      });
+      try {
+        const restartedCommerce = new CommerceService({
+          database: restartedDatabase,
+          now: h.clock.now,
+        });
+        const restarted = new CloudResultService({
+          database: restartedDatabase,
+          resultStore: new CloudResultStore(h.directory),
+          uploadStore: new TransientUploadStore(h.directory),
+          commerce: restartedCommerce,
+          clock: h.clock,
+        });
+        assert.equal(restartedDatabase.findCloudResultCache(requestId)?.state, 'staged');
+        assert.equal(restarted.finalize(lease(job)).state, 'ready');
+        assert.deepEqual(new CloudResultStore(h.directory).read(requestId), stagedBytes);
+        assert.equal(new TransientUploadStore(h.directory).hasCompleteArtifact(requestId), false);
+        assert.equal(
+          restartedDatabase
+            .listAllowanceLedger(ACCOUNT, 'snap')
+            .filter((row) => row.entry_type === 'consume').length,
+          1,
+        );
+      } finally {
+        restartedDatabase.close();
+      }
+    } finally {
+      close(h);
+    }
+  });
+
+  it('retries after upload deletion when the final transaction crashes without rerunning encryption', () => {
+    const h = harness();
+    try {
+      const requestId = admitAndQueue(h);
+      const job = claim(h);
+      const result = envelope(requestId);
+      h.results.stage(lease(job), result);
+      const stagedBytes = h.resultStore.read(requestId);
+      const originalTransaction = h.database.transaction;
+      let crash = true;
+      h.database.transaction = ((callback: () => unknown) => {
+        if (crash) {
+          crash = false;
+          throw new Error('simulated_crash_after_upload_deletion');
+        }
+        return originalTransaction.call(h.database, callback);
+      }) as typeof h.database.transaction;
+
+      assert.throws(
+        () => h.results.finalize(lease(job)),
+        (error: unknown) =>
+          error instanceof CloudResultFailure && error.code === 'cloud_result_storage_failure',
+      );
       assert.equal(h.uploadStore.hasCompleteArtifact(requestId), false);
+      assert.equal(h.database.findCloudResultCache(requestId)?.state, 'staged');
+      assert.equal(h.database.findAnalysisJobByRequest(requestId)?.state, 'processing');
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'consume').length,
+        0,
+      );
+
+      assert.equal(h.results.finalize(lease(job)).state, 'ready');
+      assert.deepEqual(h.resultStore.read(requestId), stagedBytes);
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'consume').length,
+        1,
+      );
     } finally {
       close(h);
     }
@@ -352,11 +560,18 @@ describe('cloud result cache', () => {
       const requestId = admitAndQueue(h);
       const firstJob = claim(h, 'first-worker');
       const result = envelope(requestId);
-      h.results.stage(result, firstJob);
+      const firstLease = lease(firstJob);
+      h.results.stage(firstLease, result);
       h.clock.advance(60_001);
       const reclaimed = claim(h, 'second-worker');
       assert.equal(reclaimed.id, firstJob.id);
-      assert.equal(h.results.finalize(reclaimed).state, 'ready');
+      const secondLease = lease(reclaimed);
+      assert.equal(h.results.finalize(secondLease).state, 'ready');
+      assert.throws(
+        () => h.results.finalize(firstLease),
+        (error: unknown) =>
+          error instanceof CloudResultFailure && error.code === 'cloud_result_context_mismatch',
+      );
       assert.equal(h.database.findAnalysisJobByRequest(requestId)?.state, 'succeeded');
       assert.equal(
         h.database
@@ -374,13 +589,62 @@ describe('cloud result cache', () => {
     try {
       const requestId = admitAndQueue(h);
       const job = claim(h);
-      h.results.stage(envelope(requestId), job);
+      h.results.stage(lease(job), envelope(requestId));
       h.database.sqlite
         .prepare('UPDATE cloud_result_cache SET expires_at = ? WHERE request_id = ?')
         .run(new Date(NOW.getTime() - 1).toISOString(), requestId);
       h.results.reconcile();
       assert.equal(h.database.findCloudResultCache(requestId)?.state, 'expired');
+      assert.equal(h.database.findAnalysisJobByRequest(requestId)?.state, 'expired');
+      assert.equal(h.database.findAnalysisJobByRequest(requestId)?.lease_owner, null);
       assert.equal(h.uploadStore.hasCompleteArtifact(requestId), false);
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'release').length,
+        1,
+      );
+      h.results.reconcile();
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'release').length,
+        1,
+      );
+      assert.equal(
+        h.database.claimAnalysisJob({
+          now: h.clock.now().toISOString(),
+          leaseOwner: 'after-expiry',
+          leaseExpiresAt: new Date(h.clock.now().getTime() + 60_000).toISOString(),
+        }),
+        undefined,
+      );
+    } finally {
+      close(h);
+    }
+  });
+
+  it('on-demand staged expiry terminalizes the job and releases once', () => {
+    const h = harness();
+    try {
+      const requestId = admitAndQueue(h);
+      const job = claim(h);
+      h.results.stage(lease(job), envelope(requestId));
+      h.database.sqlite
+        .prepare('UPDATE cloud_result_cache SET expires_at = ? WHERE request_id = ?')
+        .run(new Date(NOW.getTime() - 1).toISOString(), requestId);
+
+      assert.equal(h.results.status(ACCOUNT, requestId).state, 'expired');
+      assert.equal(h.database.findAnalysisJobByRequest(requestId)?.state, 'expired');
+      assert.equal(h.database.findAnalysisJobByRequest(requestId)?.lease_owner, null);
+      assert.equal(h.uploadStore.hasCompleteArtifact(requestId), false);
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'release').length,
+        1,
+      );
+      assert.equal(h.results.status(ACCOUNT, requestId).state, 'expired');
       assert.equal(
         h.database
           .listAllowanceLedger(ACCOUNT, 'snap')
@@ -392,23 +656,77 @@ describe('cloud result cache', () => {
     }
   });
 
-  it('publishes ciphertext-only metadata, replays the same envelope, and rejects plaintext/conflicts', () => {
+  it('terminalizes a corrupt or missing staged cache and releases exactly once', () => {
+    const h = harness();
+    try {
+      for (const missing of [false, true]) {
+        const requestId = admitAndQueue(h);
+        const job = claim(h);
+        h.results.stage(lease(job), envelope(requestId));
+        if (missing) {
+          h.resultStore.remove(requestId);
+        } else {
+          writeFileSync(join(h.resultStore.root, `${requestId}.json`), Buffer.from('corrupt'));
+        }
+
+        h.results.reconcile();
+        const result = h.database.findCloudResultCache(requestId);
+        const terminalJob = h.database.findAnalysisJobByRequest(requestId);
+        assert.equal(result?.state, 'failed');
+        assert.equal(result?.failure_category, 'cloud_result_cache_invalid');
+        assert.equal(terminalJob?.state, 'failed');
+        assert.equal(terminalJob?.lease_owner, null);
+        assert.equal(h.uploadStore.hasCompleteArtifact(requestId), false);
+        assert.equal(
+          h.database
+            .listAllowanceLedger(ACCOUNT, 'snap')
+            .filter((row) => row.entry_type === 'release').length,
+          missing ? 2 : 1,
+        );
+
+        h.results.reconcile();
+        assert.equal(
+          h.database
+            .listAllowanceLedger(ACCOUNT, 'snap')
+            .filter((row) => row.entry_type === 'release').length,
+          missing ? 2 : 1,
+        );
+        assert.equal(
+          h.database.claimAnalysisJob({
+            now: h.clock.now().toISOString(),
+            leaseOwner: `after-failure-${missing}`,
+            leaseExpiresAt: new Date(h.clock.now().getTime() + 60_000).toISOString(),
+          }),
+          undefined,
+        );
+      }
+    } finally {
+      close(h);
+    }
+  });
+
+  it('stages ciphertext-only metadata, replays the same stage, and rejects invalid/conflicts', () => {
     const h = harness();
     try {
       const requestId = admitAndQueue(h);
+      const job = claim(h);
+      const resultLease = lease(job);
       const result = envelope(requestId);
-      const published = h.results.publish(result);
-      assert.equal(published.state, 'ready');
-      assert.equal(published.resultAvailable, true);
-      assert.equal(published.resultExpiresAt !== null, true);
+      const staged = h.results.stage(resultLease, result);
+      assert.equal(staged.state, 'queued');
+      assert.equal(staged.resultAvailable, false);
       const row = h.database.sqlite
         .prepare('SELECT * FROM cloud_result_cache WHERE request_id = ?')
         .get(requestId) as Record<string, unknown>;
       assert.equal(JSON.stringify(row).includes(result.ciphertext), false);
       assert.equal(row.byte_count, Buffer.byteLength(JSON.stringify(result), 'utf8'));
-      assert.deepEqual(h.results.publish(result), published);
+      assert.deepEqual(h.results.stage(resultLease, result), staged);
       assert.throws(
-        () => h.results.publish({ requestId, plaintext: 'never accepted' }),
+        () =>
+          h.results.stage(resultLease, {
+            requestId,
+            plaintext: 'never accepted',
+          } as unknown as CloudResultEnvelope),
         (error: unknown) =>
           error instanceof CloudResultFailure && error.code === 'cloud_result_envelope_invalid',
       );
@@ -420,7 +738,7 @@ describe('cloud result cache', () => {
             : `A${result.ciphertext.slice(1)}`,
       });
       assert.throws(
-        () => h.results.publish(conflicting),
+        () => h.results.stage(resultLease, conflicting),
         (error: unknown) =>
           error instanceof CloudResultFailure && error.code === 'cloud_result_conflict',
       );
@@ -437,8 +755,7 @@ describe('cloud result cache', () => {
     const h = harness();
     try {
       const requestId = admitAndQueue(h);
-      const result = envelope(requestId);
-      h.results.publish(result);
+      const { result } = completeResult(h, requestId);
       const canonical = Buffer.from(JSON.stringify(result), 'utf8');
       assert.deepEqual(h.results.retrieve(ACCOUNT, requestId), canonical);
       assert.equal(h.results.status(ACCOUNT, requestId).state, 'retrieved');
@@ -462,17 +779,17 @@ describe('cloud result cache', () => {
     const h = harness();
     try {
       const retrievedId = admitAndQueue(h);
-      h.results.publish(envelope(retrievedId));
+      completeResult(h, retrievedId);
       h.results.retrieve(ACCOUNT, retrievedId);
 
       const expiredId = admitAndQueue(h);
-      h.results.publish(envelope(expiredId));
+      completeResult(h, expiredId);
       h.database.sqlite
         .prepare('UPDATE cloud_result_cache SET expires_at = ? WHERE request_id = ?')
         .run(new Date(NOW.getTime() - 1).toISOString(), expiredId);
 
       const crossOwnerId = admitAndQueue(h);
-      h.results.publish(envelope(crossOwnerId));
+      completeResult(h, crossOwnerId);
       const attempts = [
         () => h.results.retrieve(ACCOUNT, 'missing-result'),
         () => h.results.retrieve('other-account', crossOwnerId),
@@ -496,12 +813,14 @@ describe('cloud result cache', () => {
   it('preserves a ready envelope over restart and expires it within the bounded window', () => {
     const h = harness();
     const requestId = admitAndQueue(h);
-    h.results.publish(envelope(requestId));
+    completeResult(h, requestId);
     h.database.close();
     const restartedDatabase = new AccountDatabase({ filename: join(h.directory, 'cloud.sqlite') });
     const restarted = new CloudResultService({
       database: restartedDatabase,
       resultStore: new CloudResultStore(h.directory),
+      uploadStore: new TransientUploadStore(h.directory),
+      commerce: new CommerceService({ database: restartedDatabase, now: h.clock.now }),
       clock: h.clock,
     });
     try {
@@ -520,7 +839,7 @@ describe('cloud result cache', () => {
     const h = harness();
     try {
       const requestId = admitAndQueue(h);
-      h.results.publish(envelope(requestId));
+      completeResult(h, requestId);
       const expiresAt = new Date(NOW.getTime() - 1).toISOString();
       assert.equal(h.database.markCloudResultExpired(requestId, expiresAt), true);
       assert.equal(h.resultStore.hasCompleteArtifact(requestId), true);
@@ -536,7 +855,7 @@ describe('cloud result cache', () => {
     const h = harness();
     try {
       const requestId = admitAndQueue(h);
-      h.results.publish(envelope(requestId));
+      completeResult(h, requestId);
       h.resultStore.remove(requestId);
       h.clock.advance(CLOUD_RESULT_RETENTION_MS + 1);
       h.results.reconcile();
@@ -552,7 +871,7 @@ describe('cloud result cache', () => {
     try {
       const requestId = admitAndQueue(h);
       const result = envelope(requestId);
-      h.results.publish(result);
+      completeResult(h, requestId);
       const originalRemove = h.resultStore.remove;
       h.resultStore.remove = () => {
         throw new CloudResultStoreFailure();
@@ -560,11 +879,15 @@ describe('cloud result cache', () => {
       const first = new CloudResultService({
         database: h.database,
         resultStore: h.resultStore,
+        uploadStore: h.uploadStore,
+        commerce: h.commerce,
         clock: h.clock,
       });
       const second = new CloudResultService({
         database: h.database,
         resultStore: h.resultStore,
+        uploadStore: h.uploadStore,
+        commerce: h.commerce,
         clock: h.clock,
       });
       // Both readers may load the bytes before either claims the row. The conditional state
@@ -630,8 +953,13 @@ describe('cloud result cache', () => {
       ] as const;
       for (const { make, code } of cases) {
         const requestId = admitAndQueue(h);
+        const job = claim(h);
         assert.throws(
-          () => h.results.publish(make(envelope(requestId))),
+          () =>
+            h.results.stage(
+              lease(job),
+              make(envelope(requestId)) as unknown as CloudResultEnvelope,
+            ),
           (error: unknown) => error instanceof CloudResultFailure && error.code === code,
         );
         assertNoResultResidue(h, requestId);
@@ -659,8 +987,9 @@ describe('cloud result cache', () => {
       ];
       for (const value of invalids) {
         const requestId = admitAndQueue(h);
+        const job = claim(h);
         assert.throws(
-          () => h.results.publish(value),
+          () => h.results.stage(lease(job), value as unknown as CloudResultEnvelope),
           (error: unknown) =>
             error instanceof CloudResultFailure && error.code === 'cloud_result_envelope_invalid',
         );
@@ -675,7 +1004,7 @@ describe('cloud result cache', () => {
     const h = harness();
     try {
       const requestId = admitAndQueue(h);
-      h.results.publish(envelope(requestId));
+      completeResult(h, requestId);
       assert.equal(lstatSync(h.resultStore.root).mode & 0o777, 0o700);
       assert.equal(statSync(join(h.resultStore.root, `${requestId}.json`)).mode & 0o777, 0o600);
     } finally {
@@ -700,7 +1029,7 @@ describe('cloud result cache', () => {
       assert.equal(existsSync(join(h.resultStore.root, `${partialId}.partial`)), false);
 
       const requestId = admitAndQueue(h);
-      h.results.publish(envelope(requestId));
+      completeResult(h, requestId);
       unlinkSync(join(h.resultStore.root, `${requestId}.json`));
       symlinkSync(outside, join(h.resultStore.root, `${requestId}.json`));
       h.results.reconcile();
@@ -741,7 +1070,7 @@ describe('cloud result cache', () => {
       for (const mutate of mutations) {
         const requestId = admitAndQueue(h);
         const result = envelope(requestId);
-        h.results.publish(result);
+        completeResult(h, requestId);
         writeFileSync(
           join(h.resultStore.root, `${requestId}.json`),
           typeof mutate === 'function' ? mutate(result) : mutate,
@@ -767,7 +1096,7 @@ describe('cloud result cache', () => {
     const h = harness();
     try {
       const requestId = admitAndQueue(h);
-      h.results.publish(envelope(requestId));
+      completeResult(h, requestId);
       h.resultStore.remove(requestId);
       h.results.reconcile();
       assert.equal(h.database.findCloudResultCache(requestId)?.state, 'failed');
@@ -789,7 +1118,7 @@ describe('cloud result cache', () => {
     });
     try {
       const requestId = admitAndQueue(h);
-      h.results.publish(envelope(requestId));
+      completeResult(h, requestId);
       const exchange = await server.inject({
         method: 'POST',
         url: '/v2/auth/apple/exchange',
@@ -1022,9 +1351,61 @@ describe('cloud result cache', () => {
           state === 'expired' ? NOW.toISOString() : null,
           state === 'failed' ? 'cloud_result_cache_invalid' : null,
         );
+      legacy
+        .prepare(
+          `INSERT INTO analysis_jobs
+            (id, request_id, state, available_at, attempts, lease_owner, lease_expires_at,
+             handler_version, request_contract_version, schema_version, prompt_version,
+             failure_category, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 1, NULL, NULL, 1, ?, 'legacy-result-schema', 'legacy-prompt', ?, ?, ?)`,
+        )
+        .run(
+          `${requestId}-job`,
+          requestId,
+          state === 'ready' || state === 'retrieved' ? 'succeeded' : state,
+          NOW.toISOString(),
+          CONTRACT_VERSION,
+          state === 'failed' ? 'cloud_result_cache_invalid' : null,
+          NOW.toISOString(),
+          NOW.toISOString(),
+        );
     }
+    legacy.exec(`
+      CREATE TABLE allowance_ledger (
+        id TEXT PRIMARY KEY NOT NULL,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('snap', 'report')),
+        entry_type TEXT NOT NULL CHECK (entry_type IN ('grant', 'reserve', 'release', 'consume')),
+        units INTEGER NOT NULL CHECK (units > 0),
+        source_id TEXT NOT NULL,
+        grant_source_id TEXT,
+        grant_period_start TEXT,
+        period_end TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX allowance_ledger_source_idx
+        ON allowance_ledger(account_id, kind, entry_type, source_id);
+      CREATE INDEX allowance_ledger_account_idx
+        ON allowance_ledger(account_id, kind, created_at);
+      INSERT INTO allowance_ledger VALUES
+        ('legacy-grant', 'legacy-v9-account', 'snap', 'grant', 5, 'legacy-grant-source',
+         'legacy-grant-source', '2026-08-28T00:00:00.000Z', NULL, '2026-08-28T00:00:00.000Z'),
+        ('legacy-reserve', 'legacy-v9-account', 'snap', 'reserve', 1, 'legacy-v9-reserve',
+         'legacy-grant-source', '2026-08-28T00:00:00.000Z', NULL, '2026-08-28T00:00:00.000Z'),
+        ('legacy-release', 'legacy-v9-account', 'snap', 'release', 1, 'legacy-v9-reserve',
+         'legacy-grant-source', '2026-08-28T00:00:00.000Z', NULL, '2026-08-28T00:00:00.000Z');
+    `);
     const before = legacy
       .prepare('SELECT * FROM cloud_result_cache ORDER BY request_id')
+      .all() as readonly Record<string, unknown>[];
+    const beforeRequests = legacy
+      .prepare('SELECT * FROM cloud_requests ORDER BY id')
+      .all() as readonly Record<string, unknown>[];
+    const beforeJobs = legacy
+      .prepare('SELECT * FROM analysis_jobs ORDER BY id')
+      .all() as readonly Record<string, unknown>[];
+    const beforeLedger = legacy
+      .prepare('SELECT * FROM allowance_ledger ORDER BY id')
       .all() as readonly Record<string, unknown>[];
     legacy.close();
     try {
@@ -1035,6 +1416,18 @@ describe('cloud result cache', () => {
         )
         .all() as readonly Record<string, unknown>[];
       assert.deepEqual(after, before);
+      assert.deepEqual(
+        database.sqlite.prepare('SELECT * FROM cloud_requests ORDER BY id').all(),
+        beforeRequests,
+      );
+      assert.deepEqual(
+        database.sqlite.prepare('SELECT * FROM analysis_jobs ORDER BY id').all(),
+        beforeJobs,
+      );
+      assert.deepEqual(
+        database.sqlite.prepare('SELECT * FROM allowance_ledger ORDER BY id').all(),
+        beforeLedger,
+      );
       assert.deepEqual(
         database.sqlite
           .prepare(
@@ -1073,7 +1466,7 @@ describe('cloud result cache', () => {
     const lines: string[] = [];
     const requestId = admitAndQueue(h);
     const result = envelope(requestId);
-    h.results.publish(result);
+    completeResult(h, requestId);
     const server = createServer({
       database: h.database,
       runtimePath: h.directory,

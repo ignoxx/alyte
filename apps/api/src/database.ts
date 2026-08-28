@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import type { CloudRequestOperation, CloudRequestState } from '@alyte/contracts';
 
-export const CURRENT_SCHEMA_VERSION = 10;
+export const CURRENT_SCHEMA_VERSION = 11;
 
 export const SESSION_RETENTION_MS = 24 * 60 * 60 * 1_000;
 export const OPERATION_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -172,6 +172,9 @@ export interface CloudResultCacheRow {
   readonly ready_at: string | null;
   /** Non-sensitive staging timestamp; staged rows are never returned to clients. */
   readonly staged_at: string | null;
+  /** Completion identity used to authorize an exact finalization replay. */
+  readonly completion_job_id: string | null;
+  readonly completion_lease_owner: string | null;
   readonly expires_at: string;
   readonly retrieved_at: string | null;
   readonly expired_at: string | null;
@@ -532,6 +535,12 @@ const migrations: readonly string[] = [
     DROP TABLE cloud_result_cache;
     ALTER TABLE cloud_result_cache_v10 RENAME TO cloud_result_cache;
     CREATE INDEX cloud_result_cache_expiry_idx ON cloud_result_cache(state, expires_at, request_id);
+  `,
+  `
+    -- Retain only the bounded worker identity needed to distinguish an authorized completion
+    -- replay from a stale or wrong-owner caller. Existing result history remains unchanged.
+    ALTER TABLE cloud_result_cache ADD COLUMN completion_job_id TEXT;
+    ALTER TABLE cloud_result_cache ADD COLUMN completion_lease_owner TEXT;
   `,
 ];
 
@@ -1348,8 +1357,9 @@ export class AccountDatabase {
       .prepare(
         `INSERT INTO cloud_result_cache
           (request_id, state, result_schema_version, handler_version, byte_count,
-           ready_at, staged_at, expires_at, retrieved_at, expired_at, failure_category)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ready_at, staged_at, completion_job_id, completion_lease_owner,
+           expires_at, retrieved_at, expired_at, failure_category)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         result.request_id,
@@ -1359,6 +1369,8 @@ export class AccountDatabase {
         result.byte_count,
         result.ready_at,
         result.staged_at,
+        result.completion_job_id,
+        result.completion_lease_owner,
         result.expires_at,
         result.retrieved_at,
         result.expired_at,
@@ -1367,16 +1379,23 @@ export class AccountDatabase {
   }
 
   /** Activate a staged envelope after its cleanup and allowance transaction has passed. */
-  activateCloudResult(requestId: string, readyAt: string, expiresAt: string): boolean {
+  activateCloudResult(
+    requestId: string,
+    readyAt: string,
+    expiresAt: string,
+    completionJobId: string,
+    completionLeaseOwner: string,
+  ): boolean {
     return (
       this.sqlite
         .prepare(
           `UPDATE cloud_result_cache
            SET state = 'ready', ready_at = ?, expires_at = ?, staged_at = NULL,
+               completion_job_id = ?, completion_lease_owner = ?,
                retrieved_at = NULL, expired_at = NULL, failure_category = NULL
            WHERE request_id = ? AND state = 'staged'`,
         )
-        .run(readyAt, expiresAt, requestId).changes === 1
+        .run(readyAt, expiresAt, completionJobId, completionLeaseOwner, requestId).changes === 1
     );
   }
 
@@ -1432,6 +1451,39 @@ export class AccountDatabase {
              AND lease_expires_at IS NOT NULL AND lease_expires_at > ?`,
         )
         .run(now, jobId, requestId, leaseOwner, now).changes === 1
+    );
+  }
+
+  /** Terminalize a staged-result job so corrupt or missing ciphertext cannot be reclaimed. */
+  markAnalysisJobFailed(
+    jobId: string,
+    requestId: string,
+    failureCategory: string,
+    now: string,
+  ): boolean {
+    return (
+      this.sqlite
+        .prepare(
+          `UPDATE analysis_jobs
+           SET state = 'failed', lease_owner = NULL, lease_expires_at = NULL,
+               failure_category = ?, updated_at = ?
+           WHERE id = ? AND request_id = ? AND state IN ('queued', 'processing')`,
+        )
+        .run(failureCategory, now, jobId, requestId).changes === 1
+    );
+  }
+
+  /** Expire a staged-result job so expired ciphertext cannot be reclaimed or requeued. */
+  markAnalysisJobExpired(jobId: string, requestId: string, now: string): boolean {
+    return (
+      this.sqlite
+        .prepare(
+          `UPDATE analysis_jobs
+           SET state = 'expired', lease_owner = NULL, lease_expires_at = NULL,
+               failure_category = NULL, updated_at = ?
+           WHERE id = ? AND request_id = ? AND state IN ('queued', 'processing')`,
+        )
+        .run(now, jobId, requestId).changes === 1
     );
   }
 
