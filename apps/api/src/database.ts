@@ -165,6 +165,30 @@ export interface AnalysisJobRow {
   readonly updated_at: string;
 }
 
+export type AnalysisJobLeaseOutcome =
+  'renewed' | 'relinquished' | 'not-found' | 'not-owner' | 'not-live';
+
+export interface AnalysisJobClaimOptions {
+  readonly now: string;
+  readonly leaseOwner: string;
+  readonly leaseExpiresAt: string;
+  readonly supportedHandlerVersions?: readonly number[];
+}
+
+export interface AnalysisJobHeartbeatOptions {
+  readonly jobId: string;
+  readonly leaseOwner: string;
+  readonly now: string;
+  readonly leaseExpiresAt: string;
+}
+
+export interface AnalysisJobRelinquishOptions {
+  readonly jobId: string;
+  readonly leaseOwner: string;
+  readonly now: string;
+  readonly availableAt: string;
+}
+
 export interface SessionExportRow {
   readonly id: string;
   readonly family_id: string;
@@ -1190,6 +1214,169 @@ export class AccountDatabase {
     return this.sqlite
       .prepare('SELECT * FROM analysis_jobs WHERE request_id = ?')
       .get(requestId) as AnalysisJobRow | undefined;
+  }
+
+  /**
+   * Atomically claim one ready v1 job. The candidate read and guarded update share one short
+   * SQLite transaction so a second process cannot receive the same live lease.
+   */
+  claimAnalysisJob(options: AnalysisJobClaimOptions): AnalysisJobRow | undefined {
+    const supported = options.supportedHandlerVersions ?? [1];
+    if (supported.length === 0) return undefined;
+    const placeholders = supported.map(() => '?').join(', ');
+    const claim = this.sqlite.transaction(() => {
+      const candidate = this.sqlite
+        .prepare(
+          `SELECT * FROM analysis_jobs
+           WHERE handler_version IN (${placeholders})
+             AND (
+               (state = 'queued' AND available_at <= ?)
+               OR (state = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
+             )
+           ORDER BY available_at ASC, id ASC
+           LIMIT 1`,
+        )
+        .get(...supported, options.now, options.now) as AnalysisJobRow | undefined;
+      if (candidate === undefined) return undefined;
+
+      const updated = this.sqlite
+        .prepare(
+          `UPDATE analysis_jobs
+           SET state = 'processing',
+               attempts = attempts + 1,
+               lease_owner = ?,
+               lease_expires_at = ?,
+               updated_at = ?
+           WHERE id = ?
+             AND handler_version IN (${placeholders})
+             AND (
+               (state = 'queued' AND available_at <= ?)
+               OR (state = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
+             )`,
+        )
+        .run(
+          options.leaseOwner,
+          options.leaseExpiresAt,
+          options.now,
+          candidate.id,
+          ...supported,
+          options.now,
+          options.now,
+        );
+      if (updated.changes !== 1) return undefined;
+      return this.sqlite
+        .prepare('SELECT * FROM analysis_jobs WHERE id = ?')
+        .get(candidate.id) as AnalysisJobRow;
+    });
+    // Acquire the SQLite write lock before reading the candidate. Two runner processes then
+    // serialize at the transaction boundary instead of both reading and racing to upgrade a
+    // deferred transaction after the read.
+    return claim.immediate();
+  }
+
+  /**
+   * List only unsupported versions that are ready to run. Returning versions rather than rows
+   * keeps observability useful without exposing request/job identifiers.
+   */
+  listUnsupportedReadyAnalysisHandlerVersions(
+    now: string,
+    supportedHandlerVersions: readonly number[] = [1],
+  ): readonly number[] {
+    if (supportedHandlerVersions.length === 0) {
+      return this.sqlite
+        .prepare(
+          `SELECT DISTINCT handler_version FROM analysis_jobs
+           WHERE (state = 'queued' AND available_at <= ?)
+              OR (state = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
+           ORDER BY handler_version ASC`,
+        )
+        .all(now, now)
+        .map((row) => (row as { handler_version: number }).handler_version);
+    }
+    const placeholders = supportedHandlerVersions.map(() => '?').join(', ');
+    return this.sqlite
+      .prepare(
+        `SELECT DISTINCT handler_version FROM analysis_jobs
+         WHERE handler_version NOT IN (${placeholders})
+           AND (
+             (state = 'queued' AND available_at <= ?)
+             OR (state = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
+           )
+         ORDER BY handler_version ASC`,
+      )
+      .all(...supportedHandlerVersions, now, now)
+      .map((row) => (row as { handler_version: number }).handler_version);
+  }
+
+  heartbeatAnalysisJob(options: AnalysisJobHeartbeatOptions): AnalysisJobLeaseOutcome {
+    const row = this.sqlite
+      .prepare('SELECT state, lease_owner, lease_expires_at FROM analysis_jobs WHERE id = ?')
+      .get(options.jobId) as
+      | {
+          state: AnalysisJobRow['state'];
+          lease_owner: string | null;
+          lease_expires_at: string | null;
+        }
+      | undefined;
+    if (row === undefined) return 'not-found';
+    if (row.lease_owner !== options.leaseOwner) return 'not-owner';
+    if (
+      row.state !== 'processing' ||
+      row.lease_expires_at === null ||
+      row.lease_expires_at <= options.now
+    ) {
+      return 'not-live';
+    }
+    const result = this.sqlite
+      .prepare(
+        `UPDATE analysis_jobs
+         SET lease_expires_at = ?, updated_at = ?
+         WHERE id = ? AND state = 'processing' AND lease_owner = ?
+           AND lease_expires_at IS NOT NULL AND lease_expires_at > ?`,
+      )
+      .run(options.leaseExpiresAt, options.now, options.jobId, options.leaseOwner, options.now);
+    return result.changes === 1 ? 'renewed' : 'not-live';
+  }
+
+  relinquishAnalysisJob(options: AnalysisJobRelinquishOptions): AnalysisJobLeaseOutcome {
+    const row = this.sqlite
+      .prepare('SELECT state, lease_owner, lease_expires_at FROM analysis_jobs WHERE id = ?')
+      .get(options.jobId) as
+      | {
+          state: AnalysisJobRow['state'];
+          lease_owner: string | null;
+          lease_expires_at: string | null;
+        }
+      | undefined;
+    if (row === undefined) return 'not-found';
+    if (row.lease_owner !== options.leaseOwner) return 'not-owner';
+    if (
+      row.state !== 'processing' ||
+      row.lease_expires_at === null ||
+      row.lease_expires_at <= options.now
+    ) {
+      return 'not-live';
+    }
+    const result = this.sqlite
+      .prepare(
+        `UPDATE analysis_jobs
+         SET state = 'queued', available_at = ?, lease_owner = NULL,
+             lease_expires_at = NULL, updated_at = ?
+         WHERE id = ? AND state = 'processing' AND lease_owner = ?
+           AND lease_expires_at IS NOT NULL AND lease_expires_at > ?`,
+      )
+      .run(options.availableAt, options.now, options.jobId, options.leaseOwner, options.now);
+    return result.changes === 1 ? 'relinquished' : 'not-live';
+  }
+
+  listProcessingAnalysisJobsByOwner(leaseOwner: string): readonly AnalysisJobRow[] {
+    return this.sqlite
+      .prepare(
+        `SELECT * FROM analysis_jobs
+         WHERE state = 'processing' AND lease_owner = ?
+         ORDER BY available_at ASC, id ASC`,
+      )
+      .all(leaseOwner) as AnalysisJobRow[];
   }
 
   listCloudRequests(): readonly CloudRequestRow[] {
