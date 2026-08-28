@@ -282,6 +282,7 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
     cloudMaxEnabled: options.cloudMaxEnabled ?? cloudMaxEnabledFromEnvironment(),
     ...(revenueCatWebhookSecret === undefined ? {} : { webhookSecret: revenueCatWebhookSecret }),
   });
+  const uploadStore = options.uploadStore ?? new TransientUploadStore(runtimePath);
   const cloudRequests =
     options.cloudRequestService ??
     new CloudRequestService({
@@ -289,13 +290,15 @@ export function createServer(options: ServerOptions = {}): FastifyInstance {
       commerce,
       hashSecret: secret,
       ...(options.clock === undefined ? {} : { clock: options.clock }),
-      uploadStore: options.uploadStore ?? new TransientUploadStore(runtimePath),
+      uploadStore,
     });
   const cloudResults =
     options.cloudResultService ??
     new CloudResultService({
       database,
       resultStore: options.resultStore ?? new CloudResultStore(runtimePath),
+      uploadStore,
+      commerce,
       ...(options.clock === undefined ? {} : { clock: options.clock }),
     });
   database.cleanupExpired(options.clock?.now() ?? new Date());

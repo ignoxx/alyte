@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import type { CloudRequestOperation, CloudRequestState } from '@alyte/contracts';
 
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 export const SESSION_RETENTION_MS = 24 * 60 * 60 * 1_000;
 export const OPERATION_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -157,7 +157,7 @@ export interface CloudRequestRow {
   readonly result_failure_category?: CloudResultFailureCategory | null;
 }
 
-export type CloudResultState = 'ready' | 'retrieved' | 'failed' | 'expired';
+export type CloudResultState = 'staged' | 'ready' | 'retrieved' | 'failed' | 'expired';
 export type CloudResultFailureCategory =
   'cloud_result_cache_missing' | 'cloud_result_cache_invalid' | 'cloud_result_cache_conflict';
 
@@ -168,7 +168,10 @@ export interface CloudResultCacheRow {
   readonly result_schema_version: string;
   readonly handler_version: number;
   readonly byte_count: number;
-  readonly ready_at: string;
+  /** The result becomes visible only when this is populated and state is ready. */
+  readonly ready_at: string | null;
+  /** Non-sensitive staging timestamp; staged rows are never returned to clients. */
+  readonly staged_at: string | null;
   readonly expires_at: string;
   readonly retrieved_at: string | null;
   readonly expired_at: string | null;
@@ -498,6 +501,36 @@ const migrations: readonly string[] = [
         failure_category IN ('cloud_result_cache_missing', 'cloud_result_cache_invalid', 'cloud_result_cache_conflict')
       )
     );
+    CREATE INDEX cloud_result_cache_expiry_idx ON cloud_result_cache(state, expires_at, request_id);
+  `,
+  `
+    -- A promoted encrypted file is not usable until transient media cleanup and allowance
+    -- consumption have committed with job success. Rebuild the table because SQLite cannot
+    -- widen the state CHECK constraint in place. Existing result history is copied byte-for-byte.
+    CREATE TABLE cloud_result_cache_v10 (
+      request_id TEXT PRIMARY KEY NOT NULL REFERENCES cloud_requests(id) ON DELETE CASCADE,
+      state TEXT NOT NULL CHECK (state IN ('staged', 'ready', 'retrieved', 'failed', 'expired')),
+      result_schema_version TEXT NOT NULL,
+      handler_version INTEGER NOT NULL CHECK (handler_version > 0),
+      byte_count INTEGER NOT NULL CHECK (byte_count > 0 AND byte_count <= 524288),
+      ready_at TEXT,
+      staged_at TEXT,
+      expires_at TEXT NOT NULL,
+      retrieved_at TEXT,
+      expired_at TEXT,
+      failure_category TEXT CHECK (
+        failure_category IS NULL OR
+        failure_category IN ('cloud_result_cache_missing', 'cloud_result_cache_invalid', 'cloud_result_cache_conflict')
+      )
+    );
+    INSERT INTO cloud_result_cache_v10
+      (request_id, state, result_schema_version, handler_version, byte_count,
+       ready_at, staged_at, expires_at, retrieved_at, expired_at, failure_category)
+      SELECT request_id, state, result_schema_version, handler_version, byte_count,
+             ready_at, NULL, expires_at, retrieved_at, expired_at, failure_category
+        FROM cloud_result_cache;
+    DROP TABLE cloud_result_cache;
+    ALTER TABLE cloud_result_cache_v10 RENAME TO cloud_result_cache;
     CREATE INDEX cloud_result_cache_expiry_idx ON cloud_result_cache(state, expires_at, request_id);
   `,
 ];
@@ -1315,8 +1348,8 @@ export class AccountDatabase {
       .prepare(
         `INSERT INTO cloud_result_cache
           (request_id, state, result_schema_version, handler_version, byte_count,
-           ready_at, expires_at, retrieved_at, expired_at, failure_category)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ready_at, staged_at, expires_at, retrieved_at, expired_at, failure_category)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         result.request_id,
@@ -1325,11 +1358,26 @@ export class AccountDatabase {
         result.handler_version,
         result.byte_count,
         result.ready_at,
+        result.staged_at,
         result.expires_at,
         result.retrieved_at,
         result.expired_at,
         result.failure_category,
       );
+  }
+
+  /** Activate a staged envelope after its cleanup and allowance transaction has passed. */
+  activateCloudResult(requestId: string, readyAt: string, expiresAt: string): boolean {
+    return (
+      this.sqlite
+        .prepare(
+          `UPDATE cloud_result_cache
+           SET state = 'ready', ready_at = ?, expires_at = ?, staged_at = NULL,
+               retrieved_at = NULL, expired_at = NULL, failure_category = NULL
+           WHERE request_id = ? AND state = 'staged'`,
+        )
+        .run(readyAt, expiresAt, requestId).changes === 1
+    );
   }
 
   markCloudResultRetrieved(requestId: string, retrievedAt: string): boolean {
@@ -1350,7 +1398,7 @@ export class AccountDatabase {
         .prepare(
           `UPDATE cloud_result_cache
            SET state = 'expired', expired_at = COALESCE(expired_at, ?), failure_category = NULL
-           WHERE request_id = ? AND state = 'ready'`,
+           WHERE request_id = ? AND state IN ('ready', 'staged')`,
         )
         .run(expiredAt, requestId).changes === 1
     );
@@ -1362,9 +1410,28 @@ export class AccountDatabase {
         .prepare(
           `UPDATE cloud_result_cache
            SET state = 'failed', failure_category = ?
-           WHERE request_id = ? AND state = 'ready'`,
+           WHERE request_id = ? AND state IN ('ready', 'staged')`,
         )
         .run(failureCategory, requestId).changes === 1
+    );
+  }
+
+  /** Complete a live leased job without reviving or mutating a terminal/requeued row. */
+  markAnalysisJobSucceeded(
+    jobId: string,
+    requestId: string,
+    leaseOwner: string,
+    now: string,
+  ): boolean {
+    return (
+      this.sqlite
+        .prepare(
+          `UPDATE analysis_jobs
+           SET state = 'succeeded', lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+           WHERE id = ? AND request_id = ? AND state = 'processing' AND lease_owner = ?
+             AND lease_expires_at IS NOT NULL AND lease_expires_at > ?`,
+        )
+        .run(now, jobId, requestId, leaseOwner, now).changes === 1
     );
   }
 
@@ -1372,6 +1439,11 @@ export class AccountDatabase {
     return this.sqlite
       .prepare('SELECT * FROM analysis_jobs WHERE request_id = ?')
       .get(requestId) as AnalysisJobRow | undefined;
+  }
+
+  findAnalysisJobById(jobId: string): AnalysisJobRow | undefined {
+    return this.sqlite.prepare('SELECT * FROM analysis_jobs WHERE id = ?').get(jobId) as
+      AnalysisJobRow | undefined;
   }
 
   /**

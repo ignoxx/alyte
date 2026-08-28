@@ -3,6 +3,7 @@ import {
   decodeCloudResultEnvelope,
   decodeCloudResultEnvelopeJson,
   serializeCloudResultEnvelope,
+  type CloudRequestOperation,
   type CloudRequestStatusResponse,
   type CloudResultEnvelope,
 } from '@alyte/contracts';
@@ -19,6 +20,8 @@ import {
   type CloudResultArtifact,
 } from './cloud-result-store.js';
 import { CloudRequestFailure, toStatus } from './cloud-request.js';
+import type { CommerceService } from './commerce.js';
+import type { TransientUploadStore } from './transient-upload-store.js';
 
 /** Keep the serialized envelope bounded without allowing a result to live past one day. */
 export const CLOUD_RESULT_RETENTION_MS = 24 * 60 * 60 * 1_000 - CLOUD_UPLOAD_CLEANUP_INTERVAL_MS;
@@ -34,8 +37,19 @@ export interface CloudResultClock {
 export interface CloudResultServiceOptions {
   readonly database: AccountDatabase;
   readonly resultStore: CloudResultStore;
+  /** Required by the finalization seam; omitted only for the legacy publish test seam. */
+  readonly uploadStore?: TransientUploadStore;
+  /** Required by the finalization seam; omitted only for the legacy publish test seam. */
+  readonly commerce?: CommerceService;
   readonly clock?: CloudResultClock;
 }
+
+export interface CloudResultLease {
+  readonly jobId: string;
+  readonly leaseOwner: string;
+}
+
+type LeaseLike = CloudResultLease | AnalysisJobRow;
 
 export class CloudResultFailure extends Error {
   constructor(
@@ -54,6 +68,29 @@ export class CloudResultFailure extends Error {
 }
 
 const systemClock: CloudResultClock = { now: () => new Date() };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isLeaseLike(value: unknown): value is LeaseLike {
+  if (!isRecord(value)) return false;
+  if (typeof value.jobId === 'string' && typeof value.leaseOwner === 'string') return true;
+  return typeof value.id === 'string' && typeof value.lease_owner === 'string';
+}
+
+function leaseParts(value: unknown): CloudResultLease {
+  if (!isLeaseLike(value)) {
+    throw new CloudResultFailure(409, 'cloud_result_context_mismatch');
+  }
+  if ('jobId' in value && 'leaseOwner' in value) {
+    return { jobId: value.jobId as string, leaseOwner: value.leaseOwner as string };
+  }
+  return {
+    jobId: (value as AnalysisJobRow).id,
+    leaseOwner: (value as AnalysisJobRow).lease_owner as string,
+  };
+}
 
 function validRequestId(value: unknown): value is string {
   return typeof value === 'string' && value.length <= 128 && REQUEST_ID_PATTERN.test(value);
@@ -99,22 +136,249 @@ function resultStatus(row: CloudRequestRow): CloudRequestStatusResponse {
   return toStatus(row);
 }
 
+function allowanceKind(operation: CloudRequestOperation): 'snap' | 'report' {
+  return operation === 'intake-image' ? 'snap' : 'report';
+}
+
 /**
  * Owns the ciphertext-only result lifecycle. This service deliberately has no decryption seam and
- * accepts only a strictly decoded CloudResultEnvelope object at its publish boundary.
+ * accepts only a strictly decoded CloudResultEnvelope object at its staging boundary.
  */
 export class CloudResultService {
   private readonly database: AccountDatabase;
   private readonly resultStore: CloudResultStore;
+  private readonly uploadStore: TransientUploadStore | undefined;
+  private readonly commerce: CommerceService | undefined;
   private readonly clock: CloudResultClock;
 
   constructor(options: CloudResultServiceOptions) {
     this.database = options.database;
     this.resultStore = options.resultStore;
+    this.uploadStore = options.uploadStore;
+    this.commerce = options.commerce;
     this.clock = options.clock ?? systemClock;
   }
 
-  /** Publish one already encrypted envelope from the provider-result boundary. */
+  /**
+   * Stage a strictly decoded encrypted envelope for the caller's live job lease. Staging writes
+   * only ciphertext and bounded metadata; it deliberately does not consume an allowance or make
+   * the result visible. Both argument orders are accepted so a worker can pass either its claimed
+   * job first or the envelope first without creating a provider-specific adapter here.
+   */
+  stage(value: unknown, lease: LeaseLike): CloudRequestStatusResponse;
+  stage(lease: LeaseLike, value: unknown): CloudRequestStatusResponse;
+  stage(first: unknown, second: unknown): CloudRequestStatusResponse {
+    const leaseValue = isLeaseLike(first) ? first : second;
+    const envelopeValue = isLeaseLike(first) ? second : first;
+    const lease = leaseParts(leaseValue);
+    const { envelope, bytes } = boundedSerializedEnvelope(envelopeValue);
+    const requestId = envelope.requestId;
+    const request = this.database.findCloudRequestById(requestId);
+    if (request === undefined) throw new CloudResultFailure(404, 'cloud_result_not_available');
+    const existing = this.database.findCloudResultCache(requestId);
+    if (existing !== undefined && existing.state !== 'staged' && existing.state !== 'ready') {
+      throw new CloudResultFailure(409, 'cloud_result_conflict');
+    }
+    if (existing?.state === 'staged' && this.isExpired(existing.expires_at)) {
+      if (!this.expireStagedAndCleanup(requestId)) {
+        const current = this.database.findCloudRequest(request.account_id, requestId);
+        if (current?.result_state === 'ready') return resultStatus(current);
+      }
+      throw new CloudResultFailure(404, 'cloud_result_not_available');
+    }
+    const job = this.database.findAnalysisJobByRequest(requestId);
+    this.requireLiveLease(request, job, envelope, lease);
+    if (existing?.state === 'ready') {
+      if (!this.resultStore.hasExactBytes(requestId, bytes)) {
+        throw new CloudResultFailure(409, 'cloud_result_conflict');
+      }
+      const visible = this.database.findCloudRequest(request.account_id, requestId);
+      if (visible === undefined) throw new CloudResultFailure(404, 'cloud_result_not_available');
+      return resultStatus(visible);
+    }
+
+    try {
+      if (this.resultStore.hasCompleteArtifact(requestId)) {
+        if (!this.resultStore.hasExactBytes(requestId, bytes)) {
+          throw new CloudResultFailure(409, 'cloud_result_conflict');
+        }
+      } else {
+        this.resultStore.write(requestId, bytes);
+      }
+    } catch (error) {
+      if (error instanceof CloudResultFailure) throw error;
+      throw new CloudResultFailure(503, 'cloud_result_storage_failure');
+    }
+
+    const stagedAt = this.clock.now();
+    const stagedAtIso = stagedAt.toISOString();
+    const expiresAt = new Date(stagedAt.getTime() + CLOUD_RESULT_RETENTION_MS).toISOString();
+    try {
+      this.database.transaction(() => {
+        const currentRequest = this.database.findCloudRequestById(requestId);
+        const currentJob = this.database.findAnalysisJobByRequest(requestId);
+        if (currentRequest === undefined) {
+          throw new CloudResultFailure(404, 'cloud_result_not_available');
+        }
+        this.requireLiveLease(currentRequest, currentJob, envelope, lease);
+        const currentResult = this.database.findCloudResultCache(requestId);
+        if (currentResult !== undefined) {
+          if (
+            currentResult.state !== 'staged' ||
+            !this.resultStore.hasExactBytes(requestId, bytes)
+          ) {
+            throw new CloudResultFailure(409, 'cloud_result_conflict');
+          }
+          return;
+        }
+        this.database.createCloudResultCache({
+          request_id: requestId,
+          state: 'staged',
+          result_schema_version: envelope.resultSchemaVersion,
+          handler_version: envelope.handlerVersion,
+          byte_count: bytes.byteLength,
+          ready_at: null,
+          staged_at: stagedAtIso,
+          expires_at: expiresAt,
+          retrieved_at: null,
+          expired_at: null,
+          failure_category: null,
+        });
+      });
+    } catch (error) {
+      // A promoted ciphertext file is intentionally retained for reconciliation. It can be
+      // repaired into a staged row after a crash without rerunning the provider or re-encrypting.
+      if (error instanceof CloudResultFailure) throw error;
+      throw new CloudResultFailure(503, 'cloud_result_storage_failure');
+    }
+    const visible = this.database.findCloudRequest(request.account_id, requestId);
+    if (visible === undefined) throw new CloudResultFailure(404, 'cloud_result_not_available');
+    return resultStatus(visible);
+  }
+
+  /**
+   * Remove transient media, then atomically complete one staged result. The transaction is the
+   * only place that can make a result ready, succeed its job, and consume its matching allowance.
+   */
+  finalize(lease: LeaseLike): CloudRequestStatusResponse;
+  finalize(requestId: string, lease: LeaseLike): CloudRequestStatusResponse;
+  finalize(requestId: string, jobId: string, leaseOwner: string): CloudRequestStatusResponse;
+  finalize(first: unknown, second?: unknown, third?: unknown): CloudRequestStatusResponse {
+    let requestId: string;
+    let lease: CloudResultLease;
+    if (typeof first === 'string') {
+      requestId = first;
+      if (isLeaseLike(second)) {
+        lease = leaseParts(second);
+      } else if (typeof second === 'string' && typeof third === 'string') {
+        lease = { jobId: second, leaseOwner: third };
+      } else {
+        throw new CloudResultFailure(409, 'cloud_result_context_mismatch');
+      }
+    } else {
+      lease = leaseParts(first);
+      const job = this.database.findAnalysisJobById(lease.jobId);
+      if (job === undefined) throw new CloudResultFailure(404, 'cloud_result_not_available');
+      requestId = job.request_id;
+    }
+    if (!validRequestId(requestId)) {
+      throw new CloudResultFailure(404, 'cloud_result_not_available');
+    }
+    const request = this.database.findCloudRequestById(requestId);
+    if (request === undefined) throw new CloudResultFailure(404, 'cloud_result_not_available');
+    const existing = this.database.findCloudResultCache(requestId);
+    if (existing?.state === 'ready') {
+      const visible = this.database.findCloudRequest(request.account_id, requestId);
+      if (visible === undefined) throw new CloudResultFailure(404, 'cloud_result_not_available');
+      return resultStatus(visible);
+    }
+    if (existing === undefined || existing.state !== 'staged') {
+      throw new CloudResultFailure(404, 'cloud_result_not_available');
+    }
+    if (this.isExpired(existing.expires_at)) {
+      if (!this.expireStagedAndCleanup(requestId)) {
+        const current = this.database.findCloudRequest(request.account_id, requestId);
+        if (current?.result_state === 'ready') return resultStatus(current);
+      }
+      throw new CloudResultFailure(404, 'cloud_result_not_available');
+    }
+
+    const envelope = this.readAndDecode(requestId);
+    const job = this.database.findAnalysisJobByRequest(requestId);
+    if (envelope === null || !this.cacheMatchesEnvelope(existing, envelope)) {
+      this.invalidateStaged(requestId);
+      throw new CloudResultFailure(404, 'cloud_result_not_available');
+    }
+    this.requireLiveLease(request, job, envelope, lease);
+    this.removeTransientUpload(requestId);
+
+    const now = this.clock.now();
+    const readyAt = now.toISOString();
+    const stagedExpiry = Date.parse(existing.expires_at);
+    const expiresAt = new Date(
+      Math.min(
+        Number.isFinite(stagedExpiry) ? stagedExpiry : now.getTime() + CLOUD_RESULT_RETENTION_MS,
+        now.getTime() + CLOUD_RESULT_RETENTION_MS,
+      ),
+    ).toISOString();
+    try {
+      this.database.transaction(() => {
+        const currentRequest = this.database.findCloudRequestById(requestId);
+        const currentJob = this.database.findAnalysisJobByRequest(requestId);
+        const currentResult = this.database.findCloudResultCache(requestId);
+        if (currentRequest === undefined) {
+          throw new CloudResultFailure(404, 'cloud_result_not_available');
+        }
+        if (currentResult?.state === 'ready') return;
+        if (currentResult === undefined || currentResult.state !== 'staged') {
+          throw new CloudResultFailure(409, 'cloud_result_conflict');
+        }
+        if (!this.cacheMatchesEnvelope(currentResult, envelope)) {
+          throw new CloudResultFailure(409, 'cloud_result_conflict');
+        }
+        this.requireLiveLease(currentRequest, currentJob, envelope, lease);
+        if (this.commerce === undefined) {
+          throw new CloudResultFailure(503, 'cloud_result_storage_failure');
+        }
+        const reservation = this.database.findAllowanceReservation(requestId);
+        if (
+          reservation === undefined ||
+          reservation.account_id !== currentRequest.account_id ||
+          reservation.kind !== allowanceKind(currentRequest.operation)
+        ) {
+          throw new CloudResultFailure(409, 'cloud_result_context_mismatch');
+        }
+        this.commerce.consumeInTransaction(requestId);
+        if (
+          currentJob === undefined ||
+          !this.database.markAnalysisJobSucceeded(
+            currentJob.id,
+            requestId,
+            lease.leaseOwner,
+            readyAt,
+          )
+        ) {
+          throw new CloudResultFailure(409, 'cloud_result_context_mismatch');
+        }
+        if (!this.database.activateCloudResult(requestId, readyAt, expiresAt)) {
+          throw new CloudResultFailure(409, 'cloud_result_conflict');
+        }
+      });
+    } catch (error) {
+      // Cleanup has already happened, but a failed transaction leaves the staged ciphertext and
+      // reservation intact. A reclaimed lease can retry this exact bytes-only operation safely.
+      if (error instanceof CloudResultFailure) throw error;
+      throw new CloudResultFailure(503, 'cloud_result_storage_failure');
+    }
+    const visible = this.database.findCloudRequest(request.account_id, requestId);
+    if (visible === undefined) throw new CloudResultFailure(404, 'cloud_result_not_available');
+    return resultStatus(visible);
+  }
+
+  /**
+   * Legacy pre-finalization publish seam retained for the preceding result-cache contract tests.
+   * New worker code must use stage() followed by finalize() so cleanup and charging stay atomic.
+   */
   publish(value: unknown): CloudRequestStatusResponse {
     const { envelope, bytes } = boundedSerializedEnvelope(value);
     const requestId = envelope.requestId;
@@ -180,6 +444,7 @@ export class CloudResultService {
           handler_version: envelope.handlerVersion,
           byte_count: bytes.byteLength,
           ready_at: readyAt,
+          staged_at: null,
           expires_at: expiresAt,
           retrieved_at: null,
           expired_at: null,
@@ -212,6 +477,12 @@ export class CloudResultService {
     }
     if (row.result_state === 'ready' && this.isExpired(row.result_expires_at)) {
       this.expireReady(row.id);
+      const expired = this.database.findCloudRequest(row.account_id, row.id);
+      if (expired === undefined) throw new CloudResultFailure(404, 'cloud_result_not_available');
+      return resultStatus(expired);
+    }
+    if (row.result_state === 'staged' && this.isExpired(row.result_expires_at)) {
+      this.expireStagedAndCleanup(row.id);
       const expired = this.database.findCloudRequest(row.account_id, row.id);
       if (expired === undefined) throw new CloudResultFailure(404, 'cloud_result_not_available');
       return resultStatus(expired);
@@ -290,8 +561,32 @@ export class CloudResultService {
     for (const result of results) {
       const request = requestsById.get(result.request_id);
       const artifact = byId.get(result.request_id);
+      if (result.state === 'staged') {
+        // A staged cache remains intentionally invisible. Keep it (and its reservation) while
+        // its ciphertext is valid; a later reclaimed live lease can finish finalization.
+        if (this.isExpired(result.expires_at, nowMs)) {
+          if (this.expireStaged(result.request_id, now.toISOString())) {
+            cleanupFailed = this.tryRemove(result.request_id, artifacts, cleanupFailed);
+            cleanupFailed = this.tryRemoveTransientUpload(result.request_id, cleanupFailed);
+          }
+          continue;
+        }
+        if (
+          request === undefined ||
+          artifact === undefined ||
+          !artifact.regular ||
+          artifact.size !== result.byte_count ||
+          !this.artifactMatchesContext(request, artifact, result)
+        ) {
+          this.markStagedFailed(result.request_id);
+          cleanupFailed = this.tryRemove(result.request_id, artifacts, cleanupFailed);
+          cleanupFailed = this.tryRemoveTransientUpload(result.request_id, cleanupFailed);
+        }
+        continue;
+      }
       if (result.state !== 'ready') {
         cleanupFailed = this.tryRemove(result.request_id, artifacts, cleanupFailed);
+        cleanupFailed = this.tryRemoveTransientUpload(result.request_id, cleanupFailed);
         continue;
       }
       if (this.isExpired(result.expires_at, nowMs)) {
@@ -300,11 +595,13 @@ export class CloudResultService {
         this.database.markCloudResultExpired(result.request_id, now.toISOString());
         const removed = this.removeRequestArtifacts(result.request_id, artifacts);
         if (!removed) cleanupFailed = true;
+        cleanupFailed = this.tryRemoveTransientUpload(result.request_id, cleanupFailed);
         continue;
       }
       if (request === undefined || artifact === undefined || !artifact.regular) {
         this.database.markCloudResultFailed(result.request_id, 'cloud_result_cache_missing');
         cleanupFailed = this.tryRemove(result.request_id, artifacts, cleanupFailed);
+        cleanupFailed = this.tryRemoveTransientUpload(result.request_id, cleanupFailed);
         continue;
       }
       if (
@@ -313,6 +610,7 @@ export class CloudResultService {
       ) {
         this.database.markCloudResultFailed(result.request_id, 'cloud_result_cache_invalid');
         cleanupFailed = this.tryRemove(result.request_id, artifacts, cleanupFailed);
+        cleanupFailed = this.tryRemoveTransientUpload(result.request_id, cleanupFailed);
       }
     }
 
@@ -362,11 +660,12 @@ export class CloudResultService {
           if (this.database.findCloudResultCache(request.id) === undefined) {
             this.database.createCloudResultCache({
               request_id: request.id,
-              state: 'ready',
+              state: 'staged',
               result_schema_version: envelope.resultSchemaVersion,
               handler_version: envelope.handlerVersion,
               byte_count: bytes.byteLength,
-              ready_at: readyAt,
+              ready_at: null,
+              staged_at: readyAt,
               expires_at: expiresAt,
               retrieved_at: null,
               expired_at: null,
@@ -408,7 +707,7 @@ export class CloudResultService {
             return (
               artifact.kind === 'complete' &&
               artifact.regular &&
-              result?.state === 'ready' &&
+              (result?.state === 'ready' || result?.state === 'staged') &&
               artifact.size === result.byte_count
             );
           })
@@ -439,6 +738,33 @@ export class CloudResultService {
     }
   }
 
+  private requireLiveLease(
+    request: CloudRequestRow,
+    job: AnalysisJobRow | undefined,
+    envelope: CloudResultEnvelope,
+    lease: CloudResultLease,
+  ): void {
+    if (
+      !this.contextMatches(request, job, envelope) ||
+      job === undefined ||
+      job.id !== lease.jobId ||
+      job.state !== 'processing' ||
+      job.lease_owner !== lease.leaseOwner ||
+      job.lease_expires_at === null ||
+      Date.parse(job.lease_expires_at) <= this.clock.now().getTime()
+    ) {
+      throw new CloudResultFailure(409, 'cloud_result_context_mismatch');
+    }
+  }
+
+  private cacheMatchesEnvelope(cache: CloudResultCacheRow, envelope: CloudResultEnvelope): boolean {
+    return (
+      cache.result_schema_version === envelope.resultSchemaVersion &&
+      cache.handler_version === envelope.handlerVersion &&
+      cache.byte_count === Buffer.byteLength(serializeCloudResultEnvelope(envelope), 'utf8')
+    );
+  }
+
   private contextMatches(
     request: CloudRequestRow,
     job: AnalysisJobRow | undefined,
@@ -447,7 +773,7 @@ export class CloudResultService {
     return (
       request.state === 'queued' &&
       job !== undefined &&
-      (job.state === 'queued' || job.state === 'processing') &&
+      (job.state === 'queued' || job.state === 'processing' || job.state === 'succeeded') &&
       job.request_id === request.id &&
       job.request_contract_version === request.contract_version &&
       envelope.requestId === request.id &&
@@ -506,6 +832,81 @@ export class CloudResultService {
     this.database.transaction(() => {
       this.database.markCloudResultFailed(requestId, 'cloud_result_cache_invalid');
     });
+  }
+
+  private invalidateStaged(requestId: string): void {
+    try {
+      this.resultStore.remove(requestId);
+    } catch {
+      // The row is made unavailable even if physical cleanup needs a later reconciliation pass.
+    }
+    this.database.transaction(() => {
+      const result = this.database.findCloudResultCache(requestId);
+      if (result?.state === 'staged') {
+        this.database.markCloudResultFailed(requestId, 'cloud_result_cache_invalid');
+        this.commerce?.releaseInTransaction(requestId);
+      }
+    });
+    // Invalid staged output cannot be finalized; remove its source media as part of the same
+    // best-effort cleanup path used by reconciliation. The cache is already unavailable even if
+    // a filesystem retry remains necessary.
+    this.tryRemoveTransientUpload(requestId, false);
+  }
+
+  private markStagedFailed(requestId: string): void {
+    this.database.transaction(() => {
+      const result = this.database.findCloudResultCache(requestId);
+      if (result?.state !== 'staged') return;
+      this.database.markCloudResultFailed(requestId, 'cloud_result_cache_invalid');
+      this.commerce?.releaseInTransaction(requestId);
+    });
+  }
+
+  private expireStaged(requestId: string, expiredAt = this.clock.now().toISOString()): boolean {
+    return this.database.transaction(() => {
+      const result = this.database.findCloudResultCache(requestId);
+      if (result?.state !== 'staged') return false;
+      const expired = this.database.markCloudResultExpired(requestId, expiredAt);
+      this.commerce?.releaseInTransaction(requestId);
+      return expired;
+    });
+  }
+
+  private expireStagedAndCleanup(requestId: string): boolean {
+    if (!this.expireStaged(requestId)) return false;
+    try {
+      this.resultStore.remove(requestId);
+    } catch {
+      throw new CloudResultFailure(503, 'cloud_result_storage_failure');
+    }
+    if (this.uploadStore !== undefined) this.removeTransientUpload(requestId);
+    return true;
+  }
+
+  private removeTransientUpload(requestId: string): void {
+    if (this.uploadStore === undefined) {
+      throw new CloudResultFailure(503, 'cloud_result_storage_failure');
+    }
+    try {
+      this.uploadStore.remove(requestId);
+      if (this.uploadStore.list().some((artifact) => artifact.requestId === requestId)) {
+        throw new Error('cloud_upload_cleanup_incomplete');
+      }
+    } catch (error) {
+      if (error instanceof CloudResultFailure) throw error;
+      throw new CloudResultFailure(503, 'cloud_result_storage_failure');
+    }
+  }
+
+  private tryRemoveTransientUpload(requestId: string, failed: boolean): boolean {
+    if (this.uploadStore === undefined) return failed;
+    try {
+      this.uploadStore.remove(requestId);
+      if (this.uploadStore.list().some((artifact) => artifact.requestId === requestId)) return true;
+      return failed;
+    } catch {
+      return true;
+    }
   }
 
   private isExpired(value: string | null | undefined, nowMs = this.clock.now().getTime()): boolean {

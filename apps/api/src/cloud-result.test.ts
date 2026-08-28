@@ -119,9 +119,10 @@ function harness() {
   const clock = new TestClock();
   const resultStore = new CloudResultStore(directory);
   const uploadStore = new TransientUploadStore(directory);
+  const commerce = new CommerceService({ database, now: clock.now });
   const requests = new CloudRequestService({
     database,
-    commerce: new CommerceService({ database, now: clock.now }),
+    commerce,
     hashSecret: HASH_SECRET,
     clock,
     idFactory: (() => {
@@ -130,8 +131,8 @@ function harness() {
     })(),
     uploadStore,
   });
-  const results = new CloudResultService({ database, resultStore, clock });
-  return { directory, database, clock, requests, resultStore, results };
+  const results = new CloudResultService({ database, resultStore, uploadStore, commerce, clock });
+  return { directory, database, clock, requests, resultStore, uploadStore, commerce, results };
 }
 
 function admitAndQueue(h: ReturnType<typeof harness>): string {
@@ -181,7 +182,216 @@ function serialized(result: CloudResultEnvelope): Buffer {
   return Buffer.from(serializeCloudResultEnvelope(result), 'utf8');
 }
 
+function claim(
+  h: ReturnType<typeof harness>,
+  owner = 'result-worker',
+): NonNullable<ReturnType<AccountDatabase['claimAnalysisJob']>> {
+  const now = h.clock.now();
+  const job = h.database.claimAnalysisJob({
+    now: now.toISOString(),
+    leaseOwner: owner,
+    leaseExpiresAt: new Date(now.getTime() + 60_000).toISOString(),
+  });
+  assert.ok(job);
+  return job;
+}
+
 describe('cloud result cache', () => {
+  it('keeps a staged envelope invisible, removes upload, and atomically consumes once on finalize', () => {
+    const h = harness();
+    try {
+      const requestId = admitAndQueue(h);
+      const job = claim(h);
+      const result = envelope(requestId);
+      const staged = h.results.stage(result, { jobId: job.id, leaseOwner: 'result-worker' });
+      assert.equal(staged.state, 'queued');
+      assert.equal(staged.resultAvailable, false);
+      assert.equal(staged.resultExpiresAt, null);
+      assert.equal(h.database.findCloudResultCache(requestId)?.state, 'staged');
+      assert.equal(h.uploadStore.hasCompleteArtifact(requestId), true);
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'consume').length,
+        0,
+      );
+
+      const ready = h.results.finalize({ jobId: job.id, leaseOwner: 'result-worker' });
+      assert.equal(ready.state, 'ready');
+      assert.equal(ready.resultAvailable, true);
+      assert.equal(h.uploadStore.hasCompleteArtifact(requestId), false);
+      assert.equal(h.database.findAnalysisJobByRequest(requestId)?.state, 'succeeded');
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'consume').length,
+        1,
+      );
+      assert.deepEqual(h.results.finalize({ jobId: job.id, leaseOwner: 'result-worker' }), ready);
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'consume').length,
+        1,
+      );
+      assert.deepEqual(h.results.retrieve(ACCOUNT, requestId), serialized(result));
+      assert.equal(h.database.findCloudResultCache(requestId)?.state, 'retrieved');
+    } finally {
+      close(h);
+    }
+  });
+
+  it('rejects stale, expired, wrong-owner, and wrong-job leases without staging or cleanup', () => {
+    const h = harness();
+    try {
+      const requestId = admitAndQueue(h);
+      const job = claim(h);
+      const result = envelope(requestId);
+      for (const lease of [
+        { jobId: job.id, leaseOwner: 'other-worker' },
+        { jobId: 'other-job', leaseOwner: 'result-worker' },
+      ]) {
+        assert.throws(
+          () => h.results.stage(result, lease),
+          (error: unknown) =>
+            error instanceof CloudResultFailure && error.code === 'cloud_result_context_mismatch',
+        );
+      }
+      h.clock.advance(60_001);
+      assert.throws(
+        () => h.results.stage(result, { jobId: job.id, leaseOwner: 'result-worker' }),
+        (error: unknown) =>
+          error instanceof CloudResultFailure && error.code === 'cloud_result_context_mismatch',
+      );
+      assert.equal(h.database.findCloudResultCache(requestId), undefined);
+      assert.equal(h.uploadStore.hasCompleteArtifact(requestId), true);
+    } finally {
+      close(h);
+    }
+  });
+
+  it('keeps staged ciphertext and reservation when upload cleanup fails, then retries safely', () => {
+    const h = harness();
+    try {
+      const requestId = admitAndQueue(h);
+      const job = claim(h);
+      const result = envelope(requestId);
+      h.results.stage(result, job);
+      const originalRemove = h.uploadStore.remove;
+      h.uploadStore.remove = () => {
+        throw new Error('unlink_failed');
+      };
+      assert.throws(
+        () => h.results.finalize(job),
+        (error: unknown) =>
+          error instanceof CloudResultFailure && error.code === 'cloud_result_storage_failure',
+      );
+      assert.equal(h.database.findCloudResultCache(requestId)?.state, 'staged');
+      assert.equal(h.database.findAnalysisJobByRequest(requestId)?.state, 'processing');
+      assert.equal(h.uploadStore.hasCompleteArtifact(requestId), true);
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'consume').length,
+        0,
+      );
+      h.uploadStore.remove = originalRemove;
+      assert.equal(h.results.finalize(job).state, 'ready');
+      assert.equal(h.uploadStore.hasCompleteArtifact(requestId), false);
+    } finally {
+      close(h);
+    }
+  });
+
+  it('rejects finalization after lease expiry without consuming or changing staged state', () => {
+    const h = harness();
+    try {
+      const requestId = admitAndQueue(h);
+      const job = claim(h);
+      h.results.stage(envelope(requestId), job);
+      h.clock.advance(60_001);
+      assert.throws(
+        () => h.results.finalize(job),
+        (error: unknown) =>
+          error instanceof CloudResultFailure && error.code === 'cloud_result_context_mismatch',
+      );
+      assert.equal(h.database.findCloudResultCache(requestId)?.state, 'staged');
+      assert.equal(h.database.findAnalysisJobByRequest(requestId)?.state, 'processing');
+      assert.equal(h.uploadStore.hasCompleteArtifact(requestId), true);
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'consume').length,
+        0,
+      );
+    } finally {
+      close(h);
+    }
+  });
+
+  it('recovers a promoted ciphertext file after a crash before staged metadata', () => {
+    const h = harness();
+    try {
+      const requestId = admitAndQueue(h);
+      const job = claim(h);
+      const result = envelope(requestId);
+      h.resultStore.write(requestId, serialized(result));
+      h.results.reconcile();
+      assert.equal(h.database.findCloudResultCache(requestId)?.state, 'staged');
+      assert.equal(h.results.status(ACCOUNT, requestId).state, 'queued');
+      assert.equal(h.results.finalize(job).state, 'ready');
+      assert.equal(h.uploadStore.hasCompleteArtifact(requestId), false);
+    } finally {
+      close(h);
+    }
+  });
+
+  it('reclaims a staged result after lease loss without requiring provider or encryption again', () => {
+    const h = harness();
+    try {
+      const requestId = admitAndQueue(h);
+      const firstJob = claim(h, 'first-worker');
+      const result = envelope(requestId);
+      h.results.stage(result, firstJob);
+      h.clock.advance(60_001);
+      const reclaimed = claim(h, 'second-worker');
+      assert.equal(reclaimed.id, firstJob.id);
+      assert.equal(h.results.finalize(reclaimed).state, 'ready');
+      assert.equal(h.database.findAnalysisJobByRequest(requestId)?.state, 'succeeded');
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'consume').length,
+        1,
+      );
+    } finally {
+      close(h);
+    }
+  });
+
+  it('expires staged ciphertext during reconciliation and releases its reservation', () => {
+    const h = harness();
+    try {
+      const requestId = admitAndQueue(h);
+      const job = claim(h);
+      h.results.stage(envelope(requestId), job);
+      h.database.sqlite
+        .prepare('UPDATE cloud_result_cache SET expires_at = ? WHERE request_id = ?')
+        .run(new Date(NOW.getTime() - 1).toISOString(), requestId);
+      h.results.reconcile();
+      assert.equal(h.database.findCloudResultCache(requestId)?.state, 'expired');
+      assert.equal(h.uploadStore.hasCompleteArtifact(requestId), false);
+      assert.equal(
+        h.database
+          .listAllowanceLedger(ACCOUNT, 'snap')
+          .filter((row) => row.entry_type === 'release').length,
+        1,
+      );
+    } finally {
+      close(h);
+    }
+  });
+
   it('publishes ciphertext-only metadata, replays the same envelope, and rejects plaintext/conflicts', () => {
     const h = harness();
     try {
@@ -710,7 +920,136 @@ describe('cloud result cache', () => {
     }
   });
 
-  it('repairs a promoted orphan and removes result files after account deletion', () => {
+  it('migrates every populated v9 result state without changing result history', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'alyte-cloud-result-v9-'));
+    const filename = join(directory, 'legacy.sqlite');
+    const legacy = new Database(filename);
+    legacy.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, applied_at) VALUES (9, '2026-08-28T00:00:00.000Z');
+      CREATE TABLE accounts (id TEXT PRIMARY KEY NOT NULL, created_at TEXT NOT NULL);
+      INSERT INTO accounts (id, created_at) VALUES ('legacy-v9-account', '2026-08-28T00:00:00.000Z');
+      CREATE TABLE cloud_requests (
+        id TEXT PRIMARY KEY NOT NULL,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        operation TEXT NOT NULL CHECK (operation IN ('intake-image', 'lab-report')),
+        state TEXT NOT NULL CHECK (state IN ('awaiting-upload', 'uploaded', 'queued', 'cancelled', 'expired')),
+        byte_count INTEGER NOT NULL CHECK (byte_count > 0 AND byte_count <= 26214400),
+        page_count INTEGER NOT NULL CHECK (page_count > 0 AND page_count <= 20),
+        device_public_key_jwk TEXT NOT NULL,
+        idempotency_key_hash TEXT NOT NULL,
+        request_fingerprint TEXT NOT NULL,
+        contract_version TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        upload_expires_at TEXT NOT NULL,
+        uploaded_at TEXT,
+        queued_at TEXT,
+        expired_at TEXT,
+        cancelled_at TEXT
+      );
+      CREATE TABLE analysis_jobs (
+        id TEXT PRIMARY KEY NOT NULL,
+        request_id TEXT NOT NULL UNIQUE REFERENCES cloud_requests(id) ON DELETE CASCADE,
+        state TEXT NOT NULL CHECK (state IN ('queued', 'processing', 'succeeded', 'failed', 'expired', 'cancelled')),
+        available_at TEXT NOT NULL,
+        attempts INTEGER NOT NULL CHECK (attempts >= 0),
+        lease_owner TEXT,
+        lease_expires_at TEXT,
+        handler_version INTEGER NOT NULL CHECK (handler_version > 0),
+        request_contract_version TEXT NOT NULL,
+        schema_version TEXT NOT NULL,
+        prompt_version TEXT,
+        failure_category TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE cloud_result_cache (
+        request_id TEXT PRIMARY KEY NOT NULL REFERENCES cloud_requests(id) ON DELETE CASCADE,
+        state TEXT NOT NULL CHECK (state IN ('ready', 'retrieved', 'failed', 'expired')),
+        result_schema_version TEXT NOT NULL,
+        handler_version INTEGER NOT NULL CHECK (handler_version > 0),
+        byte_count INTEGER NOT NULL CHECK (byte_count > 0 AND byte_count <= 524288),
+        ready_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        retrieved_at TEXT,
+        expired_at TEXT,
+        failure_category TEXT CHECK (
+          failure_category IS NULL OR
+          failure_category IN ('cloud_result_cache_missing', 'cloud_result_cache_invalid', 'cloud_result_cache_conflict')
+        )
+      );
+      CREATE INDEX cloud_result_cache_expiry_idx ON cloud_result_cache(state, expires_at, request_id);
+    `);
+    const states = ['ready', 'retrieved', 'failed', 'expired'] as const;
+    for (const state of states) {
+      const requestId = `legacy-v9-request-${state}`;
+      legacy
+        .prepare(
+          `INSERT INTO cloud_requests
+          (id, account_id, operation, state, byte_count, page_count, device_public_key_jwk,
+           idempotency_key_hash, request_fingerprint, contract_version, created_at, updated_at,
+           upload_expires_at, uploaded_at, queued_at, expired_at, cancelled_at)
+         VALUES (?, ?, 'intake-image', 'queued', 4, 1, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          requestId,
+          'legacy-v9-account',
+          `${requestId}-key`,
+          `${requestId}-fingerprint`,
+          CONTRACT_VERSION,
+          NOW.toISOString(),
+          NOW.toISOString(),
+          NOW.toISOString(),
+          NOW.toISOString(),
+          NOW.toISOString(),
+          null,
+          null,
+        );
+      legacy
+        .prepare(
+          `INSERT INTO cloud_result_cache
+            (request_id, state, result_schema_version, handler_version, byte_count, ready_at,
+             expires_at, retrieved_at, expired_at, failure_category)
+           VALUES (?, ?, 'result-v9', 1, 4, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          requestId,
+          state,
+          NOW.toISOString(),
+          new Date(NOW.getTime() + 60_000).toISOString(),
+          state === 'retrieved' ? NOW.toISOString() : null,
+          state === 'expired' ? NOW.toISOString() : null,
+          state === 'failed' ? 'cloud_result_cache_invalid' : null,
+        );
+    }
+    const before = legacy
+      .prepare('SELECT * FROM cloud_result_cache ORDER BY request_id')
+      .all() as readonly Record<string, unknown>[];
+    legacy.close();
+    try {
+      const database = new AccountDatabase({ filename });
+      const after = database.sqlite
+        .prepare(
+          'SELECT request_id, state, result_schema_version, handler_version, byte_count, ready_at, expires_at, retrieved_at, expired_at, failure_category FROM cloud_result_cache ORDER BY request_id',
+        )
+        .all() as readonly Record<string, unknown>[];
+      assert.deepEqual(after, before);
+      assert.deepEqual(
+        database.sqlite
+          .prepare(
+            "SELECT name FROM pragma_table_info('cloud_result_cache') WHERE name IN ('ready_at', 'staged_at') ORDER BY name",
+          )
+          .all(),
+        [{ name: 'ready_at' }, { name: 'staged_at' }],
+      );
+      database.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('repairs a promoted orphan into invisible staged state and removes result files after account deletion', () => {
     const h = harness();
     try {
       const requestId = admitAndQueue(h);
@@ -718,7 +1057,8 @@ describe('cloud result cache', () => {
       const bytes = Buffer.from(JSON.stringify(result), 'utf8');
       h.resultStore.write(requestId, bytes);
       h.results.reconcile();
-      assert.equal(h.results.status(ACCOUNT, requestId).state, 'ready');
+      assert.equal(h.results.status(ACCOUNT, requestId).state, 'queued');
+      assert.equal(h.database.findCloudResultCache(requestId)?.state, 'staged');
       h.database.deleteAccountData(ACCOUNT);
       h.results.reconcile({ strict: true });
       assert.equal(h.resultStore.list().length, 0);

@@ -186,10 +186,16 @@ function canonicalAdmission(admission: CloudRequestAdmissionRequest): string {
 
 export function toStatus(row: CloudRequestRow): CloudRequestStatusResponse {
   const resultState = row.result_state ?? null;
+  const visibleResult = resultState === 'ready';
+  const publicState = visibleResult
+    ? resultState
+    : resultState === 'staged'
+      ? row.state
+      : resultState;
   return {
     requestId: row.id,
     operation: row.operation,
-    state: resultState ?? row.state,
+    state: publicState ?? row.state,
     byteCount: row.byte_count,
     pageCount: row.page_count,
     contractVersion: row.contract_version,
@@ -198,9 +204,9 @@ export function toStatus(row: CloudRequestRow): CloudRequestStatusResponse {
     cancelledAt: row.cancelled_at,
     uploadedAt: row.uploaded_at,
     queuedAt: row.queued_at,
-    resultAvailable: resultState === 'ready',
-    resultExpiresAt: row.result_expires_at ?? null,
-    failureCategory: row.result_failure_category ?? null,
+    resultAvailable: visibleResult,
+    resultExpiresAt: visibleResult ? (row.result_expires_at ?? null) : null,
+    failureCategory: resultState === 'failed' ? (row.result_failure_category ?? null) : null,
     expiresAt: row.upload_expires_at,
     expiredAt: row.expired_at,
   };

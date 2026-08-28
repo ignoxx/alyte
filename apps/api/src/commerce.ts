@@ -357,31 +357,36 @@ export class CommerceService {
   consume(requestId: string): void {
     const reservation = this.findReservation(requestId);
     if (reservation === undefined) throw new CommerceFailure(404, 'allowance_reservation_missing');
-    this.database.transaction(() => {
-      if (
-        this.database.findAllowanceLedgerEntry(
-          reservation.account_id,
-          reservation.kind,
-          'consume',
-          requestId,
-        ) !== undefined
-      )
-        return;
-      if (
-        this.database.findAllowanceLedgerEntry(
-          reservation.account_id,
-          reservation.kind,
-          'release',
-          requestId,
-        ) !== undefined
-      )
-        throw new CommerceFailure(409, 'allowance_reservation_released');
-      if (!isFuture(reservation.period_end, this.now().getTime())) {
-        this.addLedger(reservation.account_id, reservation.kind, 'release', requestId, reservation);
-        throw new CommerceFailure(409, 'allowance_reservation_expired');
-      }
-      this.addLedger(reservation.account_id, reservation.kind, 'consume', requestId, reservation);
-    });
+    this.database.transaction(() => this.consumeInTransaction(requestId));
+  }
+
+  /** Consume a reservation while the caller owns the SQLite transaction. */
+  consumeInTransaction(requestId: string): void {
+    const reservation = this.findReservation(requestId);
+    if (reservation === undefined) throw new CommerceFailure(404, 'allowance_reservation_missing');
+    if (
+      this.database.findAllowanceLedgerEntry(
+        reservation.account_id,
+        reservation.kind,
+        'consume',
+        requestId,
+      ) !== undefined
+    )
+      return;
+    if (
+      this.database.findAllowanceLedgerEntry(
+        reservation.account_id,
+        reservation.kind,
+        'release',
+        requestId,
+      ) !== undefined
+    )
+      throw new CommerceFailure(409, 'allowance_reservation_released');
+    if (!isFuture(reservation.period_end, this.now().getTime())) {
+      this.addLedger(reservation.account_id, reservation.kind, 'release', requestId, reservation);
+      throw new CommerceFailure(409, 'allowance_reservation_expired');
+    }
+    this.addLedger(reservation.account_id, reservation.kind, 'consume', requestId, reservation);
   }
 
   async reconcile(accountId: string): Promise<CloudReconcileResponse> {
