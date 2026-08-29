@@ -568,6 +568,57 @@ function source(uri: string, sourceType: 'pdf' | 'image' = 'pdf'): LabSourceSele
   };
 }
 
+function v3TableObservation(
+  id: string,
+  text: string,
+  rowIndex: number,
+  columnIndex: number,
+): {
+  readonly id: string;
+  readonly text: string;
+  readonly alternatives: readonly string[];
+  readonly pageIndex: number;
+  readonly orientation: number;
+  readonly boundingBox: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly structure: {
+    readonly kind: 'table-cell';
+    readonly tableId: string;
+    readonly rowIndex: number;
+    readonly columnIndex: number;
+  };
+  readonly recognition: {
+    readonly level: 'accurate';
+    readonly language: string;
+    readonly internalConfidence: null;
+  };
+} {
+  return {
+    id,
+    text,
+    alternatives: [],
+    pageIndex: 0,
+    orientation: 0,
+    boundingBox: {
+      x: 0.08 + columnIndex * 0.2,
+      y: 0.08 + rowIndex * 0.08,
+      width: 0.16,
+      height: 0.03,
+    },
+    structure: {
+      kind: 'table-cell',
+      tableId: 'semantic-eligibility',
+      rowIndex,
+      columnIndex,
+    },
+    recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+  };
+}
+
 type CreateServiceOverrides = {
   readonly pdf?: PdfInspector;
   readonly visionOCR?: VisionOCR;
@@ -2053,6 +2104,155 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(draft.rows.length, 1);
     assert.equal(draft.rows[0]?.proposedSpecimenType, 'unknown');
     assert.equal(draft.rows[0]?.proposedBiomarkerId, 'biomarker.glucose');
+  });
+
+  test('offers a clear unsupported v3 row while excluding a complete known row', async () => {
+    const observations = [
+      v3TableObservation('unknown-label', 'Unmapped assay', 0, 0),
+      v3TableObservation('unknown-value', '4.2', 0, 1),
+      v3TableObservation('unknown-unit', 'mg/L', 0, 2),
+      v3TableObservation('unknown-reference', '3-5', 0, 3),
+      v3TableObservation('known-label', 'LDL-C', 1, 0),
+      v3TableObservation('known-value', '3.8', 1, 1),
+      v3TableObservation('known-unit', 'mmol/L', 1, 2),
+      v3TableObservation('known-reference', '2.0-4.0', 1, 3),
+    ];
+    const mappedSourceIds: string[][] = [];
+    const mapper: ExtractionSemanticMapper = {
+      adapterVersion: 'semantic-eligibility.mapper.v1',
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      maxRowsPerChunk: 2,
+      maxObservationsPerChunk: 24,
+      supports: () => true,
+      async map({ rows }) {
+        mappedSourceIds.push(...rows.map((row) => [...row.sourceObservationIds]));
+        return rows.map((row) => ({
+          sourceObservationIds: row.sourceObservationIds,
+          proposedBiomarkerId: null,
+          role: 'preserve' as const,
+        }));
+      },
+    };
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const service = createService(
+      repository,
+      files,
+      new FakePdf(),
+      {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v3',
+            pageIndex: 0,
+            orientation: 0,
+            observations,
+          });
+        },
+      },
+      mapper,
+    );
+    const imported = await service.importImages(source('v3-semantic-eligibility', 'image'));
+    assert.ok(imported);
+    const report = imported.report;
+    const draft = await service.startExtraction(report.id);
+    const unknown = draft.rows.find((row) => row.source.observationIds.includes('unknown-label'));
+    const known = draft.rows.find((row) => row.source.observationIds.includes('known-label'));
+
+    assert.deepEqual(mappedSourceIds, [
+      ['unknown-label', 'unknown-value', 'unknown-unit', 'unknown-reference'],
+    ]);
+    assert.ok(unknown);
+    assert.ok(known);
+    assert.equal(unknown.proposedBiomarkerId, null);
+    assert.ok(unknown.reviewReasons.includes('unsupported-alias'));
+    assert.equal(unknown.source.semantic?.adapterVersion, mapper.adapterVersion);
+    assert.equal(known.proposedBiomarkerId, 'biomarker.ldl_c');
+    assert.deepEqual(known.reviewReasons, ['defaulted-collection-date']);
+    assert.equal(known.source.semantic, null);
+  });
+
+  test('preserves a clear unsupported v3 row when semantic output is malformed', async () => {
+    const observations = [
+      v3TableObservation('malformed-label', 'Unmapped assay', 0, 0),
+      v3TableObservation('malformed-value', '4.2', 0, 1),
+      v3TableObservation('malformed-unit', 'mg/L', 0, 2),
+      v3TableObservation('malformed-reference', '3-5', 0, 3),
+    ];
+    let mapperCalls = 0;
+    const mapper: ExtractionSemanticMapper = {
+      adapterVersion: 'semantic-malformed.mapper.v1',
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      supports: () => true,
+      async map() {
+        mapperCalls += 1;
+        return '{"schemaVersion":"alyte.semantic-mapper.v1","proposals":[';
+      },
+    };
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const service = createService(
+      repository,
+      files,
+      new FakePdf(),
+      {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v3',
+            pageIndex: 0,
+            orientation: 0,
+            observations,
+          });
+        },
+      },
+      mapper,
+    );
+    const imported = await service.importImages(source('v3-malformed-semantic', 'image'));
+    assert.ok(imported);
+    const report = imported.report;
+    const draft = await service.startExtraction(report.id);
+    const row = draft.rows[0];
+
+    assert.equal(mapperCalls, 1);
+    assert.ok(row);
+    assert.equal(row.source.semantic, null);
+    assert.equal(row.proposedBiomarkerId, null);
+    assert.deepEqual(row.proposedValue, { kind: 'numeric', value: 4.2 });
+    assert.equal(row.proposedUnit, 'mg/L');
+    assert.ok(row.reviewReasons.includes('unsupported-alias'));
+  });
+
+  test('preserves a clear unsupported v3 row when no semantic mapper is available', async () => {
+    const observations = [
+      v3TableObservation('without-mapper-label', 'Unmapped assay', 0, 0),
+      v3TableObservation('without-mapper-value', '4.2', 0, 1),
+      v3TableObservation('without-mapper-unit', 'mg/L', 0, 2),
+      v3TableObservation('without-mapper-reference', '3-5', 0, 3),
+    ];
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const service = createService(repository, files, new FakePdf(), {
+      async recognize(): Promise<VisionOCRResult> {
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v3',
+          pageIndex: 0,
+          orientation: 0,
+          observations,
+        });
+      },
+    });
+    const imported = await service.importImages(source('v3-no-semantic-mapper', 'image'));
+    assert.ok(imported);
+    const report = imported.report;
+    const draft = await service.startExtraction(report.id);
+    const row = draft.rows[0];
+
+    assert.ok(row);
+    assert.equal(row.source.semantic, null);
+    assert.equal(row.proposedBiomarkerId, null);
+    assert.equal(row.source.raw?.label, 'Unmapped assay');
+    assert.equal(row.source.raw?.value, '4.2');
+    assert.equal(row.source.raw?.unit, 'mg/L');
+    assert.ok(row.reviewReasons.includes('unsupported-alias'));
   });
 
   test('gates missing packs before OCR while preserving a distinct runtime fallback path', async () => {

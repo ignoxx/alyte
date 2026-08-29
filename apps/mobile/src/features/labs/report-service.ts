@@ -2146,7 +2146,15 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const candidates = enumerateGeometryFieldCandidates(physicalRow);
       for (const parsedRow of parsedRows) {
         rows.push(parsedRow);
-        if (candidates.requiresReview) semanticCandidateRowIds.add(parsedRow.id);
+        // Geometry alone cannot see semantic completeness. A structurally clear row can still
+        // carry an unsupported alias, so keep the parsed result in the mapper's bounded input as
+        // well. Fully mapped rows with no geometry ambiguity remain out of the model request.
+        if (
+          candidates.requiresReview ||
+          parsedRow.proposedBiomarkerId === null ||
+          parsedRow.reviewReasons.includes('unsupported-alias')
+        )
+          semanticCandidateRowIds.add(parsedRow.id);
       }
     }
     rows.sort((left, right) => {
