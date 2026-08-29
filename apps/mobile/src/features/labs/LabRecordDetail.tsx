@@ -128,6 +128,7 @@ export function LabRecordDetail({
               accessibilityState={{ expanded: open }}
               accessibilityLabel={formatLabRecordMeasurementAccessibilityLabel(
                 displayLabel,
+                supportReason(item),
                 value,
                 item.current.unit,
               )}

@@ -61,14 +61,17 @@ test('record measurement rows stack at accessibility Dynamic Type sizes', () => 
 });
 
 test('record measurement accessibility labels keep the value and unit together', () => {
-  assert.equal(formatLabRecordMeasurementAccessibilityLabel('HbA1c', '5.6', '%'), 'HbA1c, 5.6 %');
   assert.equal(
-    formatLabRecordMeasurementAccessibilityLabel('Ferritin', '18', null),
-    'Ferritin, 18',
+    formatLabRecordMeasurementAccessibilityLabel('HbA1c', 'Comparable', '5.6', '%'),
+    'HbA1c, Comparable, 5.6 %',
   );
   assert.equal(
-    formatLabRecordMeasurementAccessibilityLabel('Unknown biomarker', '', ''),
-    'Unknown biomarker',
+    formatLabRecordMeasurementAccessibilityLabel('Ferritin', 'Preserved only', '18', null),
+    'Ferritin, Preserved only, 18',
+  );
+  assert.equal(
+    formatLabRecordMeasurementAccessibilityLabel('Unknown biomarker', 'Needs review', '', ''),
+    'Unknown biomarker, Needs review',
   );
 });
 

@@ -32,11 +32,12 @@ export function getLabRecordDetailRowLayout(fontScale: number): LabRecordDetailR
 
 export function formatLabRecordMeasurementAccessibilityLabel(
   label: string,
+  supportReason: string,
   value: string,
   unit: string | null | undefined,
 ): string {
   const valueWithUnit = unit ? `${value} ${unit}` : value;
-  return valueWithUnit.length > 0 ? `${label}, ${valueWithUnit}` : label;
+  return [label, supportReason, valueWithUnit].filter((part) => part.length > 0).join(', ');
 }
 
 export const labRecordSupportReasonLocalizationKeys = {
