@@ -37,6 +37,7 @@ export function SupportFaqScreen() {
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScreenScrollView
         contentContainerStyle={screenStyles.content}
+        contentInset={{ bottom: spacing.xxl }}
         style={screenStyles.scroll}
         tabBarClearance="native"
       >
