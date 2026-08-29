@@ -14,6 +14,21 @@ export type LocalSettingsRow = {
   readonly route: LocalSettingsRoute;
 };
 
+export type SettingsRowLayout = 'inline' | 'accessible';
+
+const SETTINGS_ACCESSIBILITY_FONT_SCALE = 1.3;
+
+/**
+ * Keep the Settings group compact by default, then give its rows extra vertical room once iOS
+ * enters the accessibility Dynamic Type ramp. The row stays one horizontal action so its icon,
+ * bounded copy, and trailing disclosure remain associated while long localized copy wraps.
+ */
+export function getSettingsRowLayout(fontScale: number): SettingsRowLayout {
+  return Number.isFinite(fontScale) && fontScale >= SETTINGS_ACCESSIBILITY_FONT_SCALE
+    ? 'accessible'
+    : 'inline';
+}
+
 /**
  * The pre-cloud Settings surface is deliberately a small, complete local control list. Cloud
  * account and subscription rows belong to the later cloud slice and must not be added here until

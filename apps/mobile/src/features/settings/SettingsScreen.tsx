@@ -1,6 +1,6 @@
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { MainTabParamList } from '../../navigation/types';
@@ -9,7 +9,7 @@ import { t } from '../../localization';
 import { AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { useAppLock } from '../app-lock/AppLockProvider';
-import { buildLocalSettingsRows } from './settings-ui-model';
+import { buildLocalSettingsRows, getSettingsRowLayout } from './settings-ui-model';
 
 type SettingsScreenProps = BottomTabScreenProps<MainTabParamList, 'Settings'>;
 type SettingsNavigation = NativeStackNavigationProp<SettingsStackParamList, 'SettingsRoot'>;
@@ -18,11 +18,13 @@ function SettingsRow({
   icon,
   title,
   subtitle,
+  layout,
   onPress,
 }: {
   readonly icon: 'lockShield' | 'shield' | 'folder' | 'settings' | 'doc';
   readonly title: string;
   readonly subtitle: string;
+  readonly layout: 'inline' | 'accessible';
   readonly onPress: () => void;
 }) {
   return (
@@ -30,9 +32,13 @@ function SettingsRow({
       accessibilityRole="button"
       accessibilityLabel={`${title}. ${subtitle}`}
       onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+      style={({ pressed }) => [
+        styles.row,
+        layout === 'accessible' && styles.rowAccessible,
+        pressed && styles.rowPressed,
+      ]}
     >
-      <AppIcon name={icon} size={22} color={colors.accent} />
+      <AppIcon name={icon} size={22} color={colors.accent} style={styles.rowIcon} />
       <View style={styles.rowCopy}>
         <AppText variant="heading" style={styles.rowTitle}>
           {title}
@@ -41,7 +47,7 @@ function SettingsRow({
           {subtitle}
         </AppText>
       </View>
-      <AppIcon name="chevronRight" size={16} color={colors.mutedInk} />
+      <AppIcon name="chevronRight" size={16} color={colors.mutedInk} style={styles.rowChevron} />
     </Pressable>
   );
 }
@@ -49,6 +55,8 @@ function SettingsRow({
 export function SettingsScreen(_props: SettingsScreenProps) {
   const navigation = useNavigation<SettingsNavigation>();
   const { state } = useAppLock();
+  const { fontScale } = useWindowDimensions();
+  const rowLayout = getSettingsRowLayout(fontScale);
   const appLockStatus = state.preferences?.enabled
     ? t('settings.appLockEnabled')
     : t('settings.appLockDisabled');
@@ -56,12 +64,17 @@ export function SettingsScreen(_props: SettingsScreenProps) {
 
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+      <ScreenScrollView
+        contentContainerStyle={screenStyles.content}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         <View style={styles.group}>
           {rows.map((row) => (
             <SettingsRow
               key={row.route}
               icon={row.icon}
+              layout={rowLayout}
               title={row.title}
               subtitle={row.subtitle}
               onPress={() => navigation.navigate(row.route)}
@@ -92,8 +105,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
   },
+  rowAccessible: { alignItems: 'flex-start', paddingVertical: spacing.md },
   rowPressed: { backgroundColor: colors.accentSoft },
-  rowCopy: { flex: 1, gap: spacing.xs },
-  rowTitle: { fontSize: 16, lineHeight: 21 },
-  rowSubtitle: { color: colors.mutedInk },
+  rowIcon: { flexShrink: 0 },
+  rowCopy: { flex: 1, gap: spacing.xs, minWidth: 0 },
+  rowTitle: { flexShrink: 1, fontSize: 16, lineHeight: 21, minWidth: 0 },
+  rowSubtitle: { color: colors.mutedInk, flexShrink: 1, minWidth: 0 },
+  rowChevron: { flexShrink: 0 },
 });
