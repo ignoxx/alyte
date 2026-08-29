@@ -1,9 +1,5 @@
-import {
-  parseLabDate,
-  type ExtractionDateContext,
-  type VisionTextObservation,
-} from './extraction.js';
-import type { LabDateState } from './labs.js';
+import { parseLabDate, type ExtractionDateContext, type VisionTextObservation } from './extraction';
+import type { LabDateState } from './labs';
 
 /** The Vision fields needed for conservative date-context extraction, plus the adapter locale. */
 export type OCRDateContextObservation = Pick<
