@@ -224,12 +224,20 @@ export type ExtractionDateContext = {
   readonly observationId: string;
   readonly pageIndex: number;
   readonly centerY: number;
+  /** Horizontal position and deterministic visual scope used to keep adjacent events separate. */
+  readonly centerX?: number;
+  readonly scopeKey?: string;
   readonly locale: string | null;
   readonly context: 'collection' | 'unknown';
   readonly ambiguous: boolean;
   readonly collectionDate: LabDateState;
   /** The unmodified OCR observation containing the date candidate. */
   readonly sourceText?: string;
+  /** Exact bounded date token copied from the source observation. */
+  readonly sourceDate?: string;
+  /** Explicit label observation that associated the date, when one was available. */
+  readonly labelObservationId?: string;
+  readonly labelText?: string;
 };
 
 export type ExtractionSemanticSchemaVersion =
@@ -1870,9 +1878,32 @@ function parseSourceRow(
   const rowCenterY =
     group.reduce((sum, item) => sum + item.boundingBox.y + item.boundingBox.height / 2, 0) /
     Math.max(1, group.length);
-  const nearestDateContext = collectionDateContexts
+  const rowCenterX =
+    group.reduce((sum, item) => sum + item.boundingBox.x + item.boundingBox.width / 2, 0) /
+    Math.max(1, group.length);
+  const tableIds = new Set(
+    group.flatMap((item) =>
+      item.structure?.kind === 'table-cell' && item.structure.tableId !== null
+        ? [item.structure.tableId]
+        : [],
+    ),
+  );
+  const tableScopedContexts =
+    tableIds.size === 1
+      ? collectionDateContexts.filter((candidate) =>
+          candidate.scopeKey?.includes(`:table:${[...tableIds][0]}:`),
+        )
+      : [];
+  const nearestDateContext = (
+    tableScopedContexts.length > 0 ? tableScopedContexts : collectionDateContexts
+  )
     .filter((candidate) => candidate.pageIndex === source.pageIndex)
-    .sort((a, b) => Math.abs(a.centerY - rowCenterY) - Math.abs(b.centerY - rowCenterY))[0];
+    .sort(
+      (a, b) =>
+        Math.abs(a.centerY - rowCenterY) - Math.abs(b.centerY - rowCenterY) ||
+        Math.abs((a.centerX ?? rowCenterX) - rowCenterX) -
+          Math.abs((b.centerX ?? rowCenterX) - rowCenterX),
+    )[0];
   const effectiveDate = nearestDateContext?.collectionDate ?? collectionDate;
   if (effectiveDate.kind === 'missing') reasons.push('missing-collection-date');
   else if (collectionDateDefaulted && nearestDateContext === undefined)

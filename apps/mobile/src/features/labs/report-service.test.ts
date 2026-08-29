@@ -673,7 +673,7 @@ function syntheticDateObservation(
   id: string,
   text: string,
   x: number,
-  y: number,
+  y = 0.1,
   language: string | null = 'de',
 ): VisionOCRResult['observations'][number] {
   return {
@@ -684,6 +684,21 @@ function syntheticDateObservation(
     pageIndex: 0,
     orientation: 0,
     recognition: { level: 'accurate', language, internalConfidence: null },
+  };
+}
+
+function syntheticTableDateObservation(
+  id: string,
+  text: string,
+  x: number,
+  y: number,
+  tableId: string,
+  rowIndex: number,
+  columnIndex = 0,
+): VisionOCRResult['observations'][number] {
+  return {
+    ...syntheticDateObservation(id, text, x, y),
+    structure: { kind: 'table-cell', tableId, rowIndex, columnIndex },
   };
 }
 
@@ -2598,6 +2613,9 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(measurement.collectionDateContext?.observationId, 'same-line-date-header');
     assert.equal(measurement.collectionDateContext?.locale, 'de-DE');
     assert.equal(measurement.collectionDateContext?.sourceText, observations[0]?.text);
+    assert.equal(measurement.collectionDateContext?.sourceDate, '22.08.2026');
+    assert.equal(measurement.collectionDateContext?.labelObservationId, 'same-line-date-header');
+    assert.equal(measurement.collectionDateContext?.labelText, observations[0]?.text);
     assert.equal(measurement.source.raw?.collectionDate, observations[0]?.text);
     assert.ok(modelRow);
     assert.deepEqual(modelInputs, [[['same-line-model-row']]]);
@@ -2632,7 +2650,107 @@ describe('protected Lab Report import lifecycle', () => {
     assert.deepEqual(draft.collectionDate, { kind: 'known', value: '2026-08-22' });
     assert.deepEqual(row?.collectionDate, { kind: 'known', value: '2026-08-22' });
     assert.equal(row?.collectionDateContext?.observationId, 'reversed-collection-date');
+    assert.equal(row?.collectionDateContext?.labelObservationId, 'reversed-collection-label');
+    assert.equal(row?.collectionDateContext?.labelText, 'Collected');
     assert.deepEqual(row?.source.observationIds, ['reversed-measurement']);
+  });
+
+  test('keeps same-row collection dates separate across side-by-side tables', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const observations = [
+      syntheticTableDateObservation(
+        'left-table-date',
+        'Collection date 22.08.2026',
+        0.08,
+        0.1,
+        'left-table',
+        0,
+      ),
+      syntheticTableDateObservation(
+        'left-table-measurement',
+        'LDL-C 3,8 mmol/L',
+        0.08,
+        0.2,
+        'left-table',
+        1,
+      ),
+      syntheticTableDateObservation(
+        'right-table-date',
+        'Collection date 23.08.2026',
+        0.6,
+        0.1,
+        'right-table',
+        0,
+      ),
+      syntheticTableDateObservation(
+        'right-table-measurement',
+        'LDL-C 4,0 mmol/L',
+        0.6,
+        0.2,
+        'right-table',
+        1,
+      ),
+    ];
+    const service = createService(repository, files, sanitizingPdf(files), {
+      async recognize(): Promise<VisionOCRResult> {
+        return {
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations,
+        };
+      },
+    });
+    const report = (await service.importPdf(source('side-by-side-table-dates')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+    const draft = await service.startExtraction(report.id);
+    const rows = new Map(draft.rows.map((row) => [row.source.observationIds[0], row]));
+
+    assert.deepEqual(draft.collectionDate, { kind: 'missing' });
+    assert.deepEqual(rows.get('left-table-measurement')?.collectionDate, {
+      kind: 'known',
+      value: '2026-08-22',
+    });
+    assert.deepEqual(rows.get('right-table-measurement')?.collectionDate, {
+      kind: 'known',
+      value: '2026-08-23',
+    });
+    assert.equal(rows.get('left-table-measurement')?.proposedBiomarkerId, 'biomarker.ldl_c');
+    assert.equal(rows.get('right-table-measurement')?.proposedBiomarkerId, 'biomarker.ldl_c');
+    assert.equal(rows.get('left-table-measurement')?.sourceUnit, 'mmol/L');
+    assert.equal(rows.get('right-table-measurement')?.sourceUnit, 'mmol/L');
+  });
+
+  test('leaves a single date between collection and report labels ambiguous', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const observations = [
+      syntheticDateObservation('tie-collection-label', 'Collected', 0.1),
+      syntheticDateObservation('tie-date', '22.08.2026', 0.35),
+      syntheticDateObservation('tie-report-label', 'Reported', 0.6),
+      syntheticDateObservation('tie-measurement', 'LDL-C 3,8 mmol/L', 0.08, 0.22),
+    ];
+    const service = createService(repository, files, sanitizingPdf(files), {
+      async recognize(): Promise<VisionOCRResult> {
+        return {
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations,
+        };
+      },
+    });
+    const report = (await service.importPdf(source('tied-date-context')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+    const draft = await service.startExtraction(report.id);
+    const row = draft.rows[0];
+
+    assert.deepEqual(draft.collectionDate, { kind: 'missing' });
+    assert.deepEqual(row?.collectionDate, { kind: 'missing' });
+    assert.equal(row?.collectionDateContext?.ambiguous, true);
+    assert.equal(row?.collectionDateContext?.labelObservationId, undefined);
+    assert.deepEqual(row?.source.observationIds, ['tie-measurement']);
   });
 
   test('leaves report, birth, conflicting, ambiguous, invalid, and unlabeled dates missing', async () => {
@@ -2640,7 +2758,7 @@ describe('protected Lab Report import lifecycle', () => {
       {
         name: 'report-and-birth',
         header: 'Report date 2026-08-28  Date of birth 1990-01-01',
-        expectedReason: 'missing-collection-date',
+        expectedReason: 'defaulted-collection-date',
       },
       {
         name: 'conflicting-collection',
@@ -2660,7 +2778,7 @@ describe('protected Lab Report import lifecycle', () => {
       {
         name: 'missing-collection-label',
         header: '22.08.2026',
-        expectedReason: 'missing-collection-date',
+        expectedReason: 'defaulted-collection-date',
       },
     ] as const;
 
@@ -2691,12 +2809,22 @@ describe('protected Lab Report import lifecycle', () => {
       const draft = await service.startExtraction(report.id);
       const row = draft.rows[0];
 
-      assert.deepEqual(draft.collectionDate, { kind: 'missing' }, testCase.name);
-      assert.deepEqual(row?.collectionDate, { kind: 'missing' }, testCase.name);
+      const expectedDate =
+        testCase.expectedReason === 'defaulted-collection-date'
+          ? {
+              kind: 'known' as const,
+              value: draft.collectionDate.kind === 'known' ? draft.collectionDate.value : '',
+            }
+          : { kind: 'missing' as const };
+      assert.equal(draft.collectionDate.kind, expectedDate.kind, testCase.name);
+      assert.equal(row?.collectionDate.kind, expectedDate.kind, testCase.name);
       assert.ok(row?.reviewReasons.includes(testCase.expectedReason), testCase.name);
-      if (testCase.expectedReason === 'missing-collection-date')
+      if (testCase.expectedReason === 'defaulted-collection-date') {
         assert.equal(row?.collectionDateContext, null, testCase.name);
-      else assert.equal(row?.collectionDateContext?.ambiguous, true, testCase.name);
+        assert.equal(row?.source.raw?.collectionDate, null, testCase.name);
+      } else {
+        assert.equal(row?.collectionDateContext?.ambiguous, true, testCase.name);
+      }
       assert.deepEqual(
         row?.source.observationIds,
         [`missing-${testCase.name}-measurement`],
