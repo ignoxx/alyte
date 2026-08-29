@@ -1919,7 +1919,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     );
   }
 
-  function specimenContextGroups(observations: readonly VisionTextObservation[]): readonly {
+  function specimenContextGroups(
+    observations: readonly VisionTextObservation[],
+    options: {
+      /** v3 geometry context is inherited from heading rows, never from other measurement rows. */
+      readonly deriveTableContextFromHeadings?: boolean;
+      readonly aliases?: readonly ExtractionAliasEntry[];
+    } = {},
+  ): readonly {
     readonly specimenType: SpecimenType;
     readonly observations: readonly VisionTextObservation[];
   }[] {
@@ -1947,7 +1954,37 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
 
     const tableSpecimens = new Map<string, SpecimenType | null>();
     for (const [tableKey, group] of tableGroups) {
-      tableSpecimens.set(tableKey, specimenTypeFromText(group.map((item) => item.text).join(' ')));
+      if (options.deriveTableContextFromHeadings !== true) {
+        tableSpecimens.set(
+          tableKey,
+          specimenTypeFromText(group.map((item) => item.text).join(' ')),
+        );
+        continue;
+      }
+
+      // A table can contain an explicit specimen on one Measurement row while the remaining
+      // rows inherit a heading-level specimen. Scanning the whole table would make that valid
+      // combination look conflicting. Only rows that are not measurement-shaped can establish
+      // inherited context; explicit row mentions are resolved below, per row.
+      const headingSpecimens = new Set<SpecimenType>();
+      for (const row of rowGroups.values()) {
+        const first = row[0];
+        if (first === undefined) continue;
+        const structure = first.structure;
+        const rowTableKey =
+          structure?.kind === 'table-cell' && structure.tableId !== null
+            ? `${first.pageIndex}:${structure.tableId}`
+            : null;
+        if (rowTableKey !== tableKey) continue;
+        const rowSpecimens = specimenTypesFromText(row.map((item) => item.text).join(' '));
+        if (rowSpecimens.size !== 1) continue;
+        const parsedMeasurements = groupObservationsIntoRows(row, {
+          specimenType: 'unknown',
+          aliases: options.aliases ?? [],
+        });
+        if (parsedMeasurements.length === 0) headingSpecimens.add([...rowSpecimens][0]!);
+      }
+      tableSpecimens.set(tableKey, headingSpecimens.size === 1 ? [...headingSpecimens][0]! : null);
     }
 
     const grouped = new Map<SpecimenType, VisionTextObservation[]>();
@@ -2039,7 +2076,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   ): GeometryExtractionRows {
     const sourceById = new Map(observations.map((observation) => [observation.id, observation]));
     const specimenByObservationId = new Map<string, SpecimenType>();
-    for (const group of specimenContextGroups(observations)) {
+    for (const group of specimenContextGroups(observations, {
+      deriveTableContextFromHeadings: true,
+      aliases: options.aliases,
+    })) {
       for (const observation of group.observations)
         specimenByObservationId.set(observation.id, group.specimenType);
     }
@@ -2130,6 +2170,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     onProgress?: (completed: number, total: number) => void,
     cancellation?: ExtractionSemanticCancellation,
     semanticCandidateRowIds?: ReadonlySet<string>,
+    lockSpecimenType = false,
   ): Promise<readonly ExtractionDraftRow[]> {
     if (semanticMapper === undefined) {
       onProgress?.(0, 0);
@@ -2375,10 +2416,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       );
       if (proposal === undefined) return row;
       if (proposal.role === 'ignore' || proposal.role === 'specimen-context') return row;
-      const proposedSpecimenType =
+      const mappedSpecimenType =
         proposal.proposedSpecimenType === 'other' ? 'unknown' : proposal.proposedSpecimenType;
+      // v3 geometry assigns specimen context before semantic mapping. Keep that deterministic
+      // result, including unknown, because the local model may not author specimen context.
+      // Legacy v2 keeps its historical ability to refine an unknown row.
+      const proposedSpecimenType = lockSpecimenType ? undefined : mappedSpecimenType;
       // Deterministic section/row context outranks model context. A model can refine an unknown
-      // row, but cannot rewrite an explicitly recognized serum/urine/blood source.
+      // v2 row, but cannot rewrite an explicitly recognized serum/urine/blood source.
       if (
         proposedSpecimenType !== undefined &&
         row.proposedSpecimenType !== 'unknown' &&
@@ -2747,6 +2792,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             extractionProgressEvent(id, mode, 'model', 'active', completed, total),
           cancellation,
           geometryExtraction?.semanticCandidateRowIds,
+          geometryExtraction !== null,
         );
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         const modelTotal = extractionProgress.get(id)?.total ?? 0;
@@ -3021,6 +3067,16 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           undefined,
           cancellation,
           eligibleIds,
+          // geometryCellObservation marks each exact persisted source cell with a synthetic
+          // source-span ID. This survives relaunch and distinguishes v3 geometry rows from the
+          // legacy v2 observation shape, whose semantic specimen behavior remains unchanged.
+          draft.rows.some((row) =>
+            row.source.observations?.some(
+              (observation) =>
+                observation.sourceSpan?.id === `${observation.id}:source` &&
+                observation.sourceSpan.parentObservationId.length > 0,
+            ),
+          ),
         );
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Improvement cancelled');
         if ((await verifySource(id)) !== 'verified')

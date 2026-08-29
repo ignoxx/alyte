@@ -1569,7 +1569,11 @@ describe('protected Lab Report import lifecycle', () => {
       supports: (locale) => locale === 'en',
       async map() {
         return [
-          { sourceObservationIds: ['semantic-source'], proposedBiomarkerId: 'biomarker.ldl_c' },
+          {
+            sourceObservationIds: ['semantic-source'],
+            proposedBiomarkerId: 'biomarker.ldl_c',
+            proposedSpecimenType: 'serum',
+          },
           {
             sourceObservationIds: ['incompatible-source'],
             proposedBiomarkerId: 'biomarker.ldl_c',
@@ -1582,6 +1586,7 @@ describe('protected Lab Report import lifecycle', () => {
     await prepareSanitizedExtraction(service, report.id);
     const draft = await service.startExtraction(report.id);
     assert.equal(draft.rows[0]?.proposedBiomarkerId, 'biomarker.ldl_c');
+    assert.equal(draft.rows[0]?.proposedSpecimenType, 'serum');
     assert.deepEqual(draft.rows[0]?.source.semantic, {
       adapterVersion: 'synthetic.mapper.v1',
       schemaVersion: 'alyte.semantic-mapper.v1',
@@ -1856,33 +1861,57 @@ describe('protected Lab Report import lifecycle', () => {
     );
   });
 
-  test('carries v3 geometry specimen context through deterministic row parsing', async () => {
-    const observation = (id: string, text: string, tableId: string, rowIndex: number) => ({
+  test('inherits v3 table specimen context without changing deterministic row fields', async () => {
+    const observation = (
+      id: string,
+      text: string,
+      tableId: string,
+      rowIndex: number,
+      columnIndex: number,
+      x = 0.1 + columnIndex * 0.18,
+    ) => ({
       id,
       text,
       alternatives: [],
       pageIndex: 0,
       orientation: 0,
-      boundingBox: { x: 0.1, y: 0.05 + rowIndex * 0.04, width: 0.7, height: 0.03 },
+      boundingBox: { x, y: 0.08 + rowIndex * 0.05, width: 0.15, height: 0.03 },
       structure: {
         kind: 'table-cell' as const,
         tableId,
         rowIndex,
-        columnIndex: 0,
+        columnIndex,
       },
       recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
     });
     const observations = [
-      observation('table-serum-heading', 'Serum', 'table-serum', 0),
-      observation('table-serum-row', 'Ferritin 42 ng/mL 15-300', 'table-serum', 1),
-      observation('row-explicit-plasma', 'Glucose 5.7 mmol/L 4.0-5.9 Plasma', 'table-row', 0),
+      {
+        id: 'collection-date',
+        text: 'Collection date 2026-08-20',
+        alternatives: [],
+        pageIndex: 0,
+        orientation: 0,
+        boundingBox: { x: 0.1, y: 0.01, width: 0.35, height: 0.03 },
+        recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+      },
+      observation('table-serum-heading', 'Serum', 'table-serum', 0, 0),
+      observation('table-serum-label', 'Ferritin', 'table-serum', 1, 0),
+      observation('table-serum-value', '42', 'table-serum', 1, 1),
+      observation('table-serum-unit', 'ng/mL', 'table-serum', 1, 2),
+      observation('table-serum-reference', '15-300', 'table-serum', 1, 3),
+      observation('table-plasma-label', 'Glucose', 'table-serum', 2, 0),
+      observation('table-plasma-value', '5.7', 'table-serum', 2, 1),
+      observation('table-plasma-unit', 'mmol/L', 'table-serum', 2, 2),
+      observation('table-plasma-reference', '4.0-5.9', 'table-serum', 2, 3),
+      observation('table-plasma-specimen', 'Plasma', 'table-serum', 2, 4),
       observation(
-        'row-conflicting-specimen',
+        'table-conflicting-row',
         'Glucose 100 mg/dL 70-110 Serum Plasma',
         'table-conflicting',
         0,
+        0,
       ),
-      observation('row-unknown-specimen', 'Glucose 100 mg/dL 70-110', 'table-unknown', 0),
+      observation('table-unknown-row', 'Glucose 100 mg/dL 70-110', 'table-unknown', 0, 0),
     ];
     const repository = createRepository();
     const files = new FakeFiles();
@@ -1896,16 +1925,134 @@ describe('protected Lab Report import lifecycle', () => {
         });
       },
     });
-    const report = (await service.importPdf(source('v3-specimen-context')))!.report;
+    const report = (await service.importPdf(source('v3-table-specimen-context')))!.report;
     const draft = await service.startExtraction(report.id);
     const rows = new Map(
       draft.rows.flatMap((row) => row.source.observationIds.map((id) => [id, row] as const)),
     );
 
-    assert.equal(rows.get('table-serum-row')?.proposedSpecimenType, 'serum');
-    assert.equal(rows.get('row-explicit-plasma')?.proposedSpecimenType, 'plasma');
-    assert.equal(rows.get('row-conflicting-specimen')?.proposedSpecimenType, 'unknown');
-    assert.equal(rows.get('row-unknown-specimen')?.proposedSpecimenType, 'unknown');
+    const serumRow = rows.get('table-serum-label');
+    assert.ok(serumRow);
+    assert.equal(serumRow.proposedSpecimenType, 'serum');
+    assert.equal(serumRow.proposedBiomarkerId, 'biomarker.ferritin');
+    assert.deepEqual(serumRow.proposedValue, { kind: 'numeric', value: 42 });
+    assert.equal(serumRow.sourceValueString, '42');
+    assert.equal(serumRow.sourceUnit, 'ng/mL');
+    assert.equal(serumRow.proposedUnit, 'ng/mL');
+    assert.equal(serumRow.sourceReferenceInterval, '15-300');
+    assert.equal(serumRow.proposedReferenceInterval, '15-300');
+    assert.deepEqual(serumRow.collectionDate, { kind: 'known', value: '2026-08-20' });
+    assert.deepEqual(serumRow.source.observationIds, [
+      'table-serum-label',
+      'table-serum-value',
+      'table-serum-unit',
+      'table-serum-reference',
+    ]);
+    assert.deepEqual(serumRow.source.raw, {
+      label: 'Ferritin',
+      value: '42',
+      unit: 'ng/mL',
+      referenceInterval: '15-300',
+      flag: null,
+      collectionDate: 'Collection date 2026-08-20',
+    });
+
+    const plasmaRow = rows.get('table-plasma-label');
+    assert.ok(plasmaRow);
+    assert.equal(plasmaRow.proposedSpecimenType, 'plasma');
+    assert.equal(plasmaRow.proposedBiomarkerId, 'biomarker.glucose');
+    assert.deepEqual(plasmaRow.proposedValue, { kind: 'numeric', value: 5.7 });
+    assert.equal(plasmaRow.sourceValueString, '5.7');
+    assert.equal(plasmaRow.sourceUnit, 'mmol/L');
+    assert.equal(plasmaRow.proposedUnit, 'mmol/L');
+    assert.equal(plasmaRow.sourceReferenceInterval, '4.0-5.9');
+    assert.equal(plasmaRow.proposedReferenceInterval, '4.0-5.9');
+    assert.deepEqual(plasmaRow.collectionDate, { kind: 'known', value: '2026-08-20' });
+    assert.deepEqual(plasmaRow.source.observationIds, [
+      'table-plasma-label',
+      'table-plasma-value',
+      'table-plasma-unit',
+      'table-plasma-reference',
+      'table-plasma-specimen',
+    ]);
+    assert.deepEqual(plasmaRow.source.raw, {
+      label: 'Glucose',
+      value: '5.7',
+      unit: 'mmol/L',
+      referenceInterval: '4.0-5.9',
+      flag: null,
+      collectionDate: 'Collection date 2026-08-20',
+    });
+    assert.equal(rows.get('table-conflicting-row')?.proposedSpecimenType, 'unknown');
+    assert.equal(rows.get('table-unknown-row')?.proposedSpecimenType, 'unknown');
+  });
+
+  test('does not let a semantic mapper author v3 specimen context', async () => {
+    const observation = (id: string, text: string, columnIndex: number) => ({
+      id,
+      text,
+      alternatives: [],
+      pageIndex: 0,
+      orientation: 0,
+      boundingBox: {
+        x: 0.1 + columnIndex * 0.18,
+        y: 0.08,
+        width: 0.15,
+        height: 0.03,
+      },
+      structure: {
+        kind: 'table-cell' as const,
+        tableId: 'table-unknown',
+        rowIndex: 0,
+        columnIndex,
+      },
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    });
+    const observations = [
+      observation('unknown-label-a', 'Unmapped marker', 0),
+      observation('unknown-label-b', 'result', 1),
+      observation('unknown-value', '100', 2),
+      observation('unknown-unit', 'mg/dL', 3),
+      observation('unknown-reference', '70-110', 4),
+    ];
+    let mapperCalls = 0;
+    const mapper: ExtractionSemanticMapper = {
+      adapterVersion: 'v3-specimen-lock.mapper.v1',
+      schemaVersion: 'alyte.semantic-mapper.v1',
+      supports: () => true,
+      async map({ rows }) {
+        mapperCalls += 1;
+        return rows.map((row) => ({
+          sourceObservationIds: row.sourceObservationIds,
+          proposedBiomarkerId: 'biomarker.glucose',
+          proposedSpecimenType: 'serum' as const,
+        }));
+      },
+    };
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const service = createService(
+      repository,
+      files,
+      sanitizingPdf(files),
+      {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v3',
+            pageIndex: 0,
+            orientation: 0,
+            observations,
+          });
+        },
+      },
+      mapper,
+    );
+    const report = (await service.importPdf(source('v3-specimen-lock')))!.report;
+    const draft = await service.startExtraction(report.id);
+    assert.equal(mapperCalls, 1);
+    assert.equal(draft.rows.length, 1);
+    assert.equal(draft.rows[0]?.proposedSpecimenType, 'unknown');
+    assert.equal(draft.rows[0]?.proposedBiomarkerId, 'biomarker.glucose');
   });
 
   test('gates missing packs before OCR while preserving a distinct runtime fallback path', async () => {
