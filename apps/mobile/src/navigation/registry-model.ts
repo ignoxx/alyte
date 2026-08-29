@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react';
 import type { NativeStackNavigationOptions } from '@react-navigation/native-stack';
+import type { SettingsStackParamList } from './types';
 
 export type FeatureTarget = 'home' | 'labs' | 'log' | 'settings';
 
@@ -23,6 +24,14 @@ export type NavigationRegistry = CoreNavigationFeatures & {
   readonly extensions: readonly NavigationFeature[];
 };
 
+export type SettingsNavigationRouteName = Exclude<keyof SettingsStackParamList, 'SettingsRoot'>;
+
+export type SettingsFeatureDefinition = {
+  readonly name: SettingsNavigationRouteName;
+  readonly target: 'settings';
+  readonly titleKey: string;
+};
+
 /**
  * The local laboratory shell has no accepted cloud-ready gate yet. Keep cloud Settings navigation
  * absent until the cloud slice owns and passes an explicit user-ready gate.
@@ -31,13 +40,62 @@ export const localNavigationGate = {
   cloudSettingsEnabled: false,
 } as const;
 
-/** Select Settings routes from the explicit cloud-slice gate, keeping local routes available. */
-export function selectSettingsFeatures(
-  localFeatures: readonly NavigationFeature[],
-  cloudFeatures: readonly NavigationFeature[],
-  cloudSettingsEnabled: boolean,
-): readonly NavigationFeature[] {
-  return cloudSettingsEnabled ? [...cloudFeatures, ...localFeatures] : localFeatures;
+/**
+ * These are the production Settings route definitions. Components are attached by the mobile
+ * registry so this pure configuration can be tested without importing native UI modules.
+ */
+export const settingsFeatureDefinitions = {
+  cloud: [
+    {
+      name: 'CloudAccount',
+      target: 'settings',
+      titleKey: 'settings.cloudAccountTitle',
+    },
+  ],
+  local: [
+    {
+      name: 'AppLock',
+      target: 'settings',
+      titleKey: 'settings.appLockTitle',
+    },
+    {
+      name: 'PrivacyStorage',
+      target: 'settings',
+      titleKey: 'settings.privacyTitle',
+    },
+    {
+      name: 'ModelStorage',
+      target: 'settings',
+      titleKey: 'settings.modelStorageTitle',
+    },
+    {
+      name: 'SupportFaq',
+      target: 'settings',
+      titleKey: 'settings.supportTitle',
+    },
+    {
+      name: 'Diagnostics',
+      target: 'settings',
+      titleKey: 'settings.diagnosticsTitle',
+    },
+    {
+      name: 'DeleteLocalData',
+      target: 'settings',
+      titleKey: 'settings.deleteTitle',
+    },
+  ],
+} as const satisfies {
+  readonly cloud: readonly SettingsFeatureDefinition[];
+  readonly local: readonly SettingsFeatureDefinition[];
+};
+
+/** Select the production Settings routes from the explicit cloud-slice gate. */
+export function settingsNavigationForGate(
+  cloudSettingsEnabled = localNavigationGate.cloudSettingsEnabled,
+): readonly SettingsFeatureDefinition[] {
+  return cloudSettingsEnabled
+    ? [...settingsFeatureDefinitions.cloud, ...settingsFeatureDefinitions.local]
+    : settingsFeatureDefinitions.local;
 }
 
 /** Root-level destinations used by the native action tab. Kept pure so navigation behavior is

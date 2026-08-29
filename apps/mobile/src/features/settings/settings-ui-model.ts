@@ -1,7 +1,11 @@
 import { t } from '../../localization';
+import type { SettingsStackParamList } from '../../navigation/types';
 import type { AppIconName } from '../../ui/primitives';
 
-export type LocalSettingsRoute = 'AppLock' | 'PrivacyStorage' | 'ModelStorage' | 'SupportFaq';
+export type LocalSettingsRoute = Exclude<
+  keyof SettingsStackParamList,
+  'SettingsRoot' | 'CloudAccount' | 'Diagnostics' | 'DeleteLocalData'
+>;
 
 export type LocalSettingsRow = {
   readonly icon: Extract<AppIconName, 'lockShield' | 'shield' | 'folder' | 'doc'>;

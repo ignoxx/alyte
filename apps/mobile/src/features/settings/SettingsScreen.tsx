@@ -1,8 +1,10 @@
 import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { MainTabParamList } from '../../navigation/types';
+import type { SettingsStackParamList } from '../../navigation/types';
 import { t } from '../../localization';
 import { AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
@@ -10,6 +12,7 @@ import { useAppLock } from '../app-lock/AppLockProvider';
 import { buildLocalSettingsRows } from './settings-ui-model';
 
 type SettingsScreenProps = BottomTabScreenProps<MainTabParamList, 'Settings'>;
+type SettingsNavigation = NativeStackNavigationProp<SettingsStackParamList, 'SettingsRoot'>;
 
 function SettingsRow({
   icon,
@@ -44,7 +47,7 @@ function SettingsRow({
 }
 
 export function SettingsScreen(_props: SettingsScreenProps) {
-  const navigation = useNavigation<any>();
+  const navigation = useNavigation<SettingsNavigation>();
   const { state } = useAppLock();
   const appLockStatus = state.preferences?.enabled
     ? t('settings.appLockEnabled')

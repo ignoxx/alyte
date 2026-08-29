@@ -1,3 +1,4 @@
+import type { ComponentType } from 'react';
 import type { MainTabParamList } from './types';
 import { HomeScreen } from '../features/home/HomeScreen';
 import { LabsScreen } from '../features/labs/LabsScreen';
@@ -17,11 +18,11 @@ import { DiagnosticsScreen } from '../features/settings/DiagnosticsScreen';
 import { DeleteLocalDataScreen } from '../features/settings/DeleteLocalDataScreen';
 import { CloudAccountScreen } from '../features/settings/CloudAccountScreen';
 import {
-  localNavigationGate,
   registerNavigationFeatures,
-  selectSettingsFeatures,
+  settingsNavigationForGate,
   type NavigationFeature,
   type NavigationRegistry,
+  type SettingsNavigationRouteName,
 } from './registry-model';
 
 export type MainRouteName = keyof MainTabParamList;
@@ -81,53 +82,22 @@ const intakeFeatures: readonly NavigationFeature[] = [
   },
 ];
 
-const cloudSettingsFeatures: readonly NavigationFeature[] = [
-  {
-    name: 'CloudAccount',
-    target: 'settings',
-    component: CloudAccountScreen,
-    titleKey: 'settings.cloudAccountTitle',
-  },
-];
+const settingsFeatureComponents = {
+  CloudAccount: CloudAccountScreen,
+  AppLock: AppLockScreen,
+  PrivacyStorage: PrivacyStorageScreen,
+  ModelStorage: ModelStorageScreen,
+  SupportFaq: SupportFaqScreen,
+  Diagnostics: DiagnosticsScreen,
+  DeleteLocalData: DeleteLocalDataScreen,
+} satisfies Record<SettingsNavigationRouteName, ComponentType<any>>;
 
-const localSettingsFeatures: readonly NavigationFeature[] = [
-  {
-    name: 'AppLock',
-    target: 'settings',
-    component: AppLockScreen,
-    titleKey: 'settings.appLockTitle',
-  },
-  {
-    name: 'PrivacyStorage',
-    target: 'settings',
-    component: PrivacyStorageScreen,
-    titleKey: 'settings.privacyTitle',
-  },
-  {
-    name: 'ModelStorage',
-    target: 'settings',
-    component: ModelStorageScreen,
-    titleKey: 'settings.modelStorageTitle',
-  },
-  {
-    name: 'SupportFaq',
-    target: 'settings',
-    component: SupportFaqScreen,
-    titleKey: 'settings.supportTitle',
-  },
-  {
-    name: 'Diagnostics',
-    target: 'settings',
-    component: DiagnosticsScreen,
-    titleKey: 'settings.diagnosticsTitle',
-  },
-  {
-    name: 'DeleteLocalData',
-    target: 'settings',
-    component: DeleteLocalDataScreen,
-    titleKey: 'settings.deleteTitle',
-  },
-];
+const settingsFeatures: readonly NavigationFeature[] = settingsNavigationForGate().map(
+  (definition) => ({
+    ...definition,
+    component: settingsFeatureComponents[definition.name],
+  }),
+);
 
 /**
  * Later vertical slices register detail and form routes under an existing destination stack. The
@@ -136,11 +106,6 @@ const localSettingsFeatures: readonly NavigationFeature[] = [
 export function createNavigationRegistry(
   extensions: readonly NavigationFeature[] = [],
 ): NavigationRegistry {
-  const settingsFeatures = selectSettingsFeatures(
-    localSettingsFeatures,
-    cloudSettingsFeatures,
-    localNavigationGate.cloudSettingsEnabled,
-  );
   return registerNavigationFeatures(coreFeatures, [
     ...labsFeatures,
     ...intakeFeatures,

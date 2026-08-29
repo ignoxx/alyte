@@ -10,7 +10,7 @@ import {
   preGateTabNames,
   reportImportDestination,
   registerNavigationFeatures,
-  selectSettingsFeatures,
+  settingsNavigationForGate,
   snapActionDestination,
   type CoreNavigationFeatures,
 } from './registry-model';
@@ -81,42 +81,17 @@ test('pre-gate shell exposes three tabs and report import is a root full-screen 
 test('pre-gate Settings has no cloud route while retaining every local route', () => {
   assert.equal(localNavigationGate.cloudSettingsEnabled, false);
 
-  const localFeatures = [
+  const preGateSettings = settingsNavigationForGate();
+  const preGateNames = preGateSettings.map((feature) => feature.name);
+  assert.deepEqual(preGateNames, [
     'AppLock',
     'PrivacyStorage',
     'ModelStorage',
     'SupportFaq',
     'Diagnostics',
     'DeleteLocalData',
-  ].map((name) => ({
-    name,
-    target: 'settings' as const,
-    component: () => null,
-    titleKey: `settings.${name}`,
-  }));
-  const cloudFeatures = [
-    {
-      name: 'CloudAccount',
-      target: 'settings' as const,
-      component: () => null,
-      titleKey: 'settings.cloudAccountTitle',
-    },
-  ];
-
-  assert.deepEqual(
-    selectSettingsFeatures(localFeatures, cloudFeatures, false).map((feature) => feature.name),
-    localFeatures.map((feature) => feature.name),
-  );
-  assert.equal(
-    selectSettingsFeatures(localFeatures, cloudFeatures, false).some(
-      (feature) => feature.name === 'CloudAccount',
-    ),
-    false,
-  );
-  assert.deepEqual(
-    selectSettingsFeatures(localFeatures, cloudFeatures, true).map((feature) => feature.name),
-    ['CloudAccount', ...localFeatures.map((feature) => feature.name)],
-  );
+  ]);
+  assert.equal(preGateNames.includes('CloudAccount'), false);
 });
 
 test('the extraction editor is a root form sheet', () => {
