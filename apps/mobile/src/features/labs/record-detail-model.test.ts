@@ -7,6 +7,8 @@ import {
   correctionDraftIsDirty,
   correctionInput,
   deletionFacts,
+  formatLabRecordMeasurementAccessibilityLabel,
+  getLabRecordDetailRowLayout,
   labRecordSupportReasonLocalizationKeys,
   measurementDraft,
 } from './record-detail-model';
@@ -49,6 +51,25 @@ test('correction validation preserves a draft until it can produce a service inp
     kind: 'numeric',
     value: 2.5,
   });
+});
+
+test('record measurement rows stack at accessibility Dynamic Type sizes', () => {
+  assert.equal(getLabRecordDetailRowLayout(1), 'inline');
+  assert.equal(getLabRecordDetailRowLayout(1.29), 'inline');
+  assert.equal(getLabRecordDetailRowLayout(1.3), 'stacked');
+  assert.equal(getLabRecordDetailRowLayout(Number.NaN), 'inline');
+});
+
+test('record measurement accessibility labels keep the value and unit together', () => {
+  assert.equal(formatLabRecordMeasurementAccessibilityLabel('HbA1c', '5.6', '%'), 'HbA1c, 5.6 %');
+  assert.equal(
+    formatLabRecordMeasurementAccessibilityLabel('Ferritin', '18', null),
+    'Ferritin, 18',
+  );
+  assert.equal(
+    formatLabRecordMeasurementAccessibilityLabel('Unknown biomarker', '', ''),
+    'Unknown biomarker',
+  );
 });
 
 test('deletion facts are derived only from the service plan', () => {

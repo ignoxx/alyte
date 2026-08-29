@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { Pressable, SectionList, StyleSheet, View } from 'react-native';
+import { Pressable, SectionList, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { formatLocaleDate, type LabRecordDetail as Detail, type Measurement } from '@alyte/domain';
 import { t } from '../../localization';
 import { colors, spacing } from '../../theme';
 import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import {
   correctionChangedFields,
+  formatLabRecordMeasurementAccessibilityLabel,
+  getLabRecordDetailRowLayout,
   labRecordSupportReasonLocalizationKeys,
   measurementValue,
   recordSections,
@@ -42,6 +44,8 @@ export function LabRecordDetail({
   onRetrySource,
 }: Props) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const { fontScale } = useWindowDimensions();
+  const rowLayout = getLabRecordDetailRowLayout(fontScale);
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
   const date =
     detail.collectionDate.kind === 'known'
@@ -122,7 +126,11 @@ export function LabRecordDetail({
             <Pressable
               accessibilityRole="button"
               accessibilityState={{ expanded: open }}
-              accessibilityLabel={`${displayLabel}, ${value}${item.current.unit ? ` ${item.current.unit}` : ''}`}
+              accessibilityLabel={formatLabRecordMeasurementAccessibilityLabel(
+                displayLabel,
+                value,
+                item.current.unit,
+              )}
               onPress={() =>
                 setExpanded((current) => {
                   const next = new Set(current);
@@ -130,31 +138,46 @@ export function LabRecordDetail({
                   return next;
                 })
               }
-              style={({ pressed }) => [styles.rowButton, pressed && styles.pressed]}
+              style={({ pressed }) => [
+                styles.rowButton,
+                rowLayout === 'stacked' && styles.rowButtonStacked,
+                pressed && styles.pressed,
+              ]}
             >
-              <View style={styles.rowCopy}>
-                <AppText selectable variant="heading">
-                  {displayLabel}
-                </AppText>
-                <AppText selectable style={styles.secondary}>
-                  {supportReason(item)}
-                </AppText>
-              </View>
-              <View style={styles.value}>
-                <AppText selectable variant="heading" style={styles.numerals}>
-                  {value}
-                </AppText>
-                {item.current.unit && (
-                  <AppText selectable style={styles.secondary}>
-                    {item.current.unit}
+              <View
+                style={[styles.rowContent, rowLayout === 'stacked' && styles.rowContentStacked]}
+              >
+                <View style={[styles.rowCopy, rowLayout === 'stacked' && styles.rowCopyStacked]}>
+                  <AppText selectable variant="heading">
+                    {displayLabel}
                   </AppText>
-                )}
+                  <AppText selectable style={styles.secondary}>
+                    {supportReason(item)}
+                  </AppText>
+                </View>
+                <View style={[styles.value, rowLayout === 'stacked' && styles.valueStacked]}>
+                  <AppText
+                    selectable
+                    variant="heading"
+                    style={[styles.numerals, rowLayout === 'stacked' && styles.numeralsStacked]}
+                  >
+                    {value}
+                  </AppText>
+                  {item.current.unit && (
+                    <AppText selectable style={styles.secondary}>
+                      {item.current.unit}
+                    </AppText>
+                  )}
+                </View>
               </View>
               <AppIcon
                 color={colors.mutedInk}
                 name="chevronRight"
                 size={16}
-                style={{ transform: [{ rotate: open ? '90deg' : '0deg' }] }}
+                style={[
+                  rowLayout === 'stacked' && styles.disclosureStacked,
+                  { transform: [{ rotate: open ? '90deg' : '0deg' }] },
+                ]}
               />
             </Pressable>
             {open && (
@@ -328,10 +351,23 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     paddingVertical: spacing.sm,
   },
+  rowButtonStacked: { alignItems: 'flex-start', paddingVertical: spacing.md },
   pressed: { backgroundColor: colors.accentSoft },
+  rowContent: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: spacing.md,
+    minWidth: 0,
+  },
+  rowContentStacked: { alignItems: 'stretch', flexDirection: 'column', gap: spacing.xs },
   rowCopy: { flex: 1, gap: spacing.xs, minWidth: 0 },
+  rowCopyStacked: { flex: 0 },
   value: { alignItems: 'flex-end', maxWidth: '40%' },
+  valueStacked: { alignItems: 'stretch', gap: spacing.xs, maxWidth: '100%' },
   numerals: { fontVariant: ['tabular-nums'], textAlign: 'right' },
+  numeralsStacked: { textAlign: 'left' },
+  disclosureStacked: { marginTop: spacing.xs },
   details: {
     backgroundColor: colors.surface,
     borderCurve: 'continuous',

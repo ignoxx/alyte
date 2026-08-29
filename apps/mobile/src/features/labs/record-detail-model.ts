@@ -20,6 +20,25 @@ type SupportReasonLocalizationKeys = {
   readonly [Reason in PreservedOnlyReason]: `labs.supportReason.${Reason}`;
 };
 
+export type LabRecordDetailRowLayout = 'inline' | 'stacked';
+
+/**
+ * Keep measurement rows compact at ordinary text sizes, while making the complete biomarker fact
+ * readable once iOS enters its accessibility Dynamic Type ramp.
+ */
+export function getLabRecordDetailRowLayout(fontScale: number): LabRecordDetailRowLayout {
+  return Number.isFinite(fontScale) && fontScale >= 1.3 ? 'stacked' : 'inline';
+}
+
+export function formatLabRecordMeasurementAccessibilityLabel(
+  label: string,
+  value: string,
+  unit: string | null | undefined,
+): string {
+  const valueWithUnit = unit ? `${value} ${unit}` : value;
+  return valueWithUnit.length > 0 ? `${label}, ${valueWithUnit}` : label;
+}
+
 export const labRecordSupportReasonLocalizationKeys = {
   unmapped: 'labs.supportReason.unmapped',
   'unsupported-canonical-id': 'labs.supportReason.unsupported-canonical-id',
