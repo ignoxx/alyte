@@ -1,6 +1,12 @@
 import { Host } from '@expo/ui';
 import { Picker, Text } from '@expo/ui/swift-ui';
-import { disabled, labelsHidden, pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
+import {
+  disabled,
+  dynamicTypeSize,
+  labelsHidden,
+  pickerStyle,
+  tag,
+} from '@expo/ui/swift-ui/modifiers';
 import type { AppLockGracePickerProps } from './AppLockGracePicker';
 
 /**
@@ -17,10 +23,17 @@ export function AppLockGracePicker({
   onValueChange,
 }: AppLockGracePickerProps) {
   return (
-    <Host matchContents ignoreSafeArea="all">
+    <Host ignoreSafeArea="all" matchContents>
       <Picker
         label={accessibilityLabel}
-        modifiers={[pickerStyle('menu'), labelsHidden(), ...(enabled ? [] : [disabled(true)])]}
+        modifiers={[
+          pickerStyle('menu'),
+          labelsHidden(),
+          // The menu label has no wrapping opportunity. Keep it Dynamic Type-aware through
+          // accessibility 3, then cap only this intrinsic control before it can escape the row.
+          dynamicTypeSize({ max: 'accessibility3' }),
+          ...(enabled ? [] : [disabled(true)]),
+        ]}
         selection={selectedValue}
         testID={testID}
         onSelectionChange={onValueChange}
