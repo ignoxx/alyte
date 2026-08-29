@@ -1819,10 +1819,160 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     return (parts[0] ?? 0) <= 12 && (parts[1] ?? 0) <= 12;
   }
 
+  type OCRDateToken = {
+    readonly observation: VisionTextObservation;
+    readonly raw: string;
+    readonly start: number;
+    readonly end: number;
+    readonly centerY: number;
+    readonly centerX: number;
+  };
+
+  type OCRDateLabel = {
+    readonly observation: VisionTextObservation;
+    readonly context: 'collection' | 'non-collection';
+    readonly start: number;
+    readonly end: number;
+    readonly centerX: number;
+  };
+
+  type OCRDateAssociation = {
+    readonly kind: 'collection' | 'non-collection' | 'ambiguous' | 'missing';
+    readonly neighbors: readonly VisionTextObservation[];
+    readonly labels: readonly OCRDateLabel[];
+  };
+
+  const collectionDateLabelPattern =
+    /\b(?:date of collection|collection|collected|sample|specimen|abnahme|entnahme|proben(?:entnahme)?|prélèvement|prelevement|muestra|toma de muestra|prelievo|campione|colheita|amostra|afname|monster|pobranie|próbka|paėmimo data|mėgin(?:ys|io data)|ėminys|paimta)\b/giu;
+  const nonCollectionDateLabelPattern =
+    /\b(?:date of birth|date reported|report date|reported|report|issued|birth|dob|ausgestellt|geburt|naissance|nacimiento|nascita|nascimento|geboorte|urodzenia|wydania|ataskaitos data|išdavimo data|gimimo data)\b/giu;
+
+  function ocrTextPosition(observation: VisionTextObservation, start: number, end: number): number {
+    const fraction =
+      observation.text.length === 0
+        ? 0.5
+        : (Math.max(0, start) + Math.min(observation.text.length, end)) /
+          2 /
+          observation.text.length;
+    return observation.boundingBox.x + observation.boundingBox.width * fraction;
+  }
+
+  function ocrDateLabels(observation: VisionTextObservation): readonly OCRDateLabel[] {
+    const labels: OCRDateLabel[] = [];
+    for (const match of observation.text.matchAll(collectionDateLabelPattern)) {
+      const start = match.index ?? 0;
+      const end = start + match[0].length;
+      labels.push({
+        observation,
+        context: 'collection',
+        start,
+        end,
+        centerX: ocrTextPosition(observation, start, end),
+      });
+    }
+    for (const match of observation.text.matchAll(nonCollectionDateLabelPattern)) {
+      const start = match.index ?? 0;
+      const end = start + match[0].length;
+      labels.push({
+        observation,
+        context: 'non-collection',
+        start,
+        end,
+        centerX: ocrTextPosition(observation, start, end),
+      });
+    }
+    return labels;
+  }
+
+  function ocrDateTokens(observation: VisionTextObservation): readonly OCRDateToken[] {
+    const centerY = observation.boundingBox.y + observation.boundingBox.height / 2;
+    return [
+      ...observation.text.matchAll(
+        /(?<![\p{L}\p{N}.,-])\d{1,4}[./-]\d{1,2}[./-]\d{1,4}(?![\p{L}\p{N}.,-])/gu,
+      ),
+    ].map((match) => {
+      const start = match.index ?? 0;
+      const end = start + match[0].length;
+      return {
+        observation,
+        raw: match[0],
+        start,
+        end,
+        centerY,
+        centerX: ocrTextPosition(observation, start, end),
+      };
+    });
+  }
+
+  function associateOCRDate(
+    token: OCRDateToken,
+    observations: readonly VisionTextObservation[],
+  ): OCRDateAssociation {
+    const neighbors = observations.filter(
+      (other) =>
+        other.pageIndex === token.observation.pageIndex &&
+        Math.abs(other.boundingBox.y + other.boundingBox.height / 2 - token.centerY) <=
+          Math.max(token.observation.boundingBox.height, other.boundingBox.height) * 1.5,
+    );
+    const labels = neighbors.flatMap(ocrDateLabels);
+    if (labels.length === 0) return { kind: 'missing', neighbors: [], labels: [] };
+
+    const lineTokens = observations
+      .flatMap(ocrDateTokens)
+      .filter(
+        (other) =>
+          other.observation.pageIndex === token.observation.pageIndex &&
+          Math.abs(other.centerY - token.centerY) <=
+            Math.max(other.observation.boundingBox.height, token.observation.boundingBox.height) *
+              1.5,
+      )
+      .sort((left, right) => left.centerX - right.centerX);
+    const orderedLabels = [...labels].sort((left, right) => left.centerX - right.centerX);
+    const tokenIndex = lineTokens.findIndex(
+      (candidate) =>
+        candidate.observation.id === token.observation.id &&
+        candidate.start === token.start &&
+        candidate.end === token.end,
+    );
+    // Header labels and dates are frequently emitted as separate OCR cells. When the visual row
+    // has one label per date, preserve that order instead of letting a long label's text width
+    // make the next date look fractionally closer (`Collected: 22.08.2026 Reported: ...`).
+    if (lineTokens.length > 1 && lineTokens.length === orderedLabels.length && tokenIndex >= 0) {
+      const paired = orderedLabels[tokenIndex];
+      if (paired !== undefined) return { kind: paired.context, neighbors, labels };
+    }
+
+    const ranked = labels
+      .map((label) => ({ label, distance: Math.abs(label.centerX - token.centerX) }))
+      .sort((left, right) => left.distance - right.distance);
+    const nearest = ranked[0];
+    if (nearest === undefined) return { kind: 'missing', neighbors: [], labels: [] };
+    // Equal-distance labels are deliberately ambiguous. The small tolerance avoids making a
+    // floating-point geometry rounding difference decide between Collection and Reported.
+    const tied = ranked.filter(
+      (candidate) => Math.abs(candidate.distance - nearest.distance) <= 0.002,
+    );
+    // When a date is exactly between two labels, prefer the label on the same side as the other
+    // dates in a conventional header (the preceding label when one exists). This disambiguates
+    // `Collected: 22.08.2026 Reported: 23.08.2026` without changing a genuinely unequal nearest
+    // match or allowing a later label to steal an earlier date.
+    const preceding = tied.filter((candidate) => candidate.label.centerX <= token.centerX);
+    const directionalTied = preceding.length > 0 ? preceding : tied;
+    const contexts = new Set(directionalTied.map((candidate) => candidate.label.context));
+    const kind =
+      contexts.size !== 1
+        ? 'ambiguous'
+        : directionalTied[0]?.label.context === 'collection'
+          ? 'collection'
+          : 'non-collection';
+    return { kind, neighbors, labels };
+  }
+
   function dateContextFromOCR(results: readonly VisionOCRResult[]): {
     readonly contexts: readonly ExtractionDateContext[];
     readonly excludedObservationIds: ReadonlySet<string>;
     readonly collectionDate: LabDateState;
+    readonly hasDateTokens: boolean;
   } {
     const observations = [
       ...new Map(
@@ -1833,38 +1983,62 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     ];
     const contexts: ExtractionDateContext[] = [];
     const excludedObservationIds = new Set<string>();
-    const collectionWords =
-      /\b(collection|collected|sample|specimen|date of collection|abnahme|entnahme|proben(?:entnahme)?|prélèvement|prelevement|muestra|toma de muestra|prelievo|campione|colheita|amostra|afname|monster|pobranie|próbka|paėmimo data|mėgin(?:ys|io data)|ėminys|paimta)\b/iu;
-    const nonCollectionWords =
-      /\b(issued|report date|birth|dob|date of birth|ausgestellt|geburt|naissance|nacimiento|nascita|nascimento|geboorte|urodzenia|wydania|ataskaitos data|išdavimo data|gimimo data)\b/iu;
-    for (const observation of observations) {
-      const candidate = observation.text.match(/\b\d{1,4}[./-]\d{1,2}[./-]\d{1,4}\b/u)?.[0];
-      if (candidate === undefined) continue;
-      const center = observation.boundingBox.y + observation.boundingBox.height / 2;
-      const neighbors = observations.filter(
-        (other) =>
-          other.pageIndex === observation.pageIndex &&
-          Math.abs(other.boundingBox.y + other.boundingBox.height / 2 - center) <=
-            Math.max(observation.boundingBox.height, other.boundingBox.height) * 1.5,
+    const dateCandidates = observations.flatMap(ocrDateTokens);
+    const associations = dateCandidates.map((token) => ({
+      token,
+      association: associateOCRDate(token, observations),
+    }));
+    for (const { association } of associations) {
+      // Keep the header/date source observations out of measurement candidates exactly as before,
+      // including report and birth dates. A date without an explicit supported label is not a
+      // header and is left alone for the normal measurement-shaped-row filter.
+      if (association.kind !== 'missing')
+        association.neighbors.forEach((other) => excludedObservationIds.add(other.id));
+    }
+
+    const collectionCandidates = associations.filter(
+      ({ association }) => association.kind === 'collection' || association.kind === 'ambiguous',
+    );
+    for (const { token, association } of collectionCandidates) {
+      const locale = localeForObservation(token.observation);
+      const localeAmbiguous = dateIsAmbiguous(token.raw);
+      const parsed = localeAmbiguous ? null : parseLabDate(token.raw, locale);
+      const sameVisualRow = collectionCandidates.filter(
+        (candidate) =>
+          candidate.token.observation.pageIndex === token.observation.pageIndex &&
+          Math.abs(candidate.token.centerY - token.centerY) <=
+            Math.max(
+              candidate.token.observation.boundingBox.height,
+              token.observation.boundingBox.height,
+            ) *
+              1.5,
       );
-      const lineText = neighbors.map((other) => other.text).join(' ');
-      const isCollection = collectionWords.test(lineText);
-      const isNonCollection = nonCollectionWords.test(lineText);
-      if (!isCollection && !isNonCollection) continue;
-      neighbors.forEach((other) => excludedObservationIds.add(other.id));
-      if (isNonCollection) continue;
-      const locale = localeForObservation(observation);
-      const ambiguous = dateIsAmbiguous(candidate);
-      const parsed = ambiguous ? null : parseLabDate(candidate, locale);
+      const distinctDates = new Set(
+        sameVisualRow.map(({ token: candidateToken, association: candidateAssociation }) => {
+          if (candidateAssociation.kind === 'ambiguous') return 'ambiguous';
+          const candidateLocale = localeForObservation(candidateToken.observation);
+          const candidateParsed = dateIsAmbiguous(candidateToken.raw)
+            ? null
+            : parseLabDate(candidateToken.raw, candidateLocale);
+          return candidateParsed?.kind === 'known' ? candidateParsed.value : 'invalid';
+        }),
+      );
+      const visualRowConflicts =
+        distinctDates.has('ambiguous') || distinctDates.has('invalid') || distinctDates.size > 1;
+      const ambiguous =
+        association.kind === 'ambiguous' ||
+        localeAmbiguous ||
+        parsed === null ||
+        visualRowConflicts;
       contexts.push({
-        observationId: observation.id,
-        pageIndex: observation.pageIndex,
-        centerY: center,
+        observationId: token.observation.id,
+        pageIndex: token.observation.pageIndex,
+        centerY: token.centerY,
         locale,
         context: 'collection',
-        ambiguous: ambiguous || parsed === null,
-        collectionDate: parsed ?? { kind: 'missing' },
-        sourceText: observation.text,
+        ambiguous,
+        collectionDate: ambiguous ? { kind: 'missing' } : (parsed ?? { kind: 'missing' }),
+        sourceText: token.observation.text,
       });
     }
     const known = contexts.filter((context) => context.collectionDate.kind === 'known');
@@ -1872,7 +2046,12 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       contexts.length === 1 && known.length === 1
         ? (known[0]?.collectionDate ?? { kind: 'missing' })
         : { kind: 'missing' as const };
-    return { contexts, excludedObservationIds, collectionDate };
+    return {
+      contexts,
+      excludedObservationIds,
+      collectionDate,
+      hasDateTokens: dateCandidates.length > 0,
+    };
   }
 
   function specimenTypeFromText(text: string): SpecimenType | null {
@@ -2726,7 +2905,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         // A report with no collection-date context gets one captured local-day fallback. The
         // source context remains null, and all rows share this injected instant until the group
         // editor changes them atomically.
-        const collectionDateDefaulted = dateContext.contexts.length === 0;
+        const collectionDateDefaulted =
+          dateContext.contexts.length === 0 && !dateContext.hasDateTokens;
         const collectionDate = collectionDateDefaulted
           ? localCalendarDateFromInstant(now())
           : dateContext.collectionDate;

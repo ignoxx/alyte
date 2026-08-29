@@ -669,6 +669,24 @@ async function prepareSanitizedExtraction(service: LabReportsService, reportId: 
   await service.saveSanitizedReport(reportId, editor.recipe);
 }
 
+function syntheticDateObservation(
+  id: string,
+  text: string,
+  x: number,
+  y: number,
+  language: string | null = 'de',
+): VisionOCRResult['observations'][number] {
+  return {
+    id,
+    text,
+    alternatives: [],
+    boundingBox: { x, y, width: 0.2, height: 0.04 },
+    pageIndex: 0,
+    orientation: 0,
+    recognition: { level: 'accurate', language, internalConfidence: null },
+  };
+}
+
 function sanitizingPdf(files: FakeFiles): SanitizingPdf {
   const pdf = new SanitizingPdf();
   pdf.files = files;
@@ -2515,6 +2533,179 @@ describe('protected Lab Report import lifecycle', () => {
       [['measurement-one'], ['measurement-ambiguous'], ['measurement-two']],
     );
     assert.ok(draft.rows[1]?.reviewReasons.includes('ambiguous-date'));
+  });
+
+  test('keeps the collection date when a same-line report date is also present', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const observations = [
+      syntheticDateObservation(
+        'same-line-date-header',
+        'Collected: 22.08.2026 Reported: 23.08.2026',
+        0.08,
+        0.1,
+      ),
+      syntheticDateObservation('same-line-measurement', 'LDL-C 3,8 mmol/L', 0.08, 0.22),
+      syntheticDateObservation('same-line-model-row', 'Unmapped marker 4,2 mg/dL', 0.08, 0.34),
+    ];
+    const modelInputs: string[][][] = [];
+    const service = createService(
+      repository,
+      files,
+      sanitizingPdf(files),
+      {
+        async recognize(): Promise<VisionOCRResult> {
+          return {
+            contractVersion: 'alyte.vision.document.v2',
+            pageIndex: 0,
+            orientation: 0,
+            observations,
+          };
+        },
+      },
+      {
+        adapterVersion: 'date-context-test.mapper.v1',
+        schemaVersion: 'alyte.semantic-mapper.v1',
+        supports: () => true,
+        async map({ rows }) {
+          modelInputs.push(rows.map((row) => [...row.sourceObservationIds]));
+          return rows.map((row) => ({
+            sourceObservationIds: row.sourceObservationIds,
+            proposedBiomarkerId: null,
+            role: 'preserve' as const,
+          }));
+        },
+      },
+    );
+    const report = (await service.importPdf(source('same-line-date-context')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+    const draft = await service.startExtraction(report.id);
+    const measurement = draft.rows.find((row) =>
+      row.source.observationIds.includes('same-line-measurement'),
+    );
+    const modelRow = draft.rows.find((row) =>
+      row.source.observationIds.includes('same-line-model-row'),
+    );
+
+    assert.deepEqual(draft.collectionDate, { kind: 'known', value: '2026-08-22' });
+    assert.ok(measurement);
+    assert.deepEqual(measurement.collectionDate, { kind: 'known', value: '2026-08-22' });
+    assert.equal(measurement.proposedBiomarkerId, 'biomarker.ldl_c');
+    assert.deepEqual(measurement.proposedValue, { kind: 'numeric', value: 3.8 });
+    assert.equal(measurement.sourceValueString, '3,8');
+    assert.equal(measurement.sourceUnit, 'mmol/L');
+    assert.deepEqual(measurement.source.observationIds, ['same-line-measurement']);
+    assert.equal(measurement.collectionDateContext?.observationId, 'same-line-date-header');
+    assert.equal(measurement.collectionDateContext?.locale, 'de-DE');
+    assert.equal(measurement.collectionDateContext?.sourceText, observations[0]?.text);
+    assert.equal(measurement.source.raw?.collectionDate, observations[0]?.text);
+    assert.ok(modelRow);
+    assert.deepEqual(modelInputs, [[['same-line-model-row']]]);
+  });
+
+  test('associates reversed label/date order across one visual row', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const observations = [
+      syntheticDateObservation('reversed-collection-date', '22.08.2026', 0.08, 0.1),
+      syntheticDateObservation('reversed-collection-label', 'Collected', 0.3, 0.1),
+      syntheticDateObservation('reversed-issued-date', '23.08.2026', 0.52, 0.1),
+      syntheticDateObservation('reversed-issued-label', 'Reported', 0.74, 0.1),
+      syntheticDateObservation('reversed-measurement', 'LDL-C 3,8 mmol/L', 0.08, 0.22),
+    ];
+    const service = createService(repository, files, sanitizingPdf(files), {
+      async recognize(): Promise<VisionOCRResult> {
+        return {
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations,
+        };
+      },
+    });
+    const report = (await service.importPdf(source('reversed-date-context')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+    const draft = await service.startExtraction(report.id);
+    const row = draft.rows[0];
+
+    assert.equal(draft.rows.length, 1);
+    assert.deepEqual(draft.collectionDate, { kind: 'known', value: '2026-08-22' });
+    assert.deepEqual(row?.collectionDate, { kind: 'known', value: '2026-08-22' });
+    assert.equal(row?.collectionDateContext?.observationId, 'reversed-collection-date');
+    assert.deepEqual(row?.source.observationIds, ['reversed-measurement']);
+  });
+
+  test('leaves report, birth, conflicting, ambiguous, invalid, and unlabeled dates missing', async () => {
+    const cases = [
+      {
+        name: 'report-and-birth',
+        header: 'Report date 2026-08-28  Date of birth 1990-01-01',
+        expectedReason: 'missing-collection-date',
+      },
+      {
+        name: 'conflicting-collection',
+        header: 'Collected 22.08.2026 Collected 23.08.2026',
+        expectedReason: 'ambiguous-date',
+      },
+      {
+        name: 'ambiguous-collection',
+        header: 'Collected 01/02/2026',
+        expectedReason: 'ambiguous-date',
+      },
+      {
+        name: 'invalid-collection',
+        header: 'Collected 31.02.2026',
+        expectedReason: 'ambiguous-date',
+      },
+      {
+        name: 'missing-collection-label',
+        header: '22.08.2026',
+        expectedReason: 'missing-collection-date',
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const repository = createRepository();
+      const files = new FakeFiles();
+      const observations = [
+        syntheticDateObservation(`missing-${testCase.name}-header`, testCase.header, 0.08, 0.1),
+        syntheticDateObservation(
+          `missing-${testCase.name}-measurement`,
+          'LDL-C 3,8 mmol/L',
+          0.08,
+          0.22,
+        ),
+      ];
+      const service = createService(repository, files, sanitizingPdf(files), {
+        async recognize(): Promise<VisionOCRResult> {
+          return {
+            contractVersion: 'alyte.vision.document.v2',
+            pageIndex: 0,
+            orientation: 0,
+            observations,
+          };
+        },
+      });
+      const report = (await service.importPdf(source(`missing-${testCase.name}`)))!.report;
+      await prepareSanitizedExtraction(service, report.id);
+      const draft = await service.startExtraction(report.id);
+      const row = draft.rows[0];
+
+      assert.deepEqual(draft.collectionDate, { kind: 'missing' }, testCase.name);
+      assert.deepEqual(row?.collectionDate, { kind: 'missing' }, testCase.name);
+      assert.ok(row?.reviewReasons.includes(testCase.expectedReason), testCase.name);
+      if (testCase.expectedReason === 'missing-collection-date')
+        assert.equal(row?.collectionDateContext, null, testCase.name);
+      else assert.equal(row?.collectionDateContext?.ambiguous, true, testCase.name);
+      assert.deepEqual(
+        row?.source.observationIds,
+        [`missing-${testCase.name}-measurement`],
+        testCase.name,
+      );
+      assert.equal(row?.proposedBiomarkerId, 'biomarker.ldl_c', testCase.name);
+      assert.deepEqual(row?.proposedValue, { kind: 'numeric', value: 3.8 }, testCase.name);
+      assert.equal(row?.proposedUnit, 'mmol/L', testCase.name);
+    }
   });
 
   test('infers unambiguous collection date order when device and report locales differ', async () => {
