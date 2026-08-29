@@ -1,5 +1,13 @@
 import CoreGraphics
+import Foundation
 import UIKit
+
+enum AlyteVisionImageError: Error, Equatable {
+  case unreadable
+  case invalidPage
+  case imageUnavailable
+  case unsupportedOrientation
+}
 
 /// Returns the only explicit page rotations accepted by the import contract.
 ///
@@ -19,15 +27,17 @@ func alyteValidatedRightAngleOrientation(_ orientation: Int) -> Int? {
 /// passing that raw image directly would discard the orientation. This function maps all eight
 /// UIImage orientations explicitly and renders at native pixel dimensions. The input image and
 /// its source bytes are never changed.
-func alyteNormalizedImportedImage(_ image: UIImage) -> UIImage? {
-  guard let source = image.cgImage else { return nil }
+func alyteNormalizedImportedImage(_ image: UIImage) throws -> UIImage {
+  guard let source = image.cgImage else { throw AlyteVisionImageError.imageUnavailable }
+  guard let orientationTransform = alyteUIImageOrientationTransform(
+    image.imageOrientation,
+    sourceSize: CGSize(width: source.width, height: source.height)
+  ) else {
+    throw AlyteVisionImageError.unsupportedOrientation
+  }
 
   let sourceSize = CGSize(width: source.width, height: source.height)
-  let rotatesAxes = image.imageOrientation == .left
-    || image.imageOrientation == .right
-    || image.imageOrientation == .leftMirrored
-    || image.imageOrientation == .rightMirrored
-  let targetSize = rotatesAxes
+  let targetSize = orientationTransform.rotatesAxes
     ? CGSize(width: sourceSize.height, height: sourceSize.width)
     : sourceSize
 
@@ -37,10 +47,7 @@ func alyteNormalizedImportedImage(_ image: UIImage) -> UIImage? {
   let rawImage = UIImage(cgImage: source, scale: 1, orientation: .up)
   return UIGraphicsImageRenderer(size: targetSize, format: format).image { context in
     context.cgContext.saveGState()
-    context.cgContext.concatenate(alyteUIImageOrientationTransform(
-      image.imageOrientation,
-      sourceSize: sourceSize
-    ))
+    context.cgContext.concatenate(orientationTransform.transform)
 
     // The wrapper explicitly carries .up, so UIImage.draw(in:) has no metadata to interpret while
     // still using UIKit's renderer coordinate system consistently across simulator and device.
@@ -54,9 +61,12 @@ func alyteNormalizedImportedImage(_ image: UIImage) -> UIImage? {
 /// This is deliberately separate from EXIF normalization so the two transforms are composed in a
 /// visible, fixed order exactly once. The returned UIImage is always metadata-free and uses native
 /// pixel dimensions, which is the CGImage passed to Vision.
-func alyteRotatedImportedImage(_ image: UIImage, orientation: Int) -> UIImage? {
-  guard let normalized = alyteValidatedRightAngleOrientation(orientation) else { return nil }
-  guard normalized != 0, let source = image.cgImage else { return image }
+func alyteRotatedImportedImage(_ image: UIImage, orientation: Int) throws -> UIImage {
+  guard let normalized = alyteValidatedRightAngleOrientation(orientation) else {
+    throw AlyteVisionImageError.unsupportedOrientation
+  }
+  guard let source = image.cgImage else { throw AlyteVisionImageError.imageUnavailable }
+  guard normalized != 0 else { return image }
 
   let sourceSize = CGSize(width: source.width, height: source.height)
   let targetSize = normalized == 90 || normalized == 270
@@ -93,27 +103,51 @@ func alyteRotatedImportedImage(_ image: UIImage, orientation: Int) -> UIImage? {
 private func alyteUIImageOrientationTransform(
   _ orientation: UIImage.Orientation,
   sourceSize: CGSize
-) -> CGAffineTransform {
+) -> (transform: CGAffineTransform, rotatesAxes: Bool)? {
   let width = sourceSize.width
   let height = sourceSize.height
   switch orientation {
   case .up:
-    return .identity
+    return (.identity, false)
   case .upMirrored:
-    return CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: width, ty: 0)
+    return (CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: width, ty: 0), false)
   case .down:
-    return CGAffineTransform(a: -1, b: 0, c: 0, d: -1, tx: width, ty: height)
+    return (CGAffineTransform(a: -1, b: 0, c: 0, d: -1, tx: width, ty: height), false)
   case .downMirrored:
-    return CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: height)
+    return (CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: height), false)
   case .leftMirrored:
-    return CGAffineTransform(a: 0, b: 1, c: 1, d: 0, tx: 0, ty: 0)
+    return (CGAffineTransform(a: 0, b: 1, c: 1, d: 0, tx: 0, ty: 0), true)
   case .right:
-    return CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: height, ty: 0)
+    return (CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: height, ty: 0), true)
   case .rightMirrored:
-    return CGAffineTransform(a: 0, b: -1, c: -1, d: 0, tx: height, ty: width)
+    return (CGAffineTransform(a: 0, b: -1, c: -1, d: 0, tx: height, ty: width), true)
   case .left:
-    return CGAffineTransform(a: 0, b: -1, c: 1, d: 0, tx: 0, ty: width)
+    return (CGAffineTransform(a: 0, b: -1, c: 1, d: 0, tx: 0, ty: width), true)
   @unknown default:
-    return .identity
+    return nil
   }
+}
+
+/// Loads one non-PDF source page exactly as the Expo module does before Vision. Keeping this path
+/// here makes the runnable native boundary target exercise the production image pipeline rather
+/// than a test-only sequence of UIImage transforms.
+func alyteRenderedImportedImage(path: String, pageIndex: Int, orientation: Int) throws -> CGImage {
+  guard pageIndex == 0 else { throw AlyteVisionImageError.invalidPage }
+  guard alyteValidatedRightAngleOrientation(orientation) != nil else {
+    throw AlyteVisionImageError.unsupportedOrientation
+  }
+
+  let url = URL(fileURLWithPath: alyteLocalPath(path))
+  guard let image = UIImage(contentsOfFile: url.path) else {
+    throw AlyteVisionImageError.unreadable
+  }
+  let normalized = try alyteNormalizedImportedImage(image)
+  let rotated = try alyteRotatedImportedImage(normalized, orientation: orientation)
+  guard let cgImage = rotated.cgImage else { throw AlyteVisionImageError.imageUnavailable }
+  return cgImage
+}
+
+func alyteLocalPath(_ value: String) -> String {
+  if value.hasPrefix("file://"), let url = URL(string: value) { return url.path }
+  return value
 }

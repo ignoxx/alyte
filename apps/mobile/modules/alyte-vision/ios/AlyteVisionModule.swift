@@ -55,13 +55,8 @@ func alyteRotatedPDFImage(_ image: UIImage, orientation: Int) throws -> UIImage 
   }
 }
 
-private func localPath(_ value: String) -> String {
-  if value.hasPrefix("file://"), let url = URL(string: value) { return url.path }
-  return value
-}
-
 func renderedImage(path: String, pageIndex: Int, orientation: Int, password: String?) throws -> CGImage {
-  let url = URL(fileURLWithPath: localPath(path))
+  let url = URL(fileURLWithPath: alyteLocalPath(path))
   if url.pathExtension.lowercased() == "pdf" {
     guard let document = PDFDocument(url: url) else {
       throw AlyteVisionError.invalidPage
@@ -84,19 +79,16 @@ func renderedImage(path: String, pageIndex: Int, orientation: Int, password: Str
     guard let cgImage = image.cgImage else { throw AlyteVisionError.imageUnavailable }
     return cgImage
   }
-  guard pageIndex == 0 else { throw AlyteVisionError.invalidPage }
-  guard alyteValidatedRightAngleOrientation(orientation) != nil else {
-    throw AlyteVisionError.unsupportedOrientation
+  do {
+    return try alyteRenderedImportedImage(path: path, pageIndex: pageIndex, orientation: orientation)
+  } catch let error as AlyteVisionImageError {
+    switch error {
+    case .unreadable: throw AlyteVisionError.unreadable
+    case .invalidPage: throw AlyteVisionError.invalidPage
+    case .imageUnavailable: throw AlyteVisionError.imageUnavailable
+    case .unsupportedOrientation: throw AlyteVisionError.unsupportedOrientation
+    }
   }
-  guard let image = UIImage(contentsOfFile: url.path), image.cgImage != nil else {
-    throw AlyteVisionError.unreadable
-  }
-  guard let normalized = alyteNormalizedImportedImage(image),
-    let rotated = alyteRotatedImportedImage(normalized, orientation: orientation),
-    let normalizedCGImage = rotated.cgImage else {
-    throw AlyteVisionError.imageUnavailable
-  }
-  return normalizedCGImage
 }
 
 public final class AlyteVisionModule: Module {

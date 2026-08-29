@@ -1,5 +1,8 @@
 import CoreGraphics
+import Foundation
+import ImageIO
 import UIKit
+import UniformTypeIdentifiers
 import Vision
 import XCTest
 @testable import AlyteVisionBoundary
@@ -24,7 +27,7 @@ final class AlyteVisionObservationTests: XCTestCase {
         scale: 1,
         orientation: orientation
       )
-      let normalized = try XCTUnwrap(alyteNormalizedImportedImage(oriented))
+      let normalized = try alyteNormalizedImportedImage(oriented)
       XCTAssertEqual(normalized.imageOrientation, .up)
       XCTAssertEqual(normalized.cgImage?.width, expectedPixels[0].count)
       XCTAssertEqual(normalized.cgImage?.height, expectedPixels.count)
@@ -40,7 +43,7 @@ final class AlyteVisionObservationTests: XCTestCase {
       orientation: .right
     )
 
-    let normalized = try XCTUnwrap(alyteNormalizedImportedImage(oriented))
+    let normalized = try alyteNormalizedImportedImage(oriented)
     XCTAssertEqual(normalized.scale, 1)
     XCTAssertEqual(normalized.size, CGSize(width: 2, height: 3))
     XCTAssertEqual(normalized.cgImage?.width, 2)
@@ -54,8 +57,8 @@ final class AlyteVisionObservationTests: XCTestCase {
       scale: 1,
       orientation: .right
     )
-    let normalized = try XCTUnwrap(alyteNormalizedImportedImage(oriented))
-    let composed = try XCTUnwrap(alyteRotatedImportedImage(normalized, orientation: 90))
+    let normalized = try alyteNormalizedImportedImage(oriented)
+    let composed = try alyteRotatedImportedImage(normalized, orientation: 90)
 
     // EXIF .right is one clockwise turn, then Alyte's explicit 90° is one more. The result is
     // therefore a single 180° orientation of the source, with no metadata left for Vision to
@@ -65,9 +68,11 @@ final class AlyteVisionObservationTests: XCTestCase {
     XCTAssertEqual(composed.cgImage?.height, 2)
     XCTAssertEqual(Self.grayscalePixels(in: composed), [[60, 50, 40], [30, 20, 10]])
 
-    let zeroRotation = try XCTUnwrap(alyteRotatedImportedImage(normalized, orientation: 0))
+    let zeroRotation = try alyteRotatedImportedImage(normalized, orientation: 0)
     XCTAssertTrue(zeroRotation === normalized)
-    XCTAssertNil(alyteRotatedImportedImage(normalized, orientation: 45))
+    XCTAssertThrowsError(try alyteRotatedImportedImage(normalized, orientation: 45)) { error in
+      XCTAssertEqual(error as? AlyteVisionImageError, .unsupportedOrientation)
+    }
   }
 
   func testNormalizedImageSupportsBoundedVisionSmokeForSyntheticText() async throws {
@@ -82,18 +87,50 @@ final class AlyteVisionObservationTests: XCTestCase {
     }
     // Store the text pixels in the raw orientation that a camera would pair with EXIF .right.
     // Normalization should turn this back into the upright source before Vision sees it.
-    let rawCameraPixels = try XCTUnwrap(alyteRotatedImportedImage(source, orientation: 270))
+    let rawCameraPixels = try alyteRotatedImportedImage(source, orientation: 270)
     let oriented = UIImage(
       cgImage: try XCTUnwrap(rawCameraPixels.cgImage),
       scale: 1,
       orientation: .right
     )
-    let normalized = try XCTUnwrap(alyteNormalizedImportedImage(oriented))
+    let normalized = try alyteNormalizedImportedImage(oriented)
     var request = RecognizeDocumentsRequest()
     request.textRecognitionOptions.maximumCandidateCount = 1
     let documents = try await request.perform(on: try XCTUnwrap(normalized.cgImage), orientation: .up)
     let transcripts = documents.flatMap { $0.document.text.lines }.map(\.transcript)
     XCTAssertTrue(transcripts.contains { $0.localizedCaseInsensitiveContains("UPRIGHT") })
+  }
+
+  func testOnDiskImageWithImageIOOrientationUsesTheProductionImportHelper() throws {
+    let source = try XCTUnwrap(Self.syntheticPatternImage())
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("alyte-vision-orientation-\(UUID().uuidString).tiff")
+    defer { try? FileManager.default.removeItem(at: url) }
+    try Self.writeImage(source, to: url, imageIOOrientation: 6)
+
+    let output = try alyteRenderedImportedImage(path: url.path, pageIndex: 0, orientation: 0)
+    let normalized = UIImage(cgImage: output, scale: 1, orientation: .up)
+    XCTAssertEqual(normalized.imageOrientation, .up)
+    XCTAssertEqual(output.width, 2)
+    XCTAssertEqual(output.height, 3)
+    XCTAssertEqual(Self.grayscalePixels(in: normalized), [[40, 10], [50, 20], [60, 30]])
+  }
+
+  func testOnDiskImageHelperComposesExifAndExplicitRotationAndRejectsUnsupportedAngles() throws {
+    let source = try XCTUnwrap(Self.syntheticPatternImage())
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("alyte-vision-orientation-\(UUID().uuidString).tiff")
+    defer { try? FileManager.default.removeItem(at: url) }
+    try Self.writeImage(source, to: url, imageIOOrientation: 6)
+
+    let output = try alyteRenderedImportedImage(path: url.path, pageIndex: 0, orientation: 90)
+    let composed = UIImage(cgImage: output, scale: 1, orientation: .up)
+    XCTAssertEqual(output.width, 3)
+    XCTAssertEqual(output.height, 2)
+    XCTAssertEqual(Self.grayscalePixels(in: composed), [[60, 50, 40], [30, 20, 10]])
+    XCTAssertThrowsError(try alyteRenderedImportedImage(path: url.path, pageIndex: 0, orientation: 45)) { error in
+      XCTAssertEqual(error as? AlyteVisionImageError, .unsupportedOrientation)
+    }
   }
 
   private static func syntheticPatternImage() -> UIImage? {
@@ -125,6 +162,29 @@ final class AlyteVisionObservationTests: XCTestCase {
         let channel2 = bytes[offset + min(2, bytesPerPixel - 1)]
         return Int(min(bytes[offset], min(channel1, channel2)))
       }
+    }
+  }
+
+  private static func writeImage(
+    _ image: UIImage,
+    to url: URL,
+    imageIOOrientation: Int
+  ) throws {
+    guard let source = image.cgImage,
+      let destination = CGImageDestinationCreateWithURL(
+        url as CFURL,
+        UTType.tiff.identifier as CFString,
+        1,
+        nil
+      )
+    else {
+      throw NSError(domain: "AlyteVisionObservationTests", code: 1)
+    }
+    CGImageDestinationAddImage(destination, source, [
+      kCGImagePropertyOrientation: imageIOOrientation,
+    ] as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else {
+      throw NSError(domain: "AlyteVisionObservationTests", code: 2)
     }
   }
 
