@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -167,8 +167,6 @@ function PopulatedHome({
 }) {
   const latest = model.latestReport;
   const latestRecord = model.latestRecord;
-  const { fontScale } = useWindowDimensions();
-  const usesAccessibilityTextSize = fontScale >= 1.3;
   // A confirmed Lab Record is the person's measured history anchor. Fall back to the source report
   // only while an import has not produced a record yet, keeping extracted/source state honest.
   const latestItem = latestRecord ?? latest;
@@ -189,11 +187,7 @@ function PopulatedHome({
         style={({ pressed }) => [styles.latestRow, pressed && styles.rowPressed]}
       >
         <View style={styles.latestCopy}>
-          <AppText
-            selectable
-            style={styles.heroDate}
-            variant={usesAccessibilityTextSize ? 'title' : 'display'}
-          >
+          <AppText selectable style={styles.heroDate} variant="title">
             {dateLabel(latestItem.date, locale)}
           </AppText>
           <AppText selectable style={styles.latestTitle} variant="heading">
