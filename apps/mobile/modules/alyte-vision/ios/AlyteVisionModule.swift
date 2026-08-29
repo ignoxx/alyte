@@ -26,8 +26,7 @@ private enum AlyteVisionError: LocalizedError {
 /// orientation from text. PDFKit owns the page-box transform so unusual PDF coordinate systems do
 /// not silently render an empty OCR image.
 func alyteRotatedPDFImage(_ image: UIImage, orientation: Int) throws -> UIImage {
-  let normalized = ((orientation % 360) + 360) % 360
-  guard normalized == 0 || normalized == 90 || normalized == 180 || normalized == 270 else {
+  guard let normalized = alyteValidatedRightAngleOrientation(orientation) else {
     throw AlyteVisionError.unsupportedOrientation
   }
   guard normalized != 0 else { return image }
@@ -85,11 +84,19 @@ func renderedImage(path: String, pageIndex: Int, orientation: Int, password: Str
     guard let cgImage = image.cgImage else { throw AlyteVisionError.imageUnavailable }
     return cgImage
   }
-  guard let image = UIImage(contentsOfFile: url.path), let cgImage = image.cgImage else {
+  guard pageIndex == 0 else { throw AlyteVisionError.invalidPage }
+  guard alyteValidatedRightAngleOrientation(orientation) != nil else {
+    throw AlyteVisionError.unsupportedOrientation
+  }
+  guard let image = UIImage(contentsOfFile: url.path), image.cgImage != nil else {
     throw AlyteVisionError.unreadable
   }
-  guard pageIndex == 0 else { throw AlyteVisionError.invalidPage }
-  return cgImage
+  guard let normalized = alyteNormalizedImportedImage(image),
+    let rotated = alyteRotatedImportedImage(normalized, orientation: orientation),
+    let normalizedCGImage = rotated.cgImage else {
+    throw AlyteVisionError.imageUnavailable
+  }
+  return normalizedCGImage
 }
 
 public final class AlyteVisionModule: Module {

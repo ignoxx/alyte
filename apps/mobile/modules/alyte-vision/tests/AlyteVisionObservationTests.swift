@@ -5,6 +5,129 @@ import XCTest
 @testable import AlyteVisionBoundary
 
 final class AlyteVisionObservationTests: XCTestCase {
+  func testImportedUIImageOrientationsNormalizeToUprightNativePixels() throws {
+    let source = try XCTUnwrap(Self.syntheticPatternImage())
+    let expected: [UIImage.Orientation: [[Int]]] = [
+      .up: [[10, 20, 30], [40, 50, 60]],
+      .upMirrored: [[30, 20, 10], [60, 50, 40]],
+      .down: [[60, 50, 40], [30, 20, 10]],
+      .downMirrored: [[40, 50, 60], [10, 20, 30]],
+      .leftMirrored: [[10, 40], [20, 50], [30, 60]],
+      .right: [[40, 10], [50, 20], [60, 30]],
+      .rightMirrored: [[60, 30], [50, 20], [40, 10]],
+      .left: [[30, 60], [20, 50], [10, 40]],
+    ]
+
+    for (orientation, expectedPixels) in expected {
+      let oriented = UIImage(
+        cgImage: try XCTUnwrap(source.cgImage),
+        scale: 1,
+        orientation: orientation
+      )
+      let normalized = try XCTUnwrap(alyteNormalizedImportedImage(oriented))
+      XCTAssertEqual(normalized.imageOrientation, .up)
+      XCTAssertEqual(normalized.cgImage?.width, expectedPixels[0].count)
+      XCTAssertEqual(normalized.cgImage?.height, expectedPixels.count)
+      XCTAssertEqual(Self.grayscalePixels(in: normalized), expectedPixels, "orientation: \(orientation.rawValue)")
+    }
+  }
+
+  func testImportedUIImageNormalizationPreservesPixelDimensionsForScaledExifImage() throws {
+    let source = try XCTUnwrap(Self.syntheticPatternImage())
+    let oriented = UIImage(
+      cgImage: try XCTUnwrap(source.cgImage),
+      scale: 2,
+      orientation: .right
+    )
+
+    let normalized = try XCTUnwrap(alyteNormalizedImportedImage(oriented))
+    XCTAssertEqual(normalized.scale, 1)
+    XCTAssertEqual(normalized.size, CGSize(width: 2, height: 3))
+    XCTAssertEqual(normalized.cgImage?.width, 2)
+    XCTAssertEqual(normalized.cgImage?.height, 3)
+  }
+
+  func testExplicitImageRotationComposesExactlyOnceAfterExifNormalization() throws {
+    let source = try XCTUnwrap(Self.syntheticPatternImage())
+    let oriented = UIImage(
+      cgImage: try XCTUnwrap(source.cgImage),
+      scale: 1,
+      orientation: .right
+    )
+    let normalized = try XCTUnwrap(alyteNormalizedImportedImage(oriented))
+    let composed = try XCTUnwrap(alyteRotatedImportedImage(normalized, orientation: 90))
+
+    // EXIF .right is one clockwise turn, then Alyte's explicit 90° is one more. The result is
+    // therefore a single 180° orientation of the source, with no metadata left for Vision to
+    // apply a third transform.
+    XCTAssertEqual(composed.imageOrientation, .up)
+    XCTAssertEqual(composed.cgImage?.width, 3)
+    XCTAssertEqual(composed.cgImage?.height, 2)
+    XCTAssertEqual(Self.grayscalePixels(in: composed), [[60, 50, 40], [30, 20, 10]])
+
+    let zeroRotation = try XCTUnwrap(alyteRotatedImportedImage(normalized, orientation: 0))
+    XCTAssertTrue(zeroRotation === normalized)
+    XCTAssertNil(alyteRotatedImportedImage(normalized, orientation: 45))
+  }
+
+  func testNormalizedImageSupportsBoundedVisionSmokeForSyntheticText() async throws {
+    let source = UIGraphicsImageRenderer(size: CGSize(width: 1_200, height: 700)).image { context in
+      UIColor.white.setFill()
+      context.fill(CGRect(x: 0, y: 0, width: 1_200, height: 700))
+      let attributes: [NSAttributedString.Key: Any] = [
+        .font: UIFont.systemFont(ofSize: 56),
+        .foregroundColor: UIColor.black,
+      ]
+      NSString(string: "UPRIGHT SYNTHETIC TEXT").draw(at: CGPoint(x: 90, y: 300), withAttributes: attributes)
+    }
+    // Store the text pixels in the raw orientation that a camera would pair with EXIF .right.
+    // Normalization should turn this back into the upright source before Vision sees it.
+    let rawCameraPixels = try XCTUnwrap(alyteRotatedImportedImage(source, orientation: 270))
+    let oriented = UIImage(
+      cgImage: try XCTUnwrap(rawCameraPixels.cgImage),
+      scale: 1,
+      orientation: .right
+    )
+    let normalized = try XCTUnwrap(alyteNormalizedImportedImage(oriented))
+    var request = RecognizeDocumentsRequest()
+    request.textRecognitionOptions.maximumCandidateCount = 1
+    let documents = try await request.perform(on: try XCTUnwrap(normalized.cgImage), orientation: .up)
+    let transcripts = documents.flatMap { $0.document.text.lines }.map(\.transcript)
+    XCTAssertTrue(transcripts.contains { $0.localizedCaseInsensitiveContains("UPRIGHT") })
+  }
+
+  private static func syntheticPatternImage() -> UIImage? {
+    let values = [[10, 20, 30], [40, 50, 60]]
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    format.opaque = true
+    return UIGraphicsImageRenderer(size: CGSize(width: 3, height: 2), format: format).image { context in
+      for (row, values) in values.enumerated() {
+        for (column, value) in values.enumerated() {
+          UIColor(white: CGFloat(value) / 255, alpha: 1).setFill()
+          context.fill(CGRect(x: column, y: row, width: 1, height: 1))
+        }
+      }
+    }
+  }
+
+  private static func grayscalePixels(in image: UIImage) -> [[Int]] {
+    guard let cgImage = image.cgImage,
+      let providerData = cgImage.dataProvider?.data,
+      let bytes = CFDataGetBytePtr(providerData)
+    else { return [] }
+
+    let bytesPerPixel = max(1, cgImage.bitsPerPixel / 8)
+    return (0..<cgImage.height).map { row in
+      (0..<cgImage.width).map { column in
+        let offset = row * cgImage.bytesPerRow + column * bytesPerPixel
+        let channel1 = bytes[offset + min(1, bytesPerPixel - 1)]
+        let channel2 = bytes[offset + min(2, bytesPerPixel - 1)]
+        return Int(min(bytes[offset], min(channel1, channel2)))
+      }
+    }
+  }
+
   func testTokenSpansUseExactUTF16OffsetsAndDeterministicParentLinkedIDs() {
     let text = "Žmogus 🔬 LDL 3,8 mmol/L"
     let candidates = [

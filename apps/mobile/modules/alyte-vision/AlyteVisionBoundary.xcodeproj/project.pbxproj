@@ -6,6 +6,7 @@
 
 /* Begin PBXBuildFile section */
 		A65000000000000000000001 /* AlyteVisionObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A65000000000000000000011 /* AlyteVisionObservation.swift */; };
+		A65000000000000000000007 /* AlyteVisionImageOrientation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A65000000000000000000017 /* AlyteVisionImageOrientation.swift */; };
 		A65000000000000000000002 /* AlyteVisionObservationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A65000000000000000000012 /* AlyteVisionObservationTests.swift */; };
 		A65000000000000000000003 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A65000000000000000000021 /* Vision.framework */; };
 		A65000000000000000000004 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A65000000000000000000022 /* UIKit.framework */; };
@@ -15,6 +16,7 @@
 
 /* Begin PBXFileReference section */
 		A65000000000000000000011 /* AlyteVisionObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlyteVisionObservation.swift; sourceTree = "<group>"; };
+		A65000000000000000000017 /* AlyteVisionImageOrientation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlyteVisionImageOrientation.swift; sourceTree = "<group>"; };
 		A65000000000000000000012 /* AlyteVisionObservationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlyteVisionObservationTests.swift; sourceTree = "<group>"; };
 		A65000000000000000000021 /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
 		A65000000000000000000022 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
@@ -30,7 +32,7 @@
 
 /* Begin PBXGroup section */
 		A65000000000000000000041 = {isa = PBXGroup; children = (A65000000000000000000042 /* Sources */, A65000000000000000000043 /* Tests */, A65000000000000000000044 /* Frameworks */, A65000000000000000000045 /* Products */); sourceTree = "<group>"; };
-		A65000000000000000000042 /* Sources */ = {isa = PBXGroup; children = (A65000000000000000000011 /* AlyteVisionObservation.swift */); path = ios; sourceTree = "<group>"; };
+		A65000000000000000000042 /* Sources */ = {isa = PBXGroup; children = (A65000000000000000000011 /* AlyteVisionObservation.swift */, A65000000000000000000017 /* AlyteVisionImageOrientation.swift */); path = ios; sourceTree = "<group>"; };
 		A65000000000000000000043 /* Tests */ = {isa = PBXGroup; children = (A65000000000000000000012 /* AlyteVisionObservationTests.swift */); path = tests; sourceTree = "<group>"; };
 		A65000000000000000000044 /* Frameworks */ = {isa = PBXGroup; children = (A65000000000000000000021 /* Vision.framework */, A65000000000000000000022 /* UIKit.framework */, A65000000000000000000023 /* XCTest.framework */); name = Frameworks; sourceTree = "<group>"; };
 		A65000000000000000000045 /* Products */ = {isa = PBXGroup; children = (A65000000000000000000024 /* AlyteVisionBoundary.framework */, A65000000000000000000025 /* AlyteVisionBoundaryTests.xctest */); name = Products; sourceTree = "<group>"; };
@@ -50,7 +52,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A65000000000000000000071 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A65000000000000000000001 /* AlyteVisionObservation.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+		A65000000000000000000071 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A65000000000000000000001 /* AlyteVisionObservation.swift in Sources */, A65000000000000000000007 /* AlyteVisionImageOrientation.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
 		A65000000000000000000072 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A65000000000000000000002 /* AlyteVisionObservationTests.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
