@@ -1,4 +1,3 @@
-import { Collapsible, Host } from '@expo/ui';
 import { useState } from 'react';
 import { Alert, Linking, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -85,15 +84,32 @@ export function SupportFaqScreen() {
           {faqItems.map(([titleKey, bodyKey], index) => {
             const isExpanded = expanded === index;
             return (
-              <Host key={titleKey} matchContents={{ vertical: true }}>
-                <Collapsible
-                  isOpen={isExpanded}
-                  onOpenChange={(nextOpen) => setExpanded(nextOpen ? index : null)}
-                  label={t(`settings.${titleKey}`)}
+              <View key={titleKey}>
+                <Pressable
+                  accessibilityLabel={t(`settings.${titleKey}`)}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: isExpanded }}
+                  onPress={() => setExpanded(isExpanded ? null : index)}
+                  style={({ pressed }) => [
+                    styles.faqRow,
+                    index > 0 && styles.faqRowDivider,
+                    pressed && styles.rowPressed,
+                  ]}
                 >
-                  <AppText style={styles.faqBody}>{t(`settings.${bodyKey}`)}</AppText>
-                </Collapsible>
-              </Host>
+                  <AppText style={styles.faqTitle}>{t(`settings.${titleKey}`)}</AppText>
+                  <AppIcon
+                    color={colors.accent}
+                    name="chevronRight"
+                    size={16}
+                    style={[styles.faqIcon, isExpanded && styles.faqIconExpanded]}
+                  />
+                </Pressable>
+                {isExpanded && (
+                  <View style={styles.faqAnswer}>
+                    <AppText style={styles.faqBody}>{t(`settings.${bodyKey}`)}</AppText>
+                  </View>
+                )}
+              </View>
             );
           })}
         </View>
@@ -131,6 +147,18 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     minHeight: 54,
     paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
   },
-  faqBody: { color: colors.mutedInk, paddingBottom: spacing.lg, paddingHorizontal: spacing.lg },
+  faqRowDivider: {
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  faqTitle: { color: colors.accent, flex: 1, flexShrink: 1, minWidth: 0 },
+  faqIcon: { flexShrink: 0 },
+  faqIconExpanded: { transform: [{ rotate: '90deg' }] },
+  faqAnswer: {
+    paddingBottom: spacing.lg,
+    paddingHorizontal: spacing.lg,
+  },
+  faqBody: { color: colors.mutedInk },
 });
