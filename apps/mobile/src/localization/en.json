@@ -952,7 +952,9 @@
     "deleteCategoryIntakeImages": "Intake Images",
     "deleteCategoryCloudJobs": "local jobs",
     "deleteCategoryCaptureRecoveries": "recovery entries",
-    "deleteCategoryDrafts": "review drafts",
+    "deleteCategoryExtractionDrafts": "extraction drafts",
+    "deleteCategoryExtractionRows": "extracted review rows",
+    "deleteCategorySanitizationDrafts": "sanitization drafts",
     "deleteCategoryIntakeComponents": "Intake Components",
     "deleteCategoryExportJobs": "export artifacts",
     "appLock": {

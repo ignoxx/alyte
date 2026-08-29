@@ -6,6 +6,7 @@ import { t } from '../../localization';
 import { useServices } from '../../services';
 import { AppButton, AppIcon, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
+import { deletionCountLabelKeys } from './deletion-ui-model';
 import {
   LOCAL_DELETION_SCOPES,
   type DeletionPlan,
@@ -19,25 +20,6 @@ const scopeCopy: Record<LocalDeletionScope, { title: string; subtitle: string }>
   events: { title: 'settings.deleteEvents', subtitle: 'settings.deleteEventsSubtitle' },
   media: { title: 'settings.deleteMedia', subtitle: 'settings.deleteMediaSubtitle' },
   'all-health': { title: 'settings.deleteAll', subtitle: 'settings.deleteAllSubtitle' },
-};
-
-const countCopy: Record<keyof LocalDataCounts, string> = {
-  reports: 'settings.deleteCategoryReports',
-  reportPages: 'settings.deleteCategoryReportPages',
-  sanitizedReports: 'settings.deleteCategorySanitizedReports',
-  records: 'settings.deleteCategoryRecords',
-  measurements: 'settings.deleteCategoryMeasurements',
-  corrections: 'settings.deleteCategoryCorrections',
-  extractionDrafts: 'settings.deleteCategoryDrafts',
-  extractionRows: 'settings.deleteCategoryDrafts',
-  intakeEvents: 'settings.deleteCategoryIntakeEvents',
-  intakeComponents: 'settings.deleteCategoryIntakeComponents',
-  intakeImages: 'settings.deleteCategoryIntakeImages',
-  cloudJobs: 'settings.deleteCategoryCloudJobs',
-  captureRecoveries: 'settings.deleteCategoryCaptureRecoveries',
-  combinedDeletions: 'settings.deleteCategoryCombinedDeletions',
-  exportJobs: 'settings.deleteCategoryExportJobs',
-  sanitizationDrafts: 'settings.deleteCategoryDrafts',
 };
 
 function CountBlock({
@@ -59,8 +41,10 @@ function CountBlock({
         </AppText>
       ) : (
         rows.map((key) => (
-          <View key={key} style={styles.countRow}>
-            <AppText style={styles.muted}>{t(countCopy[key])}</AppText>
+          <View key={key} accessible accessibilityRole="text" style={styles.countRow}>
+            <AppText style={[styles.muted, styles.countLabel]}>
+              {t(deletionCountLabelKeys[key])}
+            </AppText>
             <AppText selectable style={styles.count}>
               {counts[key].toLocaleString()}
             </AppText>
@@ -282,8 +266,14 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   countTitle: { fontSize: 16, lineHeight: 21, marginBottom: spacing.xs },
-  countRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
-  count: { color: colors.ink, fontVariant: ['tabular-nums'] },
+  countRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.md,
+    justifyContent: 'space-between',
+  },
+  countLabel: { flex: 1, flexShrink: 1, minWidth: 0 },
+  count: { color: colors.ink, flexShrink: 0, fontVariant: ['tabular-nums'] },
   failure: { color: colors.danger, marginBottom: spacing.md },
   successSurface: { gap: spacing.sm, marginBottom: spacing.md },
   scopeFootnote: { color: colors.mutedInk, marginTop: spacing.md },
