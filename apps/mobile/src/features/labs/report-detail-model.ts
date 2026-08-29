@@ -2,10 +2,25 @@ import type { LabReport } from '@alyte/domain';
 
 export type LabReportDetailState = 'loading' | 'error' | 'unavailable' | 'ready';
 
+export type LabReportDetailRowLayout = 'inline' | 'stacked';
+
 export type LabReportFailureRecovery = {
   readonly action: 'retry' | 'delete';
   readonly message: 'retained-source' | 'missing-source';
 };
+
+/**
+ * Keep the metadata card compact at ordinary text sizes, while avoiding a two-column squeeze once
+ * iOS enters its accessibility Dynamic Type ramp. The inline row still has bounded flex columns so
+ * larger non-accessibility categories can wrap without relying on intrinsic text widths.
+ */
+export function getLabReportDetailRowLayout(fontScale: number): LabReportDetailRowLayout {
+  return Number.isFinite(fontScale) && fontScale >= 1.3 ? 'stacked' : 'inline';
+}
+
+export function formatLabReportDetailRowAccessibilityLabel(label: string, value: string): string {
+  return value.length > 0 ? `${label}: ${value}` : label;
+}
 
 /**
  * Keep an absent report distinct from a failed read. A report can disappear after Home has

@@ -2,10 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { t } from '../../localization';
 import {
+  formatLabReportDetailRowAccessibilityLabel,
   formatReportFileSize,
   formatReportPageCount,
   getLabReportFailureRecovery,
   getLabReportDetailState,
+  getLabReportDetailRowLayout,
 } from './report-detail-model';
 
 test('report detail separates unavailable records from transient load errors', () => {
@@ -34,6 +36,21 @@ test('pathless import failures are deletion-only and do not claim a retained sou
 test('report page count interpolation produces one localized label', () => {
   assert.equal(formatReportPageCount('Pages: {count}', 4, 'Unknown'), 'Pages: 4');
   assert.equal(formatReportPageCount('Pages: {count}', null, 'Unknown'), 'Pages: Unknown');
+});
+
+test('report metadata switches to stacked rows at accessibility Dynamic Type sizes', () => {
+  assert.equal(getLabReportDetailRowLayout(1), 'inline');
+  assert.equal(getLabReportDetailRowLayout(1.29), 'inline');
+  assert.equal(getLabReportDetailRowLayout(1.3), 'stacked');
+  assert.equal(getLabReportDetailRowLayout(Number.NaN), 'inline');
+});
+
+test('report metadata accessibility labels keep label and value together', () => {
+  assert.equal(
+    formatLabReportDetailRowAccessibilityLabel('Source type', 'PDF'),
+    'Source type: PDF',
+  );
+  assert.equal(formatLabReportDetailRowAccessibilityLabel('Pages: 4', ''), 'Pages: 4');
 });
 
 test('report file sizes use honest B, KB, and MB boundaries', () => {

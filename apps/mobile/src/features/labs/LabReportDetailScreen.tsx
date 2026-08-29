@@ -1,5 +1,13 @@
 import { useCallback, useLayoutEffect, useState, type PropsWithChildren } from 'react';
-import { ActionSheetIOS, Alert, Platform, Pressable, StyleSheet, View } from 'react-native';
+import {
+  ActionSheetIOS,
+  Alert,
+  Platform,
+  Pressable,
+  StyleSheet,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { LabReport } from '@alyte/domain';
@@ -19,8 +27,10 @@ import { LabReportImportError, type PasswordRequest } from './report-service';
 import {
   formatReportFileSize,
   formatReportPageCount,
+  formatLabReportDetailRowAccessibilityLabel,
   getLabReportFailureRecovery,
   getLabReportDetailState,
+  getLabReportDetailRowLayout,
 } from './report-detail-model';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
@@ -59,6 +69,8 @@ export function LabReportDetailScreen() {
   const navigation = useNavigation<Navigation>();
   const route = useRoute<DetailRoute>();
   const { reports } = useServices();
+  const { fontScale } = useWindowDimensions();
+  const detailRowLayout = getLabReportDetailRowLayout(fontScale);
   const [report, setReport] = useState<LabReport | null>(null);
   const [integrity, setIntegrity] = useState<
     'verified' | 'missing' | 'mismatch' | 'not-verifiable'
@@ -273,17 +285,23 @@ export function LabReportDetailScreen() {
       <AppText variant="heading">{report.originalFilename}</AppText>
       <StatusPill>{stateLabel(report, integrity)}</StatusPill>
       <AppSurface style={styles.metaSection}>
-        <DetailRow label={t('labs.reportSourceType')} value={sourceLabel(report)} />
+        <DetailRow
+          label={t('labs.reportSourceType')}
+          layout={detailRowLayout}
+          value={sourceLabel(report)}
+        />
         <DetailRow
           label={formatReportPageCount(
             t('labs.reportPageCount'),
             report.pageCount,
             t('labs.reportUnknown'),
           )}
+          layout={detailRowLayout}
           value=""
         />
         <DetailRow
           label={t('labs.reportSize')}
+          layout={detailRowLayout}
           value={formatReportFileSize(report.byteSize, {
             locale,
             unknownLabel: t('labs.reportSizeUnknown'),
@@ -291,6 +309,7 @@ export function LabReportDetailScreen() {
         />
         <DetailRow
           label={t('labs.reportIntegrity')}
+          layout={detailRowLayout}
           value={t(`labs.reportIntegrity${integrity[0]?.toUpperCase() ?? ''}${integrity.slice(1)}`)}
         />
       </AppSurface>
@@ -376,13 +395,33 @@ function DetailScrollView({
   );
 }
 
-function DetailRow({ label, value }: { readonly label: string; readonly value: string }) {
+function DetailRow({
+  label,
+  layout,
+  value,
+}: {
+  readonly label: string;
+  readonly layout: 'inline' | 'stacked';
+  readonly value: string;
+}) {
+  const hasValue = value.length > 0;
   return (
-    <View style={styles.detailRow}>
-      <AppText style={styles.detailLabel}>{label}</AppText>
-      <AppText selectable style={styles.detailValue}>
-        {value}
+    <View
+      accessible
+      accessibilityLabel={formatLabReportDetailRowAccessibilityLabel(label, value)}
+      style={[styles.detailRow, layout === 'stacked' && styles.detailRowStacked]}
+    >
+      <AppText style={[styles.detailLabel, layout === 'stacked' && styles.detailLabelStacked]}>
+        {label}
       </AppText>
+      {hasValue && (
+        <AppText
+          selectable
+          style={[styles.detailValue, layout === 'stacked' && styles.detailValueStacked]}
+        >
+          {value}
+        </AppText>
+      )}
     </View>
   );
 }
@@ -403,8 +442,23 @@ const styles = StyleSheet.create({
     minHeight: 48,
     paddingHorizontal: spacing.md,
   },
-  detailLabel: { color: colors.mutedInk },
-  detailValue: { color: colors.ink, flexShrink: 1, marginLeft: spacing.md, textAlign: 'right' },
+  detailRowStacked: {
+    alignItems: 'stretch',
+    flexDirection: 'column',
+    gap: spacing.xs,
+    paddingVertical: spacing.md,
+  },
+  detailLabel: { color: colors.mutedInk, flex: 1, flexShrink: 1, minWidth: 0 },
+  detailLabelStacked: { flex: 0, width: '100%' },
+  detailValue: {
+    color: colors.ink,
+    flex: 1,
+    flexShrink: 1,
+    marginLeft: spacing.md,
+    minWidth: 0,
+    textAlign: 'right',
+  },
+  detailValueStacked: { flex: 0, marginLeft: 0, textAlign: 'left', width: '100%' },
   actionSection: { gap: spacing.xs, marginTop: spacing.md, padding: 0 },
   sectionLabel: { color: colors.mutedInk, paddingHorizontal: spacing.md, paddingTop: spacing.md },
   actionRow: {
