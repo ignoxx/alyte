@@ -31,6 +31,7 @@ import {
   getLabReportFailureRecovery,
   getLabReportDetailState,
   getLabReportDetailRowLayout,
+  type LabReportDetailRowLayout,
 } from './report-detail-model';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
@@ -401,7 +402,7 @@ function DetailRow({
   value,
 }: {
   readonly label: string;
-  readonly layout: 'inline' | 'stacked';
+  readonly layout: LabReportDetailRowLayout;
   readonly value: string;
 }) {
   const hasValue = value.length > 0;
