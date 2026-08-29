@@ -1,6 +1,6 @@
 import { Host, Switch } from '@expo/ui';
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
@@ -8,12 +8,19 @@ import { colors, screenStyles, spacing } from '../../theme';
 import { type AppLockGrace } from './policy';
 import { useAppLock } from './AppLockProvider';
 import { AppLockGracePicker } from './AppLockGracePicker';
-import { appLockControlsPresentation, appLockGraceOptions } from './app-lock-ui-model';
+import {
+  appLockControlsPresentation,
+  appLockGraceOptions,
+  getAppLockRowLayout,
+} from './app-lock-ui-model';
 
 export function AppLockScreen() {
   const { controller, state } = useAppLock();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
+  const { fontScale } = useWindowDimensions();
+  const rowLayout = getAppLockRowLayout(fontScale);
+  const isStackedLayout = rowLayout === 'stacked';
   const preferences = state.preferences ?? { enabled: false, grace: 'immediate' as const };
   const controls = appLockControlsPresentation(preferences, busy);
   const graceOptions = appLockGraceOptions();
@@ -58,22 +65,24 @@ export function AppLockScreen() {
             onAccessibilityTap={() => {
               if (!controls.enable.disabled) void changeEnabled(!preferences.enabled);
             }}
-            style={styles.row}
+            style={[styles.row, isStackedLayout && styles.rowStacked]}
           >
-            <AppIcon name="lockShield" size={22} color={colors.accent} />
-            <View style={styles.copy} importantForAccessibility="no-hide-descendants">
-              <AppText variant="heading" style={styles.rowTitle}>
-                {t('settings.appLock.enable')}
-              </AppText>
-              <AppText variant="caption" style={styles.supporting}>
-                {t('settings.appLock.enableSupporting')}
-              </AppText>
+            <View style={[styles.rowContent, isStackedLayout && styles.rowContentStacked]}>
+              <AppIcon name="lockShield" size={22} color={colors.accent} />
+              <View style={styles.copy} importantForAccessibility="no-hide-descendants">
+                <AppText variant="heading" style={styles.rowTitle}>
+                  {t('settings.appLock.enable')}
+                </AppText>
+                <AppText variant="caption" style={styles.supporting}>
+                  {t('settings.appLock.enableSupporting')}
+                </AppText>
+              </View>
             </View>
             <View
               accessible={false}
               accessibilityElementsHidden
               importantForAccessibility="no-hide-descendants"
-              style={styles.controlSlot}
+              style={[styles.controlSlot, isStackedLayout && styles.controlSlotStacked]}
             >
               <Host matchContents ignoreSafeArea="all">
                 <Switch
@@ -85,17 +94,19 @@ export function AppLockScreen() {
               </Host>
             </View>
           </View>
-          <View style={[styles.row, styles.lastRow]}>
-            <AppIcon name="clock" size={22} color={colors.accent} />
-            <View style={styles.copy}>
-              <AppText variant="heading" style={styles.rowTitle}>
-                {t('settings.appLock.grace')}
-              </AppText>
-              <AppText variant="caption" style={styles.supporting}>
-                {t('settings.appLock.graceSupporting')}
-              </AppText>
+          <View style={[styles.row, styles.lastRow, isStackedLayout && styles.rowStacked]}>
+            <View style={[styles.rowContent, isStackedLayout && styles.rowContentStacked]}>
+              <AppIcon name="clock" size={22} color={colors.accent} />
+              <View style={styles.copy}>
+                <AppText variant="heading" style={styles.rowTitle}>
+                  {t('settings.appLock.grace')}
+                </AppText>
+                <AppText variant="caption" style={styles.supporting}>
+                  {t('settings.appLock.graceSupporting')}
+                </AppText>
+              </View>
             </View>
-            <View style={styles.controlSlot}>
+            <View style={[styles.controlSlot, isStackedLayout && styles.controlSlotStacked]}>
               <AppLockGracePicker
                 accessibilityLabel={controls.grace.accessibilityLabel}
                 enabled={!controls.grace.disabled}
@@ -141,10 +152,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
+  rowStacked: {
+    alignItems: 'stretch',
+    flexDirection: 'column',
+    gap: spacing.sm,
+  },
   lastRow: { borderBottomWidth: 0 },
+  rowContent: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: spacing.md,
+    minWidth: 0,
+  },
+  rowContentStacked: { alignItems: 'flex-start', flex: 0 },
   copy: { flex: 1, gap: spacing.xs, minWidth: 0 },
   rowTitle: { fontSize: 16, lineHeight: 21 },
   supporting: { color: colors.mutedInk },
-  controlSlot: { alignItems: 'flex-end', flexShrink: 0, justifyContent: 'center' },
+  controlSlot: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
+    justifyContent: 'center',
+    minHeight: 44,
+  },
+  controlSlotStacked: {
+    alignItems: 'flex-start',
+    alignSelf: 'stretch',
+    paddingLeft: 22 + spacing.md,
+  },
   note: { color: colors.mutedInk, marginTop: spacing.lg },
 });

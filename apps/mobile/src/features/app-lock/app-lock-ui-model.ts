@@ -12,6 +12,21 @@ export type AppLockGraceOption = {
   readonly label: string;
 };
 
+export type AppLockRowLayout = 'inline' | 'stacked';
+
+const APP_LOCK_ACCESSIBILITY_FONT_SCALE = 1.3;
+
+/**
+ * Keep the two-control group compact at ordinary text sizes, then stack each native control below
+ * its copy once iOS enters the accessibility Dynamic Type ramp. This avoids letting an intrinsic
+ * switch or picker width squeeze the row copy or lose its visible association with the control.
+ */
+export function getAppLockRowLayout(fontScale: number): AppLockRowLayout {
+  return Number.isFinite(fontScale) && fontScale >= APP_LOCK_ACCESSIBILITY_FONT_SCALE
+    ? 'stacked'
+    : 'inline';
+}
+
 export type AppLockControlsPresentation = {
   readonly enable: {
     readonly testID: 'app-lock-enabled';
