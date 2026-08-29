@@ -1876,6 +1876,16 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   }
 
   function specimenTypeFromText(text: string): SpecimenType | null {
+    const candidates = specimenTypesFromText(text);
+    return candidates.size === 1 ? [...candidates][0]! : null;
+  }
+
+  /**
+   * A geometry row may inherit a table context, but an explicit row mention is more specific
+   * only when it names one specimen. Keep the candidate set separate from the convenience helper
+   * so a conflicting row mention cannot accidentally fall back to an inherited table context.
+   */
+  function specimenTypesFromText(text: string): ReadonlySet<SpecimenType> {
     const candidates = new Set<SpecimenType>();
     if (/\bplasma\b/iu.test(text)) candidates.add('plasma');
     if (/\b(?:serum|sérum|serumas)\b/iu.test(text)) candidates.add('serum');
@@ -1884,7 +1894,29 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       /\b(?:blood|whole blood|blut|vollblut|sang|sangue|bloed|krew|kraujas|kraujo)\b/iu.test(text)
     )
       candidates.add('blood');
-    return candidates.size === 1 ? [...candidates][0]! : null;
+    return candidates;
+  }
+
+  function specimenTypeForGeometryRow(
+    row: GeometryRow,
+    observations: readonly VisionTextObservation[],
+  ): SpecimenType {
+    const rowSpecimens = specimenTypesFromText(observations.map((item) => item.text).join(' '));
+    if (rowSpecimens.size === 1) return [...rowSpecimens][0]!;
+    if (rowSpecimens.size > 1) return 'unknown';
+    return isKnownSpecimenType(row.specimenKey) ? row.specimenKey : 'unknown';
+  }
+
+  function isKnownSpecimenType(value: string | null): value is SpecimenType {
+    return (
+      value === 'blood' ||
+      value === 'serum' ||
+      value === 'plasma' ||
+      value === 'urine' ||
+      value === 'stool' ||
+      value === 'saliva' ||
+      value === 'unknown'
+    );
   }
 
   function specimenContextGroups(observations: readonly VisionTextObservation[]): readonly {
@@ -2061,8 +2093,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
               return parent === undefined ? [] : [geometryCellObservation(cell, parent)];
             });
       if (rowObservations.length === 0) continue;
-      const specimenType =
-        specimenTypeFromText(rowObservations.map((item) => item.text).join(' ')) ?? 'unknown';
+      const specimenType = specimenTypeForGeometryRow(physicalRow, rowObservations);
       const parsedRows = groupObservationsIntoRows(rowObservations, {
         locale: options.locale,
         collectionDate: options.collectionDate,

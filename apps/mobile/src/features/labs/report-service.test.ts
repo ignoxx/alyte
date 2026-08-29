@@ -1856,6 +1856,58 @@ describe('protected Lab Report import lifecycle', () => {
     );
   });
 
+  test('carries v3 geometry specimen context through deterministic row parsing', async () => {
+    const observation = (id: string, text: string, tableId: string, rowIndex: number) => ({
+      id,
+      text,
+      alternatives: [],
+      pageIndex: 0,
+      orientation: 0,
+      boundingBox: { x: 0.1, y: 0.05 + rowIndex * 0.04, width: 0.7, height: 0.03 },
+      structure: {
+        kind: 'table-cell' as const,
+        tableId,
+        rowIndex,
+        columnIndex: 0,
+      },
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    });
+    const observations = [
+      observation('table-serum-heading', 'Serum', 'table-serum', 0),
+      observation('table-serum-row', 'Ferritin 42 ng/mL 15-300', 'table-serum', 1),
+      observation('row-explicit-plasma', 'Glucose 5.7 mmol/L 4.0-5.9 Plasma', 'table-row', 0),
+      observation(
+        'row-conflicting-specimen',
+        'Glucose 100 mg/dL 70-110 Serum Plasma',
+        'table-conflicting',
+        0,
+      ),
+      observation('row-unknown-specimen', 'Glucose 100 mg/dL 70-110', 'table-unknown', 0),
+    ];
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const service = createService(repository, files, sanitizingPdf(files), {
+      async recognize(): Promise<VisionOCRResult> {
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v3',
+          pageIndex: 0,
+          orientation: 0,
+          observations,
+        });
+      },
+    });
+    const report = (await service.importPdf(source('v3-specimen-context')))!.report;
+    const draft = await service.startExtraction(report.id);
+    const rows = new Map(
+      draft.rows.flatMap((row) => row.source.observationIds.map((id) => [id, row] as const)),
+    );
+
+    assert.equal(rows.get('table-serum-row')?.proposedSpecimenType, 'serum');
+    assert.equal(rows.get('row-explicit-plasma')?.proposedSpecimenType, 'plasma');
+    assert.equal(rows.get('row-conflicting-specimen')?.proposedSpecimenType, 'unknown');
+    assert.equal(rows.get('row-unknown-specimen')?.proposedSpecimenType, 'unknown');
+  });
+
   test('gates missing packs before OCR while preserving a distinct runtime fallback path', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
