@@ -10,6 +10,15 @@ import {
 import type { ShowcaseSnapshot } from '@alyte/fixtures';
 import type { LabsService } from '../features/labs/service';
 
+/**
+ * This preference is local application state, not health data. It intentionally lives in the
+ * protected SQLite preferences table so it survives the all-health deletion operation. A value
+ * is written only after every fixture family has been observed in the local repositories; an
+ * absent value means an interrupted first bootstrap may be retried on the next launch.
+ */
+export const SHOWCASE_BOOTSTRAP_PREFERENCE = 'app.showcase.bootstrap.v1';
+export const SHOWCASE_BOOTSTRAP_COMPLETE = 'showcase.synthetic.v1.complete';
+
 function localDateTime(localDate: string, localTime: string): string {
   const [year, month, day] = localDate.split('-').map(Number) as [number, number, number];
   const [hours, minutes] = localTime.split(':').map(Number) as [number, number];
@@ -411,17 +420,54 @@ export function missingShowcaseLabRecordInputs(
 }
 
 /** Seed at service composition time; failures remain retryable on the next development launch. */
-export async function seedShowcaseLabRecords(labs: LabsService): Promise<void> {
+export async function seedShowcaseLabRecords(labs: LabsService): Promise<boolean> {
   try {
+    const inputs = showcaseLabRecordInputs();
     const existingIds = new Set((await labs.listRecords()).map((record) => record.id));
-    for (const input of missingShowcaseLabRecordInputs(showcaseLabRecordInputs(), existingIds)) {
+    let failed = false;
+    for (const input of missingShowcaseLabRecordInputs(inputs, existingIds)) {
       try {
         await labs.createRecord(input);
       } catch {
         // A later launch retries a missing synthetic fixture without overwriting local records.
+        failed = true;
       }
     }
+    if (failed) return false;
+    const persistedIds = new Set((await labs.listRecords()).map((record) => record.id));
+    return inputs.every((input) => input.id !== undefined && persistedIds.has(input.id));
   } catch {
     // Showcase seeding is an optional development aid; local mode stays usable if its store is unavailable.
+    return false;
+  }
+}
+
+/** Seed synthetic intake rows and report whether every expected row is now durable. */
+export async function seedShowcaseIntake(
+  intake: {
+    readonly listEvents: () => Promise<readonly { readonly id: string }[]>;
+    readonly createEvent: (input: CreateIntakeEventInput) => Promise<unknown>;
+  },
+  showcase: ShowcaseSnapshot,
+  localDate: string,
+): Promise<boolean> {
+  try {
+    const inputs = showcaseIntakeInputs(showcase, localDate);
+    const existingIds = new Set((await intake.listEvents()).map((event) => event.id));
+    let failed = false;
+    for (const input of missingShowcaseIntakeInputs(inputs, existingIds)) {
+      try {
+        await intake.createEvent(input);
+      } catch {
+        // A later launch retries this missing fixture without overwriting local records.
+        failed = true;
+      }
+    }
+    if (failed) return false;
+    const persistedIds = new Set((await intake.listEvents()).map((event) => event.id));
+    return inputs.every((input) => input.id !== undefined && persistedIds.has(input.id));
+  } catch {
+    // Showcase seeding is an optional development aid; local mode stays usable if its store is unavailable.
+    return false;
   }
 }

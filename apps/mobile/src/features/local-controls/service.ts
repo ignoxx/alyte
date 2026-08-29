@@ -204,6 +204,8 @@ async function applyDatabaseDeletion(
     await database.runAsync('DELETE FROM cloud_jobs;');
     await database.runAsync('DELETE FROM intake_capture_recovery;');
     await database.runAsync('DELETE FROM local_export_jobs;');
+    // Keep non-health app preferences (including the one-time development showcase bootstrap
+    // marker). Only sanitization drafts are health-linked and are removed here.
     await database.runAsync(
       'DELETE FROM app_preferences WHERE key LIKE ?;',
       'labs.sanitization-draft.%',

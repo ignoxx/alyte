@@ -35,9 +35,10 @@ import {
 } from '../features/local-models/native';
 import { createLocalSemanticMapper } from '../features/local-models/semantic-mapper';
 import {
-  missingShowcaseIntakeInputs,
+  SHOWCASE_BOOTSTRAP_COMPLETE,
+  SHOWCASE_BOOTSTRAP_PREFERENCE,
   seedShowcaseLabRecords,
-  showcaseIntakeInputs,
+  seedShowcaseIntake,
 } from './showcase-seed';
 import { createSharedDatabaseRepositoryFactories } from './shared-database';
 import { createCloudAccountService, type CloudAccountService } from '../features/account/service';
@@ -132,8 +133,7 @@ export function createServices(
     });
 
   if (showcase !== null) {
-    void seedShowcaseLabRecords(labs);
-    void seedShowcaseIntake(intake, showcase, clock);
+    void bootstrapShowcase(labs, intake, showcase, clock);
   }
 
   return {
@@ -154,24 +154,34 @@ export function createServices(
   };
 }
 
-async function seedShowcaseIntake(
+async function bootstrapShowcase(
+  labs: LabsService,
   intake: IntakeService,
   showcase: ShowcaseSnapshot,
   clock: ServiceClock,
 ): Promise<void> {
   try {
-    const existingIds = new Set((await intake.listEvents()).map((event) => event.id));
-    const localDate = formatIntakeLocalDate(clock.now());
-    const missingInputs = missingShowcaseIntakeInputs(
-      showcaseIntakeInputs(showcase, localDate),
-      existingIds,
+    // This marker is non-health app state stored in the protected SQLite preferences table. It is
+    // deliberately written only after both fixture families are durable. All-health deletion
+    // preserves app preferences, so a completed first bootstrap is never mistaken for a user
+    // deletion that should be replenished.
+    // Warm the lab side first so the two shared-database opens retain their established order;
+    // this read is harmless when the completed marker skips fixture writes.
+    await labs.listRecords();
+    if (
+      (await intake.getLocalPreference(SHOWCASE_BOOTSTRAP_PREFERENCE)) ===
+      SHOWCASE_BOOTSTRAP_COMPLETE
+    )
+      return;
+
+    const labsComplete = await seedShowcaseLabRecords(labs);
+    const intakeComplete = await seedShowcaseIntake(
+      intake,
+      showcase,
+      formatIntakeLocalDate(clock.now()),
     );
-    for (const input of missingInputs) {
-      try {
-        await intake.createEvent(input);
-      } catch {
-        // A later launch retries this missing fixture without overwriting user edits or records.
-      }
+    if (labsComplete && intakeComplete) {
+      await intake.setLocalPreference(SHOWCASE_BOOTSTRAP_PREFERENCE, SHOWCASE_BOOTSTRAP_COMPLETE);
     }
   } catch {
     // Showcase seeding is an optional development aid; local mode stays usable if its store is unavailable.

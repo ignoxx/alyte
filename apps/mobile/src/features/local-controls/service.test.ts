@@ -10,6 +10,10 @@ import {
 } from '../local-database/persistence';
 import { LOCAL_MIGRATIONS } from '../local-database/migrations';
 import { createLocalControlsService } from './service';
+import {
+  SHOWCASE_BOOTSTRAP_COMPLETE,
+  SHOWCASE_BOOTSTRAP_PREFERENCE,
+} from '../../services/showcase-seed';
 
 class NodeDatabase implements SqliteDatabase {
   readonly databasePath: string;
@@ -147,6 +151,7 @@ async function seedHealth(database: NodeDatabase) {
     `INSERT INTO app_preferences (key, value, updated_at) VALUES
       ('app.onboarding-completed', 'true', '2026-08-25'),
       ('model.pack.state', 'ready', '2026-08-25'),
+      ('${SHOWCASE_BOOTSTRAP_PREFERENCE}', '${SHOWCASE_BOOTSTRAP_COMPLETE}', '2026-08-25'),
       ('labs.sanitization-draft.report-1', '{}', '2026-08-25');`,
   );
 }
@@ -194,6 +199,7 @@ test('builds a count-only snapshot, binds execution to a plan hash, and preserve
     ).map((row) => ({ key: row.key, value: row.value })),
     [
       { key: 'app.onboarding-completed', value: 'true' },
+      { key: SHOWCASE_BOOTSTRAP_PREFERENCE, value: SHOWCASE_BOOTSTRAP_COMPLETE },
       { key: 'model.pack.state', value: 'ready' },
     ],
   );

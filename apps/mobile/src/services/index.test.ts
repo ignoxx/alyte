@@ -7,6 +7,7 @@ import type { IntakeRepository } from '../features/intake/persistence';
 import type { LabRepository } from '../features/labs/persistence';
 import { createSharedDatabaseRepositoryFactories } from './shared-database';
 import { ONBOARDING_COMPLETED_PREFERENCE } from '../features/onboarding/preferences';
+import { SHOWCASE_BOOTSTRAP_COMPLETE, SHOWCASE_BOOTSTRAP_PREFERENCE } from './showcase-seed';
 
 test('production service composition cannot expose showcase fixtures', () => {
   const original = process.env.EXPO_PUBLIC_SHOWCASE_MODE;
@@ -84,7 +85,12 @@ test('clean showcase bootstrap serializes shared opens and retries a failed firs
   assert.equal(peak, 1);
 });
 
-function fakeRepositories(initialPreference: string | null = null) {
+function fakeRepositories(
+  initialPreference: string | null = null,
+  options: {
+    readonly shouldFailLabCreate?: () => boolean;
+  } = {},
+) {
   const preferences = new Map<string, string>();
   if (initialPreference !== null) {
     preferences.set('app.app-lock.policy', initialPreference);
@@ -95,6 +101,7 @@ function fakeRepositories(initialPreference: string | null = null) {
     listPendingCombinedDeletions: async () => [],
     listRecords: async () => labRecords,
     createRecord: async (input: unknown) => {
+      if (options.shouldFailLabCreate?.()) throw new Error('synthetic lab seed failure');
       labRecords.push(input);
       return input;
     },
@@ -147,6 +154,16 @@ function restoreEnvironment(name: string, value: string | undefined): void {
   else process.env[name] = value;
 }
 
+async function waitForShowcaseBootstrap(fake: ReturnType<typeof fakeRepositories>): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (fake.preferences.get(SHOWCASE_BOOTSTRAP_PREFERENCE) === SHOWCASE_BOOTSTRAP_COMPLETE) {
+      return;
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.fail('showcase bootstrap did not complete');
+}
+
 test('clean showcase composition unlocks with a missing policy and reaches first-run onboarding', async () => {
   const originalShowcase = process.env.EXPO_PUBLIC_SHOWCASE_MODE;
   process.env.EXPO_PUBLIC_SHOWCASE_MODE = 'true';
@@ -180,6 +197,69 @@ test('clean showcase composition unlocks with a missing policy and reaches first
     assert.equal(controller.getSnapshot().phase, 'unlocked');
     assert.equal(await services.intake.getLocalPreference(ONBOARDING_COMPLETED_PREFERENCE), null);
     assert.deepEqual(opened, ['labs', 'intake']);
+    assert.ok(fake.labRecords.length > 0);
+    assert.ok(fake.intakeEvents.length > 0);
+  } finally {
+    restoreEnvironment('EXPO_PUBLIC_SHOWCASE_MODE', originalShowcase);
+  }
+});
+
+test('completed showcase bootstrap survives all-health deletion and prevents fixture resurrection', async () => {
+  const originalShowcase = process.env.EXPO_PUBLIC_SHOWCASE_MODE;
+  process.env.EXPO_PUBLIC_SHOWCASE_MODE = 'true';
+  try {
+    const fake = fakeRepositories();
+    const options = {
+      openLabDatabase: async () => fake.labRepository,
+      openIntakeDatabase: async () => fake.intakeRepository,
+      intakeMediaStore: inertMediaStore(),
+    };
+    createServices('development', options);
+    await waitForShowcaseBootstrap(fake);
+    assert.ok(fake.labRecords.length > 0);
+    assert.ok(fake.intakeEvents.length > 0);
+
+    // The verified all-health operation removes health rows but deliberately retains non-health
+    // app preferences. This mirrors its database phase without duplicating SQL in this composition
+    // test; local-controls has the direct SQL preservation assertion.
+    fake.labRecords.splice(0);
+    fake.intakeEvents.splice(0);
+    assert.equal(fake.preferences.get(SHOWCASE_BOOTSTRAP_PREFERENCE), SHOWCASE_BOOTSTRAP_COMPLETE);
+
+    createServices('development', options);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(fake.labRecords.length, 0);
+    assert.equal(fake.intakeEvents.length, 0);
+  } finally {
+    restoreEnvironment('EXPO_PUBLIC_SHOWCASE_MODE', originalShowcase);
+  }
+});
+
+test('incomplete showcase bootstrap retries missing fixture families before marking completion', async () => {
+  const originalShowcase = process.env.EXPO_PUBLIC_SHOWCASE_MODE;
+  process.env.EXPO_PUBLIC_SHOWCASE_MODE = 'true';
+  let failLabCreates = true;
+  try {
+    const fake = fakeRepositories(null, {
+      shouldFailLabCreate: () => failLabCreates,
+    });
+    const options = {
+      openLabDatabase: async () => fake.labRepository,
+      openIntakeDatabase: async () => fake.intakeRepository,
+      intakeMediaStore: inertMediaStore(),
+    };
+    createServices('development', options);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (fake.intakeEvents.length > 0) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    assert.equal(fake.preferences.get(SHOWCASE_BOOTSTRAP_PREFERENCE), undefined);
+    assert.equal(fake.labRecords.length, 0);
+    assert.ok(fake.intakeEvents.length > 0);
+
+    failLabCreates = false;
+    createServices('development', options);
+    await waitForShowcaseBootstrap(fake);
     assert.ok(fake.labRecords.length > 0);
     assert.ok(fake.intakeEvents.length > 0);
   } finally {
