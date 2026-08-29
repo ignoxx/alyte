@@ -9,7 +9,11 @@ import { t } from '../../localization';
 import { AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { useAppLock } from '../app-lock/AppLockProvider';
-import { buildLocalSettingsRows, getSettingsRowLayout } from './settings-ui-model';
+import {
+  buildLocalSettingsRows,
+  getSettingsRowLayout,
+  type SettingsRowLayout,
+} from './settings-ui-model';
 
 type SettingsScreenProps = BottomTabScreenProps<MainTabParamList, 'Settings'>;
 type SettingsNavigation = NativeStackNavigationProp<SettingsStackParamList, 'SettingsRoot'>;
@@ -24,7 +28,7 @@ function SettingsRow({
   readonly icon: 'lockShield' | 'shield' | 'folder' | 'settings' | 'doc';
   readonly title: string;
   readonly subtitle: string;
-  readonly layout: 'inline' | 'accessible';
+  readonly layout: SettingsRowLayout;
   readonly onPress: () => void;
 }) {
   return (
