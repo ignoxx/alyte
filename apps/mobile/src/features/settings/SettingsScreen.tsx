@@ -7,6 +7,7 @@ import { t } from '../../localization';
 import { AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { useAppLock } from '../app-lock/AppLockProvider';
+import { buildLocalSettingsRows } from './settings-ui-model';
 
 type SettingsScreenProps = BottomTabScreenProps<MainTabParamList, 'Settings'>;
 
@@ -16,7 +17,7 @@ function SettingsRow({
   subtitle,
   onPress,
 }: {
-  readonly icon: 'lockShield' | 'shield' | 'folder' | 'settings' | 'doc' | 'cloud';
+  readonly icon: 'lockShield' | 'shield' | 'folder' | 'settings' | 'doc';
   readonly title: string;
   readonly subtitle: string;
   readonly onPress: () => void;
@@ -48,41 +49,21 @@ export function SettingsScreen(_props: SettingsScreenProps) {
   const appLockStatus = state.preferences?.enabled
     ? t('settings.appLockEnabled')
     : t('settings.appLockDisabled');
+  const rows = buildLocalSettingsRows(appLockStatus);
 
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
         <View style={styles.group}>
-          <SettingsRow
-            icon="cloud"
-            title={t('settings.cloudAccountTitle')}
-            subtitle={t('settings.cloudAccountSubtitle')}
-            onPress={() => navigation.navigate('CloudAccount')}
-          />
-          <SettingsRow
-            icon="lockShield"
-            title={t('settings.appLockTitle')}
-            subtitle={`${t('settings.appLockSubtitle')} · ${appLockStatus}`}
-            onPress={() => navigation.navigate('AppLock')}
-          />
-          <SettingsRow
-            icon="shield"
-            title={t('settings.privacy')}
-            subtitle={t('settings.privacySubtitle')}
-            onPress={() => navigation.navigate('PrivacyStorage')}
-          />
-          <SettingsRow
-            icon="folder"
-            title={t('settings.modelStorage')}
-            subtitle={t('settings.modelStorageSubtitle')}
-            onPress={() => navigation.navigate('ModelStorage')}
-          />
-          <SettingsRow
-            icon="doc"
-            title={t('settings.support')}
-            subtitle={t('settings.supportSubtitle')}
-            onPress={() => navigation.navigate('SupportFaq')}
-          />
+          {rows.map((row) => (
+            <SettingsRow
+              key={row.route}
+              icon={row.icon}
+              title={row.title}
+              subtitle={row.subtitle}
+              onPress={() => navigation.navigate(row.route)}
+            />
+          ))}
         </View>
       </ScreenScrollView>
     </SafeAreaView>

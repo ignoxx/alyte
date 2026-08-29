@@ -17,7 +17,9 @@ import { DiagnosticsScreen } from '../features/settings/DiagnosticsScreen';
 import { DeleteLocalDataScreen } from '../features/settings/DeleteLocalDataScreen';
 import { CloudAccountScreen } from '../features/settings/CloudAccountScreen';
 import {
+  localNavigationGate,
   registerNavigationFeatures,
+  selectSettingsFeatures,
   type NavigationFeature,
   type NavigationRegistry,
 } from './registry-model';
@@ -79,13 +81,16 @@ const intakeFeatures: readonly NavigationFeature[] = [
   },
 ];
 
-const settingsFeatures: readonly NavigationFeature[] = [
+const cloudSettingsFeatures: readonly NavigationFeature[] = [
   {
     name: 'CloudAccount',
     target: 'settings',
     component: CloudAccountScreen,
     titleKey: 'settings.cloudAccountTitle',
   },
+];
+
+const localSettingsFeatures: readonly NavigationFeature[] = [
   {
     name: 'AppLock',
     target: 'settings',
@@ -131,6 +136,11 @@ const settingsFeatures: readonly NavigationFeature[] = [
 export function createNavigationRegistry(
   extensions: readonly NavigationFeature[] = [],
 ): NavigationRegistry {
+  const settingsFeatures = selectSettingsFeatures(
+    localSettingsFeatures,
+    cloudSettingsFeatures,
+    localNavigationGate.cloudSettingsEnabled,
+  );
   return registerNavigationFeatures(coreFeatures, [
     ...labsFeatures,
     ...intakeFeatures,

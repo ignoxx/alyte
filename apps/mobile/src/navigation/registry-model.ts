@@ -23,6 +23,23 @@ export type NavigationRegistry = CoreNavigationFeatures & {
   readonly extensions: readonly NavigationFeature[];
 };
 
+/**
+ * The local laboratory shell has no accepted cloud-ready gate yet. Keep cloud Settings navigation
+ * absent until the cloud slice owns and passes an explicit user-ready gate.
+ */
+export const localNavigationGate = {
+  cloudSettingsEnabled: false,
+} as const;
+
+/** Select Settings routes from the explicit cloud-slice gate, keeping local routes available. */
+export function selectSettingsFeatures(
+  localFeatures: readonly NavigationFeature[],
+  cloudFeatures: readonly NavigationFeature[],
+  cloudSettingsEnabled: boolean,
+): readonly NavigationFeature[] {
+  return cloudSettingsEnabled ? [...cloudFeatures, ...localFeatures] : localFeatures;
+}
+
 /** Root-level destinations used by the native action tab. Kept pure so navigation behavior is
  * testable without mounting UIKit-backed navigators. */
 export const snapActionDestination = {
