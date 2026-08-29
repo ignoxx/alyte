@@ -85,12 +85,11 @@ export function SupportFaqScreen() {
           {faqItems.map(([titleKey, bodyKey], index) => {
             const isExpanded = expanded === index;
             return (
-              <Host key={titleKey} matchContents>
+              <Host key={titleKey} matchContents={{ vertical: true }}>
                 <Collapsible
                   isOpen={isExpanded}
                   onOpenChange={(nextOpen) => setExpanded(nextOpen ? index : null)}
                   label={t(`settings.${titleKey}`)}
-                  labelStyle={styles.faqTitle}
                 >
                   <AppText style={styles.faqBody}>{t(`settings.${bodyKey}`)}</AppText>
                 </Collapsible>
@@ -133,6 +132,5 @@ const styles = StyleSheet.create({
     minHeight: 54,
     paddingHorizontal: spacing.lg,
   },
-  faqTitle: { fontSize: 16 },
   faqBody: { color: colors.mutedInk, paddingBottom: spacing.lg, paddingHorizontal: spacing.lg },
 });
