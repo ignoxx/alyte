@@ -1053,6 +1053,59 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(rowByObservation.has(footerObservation.id), false);
   });
 
+  test('keeps slash prose and assay methods out of units through the production path', async () => {
+    const observations = [
+      ['method-only', 'LDL-C 3.8 CHOD/PAP'],
+      ['unit-before-value', 'mg/L LDL-C 3.8 CHOD/PAP'],
+      ['terminal-punctuation', 'LDL-C 3.8 mg/L.'],
+      ['url-footer', 'Synthetic footer 2026 https://www.example.test/g/L'],
+      ['prose-footer', 'Synthetic footer 2026 Final/Verified'],
+    ].map(([id, text], index) => ({
+      id,
+      text,
+      alternatives: [],
+      boundingBox: { x: 0.1, y: 0.1 + index * 0.14, width: 0.8, height: 0.04 },
+      pageIndex: 0,
+      orientation: 0,
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    }));
+    const ocr: VisionOCR = {
+      async recognize(_path, pageIndex): Promise<VisionOCRResult> {
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex,
+          orientation: 0,
+          observations: pageIndex === 0 ? observations : [],
+        });
+      },
+    };
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const service = createService(repository, files, new FakePdf(), ocr);
+    const report = (await service.importPdf(source('unit-token-negative-production')))!.report;
+    const draft = await service.startExtraction(report.id);
+    const rowByObservation = new Map(
+      draft.rows.flatMap((row) => row.source.observationIds.map((id) => [id, row] as const)),
+    );
+
+    assert.equal(draft.rows.length, 3);
+    assert.equal(rowByObservation.get('method-only')?.sourceUnit, null);
+    assert.equal(rowByObservation.get('method-only')?.proposedUnit, null);
+
+    const unitBeforeValue = rowByObservation.get('unit-before-value');
+    assert.ok(unitBeforeValue);
+    assert.equal(unitBeforeValue?.source.raw?.unit, 'mg/L');
+    assert.equal(unitBeforeValue?.proposedUnit, 'mg/L');
+    assert.ok(unitBeforeValue?.reviewReasons.includes('incompatible-unit'));
+
+    const terminalPunctuation = rowByObservation.get('terminal-punctuation');
+    assert.ok(terminalPunctuation);
+    assert.equal(terminalPunctuation?.source.raw?.unit, 'mg/L');
+    assert.equal(terminalPunctuation?.proposedUnit, 'mg/L');
+    assert.equal(rowByObservation.has('url-footer'), false);
+    assert.equal(rowByObservation.has('prose-footer'), false);
+  });
+
   test('resolves a mixed blood/serum/plasma/unknown report per table in production extraction', async () => {
     const fixture = bloodLiverSafetyReportFixture;
     const repository = createRepository();

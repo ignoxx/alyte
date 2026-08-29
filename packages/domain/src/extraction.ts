@@ -13,7 +13,7 @@ export { normalizeAlias } from './text';
 
 export const VISION_OCR_LEGACY_CONTRACT_VERSION = 'alyte.vision.document.v2' as const;
 export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.document.v3' as const;
-export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v7' as const;
+export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v8' as const;
 /**
  * The physical-row grouping contract is deliberately independent from the parser version.  The
  * geometry/token-lattice work can advance this seam in a later phase without making a parser
@@ -1189,31 +1189,94 @@ export function normalizeUnit(input: string | null): string | null {
 /**
  * Unit-shaped OCR tokens are bounded on both sides so a shorter known unit cannot be selected
  * from inside a longer one (`mg/L` must not become `g/L`, and `mIU/L` must not become `IU/L`).
- * Slash-separated tokens are accepted even when they are not in the catalogue; compatibility
- * remains a separate deterministic validation step and the exact token stays in source.raw.
+ * Keep the lexical candidate broad enough for an unfamiliar unit, then apply a deterministic
+ * laboratory-unit grammar below. This prevents URLs, prose paths, and assay labels from turning
+ * a numeric footer into a Measurement while compatibility remains a separate validation step.
  */
+const UNIT_COMPONENT_PATTERN = String.raw`[\p{L}\p{M}\p{N}µμ⁰¹²³⁴⁵⁶⁷⁸⁹^+−]+`;
 const UNIT_TOKEN_PATTERN = new RegExp(
-  String.raw`(?<![\p{L}\p{N}])(?:%|fL|[\p{L}\p{M}\p{N}µμ⁰¹²³⁴⁵⁶⁷⁸⁹^+−_.-]+(?:\s*/\s*[\p{L}\p{M}\p{N}µμ⁰¹²³⁴⁵⁶⁷⁸⁹^+−_.-]+)+)(?![\p{L}\p{N}])`,
+  String.raw`(?<![\p{L}-])(?:%|fL|${UNIT_COMPONENT_PATTERN}\s*/\s*${UNIT_COMPONENT_PATTERN})(?![\p{L}\p{N}])`,
   'giu',
 );
+
+// These are dimensional laboratory bases, not a catalogue of accepted Biomarker units. Prefixes
+// and combinations such as `mIU`, `µmol`, `cells`, and `10^9` remain reviewable, while prose
+// paths such as `Final/Verified`, methods such as `CHOD/PAP`, and URLs fail closed.
+const LAB_UNIT_BASES = new Set([
+  'bq',
+  'cell',
+  'cells',
+  'copy',
+  'copies',
+  'eq',
+  'g',
+  'iu',
+  'l',
+  'mol',
+  'osm',
+  'pa',
+  'u',
+]);
+const SI_UNIT_PREFIXES = [
+  '',
+  'y',
+  'z',
+  'a',
+  'f',
+  'p',
+  'n',
+  'µ',
+  'u',
+  'm',
+  'c',
+  'd',
+  'da',
+  'h',
+  'k',
+];
+
+function isLaboratoryUnitComponent(input: string): boolean {
+  const component = input.trim().replace(/μ/gu, 'µ').toLocaleLowerCase();
+  if (!component) return false;
+  if (/^\d+(?:\^[-+]?\d+|[⁰¹²³⁴⁵⁶⁷⁸⁹]+)$/u.test(component)) return true;
+  return SI_UNIT_PREFIXES.some((prefix) => {
+    const base = component.slice(prefix.length);
+    return base.length > 0 && LAB_UNIT_BASES.has(base);
+  });
+}
+
+function isCredibleLaboratoryUnit(raw: string): boolean {
+  if (raw === '%' || normalizeUnit(raw) === 'fL') return true;
+  const components = raw.split(/\s*\/\s*/u);
+  return components.length === 2 && components.every(isLaboratoryUnitComponent);
+}
 
 function extractUnitToken(
   sourceText: string,
   valueCandidates: readonly { readonly start: number; readonly end: number }[],
 ): string | null {
   const candidates = [...sourceText.matchAll(UNIT_TOKEN_PATTERN)]
-    .map((match) => ({
-      raw: match[0] ?? '',
-      start: match.index ?? 0,
-      end: (match.index ?? 0) + (match[0]?.length ?? 0),
-    }))
-    // A date or ratio made only of numbers is not a unit. A valid unfamiliar unit must contain
-    // at least one letter/symbol, while the complete token may still contain numeric exponents.
+    .map((match) => {
+      // The token pattern intentionally stops before sentence punctuation. Keep this trim as a
+      // second guard for punctuation that may be introduced by an OCR normalization layer.
+      const raw = (match[0] ?? '').replace(/[.,;:!?]+$/u, '');
+      const start = match.index ?? 0;
+      return { raw, start, end: start + raw.length };
+    })
     .filter(
       (candidate) =>
-        (candidate.raw === '%' || /[\p{L}\p{M}µμ]/u.test(candidate.raw)) &&
-        // Hyphenated slash tokens are common assay/method labels such as LC-MS/MS, not units.
-        !/[\p{L}]-[\p{L}]/u.test(candidate.raw),
+        candidate.raw.length > 0 &&
+        isCredibleLaboratoryUnit(candidate.raw) &&
+        // A credible unit cannot begin in the middle of a URL/path segment (`report/g/L`).
+        (candidate.start === 0 || sourceText[candidate.start - 1] !== '/') &&
+        (candidate.raw !== '%' ||
+          valueCandidates.some(
+            (value) =>
+              (candidate.start >= value.end &&
+                /^\s*$/u.test(sourceText.slice(value.end, candidate.start))) ||
+              (candidate.end <= value.start &&
+                /^\s*$/u.test(sourceText.slice(candidate.end, value.start))),
+          )),
     );
   const value = valueCandidates.length === 1 ? valueCandidates[0] : undefined;
   candidates.sort((left, right) => {

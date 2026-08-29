@@ -302,6 +302,114 @@ describe('local extraction domain', () => {
     assert.equal(extractionReviewBlocksConfirmation(row!), false);
   });
 
+  it('rejects URLs and slash paths as units on numeric footer text', () => {
+    for (const text of [
+      'Synthetic footer 2026 https://www.example.test/g/L',
+      'Synthetic footer 2026 archive/g/L',
+      'Synthetic footer 2026 archive/results',
+      'Synthetic footer 2026 08/22',
+    ]) {
+      const rows = groupObservationsIntoRows(
+        [
+          {
+            id: 'footer',
+            text,
+            alternatives: [],
+            boundingBox: { x: 0.1, y: 0.2, width: 0.8, height: 0.04 },
+            pageIndex: 0,
+            orientation: 0,
+            recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+          },
+        ],
+        { collectionDate: { kind: 'known', value: '2026-08-22' } },
+      );
+      assert.equal(rows.length, 0, text);
+    }
+  });
+
+  it('rejects prose slash phrases as units on numeric footer text', () => {
+    for (const text of ['Synthetic footer 2026 Final/Verified', 'Synthetic footer 2026 Mon/Fri']) {
+      const rows = groupObservationsIntoRows(
+        [
+          {
+            id: 'footer',
+            text,
+            alternatives: [],
+            boundingBox: { x: 0.1, y: 0.2, width: 0.8, height: 0.04 },
+            pageIndex: 0,
+            orientation: 0,
+            recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+          },
+        ],
+        { collectionDate: { kind: 'known', value: '2026-08-22' } },
+      );
+      assert.equal(rows.length, 0, text);
+    }
+  });
+
+  it('does not parse an assay method token as a laboratory unit', () => {
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'method-only',
+          text: 'LDL-C 3.8 CHOD/PAP',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.8, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+        },
+      ],
+      { aliases: tableAliases, collectionDate: { kind: 'known', value: '2026-08-22' } },
+    );
+    assert.ok(row);
+    assert.equal(row?.sourceUnit, null);
+    assert.equal(row?.proposedUnit, null);
+    assert.ok(!row?.reviewReasons.includes('incompatible-unit'));
+  });
+
+  it('prefers a unit before the value over a later assay method token', () => {
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'unit-before-value',
+          text: 'mg/L LDL-C 3.8 CHOD/PAP',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.8, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+        },
+      ],
+      { aliases: tableAliases, collectionDate: { kind: 'known', value: '2026-08-22' } },
+    );
+    assert.ok(row);
+    assert.equal(row?.source.raw?.unit, 'mg/L');
+    assert.equal(row?.sourceUnit, 'mg/L');
+    assert.equal(row?.proposedUnit, 'mg/L');
+    assert.ok(row?.reviewReasons.includes('incompatible-unit'));
+  });
+
+  it('excludes terminal sentence punctuation from a parsed unit', () => {
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'terminal-punctuation',
+          text: 'LDL-C 3.8 mg/L.',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.8, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+        },
+      ],
+      { aliases: tableAliases, collectionDate: { kind: 'known', value: '2026-08-22' } },
+    );
+    assert.ok(row);
+    assert.equal(row?.source.raw?.unit, 'mg/L');
+    assert.equal(row?.proposedUnit, 'mg/L');
+  });
+
   it('preserves Lithuanian and Polish decimal-comma source tokens byte-for-byte', () => {
     for (const [language, text, value] of [
       ['lt', 'MTL cholesterolis 3,8 mmol/L', '3,8'],
