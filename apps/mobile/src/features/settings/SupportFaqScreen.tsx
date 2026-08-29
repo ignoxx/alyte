@@ -35,7 +35,11 @@ export function SupportFaqScreen() {
 
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+      <ScreenScrollView
+        contentContainerStyle={screenStyles.content}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         <AppText style={styles.intro}>{t('settings.supportIntro')}</AppText>
         <View style={styles.group}>
           <Pressable

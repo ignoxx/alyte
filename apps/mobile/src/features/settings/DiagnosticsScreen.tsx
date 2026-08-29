@@ -45,7 +45,11 @@ export function DiagnosticsScreen() {
 
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+      <ScreenScrollView
+        contentContainerStyle={screenStyles.content}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         <AppText style={styles.intro}>{t('settings.diagnosticsIntro')}</AppText>
         {payload === null ? (
           <AppText style={styles.muted}>{t('settings.diagnosticsUnavailable')}</AppText>
