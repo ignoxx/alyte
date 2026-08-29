@@ -405,7 +405,12 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     padding: spacing.lg,
   },
-  content: { flexGrow: 1, gap: spacing.lg, padding: spacing.lg, paddingBottom: spacing.xxl },
+  content: {
+    flexGrow: 1,
+    gap: spacing.lg,
+    padding: spacing.lg,
+    paddingBottom: spacing.xxl + spacing.lg,
+  },
   introduction: { gap: spacing.sm },
   reviewSummary: { gap: spacing.xs },
   provenance: {
