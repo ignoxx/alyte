@@ -9,9 +9,37 @@ import {
 import {
   buildBiomarkerHistoryViewModel,
   buildHistoryAccessibilityLabel,
+  getHistoryChartLayout,
+  getHistoryTimelineLayout,
   listHistoryEntries,
   type HistoryAccessibilityCopy,
 } from './biomarker-history-model';
+
+test('history timeline stacks value and status at accessibility Dynamic Type sizes', () => {
+  assert.equal(getHistoryTimelineLayout(1), 'inline');
+  assert.equal(getHistoryTimelineLayout(1.29), 'inline');
+  assert.equal(getHistoryTimelineLayout(1.3), 'stacked');
+  assert.equal(getHistoryTimelineLayout(3.2), 'stacked');
+  assert.equal(getHistoryTimelineLayout(Number.NaN), 'inline');
+});
+
+test('history chart keeps compact geometry and grows room for scaled annotations', () => {
+  assert.deepEqual(getHistoryChartLayout(1), {
+    chartHeight: 220,
+    plotPadding: 28,
+    axisLabelInset: 8,
+  });
+  assert.deepEqual(getHistoryChartLayout(1.6), {
+    chartHeight: 288,
+    plotPadding: 40,
+    axisLabelInset: 13,
+  });
+  const maximum = getHistoryChartLayout(3.2);
+  assert.ok(maximum.chartHeight > 500);
+  assert.ok(maximum.plotPadding > 60);
+  assert.ok(maximum.axisLabelInset > 20);
+  assert.deepEqual(getHistoryChartLayout(Number.NaN), getHistoryChartLayout(1));
+});
 
 const copy: HistoryAccessibilityCopy = {
   chart: 'Measured trend',

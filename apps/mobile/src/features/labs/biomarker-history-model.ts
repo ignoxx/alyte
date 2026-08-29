@@ -45,6 +45,43 @@ export type HistoryNonPoint = {
 
 export type HistoryTimelineItem = HistoryPoint | HistoryNonPoint;
 
+export type HistoryTimelineLayout = 'inline' | 'stacked';
+
+export type HistoryChartLayout = {
+  readonly chartHeight: number;
+  readonly plotPadding: number;
+  readonly axisLabelInset: number;
+};
+
+const HISTORY_ACCESSIBILITY_FONT_SCALE = 1.3;
+
+function normalizedFontScale(fontScale: number): number {
+  return Number.isFinite(fontScale) && fontScale > 0 ? fontScale : 1;
+}
+
+/**
+ * Keep timeline facts compact by default, then give the value/unit and status separate full-width
+ * rows once iOS enters its accessibility Dynamic Type ramp. The threshold matches the other lab
+ * detail surfaces so a person gets the same reflow behavior across the laboratory journey.
+ */
+export function getHistoryTimelineLayout(fontScale: number): HistoryTimelineLayout {
+  return normalizedFontScale(fontScale) >= HISTORY_ACCESSIBILITY_FONT_SCALE ? 'stacked' : 'inline';
+}
+
+/**
+ * Scale the chart canvas only when text needs it. The ordinary-size values intentionally retain
+ * the existing compact chart geometry; larger categories gain both vertical room and plot inset
+ * so the fixed axis annotations and point markers remain inside the rounded surface.
+ */
+export function getHistoryChartLayout(fontScale: number): HistoryChartLayout {
+  const scale = normalizedFontScale(fontScale);
+  return {
+    chartHeight: Math.max(220, Math.round(180 * scale)),
+    plotPadding: Math.max(28, Math.ceil(28 + (scale - 1) * 20)),
+    axisLabelInset: Math.max(8, Math.ceil(8 * scale)),
+  };
+}
+
 export type BiomarkerHistoryViewModel = {
   readonly biomarkerId: string;
   readonly canonicalLabel: string;

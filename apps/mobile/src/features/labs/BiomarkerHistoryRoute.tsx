@@ -22,10 +22,14 @@ import { AppButton, AppSurface, AppText, ScreenScrollView, StatusPill } from '..
 import {
   buildBiomarkerHistoryViewModel,
   buildHistoryAccessibilityLabel,
+  getHistoryChartLayout,
+  getHistoryTimelineLayout,
   type BiomarkerHistoryViewModel,
   type HistoryAccessibilityCopy,
+  type HistoryChartLayout,
   type HistoryGuidanceItem,
   type HistoryTimelineItem,
+  type HistoryTimelineLayout,
 } from './biomarker-history-model';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
@@ -171,8 +175,11 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [explanationOpen, setExplanationOpen] = useState(false);
   const [generalGuidanceOpen, setGeneralGuidanceOpen] = useState(false);
+  const { fontScale } = useWindowDimensions();
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
   const accessibilityLabel = buildHistoryAccessibilityLabel(model, accessibilityCopy());
+  const timelineLayout = getHistoryTimelineLayout(fontScale);
+  const chartLayout = getHistoryChartLayout(fontScale);
   const toggle = (key: string) => {
     setExpanded((current) => {
       const next = new Set(current);
@@ -204,7 +211,12 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
         <AppText variant="heading" selectable>
           {t('labs.historyChartTitle')}
         </AppText>
-        <MeasuredTrendChart model={model} accessibilityLabel={accessibilityLabel} locale={locale} />
+        <MeasuredTrendChart
+          accessibilityLabel={accessibilityLabel}
+          layout={chartLayout}
+          locale={locale}
+          model={model}
+        />
       </View>
 
       <View style={styles.section}>
@@ -220,6 +232,7 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
                 key={key}
                 locale={locale}
                 expanded={expanded.has(key)}
+                layout={timelineLayout}
                 onToggle={() => toggle(key)}
               />
             );
@@ -238,6 +251,9 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
       {model.explanation !== null || model.explanationReviewPending ? (
         <View style={styles.section}>
           <Pressable
+            accessibilityLabel={t(
+              explanationOpen ? 'labs.historyHideExplanation' : 'labs.historyShowExplanation',
+            )}
             accessibilityRole="button"
             accessibilityState={{ expanded: explanationOpen }}
             onPress={() => setExplanationOpen((current) => !current)}
@@ -452,11 +468,13 @@ function HistoryTimelineRow({
   item,
   locale,
   expanded,
+  layout,
   onToggle,
 }: {
   readonly item: HistoryTimelineItem;
   readonly locale: string;
   readonly expanded: boolean;
+  readonly layout: HistoryTimelineLayout;
   readonly onToggle: () => void;
 }) {
   if (item.kind === 'point') {
@@ -467,7 +485,7 @@ function HistoryTimelineRow({
       <View style={styles.timelineRow}>
         <View style={styles.timelineMarker} />
         <View style={styles.timelineCopy}>
-          <View style={styles.rowHeader}>
+          <View style={[styles.rowHeader, layout === 'stacked' && styles.rowHeaderStacked]}>
             <AppText variant="heading" selectable style={styles.rowHeaderTitle}>
               {value}
             </AppText>
@@ -477,6 +495,7 @@ function HistoryTimelineRow({
             {formatLocaleDate(item.point.collectionDate, locale)}
           </AppText>
           <Pressable
+            accessibilityLabel={t(expanded ? 'labs.historyHideDetails' : 'labs.historyShowDetails')}
             accessibilityRole="button"
             accessibilityState={{ expanded }}
             onPress={onToggle}
@@ -537,7 +556,7 @@ function HistoryTimelineRow({
     <View style={styles.timelineRow}>
       <View style={[styles.timelineMarker, styles.nonPointMarker]} />
       <View style={styles.timelineCopy}>
-        <View style={styles.rowHeader}>
+        <View style={[styles.rowHeader, layout === 'stacked' && styles.rowHeaderStacked]}>
           <AppText variant="heading" selectable style={styles.rowHeaderTitle}>
             {t(nonPointKey[item.nonPoint.kind])}
           </AppText>
@@ -547,6 +566,7 @@ function HistoryTimelineRow({
           {date}
         </AppText>
         <Pressable
+          accessibilityLabel={t(expanded ? 'labs.historyHideDetails' : 'labs.historyShowDetails')}
           accessibilityRole="button"
           accessibilityState={{ expanded }}
           onPress={onToggle}
@@ -608,17 +628,17 @@ function Fact({ label, value }: { readonly label: string; readonly value: string
 function MeasuredTrendChart({
   model,
   accessibilityLabel,
+  layout,
   locale,
 }: {
   readonly model: BiomarkerHistoryViewModel;
   readonly accessibilityLabel: string;
+  readonly layout: HistoryChartLayout;
   readonly locale: string;
 }) {
-  const { fontScale } = useWindowDimensions();
   const [width, setWidth] = useState(0);
-  const chartHeight = Math.max(220, 180 * Math.min(fontScale, 1.6));
   const points = model.trend.points;
-  const plotPadding = 28;
+  const { chartHeight, plotPadding, axisLabelInset } = layout;
   const innerWidth = Math.max(1, width - plotPadding * 2);
   const innerHeight = Math.max(1, chartHeight - plotPadding * 2);
   const values = points.map((point) => point.normalized.value);
@@ -647,10 +667,28 @@ function MeasuredTrendChart({
       <View pointerEvents="none" style={StyleSheet.absoluteFill}>
         {points.length > 0 && (
           <>
-            <AppText selectable={false} style={[styles.chartAxisLabel, styles.chartAxisTop]}>
+            <AppText
+              accessibilityElementsHidden
+              accessible={false}
+              selectable={false}
+              style={[
+                styles.chartAxisLabel,
+                styles.chartAxisTop,
+                { left: axisLabelInset, right: axisLabelInset },
+              ]}
+            >
               {`${formatLocaleDecimal(maximum, locale)} ${points[0]?.normalized.unit ?? ''}`}
             </AppText>
-            <AppText selectable={false} style={[styles.chartAxisLabel, styles.chartAxisBottom]}>
+            <AppText
+              accessibilityElementsHidden
+              accessible={false}
+              selectable={false}
+              style={[
+                styles.chartAxisLabel,
+                styles.chartAxisBottom,
+                { left: axisLabelInset, right: axisLabelInset },
+              ]}
+            >
               {`${formatLocaleDecimal(minimum, locale)} ${points[0]?.normalized.unit ?? ''}`}
             </AppText>
           </>
@@ -735,8 +773,9 @@ const styles = StyleSheet.create({
   chartAxisLabel: {
     ...typography.caption,
     color: colors.mutedInk,
+    maxWidth: '100%',
     position: 'absolute',
-    right: spacing.sm,
+    textAlign: 'right',
   },
   chartAxisTop: { top: spacing.sm },
   chartAxisBottom: { bottom: spacing.sm },
@@ -767,6 +806,11 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing.sm,
     justifyContent: 'space-between',
+  },
+  rowHeaderStacked: {
+    alignItems: 'stretch',
+    flexDirection: 'column',
+    justifyContent: 'flex-start',
   },
   rowHeaderTitle: { flexShrink: 1, minWidth: 0 },
   disclosureButton: {
