@@ -92,19 +92,6 @@ function ModelFact({
   );
 }
 
-function ModelMetadataRow({ label, value }: { readonly label: string; readonly value: string }) {
-  return (
-    <View style={styles.metadataRow} accessibilityRole="summary">
-      <AppText variant="caption" style={styles.metadataLabel} selectable>
-        {label}
-      </AppText>
-      <AppText variant="caption" style={styles.metadataValue} selectable>
-        {value}
-      </AppText>
-    </View>
-  );
-}
-
 function ModelPreparationPage({
   model,
   snapshot,
@@ -125,8 +112,6 @@ function ModelPreparationPage({
   const failure = failed ? (snapshot?.failure ?? null) : modelFailure;
   const showCancelError = cancelError && !resumable;
   const showFailure = modelSetupFailureVisible(snapshot, modelFailure);
-  const artifact = model.manifest.pack.artifact;
-  const source = model.manifest.pack.source;
 
   return (
     <View style={styles.pageBody}>
@@ -162,25 +147,6 @@ function ModelPreparationPage({
           <ModelFact icon="phone">{t('onboarding.modelSpaceFact')}</ModelFact>
           <ModelFact icon="phone">{t('onboarding.modelRunsLocallyFact')}</ModelFact>
           <ModelFact icon="cloud">{t('onboarding.modelNoUploadFact')}</ModelFact>
-        </View>
-
-        <View style={styles.metadata} accessibilityRole="summary">
-          <ModelMetadataRow
-            label={t('onboarding.modelPublisherLabel')}
-            value={model.manifest.pack.publisher}
-          />
-          <ModelMetadataRow
-            label={t('onboarding.modelLicenseLabel')}
-            value={model.manifest.pack.license}
-          />
-          <ModelMetadataRow
-            label={t('onboarding.modelSourceLabel')}
-            value={`${source.repository} @ ${source.revision}`}
-          />
-          <ModelMetadataRow
-            label={t('onboarding.modelArtifactLabel')}
-            value={`${artifact.repository}/${artifact.filename} @ ${artifact.revision}`}
-          />
         </View>
       </AppSurface>
 
@@ -492,15 +458,25 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
         ]}
       >
         <View style={styles.topBarControlSlot}>
-          {page > 0 && !pagerLocked ? (
+          {page > 0 ? (
             <Pressable
               accessibilityLabel={t('onboarding.back')}
               accessibilityRole="button"
+              accessibilityState={{ disabled: pagerLocked }}
+              disabled={pagerLocked}
               hitSlop={8}
               onPress={() => moveToPage(page - 1)}
-              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+              style={({ pressed }) => [
+                styles.backButton,
+                pagerLocked && styles.backButtonDisabled,
+                pressed && styles.pressed,
+              ]}
             >
-              <AppIcon name="chevronLeft" size={18} color={colors.accent} />
+              <AppIcon
+                name="chevronLeft"
+                size={18}
+                color={pagerLocked ? colors.disabledInk : colors.accent}
+              />
             </Pressable>
           ) : (
             <View accessibilityElementsHidden style={styles.backButton} />
@@ -617,15 +593,7 @@ const styles = StyleSheet.create({
   facts: { gap: spacing.sm },
   fact: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, minHeight: 30 },
   factLabel: { color: colors.ink, flexShrink: 1 },
-  metadata: {
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    gap: spacing.sm,
-    paddingTop: spacing.md,
-  },
-  metadataRow: { gap: spacing.xs },
-  metadataLabel: { color: colors.mutedInk, ...typography.label },
-  metadataValue: { color: colors.ink },
+  backButtonDisabled: { opacity: 0.6 },
   checking: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, minHeight: 44 },
   callout: { gap: spacing.sm, padding: spacing.md },
   error: { color: colors.danger },

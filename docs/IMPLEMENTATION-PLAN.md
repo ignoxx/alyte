@@ -188,8 +188,8 @@ laboratory-history release.
 Build:
 
 - five-page onboarding that explains local mode, measured versus estimated data, cloud consent, and
-  adult-only scope without requiring login, ending with one combined required-model preparation
-  page;
+  adult-only scope without requiring login, with one combined required-model preparation page before
+  Ready;
 - privacy dashboard, app lock, exact-upload preview, support/FAQ, terms and privacy links;
 - Full Export, local deletion, cloud account export/deletion, and StoreKit restore;
 - paywall copy and the provisional EUR prices/allowances from `MVP.md`;
@@ -198,7 +198,8 @@ Build:
 
 Completion criteria:
 
-- fresh install reaches local Home without authentication or network;
+- fresh install completes the one-time required-model preparation with network but no authentication;
+  after the pack is installed, the local product launches to Home and its core flows work offline;
 - local data remains after cloud sign-out/account deletion;
 - export contains every selected local record and clearly warns about sensitive content;
 - no support or analytics path attaches health content; and
