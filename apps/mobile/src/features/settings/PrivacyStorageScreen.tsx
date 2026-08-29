@@ -75,7 +75,11 @@ export function PrivacyStorageScreen() {
   const rootNavigation = navigation.getParent()?.getParent();
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+      <ScreenScrollView
+        contentContainerStyle={screenStyles.content}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         <AppText style={styles.intro}>{t('settings.privacyIntro')}</AppText>
         <AppText variant="heading" style={styles.sectionTitle}>
           {t('settings.privacyCountsTitle')}
@@ -120,7 +124,7 @@ export function PrivacyStorageScreen() {
 const styles = StyleSheet.create({
   intro: { color: colors.mutedInk, lineHeight: 22 },
   sectionTitle: { marginBottom: spacing.sm, marginTop: spacing.lg },
-  subtitle: { color: colors.mutedInk },
+  subtitle: { color: colors.mutedInk, flexShrink: 1 },
   group: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
@@ -133,12 +137,14 @@ const styles = StyleSheet.create({
   countRow: {
     alignItems: 'center',
     flexDirection: 'row',
+    gap: spacing.md,
     justifyContent: 'space-between',
     minHeight: 46,
     paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
   },
-  countLabel: { color: colors.ink },
-  count: { color: colors.mutedInk, fontVariant: ['tabular-nums'] },
+  countLabel: { color: colors.ink, flex: 1, flexShrink: 1, minWidth: 0 },
+  count: { color: colors.mutedInk, flexShrink: 0, fontVariant: ['tabular-nums'] },
   actionRow: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -148,6 +154,6 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   rowPressed: { backgroundColor: colors.accentSoft },
-  actionCopy: { flex: 1, gap: spacing.xs },
-  actionTitle: { fontSize: 16, lineHeight: 21 },
+  actionCopy: { flex: 1, flexShrink: 1, gap: spacing.xs, minWidth: 0 },
+  actionTitle: { flexShrink: 1, fontSize: 16, lineHeight: 21 },
 });
