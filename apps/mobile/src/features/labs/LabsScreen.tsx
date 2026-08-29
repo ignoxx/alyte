@@ -161,10 +161,10 @@ export function LabsScreen() {
                     >
                       <AppIcon color={colors.accent} name="doc" size={22} />
                       <View style={styles.rowBody}>
-                        <AppText numberOfLines={2} selectable variant="heading">
+                        <AppText selectable variant="heading">
                           {report.originalFilename}
                         </AppText>
-                        <AppText numberOfLines={2} selectable style={styles.muted}>
+                        <AppText selectable style={styles.muted}>
                           {`${detail} · ${reportStateLabel(report)}`}
                         </AppText>
                       </View>
@@ -229,7 +229,7 @@ export function LabsScreen() {
                   >
                     <AppIcon color={colors.accent} name="chart" size={22} />
                     <View style={styles.rowBody}>
-                      <AppText numberOfLines={2} selectable variant="heading">
+                      <AppText selectable variant="heading">
                         {entry.canonicalLabel}
                       </AppText>
                       <AppText selectable style={styles.muted}>
@@ -269,7 +269,7 @@ const styles = StyleSheet.create({
     minHeight: 68,
     paddingVertical: spacing.md,
   },
-  rowBody: { flex: 1, gap: spacing.xs },
+  rowBody: { flex: 1, gap: spacing.xs, minWidth: 0 },
   rowPressed: { backgroundColor: colors.accentSoft },
   muted: { color: colors.mutedInk },
   errorState: { gap: spacing.sm },
