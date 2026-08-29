@@ -37,7 +37,11 @@ export function AppLockScreen() {
 
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
+      <ScreenScrollView
+        contentContainerStyle={screenStyles.content}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         <AppText variant="caption" style={styles.intro} selectable>
           {t('settings.appLock.intro')}
         </AppText>
