@@ -13,7 +13,7 @@ export { normalizeAlias } from './text';
 
 export const VISION_OCR_LEGACY_CONTRACT_VERSION = 'alyte.vision.document.v2' as const;
 export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.document.v3' as const;
-export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v6' as const;
+export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v7' as const;
 /**
  * The physical-row grouping contract is deliberately independent from the parser version.  The
  * geometry/token-lattice work can advance this seam in a later phase without making a parser
@@ -1157,7 +1157,11 @@ export function parseReferenceInterval(input: string | null): string | null {
 
 export function normalizeUnit(input: string | null): string | null {
   if (input === null) return null;
-  const normalized = input.trim().replace('μ', 'µ').replace(/\s+/g, ' ');
+  const normalized = input
+    .trim()
+    .replace(/μ/gu, 'µ')
+    .replace(/\s*\/\s*/gu, '/')
+    .replace(/\s+/gu, ' ');
   if (!normalized) return null;
   const lower = normalized.toLocaleLowerCase();
   const aliases: Record<string, string> = {
@@ -1177,10 +1181,61 @@ export function normalizeUnit(input: string | null): string | null {
     'pg/ml': 'pg/mL',
     'pmol/l': 'pmol/L',
     'u/l': 'U/L',
-    'iu/l': 'U/L',
     'l/l': 'L/L',
   };
   return aliases[lower] ?? normalized;
+}
+
+/**
+ * Unit-shaped OCR tokens are bounded on both sides so a shorter known unit cannot be selected
+ * from inside a longer one (`mg/L` must not become `g/L`, and `mIU/L` must not become `IU/L`).
+ * Slash-separated tokens are accepted even when they are not in the catalogue; compatibility
+ * remains a separate deterministic validation step and the exact token stays in source.raw.
+ */
+const UNIT_TOKEN_PATTERN = new RegExp(
+  String.raw`(?<![\p{L}\p{N}])(?:%|fL|[\p{L}\p{M}\p{N}µμ⁰¹²³⁴⁵⁶⁷⁸⁹^+−_.-]+(?:\s*/\s*[\p{L}\p{M}\p{N}µμ⁰¹²³⁴⁵⁶⁷⁸⁹^+−_.-]+)+)(?![\p{L}\p{N}])`,
+  'giu',
+);
+
+function extractUnitToken(
+  sourceText: string,
+  valueCandidates: readonly { readonly start: number; readonly end: number }[],
+): string | null {
+  const candidates = [...sourceText.matchAll(UNIT_TOKEN_PATTERN)]
+    .map((match) => ({
+      raw: match[0] ?? '',
+      start: match.index ?? 0,
+      end: (match.index ?? 0) + (match[0]?.length ?? 0),
+    }))
+    // A date or ratio made only of numbers is not a unit. A valid unfamiliar unit must contain
+    // at least one letter/symbol, while the complete token may still contain numeric exponents.
+    .filter(
+      (candidate) =>
+        (candidate.raw === '%' || /[\p{L}\p{M}µμ]/u.test(candidate.raw)) &&
+        // Hyphenated slash tokens are common assay/method labels such as LC-MS/MS, not units.
+        !/[\p{L}]-[\p{L}]/u.test(candidate.raw),
+    );
+  const value = valueCandidates.length === 1 ? valueCandidates[0] : undefined;
+  candidates.sort((left, right) => {
+    if (value !== undefined) {
+      const distance = (candidate: typeof left) =>
+        candidate.start >= value.end
+          ? { distance: candidate.start - value.end, after: 0 }
+          : candidate.end <= value.start
+            ? { distance: value.start - candidate.end, after: 1 }
+            : { distance: 0, after: 0 };
+      const leftDistance = distance(left);
+      const rightDistance = distance(right);
+      return (
+        leftDistance.distance - rightDistance.distance ||
+        leftDistance.after - rightDistance.after ||
+        left.start - right.start ||
+        right.raw.length - left.raw.length
+      );
+    }
+    return left.start - right.start || right.raw.length - left.raw.length;
+  });
+  return candidates[0]?.raw ?? null;
 }
 
 function requiresNumericUnit(value: MeasurementValue, unit: string | null): boolean {
@@ -1724,10 +1779,7 @@ function parseSourceRow(
     categoricalMatch !== null
       ? { kind: 'categorical' as const, value: rawValue }
       : (parseComparatorValue(rawValue) ?? { kind: 'free_text' as const, value: sourceText });
-  const unitMatch = sourceText.match(
-    /(?:mg\s*\/\s*dL?|mmol\s*\/\s*L|g\s*\/\s*dL?|g\s*\/\s*L|ng\s*\/\s*mL|nmol\s*\/\s*L|µ?g\s*\/\s*L|pg\s*\/\s*mL|pmol\s*\/\s*L|IU\s*\/\s*L|U\s*\/\s*L|L\s*\/\s*L|fL|%|mmol\s*\/\s*mol)/iu,
-  );
-  const rawUnit = unitMatch?.[0] ?? null;
+  const rawUnit = extractUnitToken(sourceText, valueCandidates);
   const unit = normalizeUnit(rawUnit);
   const referenceCandidate = effectiveReferences[0]?.raw ?? null;
   const reference = parseReferenceInterval(referenceCandidate);

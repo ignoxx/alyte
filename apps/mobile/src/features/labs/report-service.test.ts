@@ -22,6 +22,7 @@ import {
   EXTRACTION_PARSER_VERSION,
   extractionReviewRequiresAttention,
   groupObservationsIntoRows,
+  normalizeUnit,
   parseLabDate,
   revalidateExtractionRow,
 } from '@alyte/domain';
@@ -966,6 +967,90 @@ describe('protected Lab Report import lifecycle', () => {
         assert.equal(unknownTrend.nonPoints[0]?.reason, 'incompatible-specimen');
       }
     }
+  });
+
+  test('preserves complete units through the production import and extraction draft path', async () => {
+    const units = [
+      'mg/L',
+      'mIU/L',
+      'µmol/L',
+      'μmol/L',
+      'nmol/L',
+      'mmol/L',
+      'IU/L',
+      'U/L',
+      'g/L',
+      'L/L',
+      '%',
+      'fL',
+    ] as const;
+    const unitObservations = units.map((unit, index) => ({
+      id: `unit-${index}`,
+      text: `Unfamiliar analyte ${index + 1} ${unit}`,
+      alternatives: [],
+      boundingBox: { x: 0.1, y: 0.05 + index * 0.06, width: 0.8, height: 0.03 },
+      pageIndex: 0,
+      orientation: 0,
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    }));
+    const ldlObservation = {
+      id: 'incompatible-known-unit',
+      text: 'LDL-C 3.8 mg/L',
+      alternatives: [],
+      boundingBox: { x: 0.1, y: 0.82, width: 0.8, height: 0.03 },
+      pageIndex: 0,
+      orientation: 0,
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    };
+    const footerObservation = {
+      id: 'numeric-footer',
+      text: 'Synthetic laboratory footer 2026',
+      alternatives: [],
+      boundingBox: { x: 0.1, y: 0.94, width: 0.8, height: 0.03 },
+      pageIndex: 0,
+      orientation: 0,
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    };
+    const observations = [...unitObservations, ldlObservation, footerObservation];
+    const ocr: VisionOCR = {
+      async recognize(_path, pageIndex): Promise<VisionOCRResult> {
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex,
+          orientation: 0,
+          observations: pageIndex === 0 ? observations : [],
+        });
+      },
+    };
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const service = createService(repository, files, new FakePdf(), ocr);
+    const report = (await service.importPdf(source('unit-preservation-production')))!.report;
+    const draft = await service.startExtraction(report.id);
+    const rowByObservation = new Map(
+      draft.rows.flatMap((row) => row.source.observationIds.map((id) => [id, row] as const)),
+    );
+
+    assert.equal(draft.rows.length, units.length + 1);
+    for (const [index, unit] of units.entries()) {
+      const row = rowByObservation.get(`unit-${index}`);
+      assert.ok(row, unit);
+      const expectedUnit = normalizeUnit(unit);
+      assert.equal(row?.source.raw?.unit, unit, unit);
+      assert.equal(row?.sourceUnit, expectedUnit, unit);
+      assert.equal(row?.proposedUnit, expectedUnit, unit);
+      assert.equal(row?.reviewState, 'needs-review', unit);
+      assert.ok(row?.reviewReasons.includes('unsupported-alias'), unit);
+      assert.equal(row?.decision, 'preserve', unit);
+    }
+
+    const incompatible = rowByObservation.get(ldlObservation.id);
+    assert.ok(incompatible);
+    assert.equal(incompatible?.source.raw?.unit, 'mg/L');
+    assert.equal(incompatible?.proposedUnit, 'mg/L');
+    assert.ok(incompatible?.reviewReasons.includes('incompatible-unit'));
+    assert.equal(incompatible?.decision, 'skip');
+    assert.equal(rowByObservation.has(footerObservation.id), false);
   });
 
   test('resolves a mixed blood/serum/plasma/unknown report per table in production extraction', async () => {

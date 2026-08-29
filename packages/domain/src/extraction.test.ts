@@ -10,6 +10,7 @@ import {
   extractionReviewBlocksConfirmation,
   extractionReviewRequiresAttention,
   groupObservationsIntoRows,
+  normalizeUnit,
   parseComparatorValue,
   parseLabDate,
   reparseExtractionRowFromSemanticFields,
@@ -213,6 +214,92 @@ describe('local extraction domain', () => {
     assert.equal(rows[1]?.proposedBiomarkerId, null);
     assert.equal(rows[1]?.reviewState, 'needs-review');
     assert.equal(rows[0]?.source.pageIndex, 0);
+  });
+
+  it('preserves complete known and unfamiliar unit tokens without suffix matching', () => {
+    const units = [
+      'mg/L',
+      'mIU/L',
+      'µmol/L',
+      'μmol/L',
+      'nmol/L',
+      'mmol/L',
+      'IU/L',
+      'U/L',
+      'g/L',
+      'L/L',
+      '%',
+      'fL',
+    ] as const;
+    const observations = units.map((unit, index) => ({
+      id: `unit-${index}`,
+      text: `Unfamiliar marker ${index + 1} ${unit}`,
+      alternatives: [],
+      boundingBox: { x: 0.1, y: 0.05 + index * 0.07, width: 0.8, height: 0.03 },
+      pageIndex: 0,
+      orientation: 0,
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    }));
+    const rows = groupObservationsIntoRows(observations, {
+      collectionDate: { kind: 'known', value: '2026-08-22' },
+    });
+
+    assert.equal(rows.length, units.length);
+    for (const [index, unit] of units.entries()) {
+      const row = rows[index];
+      assert.ok(row, unit);
+      const expectedUnit = normalizeUnit(unit);
+      assert.equal(row?.source.raw?.unit, unit);
+      assert.equal(row?.sourceUnit, expectedUnit, unit);
+      assert.equal(row?.proposedUnit, expectedUnit, unit);
+      assert.equal(row?.reviewState, 'needs-review', unit);
+      assert.ok(row?.reviewReasons.includes('unsupported-alias'), unit);
+    }
+
+    const rowsWithFooter = groupObservationsIntoRows(
+      [
+        ...observations,
+        {
+          id: 'footer',
+          text: 'Synthetic laboratory footer 2026-08-22',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.94, width: 0.8, height: 0.03 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+        },
+      ],
+      { collectionDate: { kind: 'known', value: '2026-08-22' } },
+    );
+    assert.equal(rowsWithFooter.length, units.length);
+    assert.equal(
+      rowsWithFooter.some((row) => row.source.observationIds.includes('footer')),
+      false,
+    );
+  });
+
+  it('keeps canonical incompatibility strict for a complete unfamiliar unit', () => {
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'ldl-unfamiliar-unit',
+          text: 'LDL-C 3.8 mg/L',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.8, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+        },
+      ],
+      { aliases: tableAliases, collectionDate: { kind: 'known', value: '2026-08-22' } },
+    );
+    assert.ok(row);
+    assert.equal(row?.proposedBiomarkerId, 'biomarker.ldl_c');
+    assert.equal(row?.source.raw?.unit, 'mg/L');
+    assert.equal(row?.proposedUnit, 'mg/L');
+    assert.ok(row?.reviewReasons.includes('incompatible-unit'));
+    assert.equal(row?.decision, 'skip');
+    assert.equal(extractionReviewBlocksConfirmation(row!), false);
   });
 
   it('preserves Lithuanian and Polish decimal-comma source tokens byte-for-byte', () => {
