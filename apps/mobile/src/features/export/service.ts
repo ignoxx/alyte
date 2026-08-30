@@ -92,6 +92,8 @@ export type ExportDatabase = SqliteDatabase;
 export type ExportDatabaseSession = {
   readonly database: ExportDatabase;
   readonly close: () => Promise<void>;
+  /** Re-apply native protection after SQLite VACUUM/checkpoint can replace sidecars. */
+  readonly protect: (requireSidecars?: boolean) => Promise<void>;
 };
 
 export type ExportFiles = Pick<
@@ -522,6 +524,10 @@ export function createLocalExportService(options: ExportServiceOptions): LocalEx
   };
 
   const activeOperations = new Map<string, OperationContext>();
+  // A ready archive is owned by this process only after sharePath hands it to the system share
+  // controller. Relaunch has no in-memory lease and therefore cleans ready jobs, while an explicit
+  // same-process reconciliation cannot remove an archive currently shown by the share sheet.
+  const activeShareJobs = new Set<string>();
   let startupPromise: Promise<void> | null = null;
   let startupFailure: Error | null = null;
 
@@ -572,12 +578,13 @@ export function createLocalExportService(options: ExportServiceOptions): LocalEx
         `SELECT id, state, selection_json, portable_staging_reference,
            portable_archive_reference, failure_category, created_at, updated_at, ready_at
          FROM local_export_jobs
-         WHERE state IN ('staging', 'archiving')
+         WHERE state IN ('staging', 'archiving', 'ready')
             OR (state = 'failed' AND failure_category = 'cleanup-pending')
          ORDER BY created_at ASC;`,
       );
       for (const row of rows) {
         const job = decodeJob(row);
+        if (job.state === 'ready' && activeShareJobs.has(job.id)) continue;
         try {
           await cleanupReferences(job.portableStagingReference, job.portableArchiveReference);
           await writeJobState(session.database, {
@@ -912,7 +919,11 @@ export function createLocalExportService(options: ExportServiceOptions): LocalEx
   }
 
   async function completeShare(jobId: string): Promise<LocalExportJob> {
-    return transitionTerminal(jobId, 'completed');
+    try {
+      return await transitionTerminal(jobId, 'completed');
+    } finally {
+      activeShareJobs.delete(jobId);
+    }
   }
 
   async function cancelShare(jobId: string): Promise<LocalExportJob> {
@@ -935,10 +946,23 @@ export function createLocalExportService(options: ExportServiceOptions): LocalEx
       const finished = await getJob(jobId);
       // A cancellation arriving just after the ready CAS must still consume the ready handoff;
       // returning it here would leave a shareable archive alive after the caller cancelled.
-      if (finished !== null && finished.state !== 'ready') return finished;
-      if (finished?.state === 'ready') return transitionTerminal(jobId, 'cancelled');
+      if (finished !== null && finished.state !== 'ready') {
+        activeShareJobs.delete(jobId);
+        return finished;
+      }
+      if (finished?.state === 'ready') {
+        try {
+          return await transitionTerminal(jobId, 'cancelled');
+        } finally {
+          activeShareJobs.delete(jobId);
+        }
+      }
     }
-    return transitionTerminal(jobId, 'cancelled');
+    try {
+      return await transitionTerminal(jobId, 'cancelled');
+    } finally {
+      activeShareJobs.delete(jobId);
+    }
   }
 
   async function transitionTerminal(
@@ -988,12 +1012,19 @@ export function createLocalExportService(options: ExportServiceOptions): LocalEx
   }
 
   async function sharePath(jobId: string): Promise<string> {
-    const job = await getJob(jobId);
-    if (job === null || job.state !== 'ready' || job.portableArchiveReference === null) {
-      throw new Error('The Full Export is not ready to share');
+    activeShareJobs.add(jobId);
+    try {
+      const job = await getJob(jobId);
+      if (job === null || job.state !== 'ready' || job.portableArchiveReference === null) {
+        throw new Error('The Full Export is not ready to share');
+      }
+      return options.files.resolvePath === undefined
+        ? job.portableArchiveReference
+        : await options.files.resolvePath(job.portableArchiveReference);
+    } catch (error) {
+      activeShareJobs.delete(jobId);
+      throw error;
     }
-    if (options.files.resolvePath === undefined) return job.portableArchiveReference;
-    return options.files.resolvePath(job.portableArchiveReference);
   }
 
   async function reconcile(): Promise<void> {
@@ -1027,7 +1058,7 @@ export async function openProtectedExportDatabase(
   });
   try {
     await boundary.initialize();
-    return { database, close: boundary.close };
+    return { database, close: boundary.close, protect: boundary.verifyProtection };
   } catch (error) {
     await database.closeAsync();
     throw error;

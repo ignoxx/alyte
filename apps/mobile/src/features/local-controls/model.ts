@@ -87,6 +87,7 @@ export type DeletionResult = {
 
 export const LOCAL_DELETION_FAILURE_CATEGORIES = [
   'database-failed',
+  'database-hygiene-pending',
   'file-failed',
   'unowned-path',
   'orphan-cleanup-failed',

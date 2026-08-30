@@ -30,6 +30,8 @@ export type ProtectedDatabaseBoundary = {
   readonly database: SqliteDatabase;
   readonly initialize: () => Promise<void>;
   readonly close: () => Promise<void>;
+  /** Re-apply native protection after operations that rebuild the SQLite file. */
+  readonly verifyProtection: (requireSidecars?: boolean) => Promise<void>;
   readonly withWrite: <T>(work: () => Promise<T>) => Promise<T>;
   readonly now: () => string;
   readonly makeId: (prefix: string) => string;
@@ -61,7 +63,7 @@ export function createProtectedDatabaseBoundary(
   async function initializeOnce(): Promise<void> {
     if (initialized) return;
     await database.execAsync(
-      'PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;',
+      'PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA secure_delete = ON;',
     );
     await ensureProtection(false);
     await database.execAsync(
@@ -130,6 +132,7 @@ export function createProtectedDatabaseBoundary(
     database,
     initialize,
     close: () => database.closeAsync(),
+    verifyProtection: (requireSidecars = true) => ensureProtection(requireSidecars),
     withWrite,
     now,
     makeId,

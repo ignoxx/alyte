@@ -17,6 +17,8 @@ export type PathReference = {
 
 export type DeletionSnapshot = {
   readonly counts: LocalDataCounts;
+  /** Combined rows owned by active reports selected by the reports scope. */
+  readonly reportCombinedDeletions: number;
   readonly reportIds: readonly string[];
   readonly allReportIds: readonly string[];
   readonly recordIds: readonly string[];
@@ -77,6 +79,7 @@ function sumDeletedCounts(snapshot: DeletionSnapshot, scope: LocalDeletionScope)
         reports: all.reports,
         reportPages: all.reportPages,
         sanitizedReports: all.sanitizedReports,
+        combinedDeletions: snapshot.reportCombinedDeletions,
         extractionDrafts: all.extractionDrafts,
         extractionRows: all.extractionRows,
         sanitizationDrafts: all.sanitizationDrafts,
@@ -167,6 +170,20 @@ export async function readSnapshot(database: ExportDatabase): Promise<DeletionSn
     database,
     "SELECT id FROM lab_reports WHERE import_state <> 'deleted' ORDER BY id ASC;",
   );
+  let reportCombinedDeletions = 0;
+  if (reportIds.length > 0) {
+    const combinedRows = await database.getAllAsync<{ readonly count: unknown }>(
+      `SELECT COUNT(*) AS count FROM lab_combined_deletions WHERE report_id IN (${reportIds
+        .map(() => '?')
+        .join(', ')});`,
+      ...reportIds,
+    );
+    const value = combinedRows[0]?.count;
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+      throw new Error('Invalid local count for reportCombinedDeletions');
+    }
+    reportCombinedDeletions = value;
+  }
   const recordIds = await ids(database, 'SELECT id FROM lab_records ORDER BY id ASC;');
   const measurementIds = await ids(database, 'SELECT id FROM measurements ORDER BY id ASC;');
   const eventIds = await ids(database, 'SELECT id FROM intake_events ORDER BY id ASC;');
@@ -234,6 +251,7 @@ export async function readSnapshot(database: ExportDatabase): Promise<DeletionSn
 
   return {
     counts: countRows(snapshot),
+    reportCombinedDeletions,
     reportIds,
     allReportIds,
     recordIds,
