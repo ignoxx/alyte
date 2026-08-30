@@ -44,9 +44,11 @@ const stackScreenOptions = {
   headerLargeTitle: false,
   headerTransparent: true,
   headerShadowVisible: false,
-  // native-stack's headerStyle typing predates RN's opaque semantic color type; UIKit accepts it
-  // at runtime and resolves it against the current appearance.
+  // Native-stack's headerStyle typing predates RN's opaque semantic color type; UIKit accepts it
+  // at runtime and resolves it against the current appearance. Keep the back affordance/action
+  // accent while the native title itself follows the semantic label color.
   headerTintColor: colors.accent as string,
+  headerTitleStyle: { color: colors.ink as string },
   headerTitleAlign: 'left' as const,
 };
 

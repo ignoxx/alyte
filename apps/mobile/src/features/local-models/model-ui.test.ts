@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { applyLocalModelEvent, hasResumableModelDownload, notInstalledSnapshot } from './model';
 import {
+  formatModelApproximateSize,
   formatModelDownloadSize,
   isExpectedDownloadCancellation,
   modelFailureFromError,
@@ -239,5 +240,20 @@ test('download size formatting follows the device locale and localized unit keys
   assert.equal(
     formatModelDownloadSize(productionLocalModelManifest.pack.artifact.bytes, 'de-DE'),
     '2.841.481.184 bytes (2,8 GB)',
+  );
+});
+
+test('approximate model size keeps setup facts readable while following the device locale', () => {
+  assert.equal(
+    formatModelApproximateSize(productionLocalModelManifest.pack.artifact.bytes, 'en-US'),
+    '2.8 GB',
+  );
+  assert.equal(
+    formatModelApproximateSize(productionLocalModelManifest.pack.artifact.bytes, 'de-DE'),
+    '2,8 GB',
+  );
+  assert.equal(
+    formatModelApproximateSize(productionLocalModelManifest.requirements.minimumFreeBytes, 'en-US'),
+    '6 GB',
   );
 });

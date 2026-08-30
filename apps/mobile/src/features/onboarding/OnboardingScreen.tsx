@@ -29,6 +29,7 @@ import {
   modelSetupFailureVisible,
   modelSetupPrimaryAction,
   modelStatusTone,
+  formatModelApproximateSize,
 } from '../local-models/model-ui';
 import type { LocalModelService } from '../local-models/native';
 import {
@@ -79,7 +80,7 @@ function ModelFact({
   icon,
   children,
 }: {
-  readonly icon: 'phone' | 'cloud';
+  readonly icon: 'phone' | 'cloud' | 'folder';
   readonly children: string;
 }) {
   return (
@@ -112,6 +113,12 @@ function ModelPreparationPage({
   const failure = failed ? (snapshot?.failure ?? null) : modelFailure;
   const showCancelError = cancelError && !resumable;
   const showFailure = modelSetupFailureVisible(snapshot, modelFailure);
+  const locale = Intl.NumberFormat().resolvedOptions().locale;
+  const downloadSize = formatModelApproximateSize(model.manifest.pack.artifact.bytes, locale);
+  const freeSpace = formatModelApproximateSize(
+    model.manifest.requirements.minimumFreeBytes,
+    locale,
+  );
 
   return (
     <View style={styles.pageBody}>
@@ -134,19 +141,24 @@ function ModelPreparationPage({
           </View>
           <View style={styles.packCopy}>
             <AppText variant="heading" selectable>
-              {t('onboarding.modelName')}
+              {t('onboarding.privateCapabilityName')}
             </AppText>
             <AppText variant="caption" style={styles.muted} selectable>
-              {t('onboarding.modelRequiredLabel')}
+              {t('onboarding.privateCapabilityRequired')}
             </AppText>
           </View>
         </View>
 
         <View accessibilityRole="summary" style={styles.facts}>
-          <ModelFact icon="phone">{t('onboarding.modelSizeFact')}</ModelFact>
-          <ModelFact icon="phone">{t('onboarding.modelSpaceFact')}</ModelFact>
+          <ModelFact icon="phone">
+            {t('onboarding.modelDownloadSizeFact').replace('{size}', downloadSize)}
+          </ModelFact>
+          <ModelFact icon="phone">
+            {t('onboarding.modelFreeSpaceFact').replace('{size}', freeSpace)}
+          </ModelFact>
           <ModelFact icon="phone">{t('onboarding.modelRunsLocallyFact')}</ModelFact>
           <ModelFact icon="cloud">{t('onboarding.modelNoUploadFact')}</ModelFact>
+          <ModelFact icon="folder">{t('onboarding.privateCapabilityDeletionFact')}</ModelFact>
         </View>
       </AppSurface>
 
@@ -482,10 +494,8 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
             <View accessibilityElementsHidden style={styles.backButton} />
           )}
         </View>
-        <AppText variant="caption" style={styles.stepLabel} selectable>
-          {t('onboarding.step')
-            .replace('{current}', String(page + 1))
-            .replace('{total}', String(ONBOARDING_PAGE_COUNT))}
+        <AppText variant="label" style={styles.brandLabel}>
+          {t('onboarding.brand')}
         </AppText>
         <View accessibilityElementsHidden style={styles.topBarControlSlot} />
       </View>
@@ -560,7 +570,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 44,
   },
-  stepLabel: { color: colors.mutedInk, fontVariant: ['tabular-nums'] },
+  brandLabel: { color: colors.ink, letterSpacing: 0.2 },
   pagerContent: { flexGrow: 1 },
   pageScrollContent: { flexGrow: 1, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   pageBody: { flex: 1, gap: spacing.lg, justifyContent: 'center', maxWidth: 480, width: '100%' },

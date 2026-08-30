@@ -150,6 +150,14 @@ export function isExpectedDownloadCancellation(
   return cancellationRequested && errorFailureCategory(error) === 'cancelled';
 }
 
+export function formatModelApproximateSize(bytes: number, locale: string): string {
+  const decimalFormat = new Intl.NumberFormat(locale, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 1,
+  });
+  return `${decimalFormat.format(bytes / 1_000_000_000)} ${t('model.gigabytesUnit')}`;
+}
+
 export function formatModelDownloadSize(bytes: number, locale: string): string {
   const numberFormat = new Intl.NumberFormat(locale);
   const decimalFormat = new Intl.NumberFormat(locale, {

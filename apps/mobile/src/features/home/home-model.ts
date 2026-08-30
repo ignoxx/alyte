@@ -64,6 +64,9 @@ export type HomeLabViewModel = {
   readonly openDraftCount: number;
   readonly reviewCount: number;
   readonly measuredChanges: readonly HomeMeasuredChange[];
+  /** Confirmed local history coverage. These are counts, never health scores. */
+  readonly recordCount: number;
+  readonly biomarkerCount: number;
 };
 
 function knownDate(row: HomeReportRow): string {
@@ -179,7 +182,8 @@ export function buildHomeLabViewModel(
     0,
   );
 
-  const measuredChanges = listHistoryEntries(records)
+  const historyEntries = listHistoryEntries(records);
+  const measuredChanges = historyEntries
     .flatMap((entry): HomeMeasuredChange[] => {
       const trend = buildMeasuredTrend(
         records,
@@ -210,5 +214,7 @@ export function buildHomeLabViewModel(
     openDraftCount: Math.max(0, openDraftCount),
     reviewCount,
     measuredChanges,
+    recordCount: records.length,
+    biomarkerCount: historyEntries.length,
   };
 }

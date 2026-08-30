@@ -1,9 +1,8 @@
-import { forwardRef, useContext, type PropsWithChildren, type ReactNode } from 'react';
+import { forwardRef, useContext, useState, type PropsWithChildren, type ReactNode } from 'react';
 import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import { Image } from 'expo-image';
 import {
   Pressable,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,11 +14,22 @@ import {
   type StyleProp,
   type TextProps,
   type ViewProps,
+  type ViewStyle,
   type ImageStyle,
+  type LayoutChangeEvent,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radii, spacing, statusColors, typography, type StatusTone } from '../theme';
-import { getScreenScrollBottomInset } from './screen-scroll-model';
+import {
+  getScreenPlatformPolicy,
+  getScreenScrollBottomInset,
+  getScreenStatusAvailableHeight,
+  getScreenStatusBottomInset,
+  getScreenStatusScrollEnabled,
+  getScreenStatusUsesOverflowLayout,
+} from './screen-scroll-model';
+
+const screenPlatformPolicy = getScreenPlatformPolicy(process.env.EXPO_OS);
 
 type AppTextProps = TextProps & {
   variant?: keyof typeof typography;
@@ -33,20 +43,12 @@ export function AppText({
   ...props
 }: AppTextProps) {
   const baseStyle = typography[variant];
-  const { fontScale } = useWindowDimensions();
 
   return (
     <Text
       allowFontScaling={allowFontScaling}
       maxFontSizeMultiplier={maxFontSizeMultiplier}
-      style={[
-        baseStyle,
-        styles.text,
-        typeof baseStyle.lineHeight === 'number' && {
-          lineHeight: baseStyle.lineHeight * fontScale,
-        },
-        style,
-      ]}
+      style={[baseStyle, styles.text, style]}
       {...props}
     />
   );
@@ -92,7 +94,8 @@ export const ScreenScrollView = forwardRef<ScrollView, ScreenScrollViewProps>(
     const bottomInset = getScreenScrollBottomInset(
       tabBarHeight,
       safeAreaInsets.bottom,
-      tabBarClearance === 'native' && Platform.OS === 'ios' ? spacing.xxl : 0,
+      tabBarClearance === 'native' && screenPlatformPolicy === 'ios-native-tabs' ? spacing.xxl : 0,
+      screenPlatformPolicy === 'ios-native-tabs' ? 'automatic' : 'legacy',
     );
 
     return (
@@ -115,6 +118,90 @@ export const ScreenScrollView = forwardRef<ScrollView, ScreenScrollViewProps>(
     );
   },
 );
+
+type ScreenStatusViewProps = PropsWithChildren<{
+  readonly contentContainerStyle?: StyleProp<ViewStyle>;
+  readonly style?: StyleProp<ViewStyle>;
+  /** Reserve the shared native-tab clearance when this status shell sits beneath native tabs. */
+  readonly tabBarClearance?: 'native';
+}>;
+
+/**
+ * A calm centered shell for loading, error, and empty states. Ordinary content has no bounce and
+ * no movement because scrolling stays disabled. The native surface becomes scrollable only when
+ * Dynamic Type or localized copy genuinely exceeds the header/tab-adjusted viewport, keeping the
+ * primary action reachable.
+ */
+export function ScreenStatusView({
+  children,
+  contentContainerStyle,
+  style,
+  tabBarClearance,
+}: ScreenStatusViewProps) {
+  const tabBarHeight = useContext(BottomTabBarHeightContext);
+  const safeAreaInsets = useSafeAreaInsets();
+  const { height: windowHeight, fontScale } = useWindowDimensions();
+  const [viewportHeight, setViewportHeight] = useState(windowHeight);
+  const [contentHeight, setContentHeight] = useState(0);
+  const bottomInset = getScreenScrollBottomInset(
+    tabBarHeight,
+    safeAreaInsets.bottom,
+    tabBarClearance === 'native' && screenPlatformPolicy === 'ios-native-tabs' ? spacing.xxl : 0,
+    screenPlatformPolicy === 'ios-native-tabs' ? 'automatic' : 'legacy',
+  );
+  const statusBottomClearance = getScreenStatusBottomInset(
+    tabBarHeight,
+    safeAreaInsets.bottom,
+    tabBarClearance === 'native' && screenPlatformPolicy === 'ios-native-tabs' ? spacing.xxl : 0,
+  );
+  const topLayoutClearance =
+    screenPlatformPolicy === 'ios-native-tabs' ? safeAreaInsets.top + spacing.xxl * 2 : 0;
+  const availableHeight = getScreenStatusAvailableHeight(
+    viewportHeight,
+    topLayoutClearance,
+    screenPlatformPolicy === 'ios-native-tabs' ? statusBottomClearance : 0,
+  );
+  const usesOverflowLayout = getScreenStatusUsesOverflowLayout(fontScale);
+  const scrollEnabled =
+    usesOverflowLayout || getScreenStatusScrollEnabled(contentHeight, availableHeight);
+
+  function handleViewportLayout(event: LayoutChangeEvent) {
+    setViewportHeight(event.nativeEvent.layout.height);
+  }
+
+  function handleContentLayout(event: LayoutChangeEvent) {
+    setContentHeight(event.nativeEvent.layout.height);
+  }
+
+  return (
+    <ScrollView
+      alwaysBounceVertical={false}
+      automaticallyAdjustContentInsets
+      automaticallyAdjustKeyboardInsets
+      automaticallyAdjustsScrollIndicatorInsets
+      bounces={false}
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={[
+        styles.statusScreen,
+        usesOverflowLayout && styles.statusScreenOverflow,
+        { minHeight: availableHeight },
+      ]}
+      onLayout={handleViewportLayout}
+      scrollEnabled={scrollEnabled}
+      showsVerticalScrollIndicator={false}
+      style={style}
+    >
+      <View style={{ paddingBottom: bottomInset }}>
+        <View
+          onLayout={handleContentLayout}
+          style={[styles.statusMeasuredContent, contentContainerStyle]}
+        >
+          {children}
+        </View>
+      </View>
+    </ScrollView>
+  );
+}
 
 type AppButtonProps = Omit<PressableProps, 'children'> & {
   label: string;
@@ -396,7 +483,6 @@ const styles = StyleSheet.create({
   groupedRowBody: { flex: 1, gap: spacing.xs },
   labEmptyState: {
     alignItems: 'center',
-    flex: 1,
     gap: spacing.md,
     justifyContent: 'center',
     maxWidth: 440,
@@ -416,4 +502,7 @@ const styles = StyleSheet.create({
   labEmptyTitle: { textAlign: 'center' },
   labEmptyBody: { color: colors.mutedInk, textAlign: 'center' },
   labEmptyImportButton: { alignSelf: 'stretch' },
+  statusMeasuredContent: { flexShrink: 0 },
+  statusScreen: { justifyContent: 'center' },
+  statusScreenOverflow: { justifyContent: 'flex-start', paddingTop: spacing.sm },
 });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -8,8 +8,22 @@ import type { HomeStackParamList } from '../../navigation/types';
 import { dispatchHomeQuickActionFromStack } from '../../navigation/parent-tab';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppIcon, AppText, LabEmptyState, ScreenScrollView } from '../../ui/primitives';
+import {
+  AppButton,
+  AppIcon,
+  AppSurface,
+  AppText,
+  LabEmptyState,
+  ScreenScrollView,
+  ScreenStatusView,
+  StatusPill,
+} from '../../ui/primitives';
 import { colors, radii, screenStyles, spacing } from '../../theme';
+import {
+  getScreenPlatformPolicy,
+  getScreenSafeAreaEdges,
+  getScreenSurfaceMode,
+} from '../../ui/screen-scroll-model';
 import {
   buildHomeLabViewModel,
   type HomeLabViewModel,
@@ -19,6 +33,8 @@ import {
 
 type HomeNavigation = NativeStackNavigationProp<HomeStackParamList, 'HomeRoot'>;
 
+const screenSafeAreaEdges = getScreenSafeAreaEdges(getScreenPlatformPolicy(process.env.EXPO_OS));
+
 function dateLabel(date: LabDateState, locale: string): string {
   return date.kind === 'known' ? formatLocaleDate(date.value, locale) : t('home.dateMissing');
 }
@@ -26,12 +42,6 @@ function dateLabel(date: LabDateState, locale: string): string {
 function measuredValue(change: HomeMeasuredChange, latest: boolean, locale: string): string {
   const point = latest ? change.latest : change.previous;
   return `${formatLocaleDecimal(point.normalized.value, locale)} ${point.normalized.unit}`;
-}
-
-function reportDetail(row: HomeReportRow, locale: string): string {
-  const date = dateLabel(row.date, locale);
-  const count = measurementCount(row.measurementCount);
-  return `${date} · ${count}`;
 }
 
 function changeDirection(change: HomeMeasuredChange): string {
@@ -44,50 +54,6 @@ function changeDirection(change: HomeMeasuredChange): string {
   );
 }
 
-function ReportRow({
-  row,
-  locale,
-  onPress,
-}: {
-  readonly row: HomeReportRow;
-  readonly locale: string;
-  readonly onPress: () => void;
-}) {
-  const title = row.title ?? t('home.manualRecord');
-  const isReport = row.kind === 'report';
-  return (
-    <Pressable
-      accessibilityHint={t(isReport ? 'home.reportRowHint' : 'home.recordRowHint')}
-      accessibilityLabel={`${title}, ${reportDetail(row, locale)}`}
-      accessibilityRole="button"
-      onPress={onPress}
-      pressRetentionOffset={8}
-      style={({ pressed }) => [styles.reportRow, pressed && styles.rowPressed]}
-    >
-      <AppIcon color={colors.accent} name={isReport ? 'doc' : 'labs'} size={22} />
-      <View style={styles.rowBody}>
-        <AppText numberOfLines={2} selectable variant="heading">
-          {title}
-        </AppText>
-        <AppText style={styles.muted}>{reportDetail(row, locale)}</AppText>
-      </View>
-      <AppIcon name="chevronRight" size={16} />
-    </Pressable>
-  );
-}
-
-function EmptyHome({ onImport }: { readonly onImport: () => void }) {
-  return (
-    <LabEmptyState
-      actionLabel={t('home.importAction')}
-      icon="doc"
-      onAction={onImport}
-      body={t('home.emptyBody')}
-      title={t('home.emptyTitle')}
-    />
-  );
-}
-
 function countCopy(count: number, singularKey: string, pluralKey: string): string {
   return t(count === 1 ? singularKey : pluralKey).replace('{count}', String(count));
 }
@@ -96,55 +62,163 @@ function measurementCount(count: number): string {
   return countCopy(count, 'home.measurementCount', 'home.measurementsCount');
 }
 
-function PendingWork({ model }: { readonly model: HomeLabViewModel }) {
-  if (model.pendingImports.length === 0 && model.openDraftCount === 0 && model.reviewCount === 0)
-    return null;
+function EmptyHome({ onImport }: { readonly onImport: () => void }) {
   return (
-    <View accessibilityRole="summary" style={styles.pendingWork}>
-      <AppText variant="heading">{t('home.reviewWork')}</AppText>
-      {model.pendingImports.length > 0 && (
-        <AppText style={styles.muted}>
-          {countCopy(model.pendingImports.length, 'home.pendingImport', 'home.pendingImports')}
+    <View style={styles.emptyComposition}>
+      <LabEmptyState
+        actionLabel={t('home.importAction')}
+        icon="addDocument"
+        onAction={onImport}
+        body={t('home.emptyBody')}
+        title={t('home.emptyTitle')}
+      />
+      <View accessibilityRole="text" style={styles.privacyNote}>
+        <AppIcon color={colors.mutedInk} name="lockShield" size={16} />
+        <AppText style={styles.privacyNoteText} variant="caption">
+          {t('home.emptyPrivacy')}
         </AppText>
-      )}
-      {model.openDraftCount > 0 && (
-        <AppText style={styles.muted}>
-          {countCopy(model.openDraftCount, 'home.pendingDraft', 'home.pendingDrafts')}
-        </AppText>
-      )}
-      {model.reviewCount > 0 && (
-        <AppText style={styles.muted}>
-          {countCopy(model.reviewCount, 'home.pendingMeasurement', 'home.pendingMeasurements')}
-        </AppText>
-      )}
+      </View>
     </View>
   );
 }
 
-function ContinueReport({
-  report,
+function NextAction({
+  model,
   onPress,
 }: {
-  readonly report: NonNullable<HomeLabViewModel['unfinishedReports']>[number];
+  readonly model: HomeLabViewModel;
+  readonly onPress: (reportId: string, draftId?: string) => void;
+}) {
+  const report = model.unfinishedReports[0];
+  if (report === undefined) return null;
+  const draft = model.openDrafts.find((item) => item.reportId === report.id);
+  const actionTitle = draft === undefined ? t('home.continueReport') : t('home.reviewMeasurements');
+
+  return (
+    <View style={styles.actionSection}>
+      <AppText style={styles.sectionEyebrow} variant="caption">
+        {t('home.nextAction')}
+      </AppText>
+      <Pressable
+        accessibilityHint={t('home.continueReportHint')}
+        accessibilityLabel={`${actionTitle}: ${report.originalFilename}`}
+        accessibilityRole="button"
+        onPress={() => onPress(report.id, draft?.draftId)}
+        style={({ pressed }) => [styles.nextAction, pressed && styles.pressed]}
+      >
+        <View style={styles.actionIcon}>
+          <AppIcon color={colors.accent} name={draft === undefined ? 'clock' : 'doc'} size={21} />
+        </View>
+        <View style={styles.flexCopy}>
+          <AppText variant="heading">{actionTitle}</AppText>
+          <AppText numberOfLines={2} selectable style={styles.muted}>
+            {report.originalFilename}
+          </AppText>
+        </View>
+        <AppIcon name="chevronRight" size={16} />
+      </Pressable>
+    </View>
+  );
+}
+
+function LatestMeasuredSummary({
+  item,
+  locale,
+  onPress,
+}: {
+  readonly item: HomeReportRow;
+  readonly locale: string;
   readonly onPress: () => void;
 }) {
+  const title = item.title ?? t('home.manualRecord');
   return (
     <Pressable
-      accessibilityHint={t('home.continueReportHint')}
-      accessibilityLabel={`${t('home.continueReport')}: ${report.originalFilename}`}
+      accessibilityHint={t(item.kind === 'record' ? 'home.recordRowHint' : 'home.reportRowHint')}
+      accessibilityLabel={`${title}, ${dateLabel(item.date, locale)}, ${measurementCount(item.measurementCount)}`}
       accessibilityRole="button"
       onPress={onPress}
-      style={({ pressed }) => [styles.continueAction, pressed && styles.actionPressed]}
+      style={({ pressed }) => [styles.latestPressable, pressed && styles.pressed]}
     >
-      <AppIcon color={colors.accent} name="doc" size={22} />
-      <View style={styles.rowBody}>
-        <AppText variant="heading">{t('home.continueReport')}</AppText>
-        <AppText numberOfLines={2} selectable style={styles.muted}>
-          {report.originalFilename}
+      <AppSurface style={styles.latestSurface} tone="soft">
+        <View style={styles.latestHeader}>
+          <StatusPill subtle>
+            {t(item.kind === 'record' ? 'home.measuredRecord' : 'home.sourceReport')}
+          </StatusPill>
+          <AppIcon name="chevronRight" size={16} />
+        </View>
+        <AppText selectable variant="title">
+          {dateLabel(item.date, locale)}
         </AppText>
-      </View>
-      <AppIcon name="chevronRight" size={16} />
+        <AppText selectable style={styles.latestTitle} variant="heading">
+          {title}
+        </AppText>
+        <AppText selectable style={styles.muted}>
+          {measurementCount(item.measurementCount)}
+        </AppText>
+      </AppSurface>
     </Pressable>
+  );
+}
+
+function MeasuredChanges({
+  changes,
+  locale,
+  onOpen,
+}: {
+  readonly changes: readonly HomeMeasuredChange[];
+  readonly locale: string;
+  readonly onOpen: (biomarkerId: string) => void;
+}) {
+  if (changes.length === 0) return null;
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionHeading}>
+        <AppText variant="heading">{t('home.measuredChanges')}</AppText>
+        <AppText style={styles.muted}>{t('home.measuredChangesBody')}</AppText>
+      </View>
+      <View style={styles.changeList}>
+        {changes.map((change) => (
+          <Pressable
+            accessibilityHint={t('home.measuredChangeHint')}
+            accessibilityLabel={`${change.label}, ${measuredValue(change, false, locale)} to ${measuredValue(change, true, locale)}, ${changeDirection(change)}`}
+            accessibilityRole="button"
+            key={change.biomarkerId}
+            onPress={() => onOpen(change.biomarkerId)}
+            style={({ pressed }) => [styles.changeRow, pressed && styles.pressed]}
+          >
+            <View style={styles.flexCopy}>
+              <AppText variant="heading">{change.label}</AppText>
+              <AppText style={styles.muted}>
+                {measuredValue(change, false, locale)} → {measuredValue(change, true, locale)}
+              </AppText>
+            </View>
+            <View style={styles.changeMeta}>
+              <AppText style={styles.direction} variant="caption">
+                {changeDirection(change)}
+              </AppText>
+              <AppIcon name="chevronRight" size={14} />
+            </View>
+          </Pressable>
+        ))}
+      </View>
+      <AppText style={styles.limitNote} variant="caption">
+        {t('home.measuredChangesLimit')}
+      </AppText>
+    </View>
+  );
+}
+
+function Coverage({ model }: { readonly model: HomeLabViewModel }) {
+  const records = countCopy(model.recordCount, 'home.recordCount', 'home.recordsCount');
+  const biomarkers = countCopy(model.biomarkerCount, 'home.biomarkerCount', 'home.biomarkersCount');
+  return (
+    <View accessibilityRole="summary" style={styles.coverage}>
+      <AppIcon color={colors.mutedInk} name="chart" size={18} />
+      <View style={styles.flexCopy}>
+        <AppText variant="label">{t('home.historyCoverage')}</AppText>
+        <AppText style={styles.muted}>{`${records} · ${biomarkers}`}</AppText>
+      </View>
+    </View>
   );
 }
 
@@ -165,112 +239,43 @@ function PopulatedHome({
   readonly onOpenRecord: (recordId: string) => void;
   readonly onOpenBiomarkerHistory: (biomarkerId: string) => void;
 }) {
-  const latest = model.latestReport;
-  const latestRecord = model.latestRecord;
-  // A confirmed Lab Record is the person's measured history anchor. Fall back to the source report
-  // only while an import has not produced a record yet, keeping extracted/source state honest.
-  const latestItem = latestRecord ?? latest;
+  const latestItem = model.latestRecord ?? model.latestReport;
   if (latestItem === null) return <EmptyHome onImport={onImport} />;
-  const title = latestItem.title ?? t('home.manualRecord');
-  const latestIsRecord = latestItem.kind === 'record';
+
   return (
     <View style={styles.sections}>
-      <AppText style={styles.eyebrow} variant="caption">
-        {t(latestIsRecord ? 'home.latestRecord' : 'home.latestReport')}
-      </AppText>
-      <Pressable
-        accessibilityHint={t(latestIsRecord ? 'home.recordRowHint' : 'home.reportRowHint')}
-        accessibilityLabel={`${title}, ${reportDetail(latestItem, locale)}`}
-        accessibilityRole="button"
-        onPress={() => (latestIsRecord ? onOpenRecord(latestItem.id) : onOpenReport(latestItem.id))}
-        pressRetentionOffset={8}
-        style={({ pressed }) => [styles.latestRow, pressed && styles.rowPressed]}
-      >
-        <View style={styles.latestCopy}>
-          <AppText selectable style={styles.heroDate} variant="title">
-            {dateLabel(latestItem.date, locale)}
-          </AppText>
-          <AppText selectable style={styles.latestTitle} variant="heading">
-            {title}
-          </AppText>
-          <AppText selectable style={styles.muted}>
-            {measurementCount(latestItem.measurementCount)}
-          </AppText>
+      <NextAction model={model} onPress={onContinueReport} />
+      <View style={styles.section}>
+        <View style={styles.sectionHeading}>
+          <AppText variant="heading">{t('home.overviewTitle')}</AppText>
+          <AppText style={styles.muted}>{t('home.overviewBody')}</AppText>
         </View>
-        <AppIcon name="chevronRight" size={18} />
-      </Pressable>
-      <View style={styles.rule} />
-      {model.unfinishedReports[0] !== undefined && (
-        <ContinueReport
-          onPress={() => {
-            const report = model.unfinishedReports[0]!;
-            const draft = model.openDrafts.find((item) => item.reportId === report.id);
-            onContinueReport(report.id, draft?.draftId);
-          }}
-          report={model.unfinishedReports[0]}
+        <LatestMeasuredSummary
+          item={latestItem}
+          locale={locale}
+          onPress={() =>
+            latestItem.kind === 'record' ? onOpenRecord(latestItem.id) : onOpenReport(latestItem.id)
+          }
         />
-      )}
-      <PendingWork model={model} />
-      {model.measuredChanges.length > 0 && (
-        <View style={styles.section}>
-          <AppText variant="heading">{t('home.measuredChanges')}</AppText>
-          {model.measuredChanges.map((change) => (
-            <Pressable
-              accessibilityLabel={`${change.label}, ${measuredValue(change, true, locale)}, ${changeDirection(change)}`}
-              accessibilityHint={t('home.measuredChangeHint')}
-              accessibilityRole="button"
-              key={change.biomarkerId}
-              onPress={() => onOpenBiomarkerHistory(change.biomarkerId)}
-              pressRetentionOffset={8}
-              style={({ pressed }) => [styles.changeRow, pressed && styles.rowPressed]}
-            >
-              <View style={styles.rowBody}>
-                <AppText variant="heading">{change.label}</AppText>
-                <AppText style={styles.muted}>
-                  {t('home.fromValue').replace('{value}', measuredValue(change, false, locale))} ·{' '}
-                  {changeDirection(change)}
-                </AppText>
-              </View>
-              <AppText selectable style={styles.value}>
-                {measuredValue(change, true, locale)}
-              </AppText>
-              <AppIcon name="chevronRight" size={16} />
-            </Pressable>
-          ))}
+        <Coverage model={model} />
+      </View>
+      <MeasuredChanges
+        changes={model.measuredChanges}
+        locale={locale}
+        onOpen={onOpenBiomarkerHistory}
+      />
+      {model.recordCount === 1 && model.measuredChanges.length === 0 && (
+        <View accessibilityRole="summary" style={styles.secondReportPrompt}>
+          <View style={styles.actionIcon}>
+            <AppIcon color={colors.accent} name="chart" size={21} />
+          </View>
+          <View style={styles.flexCopy}>
+            <AppText variant="heading">{t('home.secondReportTitle')}</AppText>
+            <AppText style={styles.muted}>{t('home.secondReportBody')}</AppText>
+          </View>
         </View>
       )}
-      {model.recentReports.length > 0 && (
-        <View style={styles.section}>
-          <AppText variant="heading">{t('home.recentReports')}</AppText>
-          {model.recentReports.map((row) => (
-            <ReportRow
-              key={`${row.kind}-${row.id}`}
-              locale={locale}
-              onPress={() => onOpenReport(row.id)}
-              row={row}
-            />
-          ))}
-        </View>
-      )}
-      {model.recentRecords.length > 0 && (
-        <View style={styles.section}>
-          <AppText variant="heading">{t('home.recordHistory')}</AppText>
-          {model.recentRecords.map((row) => (
-            <ReportRow
-              key={`${row.kind}-${row.id}`}
-              locale={locale}
-              onPress={() => onOpenRecord(row.id)}
-              row={row}
-            />
-          ))}
-        </View>
-      )}
-      <AppButton
-        label={t('home.importAnotherAction')}
-        onPress={onImport}
-        style={styles.importButton}
-        tone="secondary"
-      >
+      <AppButton label={t('home.importAnotherAction')} onPress={onImport} tone="secondary">
         <AppIcon color={colors.accent} name="plus" size={17} />
       </AppButton>
     </View>
@@ -328,10 +333,7 @@ export function HomeScreen() {
   }
 
   function openBiomarkerHistory(biomarkerId: string) {
-    dispatchHomeQuickActionFromStack(navigation, {
-      kind: 'open-biomarker-history',
-      biomarkerId,
-    });
+    dispatchHomeQuickActionFromStack(navigation, { kind: 'open-biomarker-history', biomarkerId });
   }
 
   const isEmptyState =
@@ -340,25 +342,40 @@ export function HomeScreen() {
     model !== null &&
     model.latestReport === null &&
     model.latestRecord === null &&
-    model.recentRecords.length === 0;
+    model.recordCount === 0;
+  const surfaceState = loading ? 'loading' : error ? 'error' : isEmptyState ? 'empty' : 'populated';
+  const statusSurface = getScreenSurfaceMode(surfaceState) === 'status';
 
   return (
-    <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScreenScrollView
-        alwaysBounceVertical={!isEmptyState}
-        bounces={!isEmptyState}
-        contentContainerStyle={screenStyles.content}
-        style={screenStyles.scroll}
-        tabBarClearance="native"
-      >
-        {loading && <AppText style={styles.muted}>{t('home.loading')}</AppText>}
-        {error && <AppText style={styles.error}>{t('home.error')}</AppText>}
-        {!loading &&
-          !error &&
-          model !== null &&
-          (isEmptyState ? (
-            <EmptyHome onImport={openImport} />
-          ) : (
+    <SafeAreaView edges={screenSafeAreaEdges} style={screenStyles.safe}>
+      {statusSurface ? (
+        <ScreenStatusView
+          contentContainerStyle={styles.statusState}
+          style={screenStyles.scroll}
+          tabBarClearance="native"
+        >
+          {loading && (
+            <View accessibilityRole="progressbar" style={styles.loadingState}>
+              <ActivityIndicator color={colors.accent} />
+              <AppText style={styles.muted}>{t('home.loading')}</AppText>
+            </View>
+          )}
+          {error && (
+            <View style={styles.errorState}>
+              <AppText variant="heading">{t('home.errorTitle')}</AppText>
+              <AppText style={styles.muted}>{t('home.error')}</AppText>
+              <AppButton label={t('home.retry')} onPress={() => void load()} tone="secondary" />
+            </View>
+          )}
+          {isEmptyState && <EmptyHome onImport={openImport} />}
+        </ScreenStatusView>
+      ) : (
+        <ScreenScrollView
+          contentContainerStyle={screenStyles.content}
+          style={screenStyles.scroll}
+          tabBarClearance="native"
+        >
+          {model !== null && (
             <PopulatedHome
               locale={locale}
               model={model}
@@ -368,83 +385,83 @@ export function HomeScreen() {
               onOpenReport={openReport}
               onImport={openImport}
             />
-          ))}
-        {error && (
-          <Pressable accessibilityRole="button" onPress={() => void load()} style={styles.retry}>
-            <AppText style={styles.retryText}>{t('home.retry')}</AppText>
-          </Pressable>
-        )}
-      </ScreenScrollView>
+          )}
+        </ScreenScrollView>
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  sections: { gap: spacing.lg, paddingBottom: spacing.lg },
-  section: { gap: spacing.sm },
-  importButton: { alignSelf: 'stretch' },
-  eyebrow: {
+  sections: { gap: spacing.xl, paddingBottom: spacing.lg },
+  section: { gap: spacing.md },
+  sectionHeading: { gap: spacing.xs },
+  sectionEyebrow: {
     color: colors.mutedInk,
     fontWeight: '700',
     letterSpacing: 0.7,
     textTransform: 'uppercase',
   },
-  heroDate: { color: colors.ink },
-  rule: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth },
-  pendingWork: {
-    backgroundColor: colors.accentSoft,
-    borderColor: colors.border,
-    borderCurve: 'continuous',
-    borderRadius: radii.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    gap: spacing.xs,
-    padding: spacing.md,
-  },
-  continueAction: {
+  statusState: { alignItems: 'center', justifyContent: 'center' },
+  loadingState: { alignItems: 'center', gap: spacing.md },
+  errorState: { alignItems: 'center', gap: spacing.md, maxWidth: 340 },
+  emptyComposition: { alignItems: 'center', gap: spacing.lg, width: '100%' },
+  privacyNote: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
+  privacyNoteText: { color: colors.mutedInk, flexShrink: 1, textAlign: 'center' },
+  actionSection: { gap: spacing.sm },
+  nextAction: {
     alignItems: 'center',
+    backgroundColor: colors.surface,
     borderColor: colors.accent,
     borderCurve: 'continuous',
     borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
-    gap: spacing.sm,
-    minHeight: 68,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    gap: spacing.md,
+    minHeight: 76,
+    padding: spacing.md,
   },
-  latestRow: {
+  actionIcon: {
     alignItems: 'center',
+    backgroundColor: colors.accentSoft,
     borderCurve: 'continuous',
-    flexDirection: 'row',
-    gap: spacing.sm,
-    minHeight: 100,
-    paddingVertical: spacing.sm,
+    borderRadius: radii.sm,
+    height: 42,
+    justifyContent: 'center',
+    width: 42,
   },
-  latestCopy: { flex: 1, gap: spacing.xs, minWidth: 0 },
-  latestTitle: { flexShrink: 1, minWidth: 0 },
-  actionPressed: { backgroundColor: colors.accentSoft },
+  latestPressable: { borderCurve: 'continuous', borderRadius: radii.lg },
+  latestSurface: { gap: spacing.xs, minHeight: 156, padding: spacing.lg },
+  latestHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
+  latestTitle: { marginTop: spacing.xs },
+  coverage: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.md,
+    paddingHorizontal: spacing.xs,
+  },
+  changeList: { borderTopColor: colors.border, borderTopWidth: StyleSheet.hairlineWidth },
   changeRow: {
     alignItems: 'center',
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: spacing.sm,
+    minHeight: 72,
     paddingVertical: spacing.md,
   },
-  reportRow: {
+  changeMeta: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
+  direction: { color: colors.mutedInk, fontWeight: '600', textTransform: 'capitalize' },
+  limitNote: { color: colors.mutedInk },
+  secondReportPrompt: {
     alignItems: 'center',
-    borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
-    gap: spacing.sm,
-    minHeight: 64,
-    paddingVertical: spacing.sm,
+    gap: spacing.md,
+    paddingTop: spacing.lg,
   },
-  rowPressed: { backgroundColor: colors.accentSoft },
-  rowBody: { flex: 1, gap: spacing.xs },
-  value: { fontVariant: ['tabular-nums'], textAlign: 'right' },
+  flexCopy: { flex: 1, gap: spacing.xs, minWidth: 0 },
   muted: { color: colors.mutedInk },
-  error: { color: colors.danger },
-  retry: { alignSelf: 'flex-start', justifyContent: 'center', minHeight: 44 },
-  retryText: { color: colors.accent, fontWeight: '600' },
+  pressed: { opacity: 0.72 },
 });

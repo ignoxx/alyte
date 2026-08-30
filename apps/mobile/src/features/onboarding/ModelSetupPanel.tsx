@@ -25,6 +25,7 @@ import {
   modelSetupFailureVisible,
   modelSetupPrimaryAction,
   modelStatusTone,
+  formatModelApproximateSize,
 } from '../local-models/model-ui';
 import type { LocalModelService } from '../local-models/native';
 
@@ -38,7 +39,7 @@ function ModelFact({
   icon,
   children,
 }: {
-  readonly icon: 'phone' | 'cloud';
+  readonly icon: 'phone' | 'cloud' | 'folder';
   readonly children: string;
 }) {
   return (
@@ -89,6 +90,12 @@ export function ModelSetupPanel({ model, onComplete, contextual = false }: Model
   const failed = snapshot?.state === 'failed';
   const setupFailureVisible = modelSetupFailureVisible(snapshot, modelFailure);
   const showCancelError = cancelError && !resumable;
+  const locale = Intl.NumberFormat().resolvedOptions().locale;
+  const downloadSize = formatModelApproximateSize(model.manifest.pack.artifact.bytes, locale);
+  const freeSpace = formatModelApproximateSize(
+    model.manifest.requirements.minimumFreeBytes,
+    locale,
+  );
 
   async function startDownload() {
     cancellationRequestedRef.current = false;
@@ -160,7 +167,10 @@ export function ModelSetupPanel({ model, onComplete, contextual = false }: Model
   const failureForMessage = failed ? (snapshot?.failure ?? null) : modelFailure;
 
   return (
-    <AppSurface style={styles.modelCard}>
+    <View style={styles.modelCard}>
+      <View accessibilityElementsHidden style={styles.capabilityIcon}>
+        <AppIcon name="lockShield" size={30} color={colors.accent} />
+      </View>
       <StatusPill tone={modelStatusTone(snapshot)}>{statusLabel}</StatusPill>
       <AppText variant="heading" selectable>
         {contextual ? t('onboarding.contextualModelTitle') : t('onboarding.modelTitle')}
@@ -173,19 +183,24 @@ export function ModelSetupPanel({ model, onComplete, contextual = false }: Model
         <AppIcon name="folder" size={28} color={colors.accent} />
         <View style={styles.packCopy}>
           <AppText variant="heading" selectable>
-            {t('onboarding.modelName')}
+            {t('onboarding.privateCapabilityName')}
           </AppText>
           <AppText variant="caption" style={styles.muted} selectable>
-            {t('onboarding.modelRequiredLabel')}
+            {t('onboarding.privateCapabilityRequired')}
           </AppText>
         </View>
       </View>
 
       <View accessibilityRole="summary" style={styles.facts}>
-        <ModelFact icon="phone">{t('onboarding.modelSizeFact')}</ModelFact>
-        <ModelFact icon="phone">{t('onboarding.modelSpaceFact')}</ModelFact>
+        <ModelFact icon="phone">
+          {t('onboarding.modelDownloadSizeFact').replace('{size}', downloadSize)}
+        </ModelFact>
+        <ModelFact icon="phone">
+          {t('onboarding.modelFreeSpaceFact').replace('{size}', freeSpace)}
+        </ModelFact>
         <ModelFact icon="phone">{t('onboarding.modelRunsLocallyFact')}</ModelFact>
         <ModelFact icon="cloud">{t('onboarding.modelNoUploadFact')}</ModelFact>
+        <ModelFact icon="folder">{t('onboarding.privateCapabilityDeletionFact')}</ModelFact>
       </View>
 
       {snapshot === null && modelFailure === null ? (
@@ -284,7 +299,7 @@ export function ModelSetupPanel({ model, onComplete, contextual = false }: Model
       ) : null}
 
       <ModelDetailsDisclosure manifest={model.manifest} />
-    </AppSurface>
+    </View>
   );
 }
 
@@ -314,7 +329,17 @@ const styles = StyleSheet.create({
   title: { color: colors.ink, maxWidth: 360, marginTop: spacing.md },
   body: { color: colors.mutedInk, ...typography.body, maxWidth: 420 },
   muted: { color: colors.mutedInk },
-  modelCard: { gap: spacing.md, marginTop: spacing.md, padding: spacing.md },
+  modelCard: { gap: spacing.md, marginTop: spacing.md },
+  capabilityIcon: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: colors.accentSoft,
+    borderCurve: 'continuous',
+    borderRadius: 22,
+    height: 64,
+    justifyContent: 'center',
+    width: 64,
+  },
   packHeader: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
   packCopy: { flex: 1, gap: spacing.xs },
   facts: { gap: spacing.sm },

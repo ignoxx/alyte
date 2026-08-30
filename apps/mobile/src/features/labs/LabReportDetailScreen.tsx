@@ -20,6 +20,7 @@ import {
   AppSurface,
   AppText,
   ScreenScrollView,
+  ScreenStatusView,
   StatusPill,
 } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
@@ -235,14 +236,14 @@ export function LabReportDetailScreen() {
   const detailState = getLabReportDetailState(report, loading, error);
   if (detailState === 'loading') {
     return (
-      <DetailScrollView centered>
+      <ScreenStatusView contentContainerStyle={styles.center} style={screenStyles.scroll}>
         <AppText>{t('labs.loading')}</AppText>
-      </DetailScrollView>
+      </ScreenStatusView>
     );
   }
   if (detailState === 'error') {
     return (
-      <DetailScrollView centered>
+      <ScreenStatusView contentContainerStyle={styles.center} style={screenStyles.scroll}>
         <AppText selectable>{t('labs.reportLoadError')}</AppText>
         <AppButton label={t('labs.retry')} onPress={() => void load()} tone="secondary" />
         <AppButton
@@ -250,12 +251,12 @@ export function LabReportDetailScreen() {
           onPress={() => navigation.goBack()}
           tone="quiet"
         />
-      </DetailScrollView>
+      </ScreenStatusView>
     );
   }
   if (detailState === 'unavailable') {
     return (
-      <DetailScrollView centered>
+      <ScreenStatusView contentContainerStyle={styles.center} style={screenStyles.scroll}>
         <AppText selectable variant="heading">
           {t('labs.reportUnavailableTitle')}
         </AppText>
@@ -267,7 +268,7 @@ export function LabReportDetailScreen() {
           onPress={() => navigation.goBack()}
           tone="quiet"
         />
-      </DetailScrollView>
+      </ScreenStatusView>
     );
   }
 
@@ -381,13 +382,10 @@ export function LabReportDetailScreen() {
   );
 }
 
-function DetailScrollView({
-  centered = false,
-  children,
-}: PropsWithChildren<{ readonly centered?: boolean }>) {
+function DetailScrollView({ children }: PropsWithChildren) {
   return (
     <ScreenScrollView
-      contentContainerStyle={[screenStyles.content, centered && styles.center]}
+      contentContainerStyle={screenStyles.content}
       style={screenStyles.scroll}
       tabBarClearance="native"
     >
