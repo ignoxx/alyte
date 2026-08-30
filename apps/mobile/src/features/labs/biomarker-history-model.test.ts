@@ -9,11 +9,37 @@ import {
 import {
   buildBiomarkerHistoryViewModel,
   buildHistoryAccessibilityLabel,
+  getHistoryChartConnections,
   getHistoryChartLayout,
   getHistoryTimelineLayout,
   listHistoryEntries,
   type HistoryAccessibilityCopy,
 } from './biomarker-history-model';
+
+test('history chart connects adjacent compatible measured points across explicit context rows', () => {
+  const model = buildBiomarkerHistoryViewModel(
+    [
+      record('r1', { kind: 'known', value: '2026-01-01' }, [
+        measurement('m1', 'r1', { kind: 'numeric', value: 110 }),
+      ]),
+      record('r2', { kind: 'known', value: '2026-02-01' }, []),
+      record('r3', { kind: 'known', value: '2026-03-01' }, [
+        measurement('m3', 'r3', { kind: 'numeric', value: 90 }),
+      ]),
+    ],
+    'biomarker.ldl_c',
+  );
+
+  assert.ok(model);
+  assert.equal(model.trend.segments.length, 2);
+  assert.deepEqual(
+    getHistoryChartConnections(model.trend.points).map(([start, end]) => [
+      start.measurementId,
+      end.measurementId,
+    ]),
+    [['m1', 'm3']],
+  );
+});
 
 test('history timeline stacks value and status at accessibility Dynamic Type sizes', () => {
   assert.equal(getHistoryTimelineLayout(1), 'inline');

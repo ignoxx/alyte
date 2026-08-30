@@ -29,6 +29,7 @@ import {
 import {
   buildBiomarkerHistoryViewModel,
   buildHistoryAccessibilityLabel,
+  getHistoryChartConnections,
   getHistoryChartLayout,
   getHistoryTimelineLayout,
   type BiomarkerHistoryViewModel,
@@ -723,31 +724,29 @@ function MeasuredTrendChart({
             </AppText>
           </>
         )}
-        {model.trend.segments.flatMap((segment) =>
-          segment.slice(1).flatMap((point, index) => {
-            const start = coordinates.get(segment[index]?.measurementId ?? '');
-            const end = coordinates.get(point.measurementId);
-            if (start === undefined || end === undefined) return [];
-            const dx = end.x - start.x;
-            const dy = end.y - start.y;
-            const length = Math.sqrt(dx * dx + dy * dy);
-            const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
-            return [
-              <View
-                key={`line-${segment[index]?.measurementId}-${point.measurementId}`}
-                style={[
-                  styles.chartLine,
-                  {
-                    left: (start.x + end.x - length) / 2,
-                    top: (start.y + end.y) / 2 - 1,
-                    transform: [{ rotate: `${angle}deg` }],
-                    width: length,
-                  },
-                ]}
-              />,
-            ];
-          }),
-        )}
+        {getHistoryChartConnections(points).flatMap(([startPoint, endPoint]) => {
+          const start = coordinates.get(startPoint.measurementId);
+          const end = coordinates.get(endPoint.measurementId);
+          if (start === undefined || end === undefined) return [];
+          const dx = end.x - start.x;
+          const dy = end.y - start.y;
+          const length = Math.sqrt(dx * dx + dy * dy);
+          const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+          return [
+            <View
+              key={`line-${startPoint.measurementId}-${endPoint.measurementId}`}
+              style={[
+                styles.chartLine,
+                {
+                  left: (start.x + end.x - length) / 2,
+                  top: (start.y + end.y) / 2 - 1,
+                  transform: [{ rotate: `${angle}deg` }],
+                  width: length,
+                },
+              ]}
+            />,
+          ];
+        })}
         {points.map((point) => {
           const coordinate = coordinates.get(point.measurementId);
           if (coordinate === undefined) return null;

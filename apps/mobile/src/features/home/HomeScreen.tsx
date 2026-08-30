@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -26,6 +26,7 @@ import {
 } from '../../ui/screen-scroll-model';
 import {
   buildHomeLabViewModel,
+  getHomeMeasuredChangeColumnCount,
   type HomeLabViewModel,
   type HomeMeasuredChange,
   type HomeReportRow,
@@ -42,6 +43,13 @@ function dateLabel(date: LabDateState, locale: string): string {
 function measuredValue(change: HomeMeasuredChange, latest: boolean, locale: string): string {
   const point = latest ? change.latest : change.previous;
   return `${formatLocaleDecimal(point.normalized.value, locale)} ${point.normalized.unit}`;
+}
+
+function measuredDate(change: HomeMeasuredChange, latest: boolean, locale: string): string {
+  return formatLocaleDate(
+    latest ? change.latest.collectionDate : change.previous.collectionDate,
+    locale,
+  );
 }
 
 function changeDirection(change: HomeMeasuredChange): string {
@@ -169,36 +177,62 @@ function MeasuredChanges({
   readonly locale: string;
   readonly onOpen: (biomarkerId: string) => void;
 }) {
+  const { width, fontScale } = useWindowDimensions();
   if (changes.length === 0) return null;
+  const columnCount = getHomeMeasuredChangeColumnCount(width, fontScale);
+  const rows = Array.from({ length: Math.ceil(changes.length / columnCount) }, (_, index) =>
+    changes.slice(index * columnCount, index * columnCount + columnCount),
+  );
+
   return (
     <View style={styles.section}>
       <View style={styles.sectionHeading}>
         <AppText variant="heading">{t('home.measuredChanges')}</AppText>
         <AppText style={styles.muted}>{t('home.measuredChangesBody')}</AppText>
       </View>
-      <View style={styles.changeList}>
-        {changes.map((change) => (
-          <Pressable
-            accessibilityHint={t('home.measuredChangeHint')}
-            accessibilityLabel={`${change.label}, ${measuredValue(change, false, locale)} to ${measuredValue(change, true, locale)}, ${changeDirection(change)}`}
-            accessibilityRole="button"
-            key={change.biomarkerId}
-            onPress={() => onOpen(change.biomarkerId)}
-            style={({ pressed }) => [styles.changeRow, pressed && styles.pressed]}
-          >
-            <View style={styles.flexCopy}>
-              <AppText variant="heading">{change.label}</AppText>
-              <AppText style={styles.muted}>
-                {measuredValue(change, false, locale)} → {measuredValue(change, true, locale)}
-              </AppText>
-            </View>
-            <View style={styles.changeMeta}>
-              <AppText style={styles.direction} variant="caption">
-                {changeDirection(change)}
-              </AppText>
-              <AppIcon name="chevronRight" size={14} />
-            </View>
-          </Pressable>
+      <View style={styles.changeGrid}>
+        {rows.map((row, rowIndex) => (
+          <View key={`change-row-${rowIndex}`} style={styles.changeGridRow}>
+            {row.map((change) => (
+              <Pressable
+                accessibilityHint={t('home.measuredChangeHint')}
+                accessibilityLabel={`${change.label}, ${measuredValue(change, false, locale)} on ${measuredDate(change, false, locale)}, to ${measuredValue(change, true, locale)} on ${measuredDate(change, true, locale)}, ${changeDirection(change)}`}
+                accessibilityRole="button"
+                key={change.biomarkerId}
+                onPress={() => onOpen(change.biomarkerId)}
+                style={({ pressed }) => [styles.changeCard, pressed && styles.pressed]}
+              >
+                <View style={styles.changeCardHeader}>
+                  <AppText selectable style={styles.changeCardTitle} variant="heading">
+                    {change.label}
+                  </AppText>
+                  <AppIcon name="chevronRight" size={14} />
+                </View>
+                <View style={styles.changeLatest}>
+                  <View style={styles.changeValueLine}>
+                    <AppText selectable style={styles.changeValue} variant="title">
+                      {formatLocaleDecimal(change.latest.normalized.value, locale)}
+                    </AppText>
+                    <AppText selectable style={styles.changeUnit} variant="label">
+                      {change.latest.normalized.unit}
+                    </AppText>
+                  </View>
+                  <AppText selectable style={styles.muted} variant="caption">
+                    {measuredDate(change, true, locale)}
+                  </AppText>
+                </View>
+                <View style={styles.changePrevious}>
+                  <AppText style={styles.direction} variant="label">
+                    {changeDirection(change)}
+                  </AppText>
+                  <AppText selectable style={styles.muted} variant="caption">
+                    {`${measuredValue(change, false, locale)} · ${measuredDate(change, false, locale)}`}
+                  </AppText>
+                </View>
+              </Pressable>
+            ))}
+            {columnCount === 2 && row.length === 1 && <View style={styles.changeCardSpacer} />}
+          </View>
         ))}
       </View>
       <AppText style={styles.limitNote} variant="caption">
@@ -245,6 +279,11 @@ function PopulatedHome({
   return (
     <View style={styles.sections}>
       <NextAction model={model} onPress={onContinueReport} />
+      <MeasuredChanges
+        changes={model.measuredChanges}
+        locale={locale}
+        onOpen={onOpenBiomarkerHistory}
+      />
       <View style={styles.section}>
         <View style={styles.sectionHeading}>
           <AppText variant="heading">{t('home.overviewTitle')}</AppText>
@@ -259,11 +298,6 @@ function PopulatedHome({
         />
         <Coverage model={model} />
       </View>
-      <MeasuredChanges
-        changes={model.measuredChanges}
-        locale={locale}
-        onOpen={onOpenBiomarkerHistory}
-      />
       {model.recordCount === 1 && model.measuredChanges.length === 0 && (
         <View accessibilityRole="summary" style={styles.secondReportPrompt}>
           <View style={styles.actionIcon}>
@@ -393,9 +427,9 @@ export function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  sections: { gap: spacing.xl, paddingBottom: spacing.lg },
+  sections: { gap: spacing.xl, paddingBottom: spacing.lg, width: '100%' },
   section: { gap: spacing.md },
-  sectionHeading: { gap: spacing.xs },
+  sectionHeading: { gap: spacing.xs, width: '100%' },
   sectionEyebrow: {
     color: colors.mutedInk,
     fontWeight: '700',
@@ -440,18 +474,43 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     paddingHorizontal: spacing.xs,
   },
-  changeList: { borderTopColor: colors.border, borderTopWidth: StyleSheet.hairlineWidth },
-  changeRow: {
-    alignItems: 'center',
-    borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+  changeGrid: { gap: spacing.md },
+  changeGridRow: { alignItems: 'stretch', flexDirection: 'row', gap: spacing.md },
+  changeCard: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderCurve: 'continuous',
+    borderRadius: radii.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    flex: 1,
+    gap: spacing.md,
+    minWidth: 0,
+    padding: spacing.md,
+  },
+  changeCardSpacer: { flex: 1 },
+  changeCardHeader: {
+    alignItems: 'flex-start',
     flexDirection: 'row',
     gap: spacing.sm,
-    minHeight: 72,
-    paddingVertical: spacing.md,
+    justifyContent: 'space-between',
   },
-  changeMeta: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
-  direction: { color: colors.mutedInk, fontWeight: '600', textTransform: 'capitalize' },
+  changeCardTitle: { flex: 1, minWidth: 0 },
+  changeLatest: { gap: spacing.xs },
+  changeValueLine: {
+    alignItems: 'baseline',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  changeValue: { fontVariant: ['tabular-nums'] },
+  changeUnit: { color: colors.mutedInk },
+  changePrevious: {
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: spacing.xs,
+    paddingTop: spacing.md,
+  },
+  direction: { color: colors.ink, fontWeight: '600', textTransform: 'capitalize' },
   limitNote: { color: colors.mutedInk },
   secondReportPrompt: {
     alignItems: 'center',

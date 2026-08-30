@@ -11,10 +11,19 @@ import type { IntakeCloudJob } from '../intake/outbox';
 import { intakeEventMenuActions } from '../intake/ui';
 import {
   buildHomeLabViewModel,
+  getHomeMeasuredChangeColumnCount,
   homeHasLocalHistory,
   isUnfinishedLabReport,
   sortHomeTimeline,
 } from './home-model';
+
+test('Home biomarker cards use two columns only when width and Dynamic Type allow it', () => {
+  assert.equal(getHomeMeasuredChangeColumnCount(393, 1), 2);
+  assert.equal(getHomeMeasuredChangeColumnCount(440, 1.29), 2);
+  assert.equal(getHomeMeasuredChangeColumnCount(375, 1), 1);
+  assert.equal(getHomeMeasuredChangeColumnCount(440, 1.3), 1);
+  assert.equal(getHomeMeasuredChangeColumnCount(Number.NaN, Number.NaN), 1);
+});
 
 function event(
   id: string,

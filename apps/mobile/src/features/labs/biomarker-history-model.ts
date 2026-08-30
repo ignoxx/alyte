@@ -53,6 +53,8 @@ export type HistoryChartLayout = {
   readonly axisLabelInset: number;
 };
 
+export type HistoryChartConnection = readonly [MeasuredTrendPoint, MeasuredTrendPoint];
+
 const HISTORY_ACCESSIBILITY_FONT_SCALE = 1.3;
 
 function normalizedFontScale(fontScale: number): number {
@@ -80,6 +82,20 @@ export function getHistoryChartLayout(fontScale: number): HistoryChartLayout {
     plotPadding: Math.max(28, Math.ceil(28 + (scale - 1) * 20)),
     axisLabelInset: Math.max(8, Math.ceil(8 * scale)),
   };
+}
+
+/**
+ * The chart joins adjacent plotted Measurements, not intervening Lab Records that did not contain
+ * this Biomarker. Every input point has already passed the domain compatibility, confirmation,
+ * numeric-value, and known-date gates; non-points remain explicit in the timeline below.
+ */
+export function getHistoryChartConnections(
+  points: readonly MeasuredTrendPoint[],
+): readonly HistoryChartConnection[] {
+  return points.slice(1).flatMap((point, index) => {
+    const previous = points[index];
+    return previous === undefined ? [] : [[previous, point] as const];
+  });
 }
 
 export type BiomarkerHistoryViewModel = {
