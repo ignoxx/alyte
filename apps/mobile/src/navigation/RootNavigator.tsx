@@ -83,7 +83,11 @@ function FeatureStackNavigator({
       <FeatureStack.Screen
         name={stackRootName}
         component={root.component}
-        options={{ headerLargeTitle: true, title: t(root.titleKey) }}
+        options={{
+          headerLargeTitle: root.name !== 'Home',
+          headerShown: root.name !== 'Home',
+          title: t(root.titleKey),
+        }}
       />
       {extensions.map((feature) => (
         <FeatureStack.Screen
@@ -185,7 +189,7 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
 
   return (
     <NavigationContainer theme={navigationTheme(dark)}>
-      <RootStack.Navigator screenOptions={{ headerShown: false }}>
+      <RootStack.Navigator screenOptions={{ ...stackScreenOptions, headerShown: false }}>
         <RootStack.Screen name="MainTabs">
           {() => <MainTabNavigator extensions={extensions} services={services} />}
         </RootStack.Screen>

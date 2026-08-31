@@ -17,11 +17,20 @@ import {
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { colors, screenStyles, spacing, typography } from '../../theme';
-import { AppButton, AppSurface, AppText, ScreenScrollView, StatusPill } from '../../ui/primitives';
+import { colors, radii, screenStyles, spacing, typography } from '../../theme';
+import {
+  AppButton,
+  AppSurface,
+  AppText,
+  ScreenScrollView,
+  ScreenStatusView,
+  StatusPill,
+  TidalHero,
+} from '../../ui/primitives';
 import {
   buildBiomarkerHistoryViewModel,
   buildHistoryAccessibilityLabel,
+  getHistoryChartConnections,
   getHistoryChartLayout,
   getHistoryTimelineLayout,
   type BiomarkerHistoryViewModel,
@@ -123,22 +132,14 @@ export function BiomarkerHistoryRoute() {
 
   if (loading) {
     return (
-      <ScreenScrollView
-        contentContainerStyle={styles.content}
-        style={screenStyles.scroll}
-        tabBarClearance="native"
-      >
+      <ScreenStatusView contentContainerStyle={styles.fixedStatus} style={screenStyles.scroll}>
         <AppText selectable>{t('labs.historyLoading')}</AppText>
-      </ScreenScrollView>
+      </ScreenStatusView>
     );
   }
   if (error) {
     return (
-      <ScreenScrollView
-        contentContainerStyle={styles.content}
-        style={screenStyles.scroll}
-        tabBarClearance="native"
-      >
+      <ScreenStatusView contentContainerStyle={styles.fixedStatus} style={screenStyles.scroll}>
         <AppSurface tone="soft" style={styles.errorSurface}>
           <AppText variant="heading" selectable>
             {t('labs.historyErrorTitle')}
@@ -148,23 +149,19 @@ export function BiomarkerHistoryRoute() {
           </AppText>
           <AppButton label={t('labs.historyRetry')} onPress={() => void load()} tone="secondary" />
         </AppSurface>
-      </ScreenScrollView>
+      </ScreenStatusView>
     );
   }
   if (model === null) {
     return (
-      <ScreenScrollView
-        contentContainerStyle={styles.content}
-        style={screenStyles.scroll}
-        tabBarClearance="native"
-      >
+      <ScreenStatusView contentContainerStyle={styles.fixedStatus} style={screenStyles.scroll}>
         <AppText selectable>{t('labs.historyNotFound')}</AppText>
         <AppButton
           label={t('accessibility.back')}
           onPress={() => navigation.goBack()}
           tone="quiet"
         />
-      </ScreenScrollView>
+      </ScreenStatusView>
     );
   }
 
@@ -173,13 +170,14 @@ export function BiomarkerHistoryRoute() {
 
 function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryViewModel }) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [explanationOpen, setExplanationOpen] = useState(false);
+  const [explanationOpen, setExplanationOpen] = useState(model.explanation !== null);
   const [generalGuidanceOpen, setGeneralGuidanceOpen] = useState(false);
   const { fontScale } = useWindowDimensions();
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
   const accessibilityLabel = buildHistoryAccessibilityLabel(model, accessibilityCopy());
   const timelineLayout = getHistoryTimelineLayout(fontScale);
   const chartLayout = getHistoryChartLayout(fontScale);
+  const latestMeasured = [...model.timeline].reverse().find((item) => item.kind === 'point');
   const toggle = (key: string) => {
     setExpanded((current) => {
       const next = new Set(current);
@@ -195,21 +193,52 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
       style={screenStyles.scroll}
       tabBarClearance="native"
     >
+      {latestMeasured?.kind === 'point' && (
+        <View style={styles.latestMeasuredGroup}>
+          <TidalHero style={styles.latestMeasuredSurface}>
+            <View style={styles.latestMeasuredHeader}>
+              <StatusPill tone="measured">{t('labs.historyMeasuredPoint')}</StatusPill>
+              <AppText style={styles.latestMeasuredDate} variant="caption">
+                {formatLocaleDate(latestMeasured.point.collectionDate, locale)}
+              </AppText>
+            </View>
+            <AppText selectable style={styles.latestMeasuredValue} variant="display">
+              {`${formatLocaleDecimal(latestMeasured.point.normalized.value, locale)} ${latestMeasured.point.normalized.unit}`}
+            </AppText>
+          </TidalHero>
+          <AppSurface style={styles.latestFacts}>
+            <Fact
+              label={t('labs.historyLaboratoryInterval')}
+              value={latestMeasured.laboratoryReference.interval ?? t('labs.historyNotProvided')}
+            />
+            <Fact
+              label={t('labs.historyProvenance')}
+              value={
+                latestMeasured.provenance === null
+                  ? t('labs.historyNotProvided')
+                  : t(provenanceKey[latestMeasured.provenance])
+              }
+            />
+            <Fact
+              label={t('labs.historyOriginalSource')}
+              value={originalSourceText(latestMeasured.original) || t('labs.historyNotProvided')}
+            />
+          </AppSurface>
+        </View>
+      )}
       <View style={styles.statusBlock}>
         <AppText variant="label" selectable style={styles.secondary}>
           {t('labs.historyDirection')}
         </AppText>
         <StatusPill tone="measured">{t(directionKey[model.trend.direction])}</StatusPill>
       </View>
-      <AppSurface tone="soft" style={styles.introSurface}>
-        <AppText selectable style={styles.secondary}>
-          {t('labs.historyChartDescription')}
-        </AppText>
-      </AppSurface>
 
       <View style={styles.section}>
         <AppText variant="heading" selectable>
           {t('labs.historyChartTitle')}
+        </AppText>
+        <AppText selectable style={styles.secondary}>
+          {t('labs.historyChartDescription')}
         </AppText>
         <MeasuredTrendChart
           accessibilityLabel={accessibilityLabel}
@@ -259,9 +288,14 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
             onPress={() => setExplanationOpen((current) => !current)}
             style={({ pressed }) => [styles.disclosureButton, pressed && styles.pressed]}
           >
-            <AppText variant="heading" selectable>
-              {t('labs.historyExplanation')}
-            </AppText>
+            <View style={styles.educationHeading}>
+              <AppText variant="heading" selectable>
+                {t('labs.historyExplanation')}
+              </AppText>
+              {model.explanation !== null && (
+                <StatusPill tone="evidenceBacked">{t('labs.historyReviewedContent')}</StatusPill>
+              )}
+            </View>
             <AppText style={styles.secondary}>
               {t(explanationOpen ? 'labs.historyHideExplanation' : 'labs.historyShowExplanation')}
             </AppText>
@@ -693,31 +727,29 @@ function MeasuredTrendChart({
             </AppText>
           </>
         )}
-        {model.trend.segments.flatMap((segment) =>
-          segment.slice(1).flatMap((point, index) => {
-            const start = coordinates.get(segment[index]?.measurementId ?? '');
-            const end = coordinates.get(point.measurementId);
-            if (start === undefined || end === undefined) return [];
-            const dx = end.x - start.x;
-            const dy = end.y - start.y;
-            const length = Math.sqrt(dx * dx + dy * dy);
-            const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
-            return [
-              <View
-                key={`line-${segment[index]?.measurementId}-${point.measurementId}`}
-                style={[
-                  styles.chartLine,
-                  {
-                    left: (start.x + end.x - length) / 2,
-                    top: (start.y + end.y) / 2 - 1,
-                    transform: [{ rotate: `${angle}deg` }],
-                    width: length,
-                  },
-                ]}
-              />,
-            ];
-          }),
-        )}
+        {getHistoryChartConnections(points).flatMap(([startPoint, endPoint]) => {
+          const start = coordinates.get(startPoint.measurementId);
+          const end = coordinates.get(endPoint.measurementId);
+          if (start === undefined || end === undefined) return [];
+          const dx = end.x - start.x;
+          const dy = end.y - start.y;
+          const length = Math.sqrt(dx * dx + dy * dy);
+          const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+          return [
+            <View
+              key={`line-${startPoint.measurementId}-${endPoint.measurementId}`}
+              style={[
+                styles.chartLine,
+                {
+                  left: (start.x + end.x - length) / 2,
+                  top: (start.y + end.y) / 2 - 1,
+                  transform: [{ rotate: `${angle}deg` }],
+                  width: length,
+                },
+              ]}
+            />,
+          ];
+        })}
         {points.map((point) => {
           const coordinate = coordinates.get(point.measurementId);
           if (coordinate === undefined) return null;
@@ -741,16 +773,41 @@ function MeasuredTrendChart({
 
 const styles = StyleSheet.create({
   content: { gap: spacing.lg, paddingHorizontal: spacing.lg, paddingBottom: 140 },
+  fixedStatus: {
+    alignItems: 'center',
+    gap: spacing.md,
+    justifyContent: 'center',
+    padding: spacing.lg,
+  },
   statusBlock: { gap: spacing.sm, paddingTop: spacing.sm },
-  introSurface: { gap: spacing.sm },
+  latestMeasuredGroup: { gap: spacing.sm },
+  latestMeasuredSurface: { gap: spacing.md, padding: spacing.lg },
+  latestMeasuredHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    justifyContent: 'space-between',
+  },
+  latestMeasuredDate: { color: colors.onBrandMuted },
+  latestMeasuredValue: { color: colors.onBrand, fontVariant: ['tabular-nums'] },
+  latestFacts: {
+    gap: spacing.md,
+  },
   secondary: { color: colors.mutedInk },
   section: { gap: spacing.sm },
+  educationHeading: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
   errorSurface: { gap: spacing.sm },
   chart: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 16,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
     position: 'relative',
@@ -764,7 +821,7 @@ const styles = StyleSheet.create({
   chartPoint: {
     backgroundColor: colors.accent,
     borderColor: colors.surface,
-    borderRadius: 7,
+    borderRadius: radii.pill,
     borderWidth: 2,
     height: 12,
     position: 'absolute',
@@ -784,7 +841,7 @@ const styles = StyleSheet.create({
   timelineRow: { flexDirection: 'row', gap: spacing.sm },
   timelineMarker: {
     backgroundColor: colors.accent,
-    borderRadius: 6,
+    borderRadius: radii.pill,
     height: 12,
     marginTop: 6,
     width: 12,
@@ -794,7 +851,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 14,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     flex: 1,
     gap: spacing.xs,

@@ -22,7 +22,7 @@ import type { LabsStackParamList, RootStackParamList } from '../../navigation/ty
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
-import { colors, spacing } from '../../theme';
+import { colors, radii, spacing } from '../../theme';
 import {
   buildExtractionReviewSections,
   canConfirmExtraction,
@@ -548,7 +548,7 @@ const styles = StyleSheet.create({
   pipelineStatus: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
   reprocessCard: {
     backgroundColor: colors.accentSoft,
-    borderRadius: 14,
+    borderRadius: radii.md,
     gap: spacing.sm,
     padding: spacing.md,
   },
@@ -559,7 +559,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 999,
+    borderRadius: radii.pill,
     borderWidth: StyleSheet.hairlineWidth,
     justifyContent: 'center',
     minHeight: 44,

@@ -7,6 +7,7 @@ import {
   getScreenStatusAvailableHeight,
   getScreenStatusBottomInset,
   getScreenStatusScrollEnabled,
+  getScreenStatusUsesOverflowLayout,
   getScreenSurfaceMode,
 } from './screen-scroll-model';
 
@@ -58,6 +59,14 @@ test('status scrolling remains disabled until intrinsic content genuinely exceed
   assert.equal(getScreenStatusScrollEnabled(630, 630), false);
   assert.equal(getScreenStatusScrollEnabled(631, 630), true);
   assert.equal(getScreenStatusScrollEnabled(Number.NaN, 630), false);
+});
+
+test('accessibility text sizes opt into a top-anchored overflow layout', () => {
+  assert.equal(getScreenStatusUsesOverflowLayout(1), false);
+  assert.equal(getScreenStatusUsesOverflowLayout(1.29), false);
+  assert.equal(getScreenStatusUsesOverflowLayout(1.3), true);
+  assert.equal(getScreenStatusUsesOverflowLayout(2.35), true);
+  assert.equal(getScreenStatusUsesOverflowLayout(Number.NaN), false);
 });
 
 test('empty, loading, and error surfaces use the adaptive status shell', () => {

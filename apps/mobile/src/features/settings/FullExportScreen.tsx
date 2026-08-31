@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { useServices } from '../../services';
 import { AppButton, AppIcon, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
-import { colors, screenStyles, spacing } from '../../theme';
+import { colors, radii, screenStyles, spacing } from '../../theme';
 import type { ExportSelection } from '../export/export-contract';
 import type { LocalExportOperation, LocalExportProgress } from '../export/service';
 import type { ExportMediaSummary } from '../local-controls/model';
@@ -424,7 +424,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 14,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     marginBottom: spacing.lg,
     overflow: 'hidden',

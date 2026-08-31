@@ -20,7 +20,10 @@ import {
   AppSurface,
   AppText,
   ScreenScrollView,
+  ScreenStatusView,
   StatusPill,
+  TidalHero,
+  TidalIconStage,
 } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { LabReportImportError, type PasswordRequest } from './report-service';
@@ -235,14 +238,14 @@ export function LabReportDetailScreen() {
   const detailState = getLabReportDetailState(report, loading, error);
   if (detailState === 'loading') {
     return (
-      <DetailScrollView centered>
+      <ScreenStatusView contentContainerStyle={styles.center} style={screenStyles.scroll}>
         <AppText>{t('labs.loading')}</AppText>
-      </DetailScrollView>
+      </ScreenStatusView>
     );
   }
   if (detailState === 'error') {
     return (
-      <DetailScrollView centered>
+      <ScreenStatusView contentContainerStyle={styles.center} style={screenStyles.scroll}>
         <AppText selectable>{t('labs.reportLoadError')}</AppText>
         <AppButton label={t('labs.retry')} onPress={() => void load()} tone="secondary" />
         <AppButton
@@ -250,12 +253,12 @@ export function LabReportDetailScreen() {
           onPress={() => navigation.goBack()}
           tone="quiet"
         />
-      </DetailScrollView>
+      </ScreenStatusView>
     );
   }
   if (detailState === 'unavailable') {
     return (
-      <DetailScrollView centered>
+      <ScreenStatusView contentContainerStyle={styles.center} style={screenStyles.scroll}>
         <AppText selectable variant="heading">
           {t('labs.reportUnavailableTitle')}
         </AppText>
@@ -267,7 +270,7 @@ export function LabReportDetailScreen() {
           onPress={() => navigation.goBack()}
           tone="quiet"
         />
-      </DetailScrollView>
+      </ScreenStatusView>
     );
   }
 
@@ -283,8 +286,20 @@ export function LabReportDetailScreen() {
 
   return (
     <DetailScrollView>
-      <AppText variant="heading">{report.originalFilename}</AppText>
-      <StatusPill>{stateLabel(report, integrity)}</StatusPill>
+      <TidalHero style={styles.reportHero}>
+        <View style={styles.reportHeroHeading}>
+          <TidalIconStage name="doc" size="compact" />
+          <View style={styles.reportHeroCopy}>
+            <StatusPill>{stateLabel(report, integrity)}</StatusPill>
+            <AppText style={styles.reportHeroTitle} variant="title">
+              {report.originalFilename}
+            </AppText>
+            <AppText style={styles.reportHeroBody} variant="caption">
+              {t('labs.reportRetainedBody')}
+            </AppText>
+          </View>
+        </View>
+      </TidalHero>
       <AppSurface style={styles.metaSection}>
         <DetailRow
           label={t('labs.reportSourceType')}
@@ -381,13 +396,10 @@ export function LabReportDetailScreen() {
   );
 }
 
-function DetailScrollView({
-  centered = false,
-  children,
-}: PropsWithChildren<{ readonly centered?: boolean }>) {
+function DetailScrollView({ children }: PropsWithChildren) {
   return (
     <ScreenScrollView
-      contentContainerStyle={[screenStyles.content, centered && styles.center]}
+      contentContainerStyle={screenStyles.content}
       style={screenStyles.scroll}
       tabBarClearance="native"
     >
@@ -428,6 +440,16 @@ function DetailRow({
 }
 
 const styles = StyleSheet.create({
+  reportHero: { padding: spacing.lg },
+  reportHeroHeading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+  },
+  reportHeroCopy: { flex: 1, gap: spacing.sm, minWidth: 210 },
+  reportHeroTitle: { color: colors.onBrand },
+  reportHeroBody: { color: colors.onBrandMuted },
   body: { color: colors.mutedInk, marginTop: spacing.md },
   center: { alignItems: 'center', gap: spacing.md, justifyContent: 'center', padding: spacing.lg },
   error: { gap: spacing.sm, marginTop: spacing.md },

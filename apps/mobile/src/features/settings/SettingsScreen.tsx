@@ -6,8 +6,8 @@ import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { MainTabParamList } from '../../navigation/types';
 import type { SettingsStackParamList } from '../../navigation/types';
 import { t } from '../../localization';
-import { AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
-import { colors, screenStyles, spacing } from '../../theme';
+import { AppIcon, AppText, ScreenScrollView, TidalHero, TidalIconStage } from '../../ui/primitives';
+import { colors, radii, screenStyles, spacing, typography } from '../../theme';
 import { useAppLock } from '../app-lock/AppLockProvider';
 import {
   buildLocalSettingsRows,
@@ -42,7 +42,9 @@ function SettingsRow({
         pressed && styles.rowPressed,
       ]}
     >
-      <AppIcon name={icon} size={22} color={colors.accent} style={styles.rowIcon} />
+      <View style={styles.rowIconWell}>
+        <AppIcon name={icon} size={20} color={colors.accent} style={styles.rowIcon} />
+      </View>
       <View style={styles.rowCopy}>
         <AppText variant="heading" style={styles.rowTitle}>
           {title}
@@ -73,6 +75,19 @@ export function SettingsScreen(_props: SettingsScreenProps) {
         style={screenStyles.scroll}
         tabBarClearance="native"
       >
+        <TidalHero style={styles.settingsHero}>
+          <View style={styles.settingsHeroHeading}>
+            <TidalIconStage name="lockShield" size="compact" />
+            <View style={styles.settingsHeroCopy}>
+              <AppText style={styles.settingsHeroTitle} variant="title">
+                {t('settings.localTitle')}
+              </AppText>
+              <AppText style={styles.settingsHeroBody} variant="caption">
+                {t('settings.localBody')}
+              </AppText>
+            </View>
+          </View>
+        </TidalHero>
         <View style={styles.group}>
           {rows.map((row) => (
             <SettingsRow
@@ -91,11 +106,21 @@ export function SettingsScreen(_props: SettingsScreenProps) {
 }
 
 const styles = StyleSheet.create({
+  settingsHero: { marginBottom: spacing.xl, padding: spacing.lg },
+  settingsHeroHeading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+  },
+  settingsHeroCopy: { flex: 1, gap: spacing.xs, minWidth: 200 },
+  settingsHeroTitle: { color: colors.onBrand },
+  settingsHeroBody: { color: colors.onBrandMuted },
   group: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 14,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
   },
@@ -111,9 +136,17 @@ const styles = StyleSheet.create({
   },
   rowAccessible: { alignItems: 'flex-start', paddingVertical: spacing.md },
   rowPressed: { backgroundColor: colors.accentSoft },
+  rowIconWell: {
+    alignItems: 'center',
+    backgroundColor: colors.accentSoft,
+    borderRadius: radii.sm,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
   rowIcon: { flexShrink: 0 },
   rowCopy: { flex: 1, gap: spacing.xs, minWidth: 0 },
-  rowTitle: { flexShrink: 1, fontSize: 16, lineHeight: 21, minWidth: 0 },
+  rowTitle: { ...typography.row, flexShrink: 1, minWidth: 0 },
   rowSubtitle: { color: colors.mutedInk, flexShrink: 1, minWidth: 0 },
   rowChevron: { flexShrink: 0 },
 });

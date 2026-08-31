@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { useServices, runtimeVariant } from '../../services';
 import { AppButton, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
-import { colors, screenStyles, spacing } from '../../theme';
+import { colors, screenStyles, spacing, typography } from '../../theme';
 import { createDiagnosticsPayload, type DiagnosticsPayload } from '../local-controls/diagnostics';
 
 export function DiagnosticsScreen() {
@@ -81,5 +81,5 @@ const styles = StyleSheet.create({
   intro: { color: colors.mutedInk, lineHeight: 22, marginBottom: spacing.lg },
   muted: { color: colors.mutedInk },
   preview: { marginBottom: spacing.lg },
-  code: { fontFamily: 'Menlo', fontSize: 13, lineHeight: 19 },
+  code: { ...typography.code },
 });

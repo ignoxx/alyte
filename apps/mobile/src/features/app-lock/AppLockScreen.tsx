@@ -3,8 +3,8 @@ import { useState } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
-import { AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
-import { colors, screenStyles, spacing } from '../../theme';
+import { AppIcon, AppText, ScreenScrollView, TidalHero, TidalIconStage } from '../../ui/primitives';
+import { colors, radii, screenStyles, spacing, typography } from '../../theme';
 import { type AppLockGrace } from './policy';
 import { useAppLock } from './AppLockProvider';
 import { AppLockGracePicker } from './AppLockGracePicker';
@@ -49,9 +49,14 @@ export function AppLockScreen() {
         style={screenStyles.scroll}
         tabBarClearance="native"
       >
-        <AppText variant="caption" style={styles.intro} selectable>
-          {t('settings.appLock.intro')}
-        </AppText>
+        <TidalHero style={styles.lockHero}>
+          <View style={styles.lockHeroHeading}>
+            <TidalIconStage name="lockShield" size="compact" />
+            <AppText variant="caption" style={styles.intro} selectable>
+              {t('settings.appLock.intro')}
+            </AppText>
+          </View>
+        </TidalHero>
         <View style={styles.group}>
           <View
             accessible
@@ -132,13 +137,20 @@ export function AppLockScreen() {
 }
 
 const styles = StyleSheet.create({
-  intro: { color: colors.mutedInk, marginBottom: spacing.sm },
+  lockHero: { marginBottom: spacing.lg, padding: spacing.lg },
+  lockHeroHeading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+  },
+  intro: { color: colors.onBrandMuted, flex: 1, minWidth: 210 },
   error: { color: colors.danger, marginTop: spacing.md },
   group: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 16,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
   },
@@ -167,7 +179,7 @@ const styles = StyleSheet.create({
   },
   rowContentStacked: { alignItems: 'flex-start', flex: 0 },
   copy: { flex: 1, gap: spacing.xs, minWidth: 0 },
-  rowTitle: { fontSize: 16, lineHeight: 21 },
+  rowTitle: { ...typography.row },
   supporting: { color: colors.mutedInk },
   controlSlot: {
     alignItems: 'flex-end',

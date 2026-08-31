@@ -12,8 +12,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppSurface, AppText } from '../../ui/primitives';
-import { colors, spacing } from '../../theme';
+import { AppButton, AppSurface, AppText, TidalHero, TidalIconStage } from '../../ui/primitives';
+import { colors, radii, spacing } from '../../theme';
 import {
   LabReportExtractionError,
   type LabReportExtractionProgress,
@@ -274,20 +274,27 @@ export function ExtractionProgressScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom', 'left', 'right']}>
       <View style={styles.content}>
-        <AppText variant="heading" accessibilityRole="header" style={styles.title}>
-          {t(
-            extractionMode === 'reprocess'
-              ? 'labs.extractionReprocessProgressTitle'
-              : 'labs.extractionProgressTitle',
-          )}
-        </AppText>
-        <AppText style={styles.body}>
-          {t(
-            extractionMode === 'reprocess'
-              ? 'labs.extractionReprocessProgressBody'
-              : 'labs.extractionProgressBody',
-          )}
-        </AppText>
+        <TidalHero style={styles.progressHero}>
+          <View style={styles.progressHeroHeading}>
+            <TidalIconStage name="doc" size="compact" />
+            <View style={styles.progressHeroCopy}>
+              <AppText variant="title" accessibilityRole="header" style={styles.title}>
+                {t(
+                  extractionMode === 'reprocess'
+                    ? 'labs.extractionReprocessProgressTitle'
+                    : 'labs.extractionProgressTitle',
+                )}
+              </AppText>
+              <AppText style={styles.body}>
+                {t(
+                  extractionMode === 'reprocess'
+                    ? 'labs.extractionReprocessProgressBody'
+                    : 'labs.extractionProgressBody',
+                )}
+              </AppText>
+            </View>
+          </View>
+        </TidalHero>
         <AppSurface
           tone="soft"
           accessibilityLabel={t('labs.extractionProgressJourneyLabel')}
@@ -368,8 +375,16 @@ export function ExtractionProgressScreen() {
 const styles = StyleSheet.create({
   safe: { backgroundColor: colors.canvas, flex: 1 },
   content: { flex: 1, gap: spacing.md, justifyContent: 'center', padding: spacing.lg },
-  title: { textAlign: 'center' },
-  body: { color: colors.mutedInk, textAlign: 'center' },
+  progressHero: { padding: spacing.lg },
+  progressHeroHeading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+  },
+  progressHeroCopy: { flex: 1, gap: spacing.xs, minWidth: 200 },
+  title: { color: colors.onBrand },
+  body: { color: colors.onBrandMuted },
   muted: { color: colors.mutedInk },
   journey: { gap: spacing.md, padding: spacing.lg },
   stage: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
@@ -377,7 +392,7 @@ const styles = StyleSheet.create({
   dot: {
     alignItems: 'center',
     backgroundColor: colors.border,
-    borderRadius: 12,
+    borderRadius: radii.pill,
     height: 24,
     justifyContent: 'center',
     width: 24,

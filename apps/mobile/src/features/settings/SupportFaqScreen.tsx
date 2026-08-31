@@ -3,7 +3,7 @@ import { Alert, Linking, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
-import { colors, screenStyles, spacing } from '../../theme';
+import { colors, radii, screenStyles, spacing, typography } from '../../theme';
 import { useNavigation } from '@react-navigation/native';
 
 const faqItems = [
@@ -125,7 +125,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 14,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
   },
@@ -138,7 +138,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   copy: { flex: 1, gap: spacing.xs },
-  rowTitle: { fontSize: 16, lineHeight: 21 },
+  rowTitle: { ...typography.row },
   subtitle: { color: colors.mutedInk },
   rowPressed: { backgroundColor: colors.accentSoft },
   faqRow: {

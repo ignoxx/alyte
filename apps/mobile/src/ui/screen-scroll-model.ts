@@ -77,6 +77,11 @@ export function getScreenStatusScrollEnabled(
   return Math.max(0, contentHeight) > Math.max(0, availableHeight);
 }
 
+/** Accessibility text sizes use a top-anchored overflow layout so actions cannot be clipped. */
+export function getScreenStatusUsesOverflowLayout(fontScale: number): boolean {
+  return Number.isFinite(fontScale) && fontScale >= 1.3;
+}
+
 export type ScreenSurfaceState = 'loading' | 'error' | 'empty' | 'populated';
 
 export function getScreenSurfaceMode(state: ScreenSurfaceState): 'status' | 'scroll' {

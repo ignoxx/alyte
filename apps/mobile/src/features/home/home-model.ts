@@ -64,7 +64,32 @@ export type HomeLabViewModel = {
   readonly openDraftCount: number;
   readonly reviewCount: number;
   readonly measuredChanges: readonly HomeMeasuredChange[];
+  /** Confirmed local history coverage. These are counts, never health scores. */
+  readonly recordCount: number;
+  readonly biomarkerCount: number;
 };
+
+export type HomeMeasuredChangeColumnCount = 1 | 2;
+
+const HOME_CHANGE_GRID_MINIMUM_WIDTH = 390;
+const HOME_CHANGE_GRID_MAXIMUM_FONT_SCALE = 1.3;
+const HOME_MEASURED_CHANGE_LIMIT = 6;
+
+/**
+ * Keep the biomarker overview visual at ordinary iPhone sizes, then return to a single reading
+ * column when the viewport or Dynamic Type would make two cards compete for space.
+ */
+export function getHomeMeasuredChangeColumnCount(
+  width: number,
+  fontScale: number,
+): HomeMeasuredChangeColumnCount {
+  const normalizedWidth = Number.isFinite(width) && width > 0 ? width : 0;
+  const normalizedFontScale = Number.isFinite(fontScale) && fontScale > 0 ? fontScale : 1;
+  return normalizedWidth >= HOME_CHANGE_GRID_MINIMUM_WIDTH &&
+    normalizedFontScale < HOME_CHANGE_GRID_MAXIMUM_FONT_SCALE
+    ? 2
+    : 1;
+}
 
 function knownDate(row: HomeReportRow): string {
   return row.date.kind === 'known' ? row.date.value : '';
@@ -179,7 +204,8 @@ export function buildHomeLabViewModel(
     0,
   );
 
-  const measuredChanges = listHistoryEntries(records)
+  const historyEntries = listHistoryEntries(records);
+  const measuredChanges = historyEntries
     .flatMap((entry): HomeMeasuredChange[] => {
       const trend = buildMeasuredTrend(
         records,
@@ -197,7 +223,7 @@ export function buildHomeLabViewModel(
       const dateOrder = right.latest.collectionDate.localeCompare(left.latest.collectionDate);
       return dateOrder === 0 ? left.label.localeCompare(right.label) : dateOrder;
     })
-    .slice(0, 3);
+    .slice(0, HOME_MEASURED_CHANGE_LIMIT);
 
   return {
     latestReport,
@@ -210,5 +236,7 @@ export function buildHomeLabViewModel(
     openDraftCount: Math.max(0, openDraftCount),
     reviewCount,
     measuredChanges,
+    recordCount: records.length,
+    biomarkerCount: historyEntries.length,
   };
 }

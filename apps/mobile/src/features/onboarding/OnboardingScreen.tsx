@@ -10,10 +10,18 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { colors, radii, screenStyles, spacing, typography } from '../../theme';
-import { AppButton, AppIcon, AppSurface, AppText } from '../../ui/primitives';
+import {
+  AppButton,
+  AppIcon,
+  AppSurface,
+  AppText,
+  TidalHero,
+  TidalIconStage,
+} from '../../ui/primitives';
 import {
   canCompleteModelOnboarding,
   hasResumableModelDownload,
@@ -58,18 +66,20 @@ function IntroPage({
 }) {
   return (
     <View style={styles.pageBody}>
-      <View accessibilityElementsHidden style={styles.iconWell}>
-        <AppIcon name={icon} size={34} color={colors.accent} />
-      </View>
-      <View style={styles.pageCopy}>
-        <AppText variant="title" style={styles.pageTitle} selectable>
-          {title}
-        </AppText>
-        <AppText style={styles.pageBodyText} selectable>
-          {body}
-        </AppText>
-      </View>
-      {children}
+      <TidalHero edge="bottom" style={styles.introHero}>
+        <View style={styles.introHeroContent}>
+          <TidalIconStage name={icon} />
+          <View style={styles.pageCopy}>
+            <AppText variant="display" style={styles.pageTitle} selectable>
+              {title}
+            </AppText>
+            <AppText style={styles.pageBodyText} selectable>
+              {body}
+            </AppText>
+          </View>
+        </View>
+      </TidalHero>
+      {children === undefined ? null : <View style={styles.pageDetails}>{children}</View>}
     </View>
   );
 }
@@ -117,90 +127,97 @@ function ModelPreparationPage({
 
   return (
     <View style={styles.pageBody}>
-      <View accessibilityElementsHidden style={styles.iconWell}>
-        <AppIcon name={ready ? 'checkmarkCircle' : 'folder'} size={34} color={colors.accent} />
-      </View>
-      <View style={styles.pageCopy}>
-        <AppText variant="title" style={styles.pageTitle} selectable>
-          {t('onboarding.modelPrepareTitle')}
-        </AppText>
-        <AppText style={styles.pageBodyText} selectable>
-          {t('onboarding.modelPrepareBody')}
-        </AppText>
-      </View>
-
-      <AppSurface style={styles.modelSummary}>
-        <View style={styles.packHeader}>
-          <View style={styles.packCopy}>
-            <AppText variant="heading" selectable>
-              {t('onboarding.modelName')}
+      <TidalHero edge="bottom" style={styles.modelHero}>
+        <View style={styles.modelHeroHeading}>
+          <TidalIconStage name={ready ? 'checkmarkCircle' : 'lockShield'} />
+          <View style={styles.modelHeroCopy}>
+            <AppText variant="title" style={styles.modelHeroTitle} selectable>
+              {t('onboarding.modelPrepareTitle')}
             </AppText>
-            <AppText variant="caption" style={styles.muted} selectable>
-              {t('onboarding.modelRequiredLabel')}
+            <AppText style={styles.modelHeroBody} selectable>
+              {t('onboarding.modelPrepareBody')}
             </AppText>
           </View>
-          {ready ? <AppIcon name="checkmarkCircle" size={24} color={colors.accent} /> : null}
         </View>
-        <View style={styles.facts}>
-          <AppText style={styles.factLabel} selectable>
-            {t('onboarding.modelSizeFact').replace('{size}', size)}
-          </AppText>
-          <AppText style={styles.factLabel} selectable>
-            {t('onboarding.modelSpaceFact').replace('{space}', freeSpace)}
-          </AppText>
-          <AppText style={styles.factLabel} selectable>
-            {t('onboarding.modelNoUploadFact')}
-          </AppText>
-        </View>
-      </AppSurface>
+      </TidalHero>
 
-      {snapshot === null && failure === null ? (
-        <View accessibilityRole="progressbar" style={styles.checking}>
-          <ActivityIndicator color={colors.accent as string} />
-          <AppText style={styles.muted} selectable>
-            {t('onboarding.modelChecking')}
-          </AppText>
-        </View>
-      ) : null}
-
-      {active || resumable ? (
-        <View style={styles.progressGroup}>
-          <View style={styles.progressCopy}>
-            <AppText style={styles.muted} selectable>
-              {snapshot?.state === 'verifying'
-                ? t('onboarding.modelVerifying')
-                : t(
-                    resumable ? 'onboarding.modelDownloadPaused' : 'onboarding.modelDownloading',
-                  ).replace('{progress}', String(percent))}
+      <View style={styles.modelPageContent}>
+        <AppSurface style={styles.modelSummary}>
+          <View style={styles.packHeader}>
+            <View accessibilityElementsHidden style={styles.modelIconWell}>
+              <AppIcon name="folder" size={25} color={colors.accent} />
+            </View>
+            <View style={styles.packCopy}>
+              <AppText variant="heading" selectable>
+                {t('onboarding.modelName')}
+              </AppText>
+              <AppText variant="caption" style={styles.muted} selectable>
+                {t('onboarding.modelRequiredLabel')}
+              </AppText>
+            </View>
+            {ready ? <AppIcon name="checkmarkCircle" size={24} color={colors.accent} /> : null}
+          </View>
+          <View style={styles.facts}>
+            <AppText style={styles.factLabel} selectable>
+              {t('onboarding.modelSizeFact').replace('{size}', size)}
             </AppText>
-            <AppText style={styles.progressPercent} selectable>
-              {percent}%
+            <AppText style={styles.factLabel} selectable>
+              {t('onboarding.modelSpaceFact').replace('{space}', freeSpace)}
+            </AppText>
+            <AppText style={styles.factLabel} selectable>
+              {t('onboarding.modelNoUploadFact')}
             </AppText>
           </View>
-          <View
-            accessibilityLabel={t('onboarding.modelProgressLabel')}
-            accessibilityRole="progressbar"
-            accessibilityValue={{ min: 0, max: 100, now: percent }}
-            style={styles.progressTrack}
-          >
-            <View style={[styles.progressFill, { width: `${percent}%` }]} />
-          </View>
-        </View>
-      ) : null}
-
-      {showFailure ? (
-        <AppSurface tone="soft" style={styles.callout}>
-          <AppText style={styles.error} selectable>
-            {t(modelSetupFailureMessageKey(visibleFailure))}
-          </AppText>
         </AppSurface>
-      ) : null}
 
-      {cancelled && !resumable && !showFailure ? (
-        <AppText style={styles.muted} selectable>
-          {t('onboarding.modelSetupCancelDisclosure')}
-        </AppText>
-      ) : null}
+        {snapshot === null && failure === null ? (
+          <View accessibilityRole="progressbar" style={styles.checking}>
+            <ActivityIndicator color={colors.accent as string} />
+            <AppText style={styles.muted} selectable>
+              {t('onboarding.modelChecking')}
+            </AppText>
+          </View>
+        ) : null}
+
+        {active || resumable ? (
+          <View style={styles.progressGroup}>
+            <View style={styles.progressCopy}>
+              <AppText style={styles.muted} selectable>
+                {snapshot?.state === 'verifying'
+                  ? t('onboarding.modelVerifying')
+                  : t(
+                      resumable ? 'onboarding.modelDownloadPaused' : 'onboarding.modelDownloading',
+                    ).replace('{progress}', String(percent))}
+              </AppText>
+              <AppText style={styles.progressPercent} selectable>
+                {percent}%
+              </AppText>
+            </View>
+            <View
+              accessibilityLabel={t('onboarding.modelProgressLabel')}
+              accessibilityRole="progressbar"
+              accessibilityValue={{ min: 0, max: 100, now: percent }}
+              style={styles.progressTrack}
+            >
+              <View style={[styles.progressFill, { width: `${percent}%` }]} />
+            </View>
+          </View>
+        ) : null}
+
+        {showFailure ? (
+          <AppSurface tone="soft" style={styles.callout}>
+            <AppText style={styles.error} selectable>
+              {t(modelSetupFailureMessageKey(visibleFailure))}
+            </AppText>
+          </AppSurface>
+        ) : null}
+
+        {cancelled && !resumable && !showFailure ? (
+          <AppText style={styles.muted} selectable>
+            {t('onboarding.modelSetupCancelDisclosure')}
+          </AppText>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -427,6 +444,7 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
 
   return (
     <View style={screenStyles.safe}>
+      <StatusBar style="light" />
       <View
         style={[
           styles.topBar,
@@ -445,18 +463,24 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               disabled={pagerLocked}
               hitSlop={8}
               onPress={() => moveToPage(page - 1)}
-              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+              style={({ pressed }) => [
+                styles.backButton,
+                pagerLocked && styles.backButtonDisabled,
+                pressed && styles.pressed,
+              ]}
             >
-              <AppIcon name="chevronLeft" size={18} color={colors.accent} />
+              <AppIcon
+                name="chevronLeft"
+                size={18}
+                color={pagerLocked ? colors.onBrandMuted : colors.onBrand}
+              />
             </Pressable>
           ) : (
             <View accessibilityElementsHidden style={styles.backButton} />
           )}
         </View>
-        <AppText variant="caption" style={styles.stepLabel} selectable>
-          {t('onboarding.step')
-            .replace('{current}', String(page + 1))
-            .replace('{total}', String(ONBOARDING_PAGE_COUNT))}
+        <AppText variant="label" style={styles.brandLabel} selectable>
+          {t('onboarding.brand')}
         </AppText>
         <View accessibilityElementsHidden style={styles.topBarControlSlot} />
       </View>
@@ -512,6 +536,7 @@ const TOP_BAR_CONTENT_HEIGHT = 52;
 const styles = StyleSheet.create({
   topBar: {
     alignItems: 'center',
+    backgroundColor: colors.brand,
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
@@ -524,26 +549,49 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 44,
   },
-  stepLabel: { color: colors.mutedInk, fontVariant: ['tabular-nums'] },
-  pagerContent: { flexGrow: 1 },
-  pageScrollContent: { flexGrow: 1, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
-  pageBody: { flex: 1, gap: spacing.lg, justifyContent: 'center', maxWidth: 480, width: '100%' },
-  iconWell: {
+  backButtonDisabled: { opacity: 0.56 },
+  brandLabel: { color: colors.onBrand, letterSpacing: 0.2 },
+  pagerContent: { backgroundColor: colors.canvas, flexGrow: 1 },
+  pageScrollContent: { flexGrow: 1 },
+  pageBody: { flex: 1, maxWidth: 520, width: '100%' },
+  introHero: {
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 470,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.xxl,
+  },
+  introHeroContent: {
     alignItems: 'center',
-    alignSelf: 'center',
+    gap: spacing.xl,
+  },
+  pageCopy: { alignItems: 'center', gap: spacing.md },
+  pageTitle: { color: colors.onBrand, maxWidth: 390, textAlign: 'center' },
+  pageBodyText: {
+    color: colors.onBrandMuted,
+    maxWidth: 390,
+    textAlign: 'center',
+    ...typography.body,
+  },
+  pageDetails: { gap: spacing.md, padding: spacing.lg },
+  callout: { gap: spacing.sm, padding: spacing.md },
+  modelHero: { paddingHorizontal: spacing.xl, paddingVertical: spacing.xl },
+  modelHeroHeading: { alignItems: 'center', gap: spacing.lg },
+  modelHeroCopy: { alignItems: 'center', gap: spacing.sm },
+  modelHeroTitle: { color: colors.onBrand, maxWidth: 390, textAlign: 'center' },
+  modelHeroBody: { color: colors.onBrandMuted, maxWidth: 400, textAlign: 'center' },
+  modelPageContent: { gap: spacing.md, padding: spacing.lg },
+  modelSummary: { gap: spacing.lg, padding: spacing.lg },
+  packHeader: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
+  modelIconWell: {
+    alignItems: 'center',
     backgroundColor: colors.accentSoft,
     borderCurve: 'continuous',
-    borderRadius: radii.lg,
-    height: 76,
+    borderRadius: radii.md,
+    height: 48,
     justifyContent: 'center',
-    width: 76,
+    width: 48,
   },
-  pageCopy: { alignItems: 'center', gap: spacing.sm },
-  pageTitle: { textAlign: 'center' },
-  pageBodyText: { color: colors.mutedInk, maxWidth: 380, textAlign: 'center', ...typography.body },
-  callout: { gap: spacing.sm, padding: spacing.md },
-  modelSummary: { gap: spacing.md, padding: spacing.md },
-  packHeader: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
   packCopy: { flex: 1, gap: spacing.xs },
   facts: { gap: spacing.sm },
   factLabel: { color: colors.ink },
@@ -568,14 +616,15 @@ const styles = StyleSheet.create({
   readyCopy: { color: colors.ink },
   footer: {
     alignItems: 'center',
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    backgroundColor: colors.elevatedSurface,
+    borderTopLeftRadius: radii.lg,
+    borderTopRightRadius: radii.lg,
     gap: spacing.sm,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
   },
   dots: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, height: 12 },
-  dot: { backgroundColor: colors.disabledFill, borderRadius: 99, height: 6, width: 6 },
+  dot: { backgroundColor: colors.disabledFill, borderRadius: radii.pill, height: 6, width: 6 },
   activeDot: { backgroundColor: colors.accent, width: 20 },
   continueButton: { alignSelf: 'stretch' },
   pressed: { opacity: 0.65 },

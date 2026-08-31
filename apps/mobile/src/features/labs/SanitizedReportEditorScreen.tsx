@@ -29,7 +29,7 @@ import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppText } from '../../ui/primitives';
-import { colors, spacing } from '../../theme';
+import { colors, radii, spacing } from '../../theme';
 import {
   AlytePDFWorkspace,
   type AlytePDFWorkspaceHandle,
@@ -619,7 +619,12 @@ const styles = StyleSheet.create({
     padding: spacing.sm,
   },
   pageSelected: { backgroundColor: colors.surface },
-  pageThumbnail: { backgroundColor: colors.surface, borderRadius: 4, height: 92, width: 70 },
+  pageThumbnail: {
+    backgroundColor: colors.surface,
+    borderRadius: spacing.xs,
+    height: 92,
+    width: 70,
+  },
   pageThumbnailExcluded: { opacity: 0.4 },
   root: { backgroundColor: colors.canvas, flex: 1 },
   toolbar: {
@@ -639,7 +644,7 @@ const styles = StyleSheet.create({
   pageControl: {
     alignItems: 'center',
     borderCurve: 'continuous',
-    borderRadius: 10,
+    borderRadius: radii.sm,
     flexDirection: 'row',
     gap: spacing.xs,
     justifyContent: 'center',
@@ -652,7 +657,7 @@ const styles = StyleSheet.create({
   toolbarAction: {
     alignItems: 'center',
     borderCurve: 'continuous',
-    borderRadius: 10,
+    borderRadius: radii.sm,
     height: 44,
     justifyContent: 'center',
     minHeight: 44,

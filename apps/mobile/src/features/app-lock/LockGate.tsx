@@ -2,7 +2,7 @@ import { useLayoutEffect, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
-import { AppButton, AppIcon, AppText } from '../../ui/primitives';
+import { AppButton, AppText, TidalHero, TidalIconStage } from '../../ui/primitives';
 import { colors, screenStyles, spacing, typography } from '../../theme';
 import { useAppLock } from './AppLockProvider';
 import { nativeSnapshotShield } from './shield';
@@ -51,18 +51,20 @@ export function LockGate({ children }: { readonly children: ReactNode }) {
       {locked ? (
         <View style={styles.overlay} accessibilityViewIsModal accessibilityRole="alert">
           <SafeAreaView style={[screenStyles.safe, styles.gate]}>
-            <AppIcon
-              name="shield"
-              size={38}
-              color={colors.accent}
-              accessibilityLabel={t('settings.appLock.iconLabel')}
-            />
-            <AppText variant="title" style={styles.title} selectable>
-              {t('settings.appLock.titleGate')}
-            </AppText>
-            <AppText style={styles.body} selectable>
-              {messageForReason(state.reason)}
-            </AppText>
+            <TidalHero style={styles.gateCard}>
+              <View style={styles.gateCardContent}>
+                <TidalIconStage
+                  name="shield"
+                  accessibilityLabel={t('settings.appLock.iconLabel')}
+                />
+                <AppText variant="title" style={styles.title} selectable>
+                  {t('settings.appLock.titleGate')}
+                </AppText>
+                <AppText style={styles.body} selectable>
+                  {messageForReason(state.reason)}
+                </AppText>
+              </View>
+            </TidalHero>
             {!loading ? (
               <AppButton
                 label={
@@ -88,6 +90,8 @@ const styles = StyleSheet.create({
   hiddenContent: { opacity: 0 },
   overlay: { ...StyleSheet.absoluteFill, backgroundColor: colors.canvas, zIndex: 10 },
   gate: { alignItems: 'center', gap: spacing.lg, justifyContent: 'center', padding: spacing.xl },
-  title: { color: colors.ink, textAlign: 'center' },
-  body: { ...typography.body, color: colors.mutedInk, maxWidth: 360, textAlign: 'center' },
+  gateCard: { maxWidth: 440, padding: spacing.lg, width: '100%' },
+  gateCardContent: { alignItems: 'center', gap: spacing.md },
+  title: { color: colors.onBrand, textAlign: 'center' },
+  body: { ...typography.body, color: colors.onBrandMuted, maxWidth: 360, textAlign: 'center' },
 });
