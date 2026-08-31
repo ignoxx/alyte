@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { formatLocaleDate, formatLocaleDecimal, type LabDateState } from '@alyte/domain';
+import { formatLocaleDate, type LabDateState } from '@alyte/domain';
 import type { HomeStackParamList } from '../../navigation/types';
 import { dispatchHomeQuickActionFromStack } from '../../navigation/parent-tab';
 import { useServices } from '../../services';
@@ -40,9 +40,13 @@ function dateLabel(date: LabDateState, locale: string): string {
   return date.kind === 'known' ? formatLocaleDate(date.value, locale) : t('home.dateMissing');
 }
 
-function measuredValue(change: HomeMeasuredChange, latest: boolean, locale: string): string {
+function measuredValue(
+  change: HomeMeasuredChange,
+  latest: boolean,
+  formatter: Intl.NumberFormat,
+): string {
   const point = latest ? change.latest : change.previous;
-  return `${formatLocaleDecimal(point.normalized.value, locale)} ${point.normalized.unit}`;
+  return `${formatter.format(point.normalized.value)} ${point.normalized.unit}`;
 }
 
 function measuredDate(change: HomeMeasuredChange, latest: boolean, locale: string): string {
@@ -60,6 +64,14 @@ function changeDirection(change: HomeMeasuredChange): string {
         ? 'home.directionDecreased'
         : 'home.directionStable',
   );
+}
+
+function changeDirectionIcon(change: HomeMeasuredChange): 'trendUp' | 'trendDown' | 'trendStable' {
+  return change.direction === 'increased'
+    ? 'trendUp'
+    : change.direction === 'decreased'
+      ? 'trendDown'
+      : 'trendStable';
 }
 
 function countCopy(count: number, singularKey: string, pluralKey: string): string {
@@ -178,11 +190,62 @@ function MeasuredChanges({
   readonly onOpen: (biomarkerId: string) => void;
 }) {
   const { width, fontScale } = useWindowDimensions();
+  const numberFormatter = useMemo(
+    () => new Intl.NumberFormat(locale, { maximumSignificantDigits: 4 }),
+    [locale],
+  );
   if (changes.length === 0) return null;
   const columnCount = getHomeMeasuredChangeColumnCount(width, fontScale);
-  const rows = Array.from({ length: Math.ceil(changes.length / columnCount) }, (_, index) =>
-    changes.slice(index * columnCount, index * columnCount + columnCount),
-  );
+  const masonryColumns = [
+    changes.filter((_, index) => index % 2 === 0),
+    changes.filter((_, index) => index % 2 === 1),
+  ];
+
+  function changeCard(change: HomeMeasuredChange) {
+    return (
+      <Pressable
+        accessibilityHint={t('home.measuredChangeHint')}
+        accessibilityLabel={`${change.label}, ${measuredValue(change, false, numberFormatter)} on ${measuredDate(change, false, locale)}, to ${measuredValue(change, true, numberFormatter)} on ${measuredDate(change, true, locale)}, ${changeDirection(change)}`}
+        accessibilityRole="button"
+        key={change.biomarkerId}
+        onPress={() => onOpen(change.biomarkerId)}
+        style={({ pressed }) => [styles.changeCard, pressed && styles.pressed]}
+      >
+        <View style={styles.changeCardHeader}>
+          <AppText selectable style={styles.changeCardTitle} variant="heading">
+            {change.label}
+          </AppText>
+          <AppIcon name="chevronRight" size={14} />
+        </View>
+        <View style={styles.changeLatest}>
+          <View style={styles.changeValueLine}>
+            <AppText selectable style={styles.changeValue} variant="title">
+              {numberFormatter.format(change.latest.normalized.value)}
+            </AppText>
+            <AppText selectable style={styles.changeUnit} variant="label">
+              {change.latest.normalized.unit}
+            </AppText>
+          </View>
+          <AppText selectable style={styles.muted} variant="caption">
+            {measuredDate(change, true, locale)}
+          </AppText>
+        </View>
+        <View style={styles.changePrevious}>
+          <View accessibilityElementsHidden style={styles.directionIcon}>
+            <AppIcon color={colors.accent} name={changeDirectionIcon(change)} size={14} />
+          </View>
+          <View style={styles.previousCopy}>
+            <AppText style={styles.previousLabel} variant="caption">
+              {t('home.previousMeasurement')}
+            </AppText>
+            <AppText selectable style={styles.previousValue} variant="label">
+              {measuredValue(change, false, numberFormatter)}
+            </AppText>
+          </View>
+        </View>
+      </Pressable>
+    );
+  }
 
   return (
     <View style={styles.section}>
@@ -190,51 +253,17 @@ function MeasuredChanges({
         <AppText variant="heading">{t('home.measuredChanges')}</AppText>
         <AppText style={styles.muted}>{t('home.measuredChangesBody')}</AppText>
       </View>
-      <View style={styles.changeGrid}>
-        {rows.map((row, rowIndex) => (
-          <View key={`change-row-${rowIndex}`} style={styles.changeGridRow}>
-            {row.map((change) => (
-              <Pressable
-                accessibilityHint={t('home.measuredChangeHint')}
-                accessibilityLabel={`${change.label}, ${measuredValue(change, false, locale)} on ${measuredDate(change, false, locale)}, to ${measuredValue(change, true, locale)} on ${measuredDate(change, true, locale)}, ${changeDirection(change)}`}
-                accessibilityRole="button"
-                key={change.biomarkerId}
-                onPress={() => onOpen(change.biomarkerId)}
-                style={({ pressed }) => [styles.changeCard, pressed && styles.pressed]}
-              >
-                <View style={styles.changeCardHeader}>
-                  <AppText selectable style={styles.changeCardTitle} variant="heading">
-                    {change.label}
-                  </AppText>
-                  <AppIcon name="chevronRight" size={14} />
-                </View>
-                <View style={styles.changeLatest}>
-                  <View style={styles.changeValueLine}>
-                    <AppText selectable style={styles.changeValue} variant="title">
-                      {formatLocaleDecimal(change.latest.normalized.value, locale)}
-                    </AppText>
-                    <AppText selectable style={styles.changeUnit} variant="label">
-                      {change.latest.normalized.unit}
-                    </AppText>
-                  </View>
-                  <AppText selectable style={styles.muted} variant="caption">
-                    {measuredDate(change, true, locale)}
-                  </AppText>
-                </View>
-                <View style={styles.changePrevious}>
-                  <AppText style={styles.direction} variant="label">
-                    {changeDirection(change)}
-                  </AppText>
-                  <AppText selectable style={styles.muted} variant="caption">
-                    {`${measuredValue(change, false, locale)} · ${measuredDate(change, false, locale)}`}
-                  </AppText>
-                </View>
-              </Pressable>
-            ))}
-            {columnCount === 2 && row.length === 1 && <View style={styles.changeCardSpacer} />}
-          </View>
-        ))}
-      </View>
+      {columnCount === 2 ? (
+        <View style={styles.masonryGrid}>
+          {masonryColumns.map((column, columnIndex) => (
+            <View key={`masonry-column-${columnIndex}`} style={styles.masonryColumn}>
+              {column.map(changeCard)}
+            </View>
+          ))}
+        </View>
+      ) : (
+        <View style={styles.changeList}>{changes.map(changeCard)}</View>
+      )}
       <AppText style={styles.limitNote} variant="caption">
         {t('home.measuredChangesLimit')}
       </AppText>
@@ -474,20 +503,21 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     paddingHorizontal: spacing.xs,
   },
-  changeGrid: { gap: spacing.md },
-  changeGridRow: { alignItems: 'stretch', flexDirection: 'row', gap: spacing.md },
+  masonryGrid: { alignItems: 'flex-start', flexDirection: 'row', gap: spacing.md },
+  masonryColumn: { flex: 1, gap: spacing.md, minWidth: 0 },
+  changeList: { gap: spacing.md },
   changeCard: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderCurve: 'continuous',
     borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
-    flex: 1,
-    gap: spacing.md,
+    gap: spacing.sm,
+    minHeight: 178,
     minWidth: 0,
     padding: spacing.md,
+    width: '100%',
   },
-  changeCardSpacer: { flex: 1 },
   changeCardHeader: {
     alignItems: 'flex-start',
     flexDirection: 'row',
@@ -495,7 +525,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   changeCardTitle: { flex: 1, minWidth: 0 },
-  changeLatest: { gap: spacing.xs },
+  changeLatest: { gap: spacing.xs, paddingTop: spacing.xs },
   changeValueLine: {
     alignItems: 'baseline',
     flexDirection: 'row',
@@ -505,12 +535,26 @@ const styles = StyleSheet.create({
   changeValue: { fontVariant: ['tabular-nums'] },
   changeUnit: { color: colors.mutedInk },
   changePrevious: {
+    alignItems: 'center',
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
-    gap: spacing.xs,
-    paddingTop: spacing.md,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: 'auto',
+    paddingTop: spacing.sm,
   },
-  direction: { color: colors.ink, fontWeight: '600', textTransform: 'capitalize' },
+  directionIcon: {
+    alignItems: 'center',
+    backgroundColor: colors.accentSoft,
+    borderCurve: 'continuous',
+    borderRadius: radii.sm,
+    height: 28,
+    justifyContent: 'center',
+    width: 28,
+  },
+  previousCopy: { flex: 1, gap: 1, minWidth: 0 },
+  previousLabel: { color: colors.mutedInk },
+  previousValue: { color: colors.ink, fontVariant: ['tabular-nums'] },
   limitNote: { color: colors.mutedInk },
   secondReportPrompt: {
     alignItems: 'center',

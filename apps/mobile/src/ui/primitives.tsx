@@ -311,7 +311,10 @@ export type AppIconName =
   | 'shield'
   | 'trash'
   | 'cloud'
-  | 'checkmarkCircle';
+  | 'checkmarkCircle'
+  | 'trendUp'
+  | 'trendDown'
+  | 'trendStable';
 
 const iconSymbols: Record<AppIconName, string> = {
   home: 'house',
@@ -337,6 +340,9 @@ const iconSymbols: Record<AppIconName, string> = {
   trash: 'trash',
   cloud: 'cloud',
   checkmarkCircle: 'checkmark.circle.fill',
+  trendUp: 'arrow.up.right',
+  trendDown: 'arrow.down.right',
+  trendStable: 'arrow.right',
 };
 
 /** Small SF Symbol seam for inline controls; navigation uses native SF Symbols directly. */

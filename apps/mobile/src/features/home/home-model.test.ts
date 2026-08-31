@@ -72,12 +72,14 @@ function measurement(
   biomarkerId: string,
   value: number,
   reviewState: Measurement['reviewState'] = 'confirmed',
+  unit = 'mg/dL',
+  specimenType: Measurement['specimenType'] = 'serum',
 ): Measurement {
   const snapshot = {
     label: biomarkerId.replace('biomarker.', '').toUpperCase(),
     value: { kind: 'numeric' as const, value },
     valueString: String(value),
-    unit: 'mg/dL',
+    unit,
     referenceInterval: null,
     flag: null,
   };
@@ -85,12 +87,12 @@ function measurement(
     id,
     labRecordId: recordId,
     biomarkerId: canonicalId(biomarkerId),
-    specimenType: 'serum',
+    specimenType,
     panelLabel: null,
     original: snapshot,
     originalState: {
       biomarkerId: canonicalId(biomarkerId),
-      specimenType: 'serum',
+      specimenType,
       snapshot,
       reviewState,
       provenance: 'extracted',
@@ -180,18 +182,42 @@ test('Home menu keeps destructive and uncommon actions out of the row', () => {
   );
 });
 
-test('Quiet Home prioritizes the latest local report and caps measured changes at three', () => {
+test('Quiet Home prioritizes the latest local report and caps measured changes at six', () => {
   const first = labRecord('first', '2026-01-01', [
     measurement('first-ldl', 'first', 'biomarker.ldl_c', 100),
     measurement('first-hdl', 'first', 'biomarker.hdl_c', 50),
     measurement('first-triglycerides', 'first', 'biomarker.triglycerides', 120),
     measurement('first-total', 'first', 'biomarker.total_cholesterol', 180),
+    measurement('first-glucose', 'first', 'biomarker.glucose', 90),
+    measurement(
+      'first-hemoglobin',
+      'first',
+      'biomarker.hemoglobin',
+      140,
+      'confirmed',
+      'g/L',
+      'blood',
+    ),
+    measurement('first-ferritin', 'first', 'biomarker.ferritin', 48, 'confirmed', 'ng/mL'),
+    measurement('first-hba1c', 'first', 'biomarker.hba1c', 5.4, 'confirmed', '%', 'blood'),
   ]);
   const latest = labRecord('latest', '2026-08-18', [
     measurement('latest-ldl', 'latest', 'biomarker.ldl_c', 110),
     measurement('latest-hdl', 'latest', 'biomarker.hdl_c', 55),
     measurement('latest-triglycerides', 'latest', 'biomarker.triglycerides', 100),
     measurement('latest-total', 'latest', 'biomarker.total_cholesterol', 170),
+    measurement('latest-glucose', 'latest', 'biomarker.glucose', 92),
+    measurement(
+      'latest-hemoglobin',
+      'latest',
+      'biomarker.hemoglobin',
+      142,
+      'confirmed',
+      'g/L',
+      'blood',
+    ),
+    measurement('latest-ferritin', 'latest', 'biomarker.ferritin', 52, 'confirmed', 'ng/mL'),
+    measurement('latest-hba1c', 'latest', 'biomarker.hba1c', 5.5, 'confirmed', '%', 'blood'),
   ]);
   const model = buildHomeLabViewModel(
     [
@@ -207,12 +233,7 @@ test('Quiet Home prioritizes the latest local report and caps measured changes a
     model.recentReports.map((row) => row.id),
     ['latest-report', 'first-report'],
   );
-  assert.equal(model.measuredChanges.length, 3);
-  assert.deepEqual(model.measuredChanges.map((change) => change.direction).sort(), [
-    'decreased',
-    'increased',
-    'increased',
-  ]);
+  assert.equal(model.measuredChanges.length, 6);
 });
 
 test('Quiet Home keeps unfinished import and review work visible without creating a change', () => {

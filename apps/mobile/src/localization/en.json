@@ -156,6 +156,7 @@
     "directionIncreased": "increased",
     "directionDecreased": "decreased",
     "directionStable": "stable",
+    "previousMeasurement": "Previous",
     "reviewWork": "Review work",
     "continueReport": "Continue report",
     "reviewMeasurements": "Review extracted measurements",

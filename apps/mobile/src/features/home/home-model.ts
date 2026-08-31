@@ -73,6 +73,7 @@ export type HomeMeasuredChangeColumnCount = 1 | 2;
 
 const HOME_CHANGE_GRID_MINIMUM_WIDTH = 390;
 const HOME_CHANGE_GRID_MAXIMUM_FONT_SCALE = 1.3;
+const HOME_MEASURED_CHANGE_LIMIT = 6;
 
 /**
  * Keep the biomarker overview visual at ordinary iPhone sizes, then return to a single reading
@@ -222,7 +223,7 @@ export function buildHomeLabViewModel(
       const dateOrder = right.latest.collectionDate.localeCompare(left.latest.collectionDate);
       return dateOrder === 0 ? left.label.localeCompare(right.label) : dateOrder;
     })
-    .slice(0, 3);
+    .slice(0, HOME_MEASURED_CHANGE_LIMIT);
 
   return {
     latestReport,
