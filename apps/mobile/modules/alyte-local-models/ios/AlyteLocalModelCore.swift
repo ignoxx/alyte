@@ -3,9 +3,26 @@ import Foundation
 /// Narrow runtime seam used by the production lifecycle core and by injected native tests.
 protocol AlyteLocalModelRuntimeSession: AnyObject {
   func generate(prompt: String, maxOutputTokens: Int, outputCapacity: Int) throws -> String
+  func generateImage(
+    prompt: String,
+    imageData: Data,
+    maxOutputTokens: Int,
+    outputCapacity: Int
+  ) throws -> String
   /// Must be non-blocking and safe to call from outside the serialized inference queue.
   func cancelInference()
   func close()
+}
+
+extension AlyteLocalModelRuntimeSession {
+  func generateImage(
+    prompt: String,
+    imageData: Data,
+    maxOutputTokens: Int,
+    outputCapacity: Int
+  ) throws -> String {
+    throw AlyteLocalModelRuntimeError.unavailable
+  }
 }
 
 enum AlyteLocalModelRuntimeError: Error {
@@ -49,6 +66,7 @@ final class AlyteLocalModelCore: @unchecked Sendable {
   private let protectFileClosure: ProtectFile
   private let availableMemoryClosure: AvailableMemory
   private let runtimeFactory: RuntimeFactory
+  private let enforcesProductionRequirements: Bool
   // Cancellation is intentionally callable from UIKit/OS callbacks while the serialized store
   // queue is decoding. Keep pointer access separate from lifecycle work so a pressure callback
   // cannot race a runtime close and signal a stale runtime.
@@ -85,6 +103,7 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     hashFile: @escaping HashFile,
     protectFile: @escaping ProtectFile,
     availableMemory: @escaping AvailableMemory = { Int64.max },
+    enforcesProductionRequirements: Bool = true,
     runtimeFactory: @escaping RuntimeFactory
   ) {
     self.directory = directory
@@ -96,12 +115,14 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     self.hashFileClosure = hashFile
     self.protectFileClosure = protectFile
     self.availableMemoryClosure = availableMemory
+    self.enforcesProductionRequirements = enforcesProductionRequirements
     self.runtimeFactory = runtimeFactory
   }
 
   var state: AlyteLocalModelState { stateValue }
   var failure: AlyteLocalModelFailure? { failureValue }
   var bytesReceived: Int64 { bytesReceivedValue }
+  var storageBytes: Int64 { storageBytesValue }
   var runtime: (any AlyteLocalModelRuntimeSession)? {
     runtimeAccessLock.lock()
     defer { runtimeAccessLock.unlock() }
@@ -153,6 +174,7 @@ final class AlyteLocalModelCore: @unchecked Sendable {
         stateValue = .notInstalled
         failureValue = nil
         bytesReceivedValue = 0
+        storageBytesValue = 0
         offset = 0
         emitState()
       }
@@ -214,7 +236,7 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     let capacity = try directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage ?? 0
     // Production passes the six-gigabyte requirement through this explicit guard. Tiny native
     // tests use a directory with a synthetic expected size and override the resource seam below.
-    if expectedBytes >= AlyteLocalModelManifest.bytes {
+    if enforcesProductionRequirements && expectedBytes >= AlyteLocalModelManifest.bytes {
       guard capacity >= AlyteLocalModelManifest.minimumFreeBytes else {
         throw AlyteLocalModelError.failed(.insufficientSpace)
       }
@@ -305,14 +327,24 @@ final class AlyteLocalModelCore: @unchecked Sendable {
   }
 
   func complete(transportFailure: AlyteLocalModelFailure?) -> AlyteLocalModelCoreCompletion {
-    if cancellationRequested {
+    if let failure = forcedFailure {
       cancellationRequested = false
       forcedFailure = nil
+      if failure == .rangeRejected || failure == .sizeMismatch || failure == .checksumMismatch {
+        try? removeIfPresent(partialURL)
+        bytesReceivedValue = 0
+        offset = 0
+      }
+      let error = AlyteLocalModelError.failed(failure)
+      fail(error)
+      return .failed(error)
+    }
+    if cancellationRequested {
+      cancellationRequested = false
       setState(.notInstalled, failure: nil)
       return .cancelled(stateDictionary())
     }
-    if let failure = forcedFailure ?? transportFailure {
-      forcedFailure = nil
+    if let failure = transportFailure {
       if failure == .rangeRejected || failure == .sizeMismatch || failure == .checksumMismatch {
         try? removeIfPresent(partialURL)
         bytesReceivedValue = 0
@@ -350,7 +382,7 @@ final class AlyteLocalModelCore: @unchecked Sendable {
   }
 
   func load() throws -> [String: Any] {
-    if expectedBytes >= AlyteLocalModelManifest.bytes {
+    if enforcesProductionRequirements && expectedBytes >= AlyteLocalModelManifest.bytes {
       guard ProcessInfo.processInfo.physicalMemory >= AlyteLocalModelManifest.minimumMemoryBytes else {
         throw AlyteLocalModelError.failed(.incompatible)
       }
@@ -405,6 +437,15 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     }
   }
 
+  /// Cheap activation gate used by a multi-artifact pack coordinator. It validates the protected
+  /// receipt and current file identity without loading a runtime or hashing gigabytes on import.
+  func requireVerifiedForActivation() throws {
+    try protectFileClosure(readyURL)
+    guard try verificationReceiptMatchesReadyFile() else {
+      throw AlyteLocalModelError.failed(.verificationRequired)
+    }
+  }
+
   func infer(prompt: String, maxOutputTokens: Int, outputCapacity: Int) throws -> String {
     guard stateValue == .loaded, let loadedRuntime else {
       throw AlyteLocalModelError.unavailable(.unavailable)
@@ -414,6 +455,27 @@ final class AlyteLocalModelCore: @unchecked Sendable {
     }
     return try loadedRuntime.generate(
       prompt: prompt,
+      maxOutputTokens: maxOutputTokens,
+      outputCapacity: outputCapacity
+    )
+  }
+
+  func inferImage(
+    prompt: String,
+    imageData: Data,
+    maxOutputTokens: Int,
+    outputCapacity: Int
+  ) throws -> String {
+    guard stateValue == .loaded, let loadedRuntime else {
+      throw AlyteLocalModelError.unavailable(.unavailable)
+    }
+    guard !imageData.isEmpty, imageData.count <= 16 * 1024 * 1024,
+      maxOutputTokens > 0, maxOutputTokens <= 2_048,
+      outputCapacity > 0, outputCapacity <= 131_072
+    else { throw AlyteLocalModelError.failed(.runtimeFailed) }
+    return try loadedRuntime.generateImage(
+      prompt: prompt,
+      imageData: imageData,
       maxOutputTokens: maxOutputTokens,
       outputCapacity: outputCapacity
     )

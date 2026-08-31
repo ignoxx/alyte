@@ -73,7 +73,7 @@ test('lifecycle presentation keeps transition actions exclusive', () => {
       ...notInstalledSnapshot(productionLocalModelManifest),
       state: 'failed',
       bytesReceived: 100,
-      progress: 100 / productionLocalModelManifest.pack.artifact.bytes,
+      progress: 100 / productionLocalModelManifest.pack.bytes,
       failure: 'interrupted',
     }),
     'neutral',
@@ -233,11 +233,11 @@ test('resumable setup owns its failure presentation', () => {
 
 test('download size formatting follows the device locale and localized unit keys', () => {
   assert.equal(
-    formatModelDownloadSize(productionLocalModelManifest.pack.artifact.bytes, 'en-US'),
-    '2,841,481,184 bytes (2.8 GB)',
+    formatModelDownloadSize(productionLocalModelManifest.pack.bytes, 'en-US'),
+    '1,552,463,168 bytes (1.6 GB)',
   );
   assert.equal(
-    formatModelDownloadSize(productionLocalModelManifest.pack.artifact.bytes, 'de-DE'),
-    '2.841.481.184 bytes (2,8 GB)',
+    formatModelDownloadSize(productionLocalModelManifest.pack.bytes, 'de-DE'),
+    '1.552.463.168 bytes (1,6 GB)',
   );
 });

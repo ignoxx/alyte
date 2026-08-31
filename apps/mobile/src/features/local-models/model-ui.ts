@@ -6,7 +6,7 @@ import {
   type LocalModelSnapshot,
   type LocalModelState,
 } from './model';
-import { t } from '../../localization';
+import researchStrings from './research-en.json';
 
 export type ModelStatusTone = 'neutral' | 'measured' | 'reviewNeeded';
 export type ModelOperation =
@@ -156,11 +156,11 @@ export function formatModelDownloadSize(bytes: number, locale: string): string {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
   });
-  return t('model.downloadSizeValue')
+  return researchStrings.downloadSizeValue
     .replace('{bytes}', numberFormat.format(bytes))
-    .replace('{bytesUnit}', t('model.bytesUnit'))
+    .replace('{bytesUnit}', researchStrings.bytesUnit)
     .replace('{gigabytes}', decimalFormat.format(bytes / 1_000_000_000))
-    .replace('{gigabytesUnit}', t('model.gigabytesUnit'));
+    .replace('{gigabytesUnit}', researchStrings.gigabytesUnit);
 }
 
 export function modelFailureMessageKey(failure: LocalModelFailure | null): string {

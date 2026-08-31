@@ -12,6 +12,10 @@ const coreSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModelCore.swift')
 const moduleSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModelsModule.swift'), 'utf8');
 const podspecSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModels.podspec'), 'utf8');
 const runtimeSource = readFileSync(resolve(nativeRoot, 'AlyteLocalModelRuntime.c'), 'utf8');
+const runtimeSessionSource = readFileSync(
+  resolve(nativeRoot, 'AlyteLocalModelRuntime.swift'),
+  'utf8',
+);
 
 test('native store owns resumable verification, protection, promotion, and release hooks', () => {
   for (const value of [
@@ -75,4 +79,22 @@ test('device and production builds cannot silently omit the pinned runtime', () 
   );
   assert.equal(runtimeSource.includes('#if defined(ALYTE_LLAMA_RUNTIME)'), true);
   assert.equal(runtimeSource.includes('llama_model_load_from_file'), true);
+});
+
+test('the native runtime constrains production output to the flat document-row contract', () => {
+  assert.equal(runtimeSessionSource.includes('AlyteDocumentVLMGrammar.root'), true);
+  assert.equal(runtimeSessionSource.includes('AlyteSemanticMapperGrammar.root'), false);
+  for (const value of [
+    'mtmd_init_from_file',
+    'mtmd_helper_bitmap_init_from_buf',
+    'mtmd_tokenize',
+    'mtmd_helper_eval_chunks',
+    'mtmd_input_chunks_free',
+    'mtmd_bitmap_free',
+    'mtmd_free',
+  ]) {
+    assert.equal(runtimeSource.includes(value), true, value);
+  }
+  assert.equal(moduleSource.includes('inferImage'), true);
+  assert.equal(storeSource.includes('standardizedURL.path.hasPrefix(sandboxURL.path'), true);
 });

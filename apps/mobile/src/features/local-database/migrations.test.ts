@@ -435,6 +435,124 @@ async function createFrozenLabsFixture(database: SqliteDatabase, version: number
 }
 
 describe('local schema forward migrations', () => {
+  test('v15 removes the legacy model progress stage without losing retryable operations', async () => {
+    const database = new NodeSqliteDatabase(temporaryDatabase());
+    await createBoundary(
+      database,
+      LOCAL_MIGRATIONS.filter((migration) => migration.version <= 14),
+    ).initialize();
+    await database.execAsync(`
+      ALTER TABLE extraction_operations RENAME TO extraction_operations_current;
+      DROP INDEX IF EXISTS extraction_operations_state_idx;
+      CREATE TABLE extraction_operations (
+        report_id TEXT PRIMARY KEY NOT NULL REFERENCES lab_reports(id) ON DELETE CASCADE,
+        state TEXT NOT NULL CHECK (state IN ('active', 'interrupted', 'failed', 'cancelled', 'complete')),
+        stage TEXT NOT NULL CHECK (stage IN ('import', 'ocr', 'model', 'review')),
+        completed INTEGER NOT NULL DEFAULT 0,
+        total INTEGER NOT NULL DEFAULT 0,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        mode TEXT NOT NULL DEFAULT 'start' CHECK (mode IN ('start', 'reprocess', 'improve')),
+        pipeline_fingerprint_json TEXT,
+        pipeline_fingerprint_hash TEXT,
+        revision INTEGER NOT NULL DEFAULT 1
+      );
+      INSERT INTO lab_reports
+        (id, source_type, original_filename, mime_type, byte_size, source_hash, original_path,
+         import_state, failure_reason, encrypted, page_count, created_at, updated_at, imported_at)
+      VALUES
+        ('report-old-v5', 'pdf', 'synthetic.pdf', 'application/pdf', 1, 'hash', 'protected://report',
+         'imported', NULL, 1, 1, '2026-08-22T09:00:00.000Z', '2026-08-22T09:00:00.000Z',
+         '2026-08-22T09:00:00.000Z'),
+        ('report-failed-model', 'pdf', 'synthetic-failed.pdf', 'application/pdf', 1, 'hash-failed',
+         'protected://report-failed', 'imported', NULL, 1, 1, '2026-08-22T09:00:00.000Z',
+         '2026-08-22T09:00:00.000Z', '2026-08-22T09:00:00.000Z'),
+        ('report-cancelled-model', 'pdf', 'synthetic-cancelled.pdf', 'application/pdf', 1,
+         'hash-cancelled', 'protected://report-cancelled', 'imported', NULL, 1, 1,
+         '2026-08-22T09:00:00.000Z', '2026-08-22T09:00:00.000Z', '2026-08-22T09:00:00.000Z'),
+        ('report-complete-model', 'pdf', 'synthetic-complete.pdf', 'application/pdf', 1,
+         'hash-complete', 'protected://report-complete', 'imported', NULL, 1, 1,
+         '2026-08-22T09:00:00.000Z', '2026-08-22T09:00:00.000Z', '2026-08-22T09:00:00.000Z');
+      INSERT INTO extraction_operations
+        (report_id, state, stage, completed, total, error, created_at, updated_at)
+      VALUES
+        ('report-old-v5', 'active', 'model', 2, 4, NULL,
+         '2026-08-22T09:00:00.000Z', '2026-08-22T09:00:00.000Z'),
+        ('report-failed-model', 'failed', 'model', 1, 4, 'recognition',
+         '2026-08-22T09:00:00.000Z', '2026-08-22T09:00:00.000Z'),
+        ('report-cancelled-model', 'cancelled', 'model', 0, 4, 'cancelled',
+         '2026-08-22T09:00:00.000Z', '2026-08-22T09:00:00.000Z'),
+        ('report-complete-model', 'complete', 'model', 4, 4, NULL,
+         '2026-08-22T09:00:00.000Z', '2026-08-22T09:00:00.000Z');
+      CREATE INDEX extraction_operations_state_idx
+        ON extraction_operations(state, updated_at ASC);
+      DROP TABLE extraction_operations_current;
+    `);
+
+    const v14Objects = await database.getAllAsync<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE name IN ('extraction_operations', 'extraction_operations_state_idx') ORDER BY name;",
+    );
+    assert.deepEqual(
+      v14Objects.map((object) => object.name),
+      ['extraction_operations', 'extraction_operations_state_idx'],
+    );
+
+    await createBoundary(database).initialize();
+    const operations = await database.getAllAsync<{
+      report_id: string;
+      state: string;
+      stage: string;
+      completed: number;
+      total: number;
+      error: string;
+    }>(
+      'SELECT report_id, state, stage, completed, total, error FROM extraction_operations ORDER BY report_id;',
+    );
+    assert.deepEqual(
+      operations.map((operation) => ({ ...operation })),
+      [
+        {
+          report_id: 'report-cancelled-model',
+          state: 'cancelled',
+          stage: 'review',
+          completed: 0,
+          total: 4,
+          error: 'cancelled',
+        },
+        {
+          report_id: 'report-complete-model',
+          state: 'complete',
+          stage: 'review',
+          completed: 4,
+          total: 4,
+          error: null,
+        },
+        {
+          report_id: 'report-failed-model',
+          state: 'failed',
+          stage: 'review',
+          completed: 1,
+          total: 4,
+          error: 'recognition',
+        },
+        {
+          report_id: 'report-old-v5',
+          state: 'interrupted',
+          stage: 'review',
+          completed: 2,
+          total: 4,
+          error: 'interrupted-after-model-stage',
+        },
+      ],
+    );
+    const tableSql = await database.getAllAsync<{ sql: string }>(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'extraction_operations';",
+    );
+    assert.equal(tableSql[0]?.sql.includes("'model'"), false);
+    await database.closeAsync();
+  });
+
   test('direct v11 to v12 invalidates legacy Sanitized drafts without reinterpreting them as Original', async () => {
     const database = new NodeSqliteDatabase(temporaryDatabase());
     await createFrozenLabsFixture(database, 8);

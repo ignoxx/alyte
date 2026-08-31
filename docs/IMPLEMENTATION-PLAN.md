@@ -67,18 +67,23 @@ Build:
 - local database schema and repositories;
 - Files/Photos import, password prompt, protected storage, and the future cloud-upload PDFKit
   privacy workspace for page selection, zoom, pan, crop, rotation, and direct redaction;
-- direct Original Report OCR with hash/password verification immediately before Vision, a calm
-  Import → OCR → On-device model → Review journey, and independent source provenance; Sanitized
-  Report creation remains reserved for a future explicit cloud upload;
+- direct Original Report extraction with hash/password verification immediately before and after
+  every native page read; trusted selectable PDF pages use the strict PDFKit text-layer adapter,
+  while unavailable or untrusted pages and image imports use Vision only, with no same-page merge;
+  the calm Import → OCR → Review journey and independent source provenance remain
+  intact; Sanitized Report creation remains reserved for a future explicit cloud upload. This
+  native adapter changes the native fingerprint and requires a new development/TestFlight binary,
+  but adds no dependency, entitlement, permission, or database migration;
 - Vision document/table recognition, measurement-candidate filtering, locale parsing, alias mapping,
   unit normalization, and preservation of every credible result;
-- bounded Qwen 3.5 0.8B and Gemma 4 E2B feasibility benchmarks using structured OCR fixtures,
-  followed only by a post-install model-pack manager and production mapper when the maintainer
-  accepts the measured precision, review burden, memory, latency, thermal, license, and download-size
-  trade-offs;
+- bounded local-model feasibility benchmarks selected the Qwen3-VL 2B document pipeline; its
+  verified pack is mandatory for automated import while deterministic source validation remains
+  authoritative;
 - section/table/row specimen context so mixed blood, serum, plasma, urine, and unknown results are
   not assigned one report-wide specimen;
-- English, German, and Lithuanian fixtures first, followed by the remaining declared languages;
+- English fixtures and real-report evaluation first, German fixtures and de-identified evaluation
+  second; every language uses the same production pipeline, while Lithuanian remains a non-blocking
+  stress case rather than a launch gate and other report languages receive no MVP accuracy promise;
 - compact grouped Extraction Draft review with exception-level reasons and source-page inspection;
 - Lab Report library, Lab Record detail, complete Measurement list, deletion, and manual entry; and
 - first comparable catalogue fixtures.
@@ -87,6 +92,10 @@ Completion criteria:
 
 - two synthetic and two developer-held real reports can complete the success journey in under five
   minutes without an account;
+- the 95 percent under-five-minute Gate 1 target is evaluated separately from upstream candidate
+  recovery and remains open until private aggregate results and physical-device acceptance pass;
+- selectable PDF pages use trusted PDFKit observations only, while unavailable or image-only pages
+  fall back to Vision without regression on the image-based report;
 - the app presents no serial review of unrelated OCR text and the common path requires decisions
   only for genuine ambiguities;
 - originals remain unchanged and sanitized derivatives pass recovery checks;
@@ -187,9 +196,8 @@ laboratory-history release.
 
 Build:
 
-- five-page onboarding that explains local mode, measured versus estimated data, cloud consent, and
-  adult-only scope without requiring login, with one combined required-model preparation page before
-  Ready;
+- concise onboarding that explains local mode, measured versus estimated data, cloud consent,
+  adult-only scope, and the required import-pack download/verification without loading the model;
 - privacy dashboard, app lock, exact-upload preview, support/FAQ, terms and privacy links;
 - Full Export, local deletion, cloud account export/deletion, and StoreKit restore;
 - paywall copy and the provisional EUR prices/allowances from `MVP.md`;
@@ -198,8 +206,9 @@ Build:
 
 Completion criteria:
 
-- fresh install completes the one-time required-model preparation with network but no authentication;
-  after the pack is installed, the local product launches to Home and its core flows work offline;
+- fresh install completes onboarding without authentication; setup requires network only to
+  download and verify the required pack, never to load it. After setup, the local product launches
+  to Home and its core flows work offline;
 - local data remains after cloud sign-out/account deletion;
 - export contains every selected local record and clearly warns about sensitive content;
 - no support or analytics path attaches health content; and
@@ -263,7 +272,9 @@ cost plus infrastructure, StoreKit commission, taxes, support, and safety margin
 ### Gate A — local core, September 2
 
 If the no-account two-report journey is not reliable, understandable, visually accepted, and
-complete in under five minutes, do not dispatch cloud or intake implementation. Finish it first.
+complete in under five minutes, do not dispatch cloud or intake implementation. The 95 percent
+under-five-minute target is not yet passed; a PDFKit upstream improvement does not close Gate A
+without the private aggregate and integrated physical-device evidence. Finish it first.
 
 ### Gate B — evidence, September 8
 
@@ -298,16 +309,12 @@ Cloud Plus passes Gate C.
 3. **Import source** — Files/Photos, password, page model, original retention.
 4. **Privacy workspace** — full-screen PDFKit viewing, crop/rotation/direct redaction, exact artifact
    preview, verification.
-5. **Candidate extraction** — Vision document/tables, measurement filtering, locale parsing,
-   Lithuanian fixtures, per-section specimen context, deterministic validation, a provider-neutral
-   semantic mapper, and structured-fixture candidate evaluation through #50 and #66.
-6. **Required extraction model pack** — no bundled weights; a verified Gemma 4 E2B (Q4_0)
-   preparation page with disclosure and a verified download ending in on-disk `ready`
-   before onboarding completes; runtime activation and load stay lazy and extraction-scoped;
-   contextual reinstall gate after later deletion;
-   direct public/ungated Hugging Face download from an immutable revision; reviewed
-   manifest/license, checksum verification, and storage/load/delete lifecycle through #51; followed
-   by constrained extraction integration and deterministic inference-failure fallback through #52.
+5. **Candidate extraction** — strict PDFKit text-layer pages with per-page Vision fallback, Vision
+   document/tables, measurement filtering, English/German locale parsing and fixtures, non-blocking
+   Lithuanian stress coverage, per-section
+   specimen context, deterministic validation, and structured-fixture candidate evaluation through
+   #50 and #66. Local model experiments remain isolated from the production dependency graph until
+   separately accepted.
 7. **Laboratory history and review** — compact draft, Reports, Records, Measurements, manual entry,
    source inspection, correction, provenance.
 8. **Comparison** — canonical aliases, units, trends, missing/incompatible behavior.

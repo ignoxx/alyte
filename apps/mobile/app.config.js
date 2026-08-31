@@ -37,13 +37,8 @@ module.exports = ({ config }) => {
       deploymentTarget: '26.0',
       supportsTablet: false,
       usesAppleSignIn: true,
-      // This native entitlement changes the fingerprint; release builds must be rebuilt and signed.
       entitlements: {
         ...config.ios?.entitlements,
-        'com.apple.developer.kernel.increased-memory-limit': true,
-        ...(variant === 'development'
-          ? {}
-          : { 'com.apple.developer.kernel.extended-virtual-addressing': true }),
       },
       infoPlist: {
         ...config.ios?.infoPlist,

@@ -26,6 +26,8 @@ uint64_t alyte_local_model_runtime_available_memory(void) {
 
 #if defined(ALYTE_LLAMA_RUNTIME)
 #include <llama.h>
+#include <mtmd.h>
+#include <mtmd-helper.h>
 
 #include <limits.h>
 #include <stdint.h>
@@ -47,12 +49,14 @@ enum {
 // becomes a Jetsam event. The Swift admission gate still enforces the manifest's minimum.
 static const uint64_t ALYTE_LOCAL_MODEL_MIN_GPU_HEADROOM_BYTES = 5ULL * 1000ULL * 1000ULL * 1000ULL;
 static const int32_t ALYTE_LOCAL_MODEL_GPU_LAYER_LIMIT = 16;
+static const size_t ALYTE_LOCAL_MODEL_MAX_IMAGE_BYTES = 16U * 1024U * 1024U;
 
 struct AlyteLocalModelRuntime {
     struct llama_model *model;
     struct llama_context *context;
     const struct llama_vocab *vocab;
     struct llama_sampler *sampler_chain;
+    mtmd_context *vision;
     int context_tokens;
     int batch_tokens;
     atomic_bool cancel_requested;
@@ -62,6 +66,24 @@ static void alyte_local_model_discard_log(enum ggml_log_level level, const char 
     (void) level;
     (void) text;
     (void) user_data;
+}
+
+static bool alyte_local_model_should_continue(float progress, void *user_data) {
+    (void) progress;
+    struct AlyteLocalModelRuntime *runtime = (struct AlyteLocalModelRuntime *) user_data;
+    return runtime != NULL && !atomic_load_explicit(&runtime->cancel_requested, memory_order_acquire);
+}
+
+static bool alyte_local_model_eval_callback(struct ggml_tensor *tensor, bool ask, void *user_data) {
+    (void) tensor;
+    if (ask) return true;
+    struct AlyteLocalModelRuntime *runtime = (struct AlyteLocalModelRuntime *) user_data;
+    return runtime != NULL && !atomic_load_explicit(&runtime->cancel_requested, memory_order_acquire);
+}
+
+static bool alyte_local_model_abort_callback(void *user_data) {
+    struct AlyteLocalModelRuntime *runtime = (struct AlyteLocalModelRuntime *) user_data;
+    return runtime != NULL && atomic_load_explicit(&runtime->cancel_requested, memory_order_acquire);
 }
 
 static const char *alyte_local_model_backend_label(AlyteLocalModelBackendMode backend_mode) {
@@ -160,7 +182,7 @@ static struct llama_model *alyte_local_model_load(
 static struct llama_context_params alyte_local_model_context_params(
     uint32_t batch_tokens) {
     struct llama_context_params context_params = llama_context_default_params();
-    context_params.n_ctx = 2048;
+    context_params.n_ctx = 4096;
     context_params.n_batch = batch_tokens;
     context_params.n_ubatch = batch_tokens;
     context_params.n_seq_max = 1;
@@ -218,14 +240,16 @@ static int alyte_local_model_tokenize(
 
 void *alyte_local_model_runtime_create(
     const char *model_path,
+    const char *projector_path,
     const char *grammar,
     const char *grammar_root,
     int32_t *failure_stage_out) {
     alyte_local_model_set_failure_stage(
         failure_stage_out,
         ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_NONE);
-    if (model_path == NULL || grammar == NULL || grammar_root == NULL) return NULL;
+    if (model_path == NULL || projector_path == NULL || grammar == NULL || grammar_root == NULL) return NULL;
     llama_log_set(alyte_local_model_discard_log, NULL);
+    mtmd_helper_log_set(alyte_local_model_discard_log, NULL);
     llama_backend_init();
     AlyteLocalModelActivationHooks hooks = {
         .load_model = alyte_local_model_load_with_mode,
@@ -315,9 +339,33 @@ void *alyte_local_model_runtime_create(
     runtime->context = context;
     runtime->vocab = vocab;
     runtime->sampler_chain = sampler_chain;
-    runtime->context_tokens = 2048;
+    runtime->context_tokens = 4096;
     runtime->batch_tokens = (int) batch_tokens;
     atomic_init(&runtime->cancel_requested, false);
+    llama_set_abort_callback(context, alyte_local_model_abort_callback, runtime);
+    struct mtmd_context_params vision_params = mtmd_context_params_default();
+    vision_params.use_gpu = activation.backend_mode == ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED;
+    vision_params.print_timings = false;
+    vision_params.n_threads = 4;
+    vision_params.image_min_tokens = 1024;
+    vision_params.image_max_tokens = 1024;
+    vision_params.batch_max_tokens = 1024;
+    vision_params.progress_callback = alyte_local_model_should_continue;
+    vision_params.progress_callback_user_data = runtime;
+    vision_params.cb_eval = alyte_local_model_eval_callback;
+    vision_params.cb_eval_user_data = runtime;
+    runtime->vision = mtmd_init_from_file(projector_path, model, vision_params);
+    if (runtime->vision == NULL || !mtmd_support_vision(runtime->vision)) {
+        if (runtime->vision != NULL) mtmd_free(runtime->vision);
+        llama_sampler_free(sampler_chain);
+        llama_free(context);
+        llama_model_free(model);
+        free(runtime);
+        alyte_local_model_set_failure_stage(
+            failure_stage_out,
+            ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_PROJECTOR);
+        return NULL;
+    }
     return runtime;
 }
 
@@ -403,9 +451,129 @@ int alyte_local_model_runtime_generate(
     return (int) output_length;
 }
 
+int alyte_local_model_runtime_generate_image(
+    void *opaque_runtime,
+    const char *prompt,
+    const unsigned char *image_data,
+    size_t image_length,
+    int max_output_tokens,
+    char *output,
+    size_t output_capacity) {
+    struct AlyteLocalModelRuntime *runtime = (struct AlyteLocalModelRuntime *) opaque_runtime;
+    if (runtime == NULL || runtime->vision == NULL || prompt == NULL || image_data == NULL ||
+        image_length == 0 || image_length > ALYTE_LOCAL_MODEL_MAX_IMAGE_BYTES || output == NULL ||
+        output_capacity == 0 || max_output_tokens <= 0) {
+        return ALYTE_LOCAL_MODEL_STATUS_INVALID_ARGUMENT;
+    }
+    if (atomic_exchange_explicit(&runtime->cancel_requested, false, memory_order_acq_rel)) {
+        return ALYTE_LOCAL_MODEL_STATUS_CANCELLED;
+    }
+    output[0] = '\0';
+    llama_memory_clear(llama_get_memory(runtime->context), true);
+    llama_sampler_reset(runtime->sampler_chain);
+
+    struct mtmd_helper_bitmap_wrapper bitmap_wrapper = mtmd_helper_bitmap_init_from_buf(
+        runtime->vision,
+        image_data,
+        image_length,
+        false);
+    if (bitmap_wrapper.bitmap == NULL || bitmap_wrapper.video_ctx != NULL) {
+        if (bitmap_wrapper.bitmap != NULL) mtmd_bitmap_free(bitmap_wrapper.bitmap);
+        if (bitmap_wrapper.video_ctx != NULL) mtmd_helper_video_free(bitmap_wrapper.video_ctx);
+        return ALYTE_LOCAL_MODEL_STATUS_TOKENIZATION_FAILED;
+    }
+    mtmd_input_chunks *chunks = mtmd_input_chunks_init();
+    if (chunks == NULL) {
+        mtmd_bitmap_free(bitmap_wrapper.bitmap);
+        return ALYTE_LOCAL_MODEL_STATUS_TOKENIZATION_FAILED;
+    }
+    struct mtmd_input_text text = {
+        .text = prompt,
+        .text_len = strlen(prompt),
+        .add_special = true,
+        .parse_special = true,
+    };
+    const mtmd_bitmap *bitmap = bitmap_wrapper.bitmap;
+    int32_t tokenize_status = mtmd_tokenize(runtime->vision, chunks, &text, &bitmap, 1);
+    mtmd_bitmap_free(bitmap_wrapper.bitmap);
+    if (tokenize_status != 0) {
+        mtmd_input_chunks_free(chunks);
+        return ALYTE_LOCAL_MODEL_STATUS_TOKENIZATION_FAILED;
+    }
+    size_t input_tokens = mtmd_helper_get_n_tokens(chunks);
+    if (input_tokens > (size_t) INT_MAX || input_tokens + (size_t) max_output_tokens >= (size_t) runtime->context_tokens) {
+        mtmd_input_chunks_free(chunks);
+        return ALYTE_LOCAL_MODEL_STATUS_INPUT_LIMIT;
+    }
+    llama_pos n_past = 0;
+    int32_t eval_status = mtmd_helper_eval_chunks(
+        runtime->vision,
+        runtime->context,
+        chunks,
+        0,
+        0,
+        runtime->batch_tokens,
+        true,
+        &n_past);
+    mtmd_input_chunks_free(chunks);
+    if (eval_status != 0) {
+        if (atomic_exchange_explicit(&runtime->cancel_requested, false, memory_order_acq_rel)) {
+            return ALYTE_LOCAL_MODEL_STATUS_CANCELLED;
+        }
+        return ALYTE_LOCAL_MODEL_STATUS_PROMPT_DECODE_FAILED;
+    }
+
+    size_t output_length = 0;
+    for (int index = 0; index < max_output_tokens; index += 1) {
+        if (atomic_load_explicit(&runtime->cancel_requested, memory_order_acquire)) {
+            output[0] = '\0';
+            atomic_store_explicit(&runtime->cancel_requested, false, memory_order_release);
+            return ALYTE_LOCAL_MODEL_STATUS_CANCELLED;
+        }
+        llama_token token = llama_sampler_sample(runtime->sampler_chain, runtime->context, -1);
+        if (token < 0) {
+            output[0] = '\0';
+            return ALYTE_LOCAL_MODEL_STATUS_TOKEN_DECODE_FAILED;
+        }
+        if (llama_vocab_is_eog(runtime->vocab, token)) break;
+        char piece[256];
+        int32_t piece_length = llama_token_to_piece(
+            runtime->vocab,
+            token,
+            piece,
+            (int32_t) sizeof(piece),
+            0,
+            false);
+        if (piece_length < 0 || output_length + (size_t) piece_length + 1 > output_capacity) {
+            output[0] = '\0';
+            return ALYTE_LOCAL_MODEL_STATUS_OUTPUT_LIMIT;
+        }
+        memcpy(output + output_length, piece, (size_t) piece_length);
+        output_length += (size_t) piece_length;
+        output[output_length] = '\0';
+
+        struct llama_batch next = llama_batch_init(1, 0, 1);
+        next.n_tokens = 1;
+        next.token[0] = token;
+        next.pos[0] = n_past++;
+        next.n_seq_id[0] = 1;
+        next.seq_id[0][0] = 0;
+        next.logits[0] = 1;
+        int32_t decode_status = llama_decode(runtime->context, next);
+        llama_batch_free(next);
+        if (decode_status != 0) {
+            output[0] = '\0';
+            return ALYTE_LOCAL_MODEL_STATUS_TOKEN_DECODE_FAILED;
+        }
+    }
+    atomic_store_explicit(&runtime->cancel_requested, false, memory_order_release);
+    return (int) output_length;
+}
+
 void alyte_local_model_runtime_destroy(void *opaque_runtime) {
     struct AlyteLocalModelRuntime *runtime = (struct AlyteLocalModelRuntime *) opaque_runtime;
     if (runtime == NULL) return;
+    mtmd_free(runtime->vision);
     llama_sampler_free(runtime->sampler_chain);
     llama_free(runtime->context);
     llama_model_free(runtime->model);
@@ -416,10 +584,12 @@ void alyte_local_model_runtime_destroy(void *opaque_runtime) {
 
 void *alyte_local_model_runtime_create(
     const char *model_path,
+    const char *projector_path,
     const char *grammar,
     const char *grammar_root,
     int32_t *failure_stage_out) {
     (void) model_path;
+    (void) projector_path;
     (void) grammar;
     (void) grammar_root;
     if (failure_stage_out != NULL) {
@@ -436,6 +606,23 @@ int alyte_local_model_runtime_generate(
     size_t output_capacity) {
     (void) runtime;
     (void) prompt;
+    (void) max_output_tokens;
+    if (output != NULL && output_capacity > 0) output[0] = '\0';
+    return -1;
+}
+
+int alyte_local_model_runtime_generate_image(
+    void *runtime,
+    const char *prompt,
+    const unsigned char *image_data,
+    size_t image_length,
+    int max_output_tokens,
+    char *output,
+    size_t output_capacity) {
+    (void) runtime;
+    (void) prompt;
+    (void) image_data;
+    (void) image_length;
     (void) max_output_tokens;
     if (output != NULL && output_capacity > 0) output[0] = '\0';
     return -1;

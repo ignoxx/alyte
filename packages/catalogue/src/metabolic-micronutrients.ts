@@ -354,6 +354,7 @@ export const metabolicMicronutrientBiomarkers: readonly BiomarkerCatalogueEntry[
       'plasma ferritin',
       'ferritine',
       'ferritina',
+      'Feritinas',
       'ferrytyna',
       'ferritine sérique',
     ],

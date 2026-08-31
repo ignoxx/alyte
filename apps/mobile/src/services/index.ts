@@ -7,11 +7,7 @@ import {
   type ServiceClock,
 } from '@alyte/domain';
 import { createLabsService, type LabsService } from '../features/labs/service';
-import {
-  createDefaultExtractionAliases,
-  createLabReportsService,
-  type LabReportsService,
-} from '../features/labs/report-service';
+import { createLabReportsService, type LabReportsService } from '../features/labs/report-service';
 import { openProtectedLabDatabase, type LabRepository } from '../features/labs/persistence';
 import {
   createIntakeService,
@@ -29,12 +25,6 @@ import {
   type LocalControlsService,
 } from '../features/local-controls/service';
 import {
-  createFakeLocalModelNativeModule,
-  createLocalModelService,
-  type LocalModelService,
-} from '../features/local-models/native';
-import { createLocalSemanticMapper } from '../features/local-models/semantic-mapper';
-import {
   SHOWCASE_BOOTSTRAP_COMPLETE,
   SHOWCASE_BOOTSTRAP_PREFERENCE,
   seedShowcaseLabRecords,
@@ -47,6 +37,12 @@ import {
   createCloudCommerceService,
   type CloudCommerceService,
 } from '../features/commerce/service';
+import {
+  createFakeLocalModelNativeModule,
+  createLocalModelService,
+  type LocalModelService,
+} from '../features/local-models/native';
+import { createLocalDocumentVLM } from '../features/local-models/document-vlm';
 
 export interface AlyteServices {
   readonly runtime: AlyteRuntime;
@@ -106,15 +102,14 @@ export function createServices(
     variant,
     appVersion: '0.1.0',
   });
+  // Service creation reads only the tiny native manifest/state. The 1.55 GB Qwen pack remains
+  // cold until the document extractor acquires a lease inside an active report import.
   const fakeModelState = process.env.EXPO_PUBLIC_LOCAL_MODEL_FAKE === 'true';
-  const models =
+  const localModels =
     fakeModelState && variant !== 'production'
       ? createLocalModelService({ native: createFakeLocalModelNativeModule() })
       : createLocalModelService();
-  const semanticMapper = createLocalSemanticMapper({
-    models,
-    aliases: createDefaultExtractionAliases(),
-  });
+  const documentVLM = createLocalDocumentVLM({ models: localModels });
   // Development and preview intentionally advertise no hosted API. A production URL cannot be
   // reached accidentally from those builds; tests can inject a fake account service or a directly
   // configured client at this boundary.
@@ -144,11 +139,11 @@ export function createServices(
     clock,
     showcase,
     labs,
-    reports: createLabReportsService({ repositoryFactory, semanticMapper }),
+    reports: createLabReportsService({ repositoryFactory, documentVLM }),
     intake,
     export: exportService,
     controls,
-    models,
+    models: localModels,
     account,
     commerce,
   };

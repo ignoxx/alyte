@@ -2,7 +2,7 @@ Pod::Spec.new do |s|
   s.name           = 'AlyteLocalModels'
   s.version        = '0.1.0'
   s.summary        = 'Alyte verified local semantic model storage'
-  s.description    = 'Downloads, verifies, protects, activates, and releases the pinned Gemma model pack.'
+  s.description    = 'Downloads, verifies, protects, activates, and releases the pinned Qwen VLM pack.'
   s.author         = 'Alyte'
   s.homepage       = 'https://alyte.app'
   s.platforms      = { :ios => '26.0' }
@@ -41,8 +41,12 @@ Pod::Spec.new do |s|
     device_framework = File.join(runtime_xcframework, 'ios-arm64', 'llama.framework')
     device_binary = File.join(device_framework, 'llama')
     device_header = File.join(device_framework, 'Headers', 'llama.h')
+    device_mtmd_header = File.join(device_framework, 'Headers', 'mtmd.h')
+    device_mtmd_helper_header = File.join(device_framework, 'Headers', 'mtmd-helper.h')
     raise "Missing pinned llama framework at #{device_framework}" unless File.directory?(device_framework)
     raise "Missing pinned llama runtime header at #{device_header}" unless File.file?(device_header)
+    raise "Missing pinned mtmd runtime header at #{device_mtmd_header}" unless File.file?(device_mtmd_header)
+    raise "Missing pinned mtmd helper header at #{device_mtmd_helper_header}" unless File.file?(device_mtmd_helper_header)
     raise "Missing pinned llama runtime binary at #{device_binary}" unless File.file?(device_binary)
     unless identity['deviceBinarySha256'] == Digest::SHA256.file(device_binary).hexdigest
       raise 'Pinned llama.cpp runtime binary checksum does not match its identity manifest'
@@ -96,6 +100,8 @@ SCRIPT
     'AlyteLocalModelStore.swift',
     'AlyteLocalModelTypes.swift',
     'AlyteLocalModelsModule.swift',
+    'AlyteDocumentVLMGrammar.swift',
+    'AlyteGeometryVariantSelectorGrammar.generated.swift',
     'AlyteSemanticMapperGrammar.generated.swift',
   ]
   s.test_spec 'Tests' do |test_spec|

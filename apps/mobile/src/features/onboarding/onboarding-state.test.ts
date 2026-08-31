@@ -12,7 +12,7 @@ import {
   onboardingResumePage,
 } from './onboarding-state';
 
-test('the mandatory gate only advances from a verified model on the combined setup page', () => {
+test('the required setup gate advances only after the complete pack is verified', () => {
   const initial = notInstalledSnapshot(productionLocalModelManifest);
   assert.equal(ONBOARDING_PAGE_COUNT, 5);
   assert.equal(onboardingCanContinue(ONBOARDING_MODEL_PAGE, initial), false);
@@ -37,4 +37,12 @@ test('relaunch resumes model work and locks the pager during transfer', () => {
     onboardingResumePage(applyLocalModelEvent(initial, { kind: 'verified' })),
     ONBOARDING_READY_PAGE,
   );
+});
+
+test('invalid and direct forward navigation cannot bypass setup', () => {
+  const initial = notInstalledSnapshot(productionLocalModelManifest);
+  assert.equal(onboardingCanNavigateTo(0, 2, initial), true);
+  assert.equal(onboardingCanNavigateTo(0, ONBOARDING_READY_PAGE, initial), false);
+  assert.equal(onboardingCanNavigateTo(-1, 0, initial), false);
+  assert.equal(onboardingCanContinue(1.5, initial), false);
 });

@@ -54,4 +54,45 @@ describe('local export serialization', () => {
     };
     assert.equal(tableCsv(table), '"notes"\n" \uFEFF\'+1+1"\n');
   });
+
+  test('exports distinct source and corrected measurement snapshots with correction provenance', () => {
+    const correctedSnapshot: ExportSnapshot = {
+      schemaVersion: 14,
+      tables: [
+        {
+          name: 'measurements',
+          columns: [
+            'id',
+            'original_label',
+            'original_value_json',
+            'current_label',
+            'current_value_json',
+            'provenance',
+          ],
+          rows: [
+            {
+              id: 'measurement-corrected-extraction',
+              original_label: 'Synthetic source label',
+              original_value_json: '{"kind":"free_text","value":"100 118"}',
+              current_label: 'Synthetic corrected label',
+              current_value_json: '{"kind":"numeric","value":118}',
+              provenance: 'user-corrected',
+            },
+          ],
+        },
+      ],
+    };
+
+    const outputs = exportTextOutputs(correctedSnapshot);
+    const json = outputs.find((output) => output.path === 'data/measurements.json');
+    const csv = outputs.find((output) => output.path === 'csv/measurements.csv');
+    assert.ok(json);
+    assert.ok(csv);
+    assert.match(json.content, /Synthetic source label/);
+    assert.match(json.content, /Synthetic corrected label/);
+    assert.match(json.content, /user-corrected/);
+    assert.match(csv.content, /Synthetic source label/);
+    assert.match(csv.content, /Synthetic corrected label/);
+    assert.match(csv.content, /user-corrected/);
+  });
 });

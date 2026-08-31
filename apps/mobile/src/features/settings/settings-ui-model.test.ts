@@ -20,11 +20,6 @@ test('local Settings presents only complete controls and keeps local routes reac
         route: 'PrivacyStorage',
       },
       {
-        icon: 'folder',
-        title: t('settings.modelStorage'),
-        route: 'ModelStorage',
-      },
-      {
         icon: 'doc',
         title: t('settings.support'),
         route: 'SupportFaq',

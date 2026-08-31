@@ -22,25 +22,35 @@ test('generated TypeScript manifest decodes exactly from the authoritative produ
   assert.deepEqual(productionLocalModelManifest, source);
 });
 
-test('production model manifest pins one public Gemma artifact and runtime', () => {
+test('production model manifest pins the complete public Qwen VLM pack and runtime', () => {
   assert.doesNotThrow(() => assertLocalModelManifest());
   assert.equal(productionLocalModelManifest.pack.id, LOCAL_MODEL_PACK_ID);
-  assert.equal(productionLocalModelManifest.pack.artifact.bytes, 2_841_481_184);
+  assert.equal(productionLocalModelManifest.pack.artifact.bytes, 1_107_409_952);
+  assert.equal(productionLocalModelManifest.pack.projector.bytes, 445_053_216);
+  assert.equal(productionLocalModelManifest.pack.bytes, 1_552_463_168);
+  assert.deepEqual(productionLocalModelManifest.compatibility.languages, ['en', 'de']);
   assert.equal(
     productionLocalModelManifest.compatibility.promptBundle,
-    'alyte.semantic-mapper.prompt.v6',
+    'alyte.document-vlm.prompt.v1',
   );
-  assert.equal(productionLocalModelManifest.compatibility.ocrChunk, 'alyte.semantic-ocr-chunk.v4');
+  assert.equal(productionLocalModelManifest.compatibility.ocrChunk, 'alyte.document-band.v1');
   assert.equal(
     productionLocalModelManifest.compatibility.semanticSchema,
-    'alyte.semantic-mapper.v2',
+    'alyte.document-vlm.flat-rows.v1',
   );
   assert.equal(
     productionLocalModelManifest.pack.artifact.sha256,
-    '8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52',
+    '089d75c52f4b7ffc56ba998ffc50aae89fcafc755f9e7208aacca281dca6c2ae',
   );
   assert.equal(productionLocalModelManifest.pack.artifact.url.includes('/main/'), false);
-  assert.deepEqual(productionLocalModelManifest.allowlist.files, ['gemma-4-E2B-it-Q4_0.gguf']);
+  assert.equal(
+    productionLocalModelManifest.pack.projector.sha256,
+    'f9a68fabba69c3b81e153367b2c7521030b0fa8bb0de400c9599c8e6725f9c82',
+  );
+  assert.deepEqual(productionLocalModelManifest.allowlist.files, [
+    'Qwen3VL-2B-Instruct-Q4_K_M.gguf',
+    'mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf',
+  ]);
 });
 
 test('generated manifest retains the exact reviewed Hugging Face download host list', () => {

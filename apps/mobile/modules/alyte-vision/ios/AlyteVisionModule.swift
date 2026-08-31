@@ -4,7 +4,7 @@ import PDFKit
 import UIKit
 import Vision
 
-let alyteVisionContractVersion = "alyte.vision.document.v3"
+let alyteVisionContractVersion = "alyte.vision.document.v4"
 
 private enum AlyteVisionError: LocalizedError {
   case unreadable
@@ -101,7 +101,9 @@ public final class AlyteVisionModule: Module {
       request.textRecognitionOptions.automaticallyDetectLanguage = true
       request.textRecognitionOptions.useLanguageCorrection = true
       request.textRecognitionOptions.maximumCandidateCount = 5
-      let preferred = ["lt", "en", "de"].map { Locale.Language(identifier: $0) }
+      let preferred = alyteVisionPreferredRecognitionLanguageIdentifiers.map {
+        Locale.Language(identifier: $0)
+      }
       request.textRecognitionOptions.recognitionLanguages = preferred.filter {
         request.supportedRecognitionLanguages.contains($0)
       }
@@ -109,17 +111,31 @@ public final class AlyteVisionModule: Module {
       var observations: [[String: Any]] = []
       for (documentIndex, document) in documents.enumerated() {
         for (tableIndex, table) in document.document.tables.enumerated() {
-          for (rowIndex, row) in table.rows.enumerated() {
-            for (columnIndex, cell) in row.enumerated() {
+          var emittedTableCellIDs = Set<String>()
+          for row in table.rows {
+            for cell in row {
+              guard let coordinates = alyteVisionTableCellCoordinates(
+                rowRange: cell.rowRange,
+                columnRange: cell.columnRange
+              ) else { continue }
+              let cellID = "document-\(pageIndex)-\(documentIndex)-table-\(tableIndex)-\(coordinates.identitySuffix)"
+              // A spanning cell can be addressable from more than one row/column. Emit its exact
+              // source container once while retaining the authoritative starting coordinates.
+              guard emittedTableCellIDs.insert(cellID).inserted else { continue }
               let text = cell.content.text.transcript
               guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
               observations.append(contentsOf: alyteDocumentObservations(
-                id: "document-\(pageIndex)-\(documentIndex)-table-\(tableIndex)-r\(rowIndex)-c\(columnIndex)",
+                id: cellID,
                 text: text,
                 box: cell.content.boundingRegion.boundingBox.cgRect,
                 pageIndex: pageIndex,
                 orientation: orientation,
-                structure: ["kind": "table-cell", "tableId": "table-\(documentIndex)-\(tableIndex)", "rowIndex": rowIndex, "columnIndex": columnIndex],
+                structure: [
+                  "kind": "table-cell",
+                  "tableId": "table-\(documentIndex)-\(tableIndex)",
+                  "rowIndex": coordinates.rowIndex,
+                  "columnIndex": coordinates.columnIndex,
+                ],
                 lines: cell.content.text.lines,
                 words: cell.content.text.words
               ))

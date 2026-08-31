@@ -9,6 +9,7 @@ import {
   buildMeasuredTrend,
   canonicalId,
   createSanitizationRecipe,
+  createExtractionPipelineFingerprint,
   groupObservationsIntoRows,
   type ExtractionAliasEntry,
 } from '@alyte/domain';
@@ -488,6 +489,27 @@ describe('protected manual Lab Record persistence', () => {
       (await repository.getExtractionDraft(draft.id))?.rows[0]?.source.semantic?.schemaVersion,
       'alyte.semantic-mapper.v1',
     );
+    semanticBox.semantic = {
+      adapterVersion: 'geometry-variant-selector.test.v1',
+      schemaVersion: 'alyte.geometry-variant-selector.v1',
+      sourceObservationIds: provenanceObservations.map((observation) => observation.id),
+      sourceFieldObservationIds: {
+        label: 'provenance-label',
+        value: 'provenance-value',
+        unit: 'provenance-unit',
+        referenceInterval: 'provenance-range',
+        flag: null,
+      },
+    };
+    await database.runAsync(
+      'UPDATE extraction_draft_rows SET source_bbox_json = ? WHERE draft_id = ?;',
+      JSON.stringify(semanticBox),
+      draft.id,
+    );
+    assert.equal(
+      (await repository.getExtractionDraft(draft.id))?.rows[0]?.source.semantic?.schemaVersion,
+      'alyte.geometry-variant-selector.v1',
+    );
     await repository.close();
   });
 
@@ -591,6 +613,115 @@ describe('protected manual Lab Record persistence', () => {
       )[0]?.parser_version,
       'alyte.local-parser.v2',
     );
+  });
+
+  test('reopens a legacy fingerprint without the optional PDF adapter field', async () => {
+    const path = temporaryDatabase();
+    const first = createRepository(path);
+    await first.repository.createReport({
+      id: 'report-legacy-fingerprint',
+      sourceType: 'image',
+      originalFilename: 'synthetic-legacy-fingerprint.png',
+      mimeType: 'image/png',
+      importState: 'imported',
+      originalPath: 'protected://original/synthetic-legacy-fingerprint.png',
+      sourceHash: 'synthetic-legacy-fingerprint-hash',
+      pageCount: 1,
+    });
+    const aliases: readonly ExtractionAliasEntry[] = [
+      {
+        id: 'biomarker.triglycerides',
+        aliases: ['Triglycerides'],
+        specimens: ['blood', 'unknown'],
+        units: ['mmol/L'],
+      },
+    ];
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'legacy-fingerprint-source',
+          text: 'Triglycerides 1.9 mmol/L',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.7, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: null, internalConfidence: null },
+        },
+      ],
+      { aliases, collectionDate: { kind: 'missing' }, specimenType: 'blood' },
+    );
+    assert.ok(row);
+    const fingerprint = createExtractionPipelineFingerprint({
+      sourceHash: 'synthetic-legacy-fingerprint-hash',
+      ocrContractVersion: 'alyte.vision.document.v2',
+      rowSegmentationVersion: 'alyte.row-segmentation.v1',
+      parserVersion: 'alyte.local-parser.v7',
+      semanticAdapterVersion: null,
+      semanticSchemaVersion: null,
+      semanticChunkVersion: null,
+      semanticPromptVersion: null,
+      modelVersion: null,
+      runtimeVersion: null,
+      catalogueVersion: null,
+    });
+    const draft = await first.repository.createExtractionDraft({
+      id: 'legacy-fingerprint-draft',
+      reportId: 'report-legacy-fingerprint',
+      collectionDate: { kind: 'missing' },
+      rows: [row],
+      pipelineFingerprint: fingerprint,
+    });
+    const stored = (
+      await first.database.getAllAsync<{ pipeline_fingerprint_json: string }>(
+        'SELECT pipeline_fingerprint_json FROM extraction_drafts WHERE id = ?;',
+        draft.id,
+      )
+    )[0];
+    assert.ok(stored);
+    const legacyJson = JSON.parse(stored.pipeline_fingerprint_json) as Record<string, unknown>;
+    delete legacyJson.pdfTextLayerAdapterVersion;
+    await first.database.runAsync(
+      'UPDATE extraction_drafts SET pipeline_fingerprint_json = ?, pipeline_fingerprint_hash = ? WHERE id = ?;',
+      JSON.stringify(legacyJson),
+      fingerprint.hash,
+      draft.id,
+    );
+    await first.repository.close();
+
+    const second = createRepository(path);
+    const reopened = await second.repository.getExtractionDraft(draft.id, aliases);
+    assert.equal(reopened?.pipelineFingerprint?.pdfTextLayerAdapterVersion, null);
+    assert.equal(reopened?.pipelineFingerprint?.hash, fingerprint.hash);
+    const persisted = (
+      await second.database.getAllAsync<{ pipeline_fingerprint_json: string }>(
+        'SELECT pipeline_fingerprint_json FROM extraction_drafts WHERE id = ?;',
+        draft.id,
+      )
+    )[0];
+    assert.ok(persisted);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        JSON.parse(persisted.pipeline_fingerprint_json) as Record<string, unknown>,
+        'pdfTextLayerAdapterVersion',
+      ),
+      false,
+    );
+
+    const malformedLegacy = JSON.parse(persisted.pipeline_fingerprint_json) as Record<
+      string,
+      unknown
+    >;
+    delete malformedLegacy.parserVersion;
+    await second.database.runAsync(
+      'UPDATE extraction_drafts SET pipeline_fingerprint_json = ? WHERE id = ?;',
+      JSON.stringify(malformedLegacy),
+      draft.id,
+    );
+    await assert.rejects(
+      second.repository.getExtractionDraft(draft.id, aliases),
+      /Invalid extraction pipeline fingerprint value/,
+    );
+    await second.repository.close();
   });
 
   test('replaces an open draft atomically and leaves it intact when replacement validation fails', async () => {
@@ -766,6 +897,83 @@ describe('protected manual Lab Record persistence', () => {
     assert.deepEqual(measurement.source?.observationIds, ['decision-source']);
     const reopened = await repository.getRecord(records[0]!.id);
     assert.deepEqual(reopened?.measurements[0]?.source?.observationIds, ['decision-source']);
+  });
+
+  test('a decision-only update preserves the result of a full layout correction', async () => {
+    const { repository } = createRepository();
+    await repository.createReport({
+      id: 'report-layout-correction',
+      sourceType: 'image',
+      originalFilename: 'synthetic-layout-correction.png',
+      mimeType: 'image/png',
+      importState: 'imported',
+      originalPath: 'protected://original/synthetic-layout-correction.png',
+      sourceHash: 'layout-correction-hash',
+      pageCount: 1,
+    });
+    const aliases: readonly ExtractionAliasEntry[] = [
+      {
+        id: 'biomarker.ldl_c',
+        aliases: ['LDL-C'],
+        specimens: ['blood'],
+        units: ['mmol/L'],
+      },
+    ];
+    const [parsed] = groupObservationsIntoRows(
+      [
+        {
+          id: 'layout-correction-source',
+          text: 'LDL-C 3,8 mmol/L',
+          alternatives: [],
+          boundingBox: { x: 0.2, y: 0.3, width: 0.4, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'de', internalConfidence: null },
+        },
+      ],
+      {
+        aliases,
+        collectionDate: { kind: 'known', value: '2026-08-22' },
+        specimenType: 'blood',
+      },
+    );
+    assert.ok(parsed);
+    const draft = await repository.createExtractionDraft({
+      id: 'draft-layout-correction',
+      reportId: 'report-layout-correction',
+      collectionDate: { kind: 'known', value: '2026-08-22' },
+      rows: [
+        {
+          ...parsed!,
+          reviewReasons: ['unsupported-layout'],
+          reviewState: 'needs-review',
+          decision: 'preserve',
+        },
+      ],
+    });
+
+    const corrected = await repository.updateExtractionDraftRow(
+      draft.rows[0]!.id,
+      {
+        proposedLabel: 'LDL-C',
+        proposedValue: { kind: 'numeric', value: 3.8 },
+        proposedUnit: 'mmol/L',
+        proposedReferenceInterval: null,
+      },
+      aliases,
+      { submission: 'correction-form' },
+    );
+    assert.equal(corrected.reviewReasons.includes('unsupported-layout'), false);
+    assert.equal(corrected.reviewState, 'ready');
+
+    const kept = await repository.updateExtractionDraftRow(
+      corrected.id,
+      { decision: 'resolve' },
+      aliases,
+    );
+    assert.equal(kept.reviewReasons.includes('unsupported-layout'), false);
+    assert.equal(kept.reviewState, 'ready');
+    assert.equal(kept.decision, 'resolve');
   });
 
   test('updates one date/specimen group atomically without changing other groups', async () => {

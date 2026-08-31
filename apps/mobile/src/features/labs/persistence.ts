@@ -54,6 +54,11 @@ export {
 export type { Migration } from '../local-database/migrations';
 export type { SqliteDatabase, SqliteRunResult } from '../local-database/persistence';
 
+export type ExtractionDraftRowUpdateOptions = {
+  /** The editor submitted its complete primary-field form, even if a diff omitted unchanged fields. */
+  readonly submission?: 'correction-form';
+};
+
 type LabRecordRow = {
   id: unknown;
   lab_report_id: unknown;
@@ -160,7 +165,7 @@ export type LabReportExtractionOperation = {
   readonly reportId: string;
   readonly state: 'active' | 'interrupted' | 'failed' | 'cancelled' | 'complete';
   readonly mode?: 'start' | 'reprocess' | 'improve';
-  readonly stage: 'import' | 'ocr' | 'model' | 'review';
+  readonly stage: 'import' | 'ocr' | 'review';
   readonly completed: number;
   readonly total: number;
   readonly error: string | null;
@@ -238,11 +243,7 @@ function extractionOperationFromDb(row: ExtractionOperationDb): LabReportExtract
       ['start', 'reprocess', 'improve'] as const,
       'extraction operation mode',
     ),
-    stage: enumValue(
-      row.stage,
-      ['import', 'ocr', 'model', 'review'] as const,
-      'extraction operation stage',
-    ),
+    stage: enumValue(row.stage, ['import', 'ocr', 'review'] as const, 'extraction operation stage'),
     completed: nonNegativeInteger(row.completed, 'extraction operation completed count'),
     total: nonNegativeInteger(row.total, 'extraction operation total count'),
     error: nullableString(row.error, 'extraction operation error'),
@@ -438,7 +439,10 @@ function decodeStoredSemantic(
   if (
     typeof item.adapterVersion !== 'string' ||
     (schemaVersion !== 'alyte.semantic-mapper.v1' &&
-      schemaVersion !== 'alyte.semantic-mapper.v2') ||
+      schemaVersion !== 'alyte.semantic-mapper.v2' &&
+      schemaVersion !== 'alyte.geometry-variant-selector.v1' &&
+      schemaVersion !== 'alyte.geometry-variant-selector.v2' &&
+      schemaVersion !== 'alyte.document-vlm.flat-rows.v1') ||
     !Array.isArray(item.sourceObservationIds) ||
     item.sourceObservationIds.length === 0 ||
     item.sourceObservationIds.length > 24 ||
@@ -451,7 +455,10 @@ function decodeStoredSemantic(
   if (schemaVersion === 'alyte.semantic-mapper.v1' && item.sourceFieldObservationIds !== undefined)
     throw new Error('Invalid extraction semantic provenance');
   if (
-    schemaVersion === 'alyte.semantic-mapper.v2' &&
+    (schemaVersion === 'alyte.semantic-mapper.v2' ||
+      schemaVersion === 'alyte.geometry-variant-selector.v1' ||
+      schemaVersion === 'alyte.geometry-variant-selector.v2' ||
+      schemaVersion === 'alyte.document-vlm.flat-rows.v1') &&
     (observations.length === 0 ||
       item.sourceObservationIds.some(
         (id) => !storedIds.has(id as string) || !observedIds.has(id as string),
@@ -480,7 +487,13 @@ function decodeStoredSemantic(
     });
   if (rawFields !== undefined && !validSourceFields)
     throw new Error('Invalid extraction semantic provenance');
-  if (schemaVersion === 'alyte.semantic-mapper.v2' && !validSourceFields)
+  if (
+    (schemaVersion === 'alyte.semantic-mapper.v2' ||
+      schemaVersion === 'alyte.geometry-variant-selector.v1' ||
+      schemaVersion === 'alyte.geometry-variant-selector.v2' ||
+      schemaVersion === 'alyte.document-vlm.flat-rows.v1') &&
+    !validSourceFields
+  )
     throw new Error('Invalid extraction semantic provenance');
   const sourceFieldObservationIds = validSourceFields
     ? (rawFields as {
@@ -575,6 +588,14 @@ function decodePipelineFingerprint(
     }
     return item as string | null;
   };
+  const optionalNullable = (name: string): string | null => {
+    const item = candidate[name];
+    if (item === undefined || item === null) return null;
+    if (typeof item !== 'string') {
+      throw new Error('Invalid extraction pipeline fingerprint value');
+    }
+    return item;
+  };
   const revision = Number(candidate.revision);
   const rootRevision = Number(revisionValue ?? revision);
   if (!Number.isSafeInteger(revision) || revision < 1 || rootRevision !== revision) {
@@ -587,17 +608,26 @@ function decodePipelineFingerprint(
     parserVersion: nullable('parserVersion'),
     semanticAdapterVersion: nullable('semanticAdapterVersion'),
     semanticSchemaVersion: nullable('semanticSchemaVersion') as
-      'alyte.semantic-mapper.v1' | 'alyte.semantic-mapper.v2' | null,
+      | 'alyte.semantic-mapper.v1'
+      | 'alyte.semantic-mapper.v2'
+      | 'alyte.geometry-variant-selector.v1'
+      | 'alyte.geometry-variant-selector.v2'
+      | 'alyte.document-vlm.flat-rows.v1'
+      | null,
     semanticChunkVersion: nullable('semanticChunkVersion'),
     semanticPromptVersion: nullable('semanticPromptVersion'),
     modelVersion: nullable('modelVersion'),
     runtimeVersion: nullable('runtimeVersion'),
     catalogueVersion: nullable('catalogueVersion'),
+    pdfTextLayerAdapterVersion: optionalNullable('pdfTextLayerAdapterVersion'),
   } as const;
   if (
     input.semanticSchemaVersion !== null &&
     input.semanticSchemaVersion !== 'alyte.semantic-mapper.v1' &&
-    input.semanticSchemaVersion !== 'alyte.semantic-mapper.v2'
+    input.semanticSchemaVersion !== 'alyte.semantic-mapper.v2' &&
+    input.semanticSchemaVersion !== 'alyte.geometry-variant-selector.v1' &&
+    input.semanticSchemaVersion !== 'alyte.geometry-variant-selector.v2' &&
+    input.semanticSchemaVersion !== 'alyte.document-vlm.flat-rows.v1'
   ) {
     throw new Error('Invalid extraction pipeline semantic schema');
   }
@@ -803,6 +833,7 @@ function extractionDraftFromDb(
           modelVersion: null,
           runtimeVersion: null,
           catalogueVersion: null,
+          pdfTextLayerAdapterVersion: null,
         }),
     ),
     revision,
@@ -1113,6 +1144,7 @@ export type LabRepository = {
     id: string,
     patch: ExtractionDraftRowPatch,
     aliases: readonly ExtractionAliasEntry[],
+    options?: ExtractionDraftRowUpdateOptions,
   ): Promise<ExtractionDraftRow>;
   updateExtractionDraftGroupDate(
     draftId: string,
@@ -2069,6 +2101,7 @@ export function createLabRepository(
     id: string,
     patch: ExtractionDraftRowPatch,
     aliases: readonly ExtractionAliasEntry[],
+    options?: ExtractionDraftRowUpdateOptions,
   ): Promise<ExtractionDraftRow> {
     await initialize();
     let updated: ExtractionDraftRow | null = null;
@@ -2085,10 +2118,25 @@ export function createLabRepository(
       );
       if (draftRows[0]?.state !== 'draft') throw new Error('Only a draft can be edited');
       const current = extractionRowFromDb(row);
-      const resolvedPatch =
+      const aliasResolvedPatch =
         patch.proposedLabel !== undefined && patch.proposedBiomarkerId === undefined
           ? { ...patch, proposedBiomarkerId: proposeBiomarkerId(patch.proposedLabel, aliases) }
           : patch;
+      // A form submission is explicit user intent, while the patch itself may be compacted to
+      // changed fields. Restore both submitted primary fields from the current editable snapshot.
+      const resolvedPatch: ExtractionDraftRowPatch =
+        options?.submission === 'correction-form'
+          ? {
+              ...aliasResolvedPatch,
+              proposedLabel: aliasResolvedPatch.proposedLabel ?? current.proposedLabel,
+              proposedValue: aliasResolvedPatch.proposedValue ?? current.proposedValue,
+            }
+          : aliasResolvedPatch;
+      // The source row may contain several scalar anchors. Only an editor save that supplies
+      // both primary fields can replace that automatic selection; secondary-only edits must keep
+      // the source-layout blocker and the prior exclusion decision.
+      const userEditedCorrectionFields =
+        resolvedPatch.proposedLabel !== undefined && resolvedPatch.proposedValue !== undefined;
       const userEditedSemanticFields = [
         resolvedPatch.proposedLabel,
         resolvedPatch.proposedValue,
@@ -2099,17 +2147,29 @@ export function createLabRepository(
         resolvedPatch.proposedSpecimenType,
       ].some((value) => value !== undefined);
       const userEditedDecision = resolvedPatch.decision !== undefined;
-      const revalidated = revalidateExtractionRow(current, resolvedPatch, aliases);
-      updated =
-        userEditedSemanticFields || userEditedDecision
-          ? {
-              ...revalidated,
-              editState: 'user-edited',
-              ...(userEditedSemanticFields
-                ? { source: { ...revalidated.source, semantic: null } }
-                : {}),
-            }
-          : revalidated;
+      if (userEditedDecision && !userEditedSemanticFields) {
+        // Inclusion is independent from parsing. Re-running automatic validation here can
+        // resurrect a source-layout blocker that a previous full correction already resolved.
+        updated = {
+          ...current,
+          decision: resolvedPatch.decision ?? current.decision,
+          editState: 'user-edited',
+        };
+      } else {
+        const revalidated = revalidateExtractionRow(current, resolvedPatch, aliases, {
+          mode: userEditedCorrectionFields ? 'user-correction' : 'automatic',
+        });
+        updated =
+          userEditedSemanticFields || userEditedDecision
+            ? {
+                ...revalidated,
+                editState: 'user-edited',
+                ...(userEditedSemanticFields
+                  ? { source: { ...revalidated.source, semantic: null } }
+                  : {}),
+              }
+            : revalidated;
+      }
       const next = updated;
       await database.runAsync(
         `UPDATE extraction_draft_rows SET proposed_label = ?, proposed_value_json = ?,

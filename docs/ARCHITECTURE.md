@@ -134,42 +134,39 @@ Build narrow, typed modules rather than one general native bridge.
 `AlyteVision`:
 
 - accepts protected local image paths and orientation metadata;
-- uses iOS 26 Vision document recognition over protected Original Report pages for local
-  extraction; Sanitized Report pages are reserved for a future explicit cloud operation;
+- uses iOS 26 Vision document recognition over protected Original Report pages assigned to the
+  Vision path for local extraction; Sanitized Report pages are reserved for a future explicit cloud
+  operation;
 - returns document regions, tables, rows, cells, text, normalized bounding boxes, candidate
   alternatives, and internal recognition confidence;
 - supports explicit recognition-language hints while allowing automatic detection; and
 - never logs recognized content.
 
-`AlyteLocalModels`:
+The accepted production pipeline uses the `alyte-local-models` module and one mandatory verified
+Qwen3-VL 2B pack with no MVP picker. Onboarding may download and verify the pack, but module creation
+and app startup remain metadata-only: weights load lazily only immediately before the
+model-dependent import stage and unload after success, failure, cancellation, backgrounding, or
+memory pressure. Deterministic source-ID validation remains authoritative and the model cannot
+weaken review or provenance boundaries. The evaluation harness remains available for reproducible
+replacement-model comparisons.
 
-- owns on-device semantic model-pack discovery, download state, integrity verification,
-  activation, load/unload, inference cancellation, and deletion behind one typed Expo module;
-- consumes a versioned Alyte manifest containing the Hugging Face repository, immutable commit,
-  exact allowlisted filenames, publisher, license, runtime/quantization, byte size, SHA-256,
-  supported languages, prompt/schema compatibility, and device requirements;
-- downloads public, ungated files directly from Hugging Face over HTTPS when possible, follows the
-  resolved CDN response, resumes safely when supported, and restarts cleanly otherwise;
-- rejects moving revisions, unlisted files, checksum mismatches, unsupported licenses/runtimes, and
-  gated repositories that would require a user or bundled access token;
-- stores completed packs under Application Support, excludes them from iCloud Backup, stages
-  partial downloads separately, and atomically promotes a verified pack;
-- ends download/onboarding at an on-disk `ready` artifact. Runtime activation/load is a separate
-  extraction-scoped operation, performed lazily immediately before the first supported semantic
-  mapping and released after the last extraction using it;
-- never bundles model weights in the application binary and exposes Gemma 4 E2B (Q4_0) as the sole
-  first-release pack;
-- loads at most one pack at a time, releases it under memory or thermal pressure, and exposes
-  observable not-installed, downloading, verifying, ready, loaded, failed, and deleting states;
-- requires explicit selection and verified installation of the sole first-release pack before
-  onboarding completes, without activating/loading the runtime; after later deletion it preserves
-  access to existing local history while gating only new automated extraction, and exposes
-  user-visible storage, retry, and delete controls; and
-- never logs structured OCR input, prompts, generated tokens, or model results.
+All report languages traverse this same adapter. `compatibility.languages` records the benchmarked
+launch targets rather than controlling runtime routing. The document model returns source-verbatim
+fields; canonical English names come only from reviewed catalogue alias resolution. A model-authored
+translation never replaces or becomes provenance for the original laboratory label.
 
 `AlytePDF`:
 
 - inspects page count, dimensions, encryption state, metadata, and text-layer presence;
+- exposes the strict, optional `alyte.pdf.text-layer.v3` page adapter for selectable PDF pages;
+  each trusted page returns exact NSString/UTF-16 source slices, normalized geometry, stable
+  page/source-offset IDs, and bounded parent/span provenance without a raw page text wall;
+- accepts a page only when its complete text-layer envelope is source-aligned, non-overlapping,
+  geometrically safe, sufficiently bounded, and within caps. An unavailable or untrusted page
+  returns the typed fallback state rather than partial observations;
+- keeps PDFKit and Vision page sources atomic: a trusted PDFKit page uses only PDFKit observations,
+  while an unavailable or untrusted PDF page uses only Vision. Image imports and image-only PDF
+  pages use Vision, and the two sources are never merged for one page;
 - unlocks a password-protected PDF for the current import session;
 - exposes a native PDFKit viewer surface with aspect-correct page layout, zoom, pan, page navigation,
   and coordinate transforms for direct redaction editing;
@@ -179,6 +176,10 @@ Build narrow, typed modules rather than one general native bridge.
 - creates a new sanitized PDF without the original text layer, annotations, attachments, or
   document metadata; and
 - verifies the sanitized artifact has no selectable source text or removable redaction objects.
+
+The PDFKit text-layer adapter is native code and therefore changes the native fingerprint; a new
+development/TestFlight binary is required when it changes. It adds no dependency, entitlement,
+permission, or database migration.
 
 `AlyteProtection`:
 
@@ -268,7 +269,8 @@ media, transient imports, and exports. Store paths and hashes in SQLite, not fil
 file service owns creation, protection, backup exclusion, reference counting, and deletion so
 database and filesystem state cannot drift silently.
 
-The Original Report is immutable and is the local OCR source. Crop, rotation, and redaction remain
+The Original Report is immutable and is the local extraction source; pages assigned to Vision are
+its local OCR source. Crop, rotation, and redaction remain
 reversible editing recipes until the person explicitly prepares a future cloud upload. The
 Sanitized Report is a newly rendered derivative, never overwrites the original, and is used only
 for that future cloud operation and its exact preview.
@@ -279,10 +281,11 @@ for that future cloud operation and its exact preview.
 Files/Photos selection
   → copy into protected app storage
   → inspect PDF / ask for password when required
-  → verify Original hash immediately before each Vision call
-  → Vision document/table recognition over Original pages
-  → measurement-candidate filtering
-  → optional schema-constrained local semantic mapping through the active verified model pack
+  → verify Original hash immediately before each native page read
+  → strict PDFKit text-layer page read for selectable PDF pages
+  → Vision document/table recognition for images and unavailable/untrusted PDF pages
+  → verify Original hash immediately after each native page read
+  → source-specific table/result-column reconstruction and measurement-candidate filtering
   → locale-aware alias and unit mapper
   → deterministic semantic validation
   → compact editable Extraction Draft
@@ -293,48 +296,49 @@ Files/Photos selection
 Extraction progress is durable but deliberately minimal: it stores only a report ID, stage,
 bounded counts, and typed failure category. An active marker is reconciled to `interrupted` on
 relaunch, preserving the Original and making retry explicit without retaining passwords, paths,
-OCR text, or model health details. A resumable operation may also retain one bounded opaque
+OCR text, or optional-research runtime details. A resumable operation may also retain one bounded opaque
 pipeline-fingerprint hash as a compatibility token; the complete fingerprint JSON, source hash,
 model/runtime detail, and health payload remain only on the Extraction Draft root. Every draft root
 and row must carry the same validated artifact identity; pre-#75 drafts without that identity are
 marked legacy Sanitized-derived and require regeneration rather than being migrated as Original.
+The fingerprint also records the PDF text-layer adapter version for PDF-backed extraction. Legacy
+drafts without that optional field decode as absent and remain readable, while a changed or newly
+introduced adapter classifies the derived output as older until it is regenerated; image-backed
+extraction has no PDF adapter version. This compatibility addition does not require a database
+migration.
 
 Recognition confidence is an internal routing signal. The user sees the precise field or row that
 needs review and why; they do not see a medical-looking confidence percentage.
 
 Parsing occurs in layers:
 
-1. Vision returns immutable source observations with page geometry from the protected Original;
-2. Vision document structure and deterministic layout logic identify tables, rows, panels, and
-   other measurement-shaped candidates;
+1. PDFKit or Vision returns immutable source observations with page geometry from the protected
+   Original, with exactly one native source used for each page. The PDFKit adapter may attach a
+   conservative on-device English/German page-language result; uncertainty remains `null` and is
+   never replaced by the device locale;
+2. native document structure and deterministic layout logic identify tables, result columns, rows,
+   panels, and other measurement-shaped candidates. Trusted selectable-PDF pages may narrow a row
+   to one source-backed value under a supported Result header; missing or contradictory evidence
+   fails open, and the PDF-only rule is not silently applied to Vision pages;
 3. locale parsers recognize dates, decimals, comparators, intervals, and units;
-4. the multilingual alias catalogue proposes canonical Biomarker IDs;
-5. where the device, input language, and installed pack are supported, an on-device model receives
-   small structured OCR chunks and may select source cell IDs, classify section/row specimen, or
-   propose semantic roles and canonical candidates through a versioned schema;
-6. deterministic validators copy exact source values, reject invented cell IDs and incompatible
-   specimen/value/unit mappings, and decide which fields genuinely need review; and
-7. the user inspects a grouped table, resolves the exceptions, and confirms the draft.
+4. the versioned extraction identity catalogue resolves source labels to canonical Biomarker IDs,
+   with English and German aliases forming the MVP-supported report-language boundary; resolution
+   supplies a reviewed English display name but does not imply comparison or evidence support;
+5. deterministic validators retain exact source observations, reparse every field, reject malformed
+   or incompatible specimen/value/unit mappings, and decide which fields genuinely need review; and
+6. the user inspects a grouped table, resolves the exceptions, and confirms the draft.
 
 Raw OCR or PDF text observations are retained only as internal provenance. They do not each become
 a draft row. Unknown measurement-shaped results remain preserved even when they cannot be mapped;
 unrelated headers, addresses, licences, and prose do not become user review work.
 
-The semantic mapper remains provider-neutral above the native runtime even though the first release
-validates and ships one pack, Gemma 4 E2B (Q4_0). The model name is not part of the Extraction Draft
-contract. The iOS 26 Foundation Models framework may remain an optional accelerator where
-available, but it is not the local contract. Chunk every semantic request by table and bounded row
-count, accept only source identifiers that exist, reject duplicate source-row consumption, and
-never let a model author authoritative numbers, units, ranges, conversions, translations, or
-medical explanations. The catalogue owns localized display names while exact source labels remain
-provenance.
-
-Model weights are executable inputs even when they contain no health record. Alyte therefore
-accepts only manifest-pinned inference formats from reviewed repositories and never loads pickle or
-arbitrary code from the Hub. A missing, deleted, corrupt, incompatible, or interrupted pack does not
-block launch or existing local history, but it prevents a new automated extraction until a verified
-pack is ready. Once an extraction has started, runtime or inference failure falls back to Vision
-structure, locale parsing, aliases, deterministic validation, and focused user review.
+The MVP local contract remains deterministic at its trust boundary: locale parsing, catalogue
+aliasing, and validation preserve unknown or ambiguous measurement-shaped rows for focused review.
+The accepted Qwen document model is an automated-import prerequisite completed during onboarding.
+Its output remains untrusted and is grounded back to exact source IDs or bounded source spans. It
+cannot author authoritative labels, values, units, ranges, conversions, translations, identifiers,
+dates, confidence, or medical explanations. The catalogue owns reviewed canonical English display
+names and localized source aliases while exact source labels remain provenance.
 
 Cloud report extraction is a future fallback for selected, sanitized pages. It produces another editable
 Extraction Draft and never bypasses review.
@@ -661,6 +665,11 @@ use typechecking and focused integrated checks for obvious low-risk wiring and s
 - Repository tests use temporary SQLite databases and exercise every migration from version zero.
 - Swift XCTest covers OCR/PDF transforms, password handling, metadata removal, redaction flattening,
   file protection, and cloud-envelope test vectors.
+- PDF text-layer contract tests cover UTF-16/source-span integrity, geometry transforms, caps,
+  malformed or insufficient pages, and typed unavailability. Import integration tests prove that
+  trusted pages skip Vision, unavailable pages use Vision exactly once, same-page sources are never
+  merged, page order is preserved, and Original hash mutation before or after either source read
+  fails the operation.
 - `npm run test:native:protection` copies the maintained `AlyteProtection` sources and XCTest
   fixtures into an ephemeral Swift Package, resolves the exact ZIPFoundation 0.9.20 dependency
   at the checked-in immutable revision, and runs both native protection test suites on the current

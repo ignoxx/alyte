@@ -11,11 +11,11 @@ import type { VisionTextObservation } from '@alyte/domain';
 const loadedState = {
   packId: productionLocalModelManifest.pack.id,
   state: 'loaded' as const,
-  bytesReceived: productionLocalModelManifest.pack.artifact.bytes,
-  expectedBytes: productionLocalModelManifest.pack.artifact.bytes,
+  bytesReceived: productionLocalModelManifest.pack.bytes,
+  expectedBytes: productionLocalModelManifest.pack.bytes,
   progress: 1,
   failure: null,
-  storageBytes: productionLocalModelManifest.pack.artifact.bytes,
+  storageBytes: productionLocalModelManifest.pack.bytes,
   loaded: true,
 };
 
@@ -47,16 +47,6 @@ const candidateRow = {
   rowId: 'synthetic-ldl-row',
   sourceObservationIds: [observation.id, valueObservation.id, unitObservation.id],
   observations: [observation, valueObservation, unitObservation],
-} as const;
-
-const siblingRow = {
-  rowId: 'synthetic-hdl-row',
-  sourceObservationIds: ['synthetic-hdl-label', 'synthetic-hdl-value', 'synthetic-hdl-unit'],
-  observations: [
-    { ...observation, id: 'synthetic-hdl-label', text: 'HDL-C' },
-    { ...valueObservation, id: 'synthetic-hdl-value', text: '1,4' },
-    { ...unitObservation, id: 'synthetic-hdl-unit' },
-  ],
 } as const;
 
 function models(
@@ -199,21 +189,24 @@ test('accepts only validated source selections and preserves versioned provenanc
     aliases,
   });
   const mapped = await mapper.map({ pageIndex: 0, rows: [candidateRow] });
-  assert.deepEqual(mapped, [
-    {
-      sourceObservationIds: ['synthetic-ldl-label', 'synthetic-ldl-value', 'synthetic-ldl-unit'],
-      sourceFields: {
-        label: 'synthetic-ldl-label',
-        value: 'synthetic-ldl-value',
-        unit: 'synthetic-ldl-unit',
-        referenceInterval: null,
-        flag: null,
+  assert.deepEqual(mapped, {
+    proposals: [
+      {
+        sourceObservationIds: ['synthetic-ldl-label', 'synthetic-ldl-value', 'synthetic-ldl-unit'],
+        sourceFields: {
+          label: 'synthetic-ldl-label',
+          value: 'synthetic-ldl-value',
+          unit: 'synthetic-ldl-unit',
+          referenceInterval: null,
+          flag: null,
+        },
+        proposedBiomarkerId: 'biomarker.ldl_c',
+        proposedSpecimenType: 'serum',
+        role: 'measurement',
       },
-      proposedBiomarkerId: 'biomarker.ldl_c',
-      proposedSpecimenType: 'serum',
-      role: 'measurement',
-    },
-  ]);
+    ],
+    incomplete: false,
+  });
   assert.equal(mapper.provenance?.promptVersion, 'alyte.semantic-mapper.prompt.v6');
   assert.equal(mapper.maxRowsPerChunk, 2);
 });
@@ -229,7 +222,10 @@ test('rejects invented root keys before semantic validation', async () => {
     ),
     aliases,
   });
-  assert.deepEqual(await mapper.map({ pageIndex: 0, rows: [candidateRow] }), []);
+  assert.deepEqual(await mapper.map({ pageIndex: 0, rows: [candidateRow] }), {
+    proposals: [],
+    incomplete: true,
+  });
 });
 
 test('retries malformed output once, then preserves deterministic fallback on timeout', async () => {
@@ -328,15 +324,17 @@ test('retries only the malformed sibling while retaining a valid proposal', asyn
     }),
     aliases,
   });
-  const proposals = (await mapper.map({
+  const mapped = (await mapper.map({
     pageIndex: 0,
     rows: [validRow, malformedRow],
-  })) as readonly {
-    readonly sourceObservationIds: readonly string[];
-  }[];
+  })) as {
+    readonly proposals: readonly { readonly sourceObservationIds: readonly string[] }[];
+    readonly incomplete: boolean;
+  };
   assert.equal(calls, 2);
-  assert.equal(proposals.length, 1);
-  assert.deepEqual(proposals[0]?.sourceObservationIds, validRow.sourceObservationIds);
+  assert.equal(mapped.incomplete, true);
+  assert.equal(mapped.proposals.length, 1);
+  assert.deepEqual(mapped.proposals[0]?.sourceObservationIds, validRow.sourceObservationIds);
   assert.match(prompts[1]!, /HDL-C/u);
   assert.doesNotMatch(prompts[1]!, /synthetic-ldl-label/u);
 });

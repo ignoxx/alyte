@@ -1,3 +1,5 @@
+import { isExtractionCategoricalResultValue } from './extraction-value-shapes';
+
 /**
  * Conservative reconstruction of the physical OCR lattice.
  *
@@ -27,6 +29,13 @@ export type GeometrySourceSpan = {
   /** Optional assertion from a producer; the parent substring remains authoritative. */
   readonly text?: string;
 };
+
+/**
+ * Ephemeral grouping authority supplied by a trusted source adapter. This is intentionally not
+ * part of persisted extraction data: ordinary Vision observations must retain the conservative
+ * parent-band reconstruction below.
+ */
+export type GeometrySpanPolicy = 'trusted-independent';
 
 export type GeometryBoundaryContext = {
   /** A stable table identity. `null` is a deliberate boundary, not a wildcard. */
@@ -58,6 +67,8 @@ export type GeometrySourceObservation = {
   readonly parentId?: string | null;
   /** Exact token spans in this observation's text, when available. */
   readonly spans?: readonly GeometrySourceSpan[];
+  /** Trusted PDFKit spans are independently banded before physical-row reconstruction. */
+  readonly spanPolicy?: GeometrySpanPolicy;
   /** Convenience fields accepted from adapters that have not nested boundary context. */
   readonly tableId?: string | null;
   readonly sectionId?: string | null;
@@ -203,15 +214,17 @@ export function reconstructGeometryLattice(
     rows.push(buildRow(group, true));
   }
 
-  const looseAnchors = new Map<string, readonly number[]>();
+  const adaptiveLooseHeight = medianHeight(looseBands);
+  const looseCellsByContext = new Map<string, GeometryCell[]>();
   for (const band of looseBands) {
     const key = contextKey(band.context);
-    const cells = looseBands
-      .filter((candidate) => contextKey(candidate.context) === key)
-      .flatMap((candidate) => candidate.cells);
-    if (!looseAnchors.has(key))
-      looseAnchors.set(key, inferColumnAnchors(cells, medianHeight(looseBands)));
+    const cells = looseCellsByContext.get(key) ?? [];
+    cells.push(...band.cells);
+    looseCellsByContext.set(key, cells);
   }
+  const looseAnchors = new Map<string, readonly number[]>();
+  for (const [key, cells] of looseCellsByContext)
+    looseAnchors.set(key, inferColumnAnchors(cells, adaptiveLooseHeight));
 
   const looseGroups: LooseRowGroup[] = [];
   const sortedLoose = [...looseBands].sort(compareBands);
@@ -219,7 +232,7 @@ export function reconstructGeometryLattice(
     const compatible = looseGroups.filter(
       (group) =>
         sameContext(group.context, band.context) &&
-        samePhysicalBand(group.parts, band, medianHeight(sortedLoose)),
+        samePhysicalBand(group.parts, band, adaptiveLooseHeight),
     );
     // The nearest compatible prior row wins. A bridging cell can merge partial groups only when
     // continuity proves they are one physical row; otherwise a new row preserves ambiguity.
@@ -228,8 +241,12 @@ export function reconstructGeometryLattice(
     else {
       // A cell can bridge two partial x-continuity groups (for example when OCR emitted the
       // label and value before the unit). Merge only groups already proven to share this exact
-      // page/table/section/specimen/date context.
-      for (const group of compatible) {
+      // page/table/section/specimen/date context and the target's stable vertical band. A tall
+      // bridge must not make adjacent physical rows appear compatible with one another.
+      const mergeable = compatible.filter(
+        (group) => group === target || sameLooseRowBand(group, target, adaptiveLooseHeight),
+      );
+      for (const group of mergeable) {
         if (group === target) continue;
         target.parts.push(...group.parts);
         const index = looseGroups.indexOf(group);
@@ -321,6 +338,27 @@ function expandObservation(
       context,
       reason: 'invalid-token-span',
     };
+  }
+  if (observation.spanPolicy === 'trusted-independent') {
+    return spans.map((span) => {
+      const cell = makeSpanCell(
+        observation,
+        parentId,
+        span,
+        seeded ? (structure?.columnIndex ?? null) : null,
+      );
+      return makeBand(
+        observation,
+        context,
+        parentId,
+        [cell],
+        seeded,
+        seeded ? (structure?.rowIndex ?? null) : null,
+        seeded ? (structure?.columnIndex ?? null) : null,
+        0,
+        cell.boundingBox,
+      );
+    });
   }
   const bandGroups = groupSourceSpansIntoBands(observation, spans);
   if (bandGroups === null) {
@@ -588,7 +626,11 @@ function buildRow(
   );
   const sourceObservationIds = uniqueInOrder(cells.map((cell) => cell.sourceObservationId));
   const parentIds = uniqueInOrder(cells.map((cell) => cell.parentId));
-  const yBandCount = Math.max(1, ...sortedParts.map((part) => part.yBandIndex + 1));
+  // `yBandIndex` describes a cell's position inside its OCR parent. Once parts are reconstructed
+  // into a physical row, that local index is no longer a physical-band count: a valid row made
+  // entirely from the parent's second band still has one final y-band. Count the final cells so
+  // downstream safety gates inspect the geometry they will actually consume.
+  const yBandCount = countFinalPhysicalYBands(cells);
   return {
     id: seeded
       ? `row:${contextKey(first.context)}:${first.rowIndex}`
@@ -605,6 +647,43 @@ function buildRow(
     yBandCount,
     cells,
   };
+}
+
+/**
+ * Counts vertical bands in the final row cells, keeping the result conservative around tall or
+ * contradictory boxes. Tall cells are excluded from the representatives when ordinary-height
+ * cells exist; the independent extraction safety gate remains responsible for validating whether
+ * a tall cell can safely belong to the row at all.
+ */
+function countFinalPhysicalYBands(cells: readonly GeometryCell[]): number {
+  if (cells.length === 0) return 0;
+  const typicalHeight = median(cells.map((cell) => cell.boundingBox.height));
+  if (!(typicalHeight > 0) || !Number.isFinite(typicalHeight)) return cells.length;
+
+  const representatives = cells.filter((cell) => cell.boundingBox.height <= typicalHeight * 1.8);
+  const boxes = (representatives.length > 0 ? representatives : cells)
+    .map((cell) => cell.boundingBox)
+    .sort(
+      (left, right) =>
+        left.y - right.y ||
+        left.x - right.x ||
+        left.height - right.height ||
+        left.width - right.width,
+    );
+  const bands: GeometryBoundingBox[] = [];
+  for (const box of boxes) {
+    const matches = bands.filter((band) => bandMatches(band, box, typicalHeight));
+    // More than one matching band is contradictory geometry. Keep this count conservative so an
+    // independent admission gate cannot mistake an ambiguous aggregate for one physical row.
+    if (matches.length > 1) return Math.max(2, bands.length);
+    const match = matches[0];
+    if (match === undefined) bands.push(box);
+    else {
+      const index = bands.indexOf(match);
+      bands[index] = unionBoxes([match, box]);
+    }
+  }
+  return Math.max(1, bands.length);
 }
 
 function assignLooseColumns(
@@ -664,14 +743,97 @@ function samePhysicalBand(
   candidate: ParentBand,
   adaptiveHeight: number,
 ): boolean {
+  const stable = stableBand(parts);
+  const vertical = loosePhysicalBandMatches(
+    stable.boundingBox,
+    candidate.boundingBox,
+    adaptiveHeight,
+  );
+  const trustedIndependent =
+    candidate.observation.spanPolicy === 'trusted-independent' &&
+    parts.every((part) => part.observation.spanPolicy === 'trusted-independent');
+  const sharesTrustedVisualLine =
+    candidate.sourceObservationId === stable.sourceObservationId ||
+    (candidate.observation.spans === undefined && stable.observation.spans === undefined);
+  const strictlyAligned =
+    trustedIndependent &&
+    sharesTrustedVisualLine &&
+    strictlyAlignedPhysicalBand(stable.boundingBox, candidate.boundingBox);
+  if (!vertical && !strictlyAligned) return false;
+  if (strictlyAligned) return true;
   return parts.some((part) => {
     const left = part.boundingBox;
     const right = candidate.boundingBox;
-    const vertical = bandMatches(left, right, adaptiveHeight);
-    if (!vertical) return false;
     const gap = horizontalGap(left, right);
     return gap <= xContinuityGap(adaptiveHeight) || horizontalOverlap(left, right) > 0;
   });
+}
+
+/**
+ * Trusted cells from one PDFKit source line may be separated by a full table-column gap and may
+ * report different glyph boxes for the same visual baseline. The caller restricts this fallback
+ * to one span-bearing source observation (or the synthetic/no-span compatibility path), so the
+ * bounded baseline offset cannot join independently proven adjacent PDF lines.
+ */
+function strictlyAlignedPhysicalBand(
+  left: GeometryBoundingBox,
+  right: GeometryBoundingBox,
+): boolean {
+  const minimumHeight = Math.max(0.000001, Math.min(left.height, right.height));
+  const maximumHeight = Math.max(left.height, right.height);
+  const heightRatio = maximumHeight / minimumHeight;
+  if (heightRatio > 1.8) return false;
+  const overlap = verticalOverlap(left, right) / minimumHeight;
+  const centerDistance = Math.abs(left.y + left.height / 2 - (right.y + right.height / 2));
+  return overlap >= 0.55 || centerDistance <= maximumHeight * 1.5;
+}
+
+/**
+ * Loose OCR rows need a stricter tall-box rule than token-band splitting. A tall box can overlap
+ * two rows, but it is assigned only to the first short band it reaches; ordinary overlap remains
+ * appropriate for same-parent token grouping, where the source producer already supplied a
+ * bounded y-band.
+ */
+function loosePhysicalBandMatches(
+  left: GeometryBoundingBox,
+  right: GeometryBoundingBox,
+  adaptiveHeight: number,
+): boolean {
+  const tallThreshold = adaptiveHeight * 1.8;
+  if (left.height > tallThreshold || right.height > tallThreshold) {
+    const tall = left.height > right.height ? left : right;
+    const short = tall === left ? right : left;
+    const shortCenter = short.y + short.height / 2;
+    return shortCenter >= tall.y && shortCenter - tall.y <= adaptiveHeight * 1.25;
+  }
+  return bandMatches(left, right, adaptiveHeight);
+}
+
+/**
+ * Compares groups without allowing a tall bridge in either group to widen its y-band.
+ *
+ * A loose row can contain several horizontally adjacent OCR parts, so vertical compatibility
+ * must be based on one representative part while horizontal continuity is checked separately.
+ * The shortest part is the least likely to overlap a neighbouring physical row and is stable
+ * under input ordering because ties fall back to the existing deterministic band ordering.
+ */
+function sameLooseRowBand(
+  left: LooseRowGroup,
+  right: LooseRowGroup,
+  adaptiveHeight: number,
+): boolean {
+  return bandMatches(
+    stableBand(left.parts).boundingBox,
+    stableBand(right.parts).boundingBox,
+    adaptiveHeight,
+  );
+}
+
+function stableBand(parts: readonly ParentBand[]): ParentBand {
+  return [...parts].sort(
+    (left, right) =>
+      left.boundingBox.height - right.boundingBox.height || compareBands(left, right),
+  )[0]!;
 }
 
 function nearestGroup(
@@ -824,10 +986,12 @@ function isRangeCell(text: string): boolean {
   return /(?:-|–|—|\bto\b)/iu.test(text.trim()) && isReferenceCell(text);
 }
 
+function isCategoricalValueCell(text: string): boolean {
+  return isExtractionCategoricalResultValue(text);
+}
+
 function isFlagCell(text: string): boolean {
-  return /^(?:h|l|n|high|low|normal|abnormal|positive|negative|detected|not detected)$/iu.test(
-    text.trim(),
-  );
+  return /^(?:h|l|n|high|low|normal|abnormal)$/iu.test(text.trim());
 }
 
 function candidatesForRole(
@@ -837,7 +1001,8 @@ function candidatesForRole(
   const candidates = cells.filter((cell) => {
     const text = cell.text.trim();
     if (text.length === 0) return false;
-    if (role === 'value') return isNumericCell(text) && !isRangeCell(text);
+    if (role === 'value')
+      return (isNumericCell(text) && !isRangeCell(text)) || isCategoricalValueCell(text);
     if (role === 'unit') return isUnitCell(text);
     if (role === 'reference') return isReferenceCell(text) && isRangeCell(text);
     if (role === 'flag') return isFlagCell(text);
@@ -846,7 +1011,8 @@ function candidatesForRole(
       !isNumericCell(text) &&
       !isUnitCell(text) &&
       !isReferenceCell(text) &&
-      !isFlagCell(text)
+      !isFlagCell(text) &&
+      !isCategoricalValueCell(text)
     );
   });
   return candidates.map((cell) => ({

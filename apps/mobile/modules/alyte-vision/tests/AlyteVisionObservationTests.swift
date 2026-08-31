@@ -8,6 +8,21 @@ import XCTest
 @testable import AlyteVisionBoundary
 
 final class AlyteVisionObservationTests: XCTestCase {
+  func testRecognitionLanguagePreferenceMatchesLaunchPriority() {
+    XCTAssertEqual(alyteVisionPreferredRecognitionLanguageIdentifiers, ["en", "de", "lt"])
+  }
+
+  func testTableCoordinatesUseVisionRangesInsteadOfArrayOffsets() throws {
+    let coordinates = try XCTUnwrap(
+      alyteVisionTableCellCoordinates(rowRange: 2...3, columnRange: 4...6)
+    )
+
+    XCTAssertEqual(coordinates.rowIndex, 2)
+    XCTAssertEqual(coordinates.columnIndex, 4)
+    XCTAssertEqual(coordinates.identitySuffix, "r2-3-c4-6")
+    XCTAssertNil(alyteVisionTableCellCoordinates(rowRange: -1...0, columnRange: 0...1))
+  }
+
   func testImportedUIImageOrientationsNormalizeToUprightNativePixels() throws {
     let source = try XCTUnwrap(Self.syntheticPatternImage())
     let expected: [UIImage.Orientation: [[Int]]] = [
@@ -330,7 +345,46 @@ final class AlyteVisionObservationTests: XCTestCase {
       XCTAssertEqual(outputBox["width"] ?? -1, Double(sourceBox.width), accuracy: 0.000001)
       XCTAssertEqual(outputBox["height"] ?? -1, Double(sourceBox.height), accuracy: 0.000001)
     }
-    XCTAssertEqual(output.map { $0["structure"] as? [String: Any] }.compactMap { $0?["kind"] as? String }, ["text", "text", "text"])
+    for observation in output {
+      let structure = try XCTUnwrap(observation["structure"] as? [String: Any])
+      XCTAssertEqual(Set(structure.keys), Set(["kind", "tableId", "rowIndex", "columnIndex"]))
+      XCTAssertEqual(structure["kind"] as? String, "text")
+      XCTAssertTrue(structure["tableId"] as? NSNull != nil)
+      XCTAssertTrue(structure["rowIndex"] as? NSNull != nil)
+      XCTAssertTrue(structure["columnIndex"] as? NSNull != nil)
+    }
+
+    let tableStructure: [String: Any] = [
+      "kind": "table-cell",
+      "tableId": "table-0",
+      "rowIndex": 2,
+      "columnIndex": 1,
+    ]
+    let tableOutput = alyteDocumentObservations(
+      id: "document-0-table-cell-source",
+      text: selected.map(\.transcript).joined(separator: "\n"),
+      box: region,
+      pageIndex: 0,
+      orientation: 0,
+      structure: tableStructure,
+      lines: selected
+    )
+
+    XCTAssertEqual(tableOutput.count, selected.count)
+    XCTAssertEqual(tableOutput.map { $0["id"] as? String }, [
+      "document-0-table-cell-source-line-0",
+      "document-0-table-cell-source-line-1",
+      "document-0-table-cell-source-line-2",
+    ])
+    XCTAssertEqual(tableOutput.map { $0["text"] as? String }, selected.map(\.transcript))
+    for observation in tableOutput {
+      let structure = try XCTUnwrap(observation["structure"] as? [String: Any])
+      XCTAssertEqual(Set(structure.keys), Set(tableStructure.keys))
+      XCTAssertEqual(structure["kind"] as? String, "table-cell")
+      XCTAssertEqual(structure["tableId"] as? String, "table-0")
+      XCTAssertEqual(structure["rowIndex"] as? Int, 2)
+      XCTAssertEqual(structure["columnIndex"] as? Int, 1)
+    }
   }
 
   func testAdapterKeepsOriginalObservationWhenLineGeometryCannotBeProvenSafe() async throws {
@@ -363,6 +417,11 @@ final class AlyteVisionObservationTests: XCTestCase {
     XCTAssertEqual(output.count, 1)
     XCTAssertEqual(output[0]["id"] as? String, "document-0-unsafe-source")
     XCTAssertEqual(output[0]["text"] as? String, sourceText)
-    XCTAssertEqual((output[0]["structure"] as? [String: Any])?["kind"] as? String, "table-cell")
+    let structure = try XCTUnwrap(output[0]["structure"] as? [String: Any])
+    XCTAssertEqual(Set(structure.keys), Set(["kind", "tableId", "rowIndex", "columnIndex"]))
+    XCTAssertEqual(structure["kind"] as? String, "table-cell")
+    XCTAssertEqual(structure["tableId"] as? String, "table-0")
+    XCTAssertEqual(structure["rowIndex"] as? Int, 2)
+    XCTAssertEqual(structure["columnIndex"] as? Int, 0)
   }
 }

@@ -260,6 +260,7 @@ enum AlyteLocalModelRuntimeFailureStage: String {
   case grammar
   case sampler
   case allocation
+  case projector
   case unknown
 
   init(rawValueFromNative value: Int32) {
@@ -269,6 +270,7 @@ enum AlyteLocalModelRuntimeFailureStage: String {
     case 3: self = .grammar
     case 4: self = .sampler
     case 5: self = .allocation
+    case 6: self = .projector
     default: self = .unknown
     }
   }

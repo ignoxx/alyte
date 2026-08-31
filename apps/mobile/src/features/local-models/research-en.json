@@ -1,0 +1,5 @@
+{
+  "downloadSizeValue": "{bytes} {bytesUnit} ({gigabytes} {gigabytesUnit})",
+  "bytesUnit": "bytes",
+  "gigabytesUnit": "GB"
+}

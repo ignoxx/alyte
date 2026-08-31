@@ -1,0 +1,250 @@
+{
+  "contractVersion": "alyte.semantic-mapper.production-baseline.v1",
+  "manifestVersion": "alyte.local-model.manifest.v1",
+  "promptBundleVersion": "alyte.semantic-mapper.prompt.v6",
+  "fixtureVersion": "alyte.gemma4-production-contract-fixtures.v1",
+  "schemaVersion": "alyte.semantic-mapper.v2",
+  "ocrChunkVersion": "alyte.semantic-ocr-chunk.v5",
+  "catalogueVersion": "0.2.0",
+  "catalogueSchemaVersion": "alyte.catalogue.v1",
+  "model": {
+    "repository": "ggml-org/gemma-4-E2B-it-GGUF",
+    "revision": "b4243c156154b6dca9324415f8c7ccc098b4aed1",
+    "filename": "gemma-4-E2B-it-Q4_0.gguf",
+    "url": "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/b4243c156154b6dca9324415f8c7ccc098b4aed1/gemma-4-E2B-it-Q4_0.gguf?download=true",
+    "bytes": 2841481184,
+    "sha256": "8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52"
+  },
+  "runtime": {
+    "id": "llama.cpp",
+    "repository": "ggml-org/llama.cpp",
+    "revision": "bb4caa7540188872173c44d161602d9271386413"
+  },
+  "thinking": false,
+  "grammar": "root ::= \"{\" ws \"\\\"schemaVersion\\\"\" ws \":\" ws \"\\\"alyte.semantic-mapper.v2\\\"\" ws \",\" ws \"\\\"proposals\\\"\" ws \":\" ws proposals ws \"}\"\nproposals ::= \"[\" ws (proposal (ws \",\" ws proposal)*)? ws \"]\"\nproposal ::= \"{\" ws \"\\\"rowKey\\\"\" ws \":\" ws string ws \",\" ws \"\\\"labelKey\\\"\" ws \":\" ws string ws \",\" ws \"\\\"valueKey\\\"\" ws \":\" ws string ws \",\" ws \"\\\"unitKey\\\"\" ws \":\" ws nullableString ws \",\" ws \"\\\"referenceIntervalKey\\\"\" ws \":\" ws nullableString ws \",\" ws \"\\\"flagKey\\\"\" ws \":\" ws nullableString ws \",\" ws \"\\\"role\\\"\" ws \":\" ws role ws \",\" ws \"\\\"specimenType\\\"\" ws \":\" ws specimen ws \",\" ws \"\\\"biomarkerId\\\"\" ws \":\" ws (string | \"null\") ws \"}\"\nnullableString ::= string | \"null\"\nrole ::= \"\\\"measurement\\\"\" | \"\\\"preserve\\\"\" | \"\\\"specimen-context\\\"\" | \"\\\"ignore\\\"\"\nspecimen ::= \"\\\"blood\\\"\" | \"\\\"serum\\\"\" | \"\\\"plasma\\\"\" | \"\\\"urine\\\"\" | \"\\\"other\\\"\" | \"\\\"unknown\\\"\"\nstring ::= \"\\\"\" ([^\"\\\\] | escape)* \"\\\"\"\nescape ::= \"\\\\\" ([\"\\\\/bfnrt] | \"u\" hex4)\nhex4 ::= [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]\nws ::= [ \\t\\n\\r]*",
+  "grammarRoot": "root",
+  "limits": {
+    "maxRows": 2,
+    "maxObservations": 24,
+    "maxHeadings": 4,
+    "maxObservationTextCharacters": 240,
+    "maxAlternativeCharacters": 120,
+    "maxProposals": 2,
+    "maxOutputBytes": 8192,
+    "maxInputBytes": 8192,
+    "maxPromptBytes": 7168,
+    "outputTokenLimit": 192
+  },
+  "context": {
+    "version": "alyte.semantic-mapper.context.v1",
+    "maxTokens": 2048,
+    "reservedOutputTokens": 192,
+    "maxPromptTokens": 1856
+  },
+  "fixtures": [
+    {
+      "id": "gemma-v2-en-supported",
+      "language": "en",
+      "serializedInput": "{\"version\":\"alyte.semantic-ocr-chunk.v5\",\"locale\":\"en\",\"rows\":[{\"key\":\"r0\",\"cells\":[{\"key\":\"c0\",\"text\":\"LDL cholesterol\",\"alternatives\":[\"2026-08-17 08:42\",\"R-017\"]},{\"key\":\"c1\",\"text\":\"118\",\"alternatives\":[]},{\"key\":\"c2\",\"text\":\"mg/dL\",\"alternatives\":[]},{\"key\":\"c3\",\"text\":\"<115\",\"alternatives\":[]}]}],\"headings\":[],\"biomarkers\":[{\"id\":\"biomarker.alt\",\"label\":\"ALT\",\"aliases\":[\"alanin-aminotransferase\",\"alanina aminotransferasa\",\"alanina aminotransferasi\",\"alanine aminotransferase\",\"alanine aminotransférase\",\"alanine aminotransferase ifcc\",\"alanine transaminase\",\"alanine-aminotransferase\",\"alat\",\"gpt\",\"sgpt\"]},{\"id\":\"biomarker.ast\",\"label\":\"AST\",\"aliases\":[\"asat\",\"aspartaataminotransferase\",\"aspartat-aminotransferase\",\"aspartate aminotransferase\",\"aspartate aminotransférase\",\"aspartate aminotransferase ifcc\",\"aspartate transaminase\",\"aspartato aminotransferasa\",\"aspartato aminotransferasi\",\"got\",\"sgot\"]},{\"id\":\"biomarker.ferritin\",\"label\":\"Ferritin\",\"aliases\":[\"Feritinas\",\"ferritina\",\"ferritine\",\"ferritine sérique\",\"ferrytyna\",\"plasma ferritin\",\"serum ferritin\"]},{\"id\":\"biomarker.ggt\",\"label\":\"GGT\",\"aliases\":[\"gama glutamil transferase\",\"gamma glutamil transferasa\",\"gamma glutamil transferasi\",\"gamma glutamyl transferase\",\"gamma gt\",\"gamma-glutamyl transferase\",\"gamma-glutamyl transférase\",\"gamma-glutamyl transpeptidase\",\"gamma-glutamyltransferase\",\"gamma-gt\",\"ggtp\",\"γ-glutamyltransferase\"]},{\"id\":\"biomarker.glucose\",\"label\":\"Glucose\",\"aliases\":[\"blood glucose\",\"blood sugar\",\"blutzucker\",\"fasting blood glucose\",\"fasting glucose\",\"glicemia\",\"gliukozė\",\"glucosa\",\"glucose à jeun\",\"glucose nuchter\",\"glukose\",\"glukoza\",\"glycémie\",\"nüchternblutzucker\"]},{\"id\":\"biomarker.hba1c\",\"label\":\"HbA1c\",\"aliases\":[\"a1c\",\"emoglobina glicata\",\"geglyceerd hemoglobine\",\"glycated hemoglobin\",\"glycosylated hemoglobin\",\"glykiertes hämoglobin\",\"hämoglobin a1c\",\"hb a1c\",\"hemoglobin a1c\",\"hemoglobina glicosilada\",\"hemoglobina glikowana\",\"hémoglobine glyquée\",\"langzeitblutzucker\"]},{\"id\":\"biomarker.hdl_c\",\"label\":\"HDL-C\",\"aliases\":[\"cholestérol hdl\",\"colesterol hdl\",\"colesterolo hdl\",\"didelio tankio lipoproteinų cholesterolis\",\"hdl\",\"hdl cholesterol\",\"hdl-cholesterin\"]},{\"id\":\"biomarker.hematocrit\",\"label\":\"Hematocrit\",\"aliases\":[\"ematocrito\",\"haematocrit\",\"hämatokrit\",\"hct\",\"hematocriet\",\"hématocrite\",\"hematocrito\",\"hematokritas\",\"hematokryt\",\"packed cell volume\",\"packed-cell volume\",\"pcv\"]},{\"id\":\"biomarker.hemoglobin\",\"label\":\"Hemoglobin\",\"aliases\":[\"emoglobina\",\"haemoglobin\",\"hämoglobin\",\"hämoglobinwert\",\"hb\",\"hemoglobin concentration\",\"hemoglobina\",\"hemoglobinas\",\"hemoglobine\",\"hémoglobine\",\"hgb\"]},{\"id\":\"biomarker.ldl_c\",\"label\":\"LDL-C\",\"aliases\":[\"cholesterol ldl\",\"cholestérol ldl\",\"colesterol ldl\",\"colesterolo ldl\",\"ldl\",\"ldl cholesterol\",\"ldl-cholesterin\",\"ldl-cholesterol\",\"mažo tankio lipoproteinų cholesterolis\"]},{\"id\":\"biomarker.mcv\",\"label\":\"MCV\",\"aliases\":[\"gemiddeld corpusculair volume\",\"mean cell volume\",\"mean corpuscular volume\",\"mittleres korpuskuläres volumen\",\"średnia objętość krwinki\",\"vidutinis eritrocitų tūris\",\"volume corpuscolare medio\",\"volume globulaire moyen\",\"volumen corpuscular medio\"]},{\"id\":\"biomarker.total_cholesterol\",\"label\":\"Total cholesterol\",\"aliases\":[\"bendras cholesterolis\",\"cholesterol całkowity\",\"cholesterol total\",\"cholestérol total\",\"colesterol total\",\"colesterolo totale\",\"gesamtcholesterin\",\"totaal cholesterol\"]},{\"id\":\"biomarker.triglycerides\",\"label\":\"Triglycerides\",\"aliases\":[\"trigliceridai\",\"trigliceridi\",\"triglicéridos\",\"triglicerydy\",\"triglyceride\",\"triglyceriden\",\"triglyzeride\"]},{\"id\":\"biomarker.vitamin_b12_total\",\"label\":\"Total vitamin B12\",\"aliases\":[\"cobalamin\",\"kobalamina\",\"plasma vitamin b12\",\"serum vitamin b12\",\"total cobalamin\",\"vitamin b-12\",\"vitamin b12\",\"vitamina b12\",\"vitamina b12 totale\",\"vitamine b12\",\"witamina b12\"]},{\"id\":\"biomarker.vitamin_d_total\",\"label\":\"Total 25-hydroxyvitamin D\",\"aliases\":[\"25 hydroxyvitamin d\",\"25 oh vitamin d\",\"25-hidroksivitaminas d\",\"25-hidroxivitamina d\",\"25-hydroksywitamina d\",\"25-hydroxyvitamin d\",\"25-hydroxyvitamine d\",\"25-idrossivitamina d\",\"25-oh d\",\"25-oh vitamin d\",\"25-oh-vitamin d\",\"25(oh)d\",\"calcidiol\"]}]}",
+      "expected": [
+        {
+          "rowId": "en-serum-ldl",
+          "sourceObservationIds": [
+            "en-serum-ldl-c0",
+            "en-serum-ldl-c1",
+            "en-serum-ldl-c2",
+            "en-serum-ldl-c3"
+          ],
+          "sourceFactObservationIds": ["en-serum-ldl-c1", "en-serum-ldl-c2", "en-serum-ldl-c3"],
+          "sourceFields": {
+            "label": "en-serum-ldl-c0",
+            "value": "en-serum-ldl-c1",
+            "unit": "en-serum-ldl-c2",
+            "referenceInterval": "en-serum-ldl-c3",
+            "flag": null
+          },
+          "biomarkerId": "biomarker.ldl_c",
+          "role": "measurement",
+          "specimenType": "serum",
+          "sourceFacts": {
+            "valueString": "118",
+            "unit": "mg/dL",
+            "referenceInterval": "<115"
+          }
+        }
+      ]
+    },
+    {
+      "id": "gemma-v2-en-unsupported",
+      "language": "en",
+      "serializedInput": "{\"version\":\"alyte.semantic-ocr-chunk.v5\",\"locale\":\"en\",\"rows\":[{\"key\":\"r0\",\"cells\":[{\"key\":\"c0\",\"text\":\"Glucose\",\"alternatives\":[\"Glucose (urine)\"]},{\"key\":\"c1\",\"text\":\"negative\",\"alternatives\":[]},{\"key\":\"c2\",\"text\":\"qualitative\",\"alternatives\":[]},{\"key\":\"c3\",\"text\":\"negative\",\"alternatives\":[]}]}],\"headings\":[],\"biomarkers\":[{\"id\":\"biomarker.alt\",\"label\":\"ALT\",\"aliases\":[\"alanin-aminotransferase\",\"alanina aminotransferasa\",\"alanina aminotransferasi\",\"alanine aminotransferase\",\"alanine aminotransférase\",\"alanine aminotransferase ifcc\",\"alanine transaminase\",\"alanine-aminotransferase\",\"alat\",\"gpt\",\"sgpt\"]},{\"id\":\"biomarker.ast\",\"label\":\"AST\",\"aliases\":[\"asat\",\"aspartaataminotransferase\",\"aspartat-aminotransferase\",\"aspartate aminotransferase\",\"aspartate aminotransférase\",\"aspartate aminotransferase ifcc\",\"aspartate transaminase\",\"aspartato aminotransferasa\",\"aspartato aminotransferasi\",\"got\",\"sgot\"]},{\"id\":\"biomarker.ferritin\",\"label\":\"Ferritin\",\"aliases\":[\"Feritinas\",\"ferritina\",\"ferritine\",\"ferritine sérique\",\"ferrytyna\",\"plasma ferritin\",\"serum ferritin\"]},{\"id\":\"biomarker.ggt\",\"label\":\"GGT\",\"aliases\":[\"gama glutamil transferase\",\"gamma glutamil transferasa\",\"gamma glutamil transferasi\",\"gamma glutamyl transferase\",\"gamma gt\",\"gamma-glutamyl transferase\",\"gamma-glutamyl transférase\",\"gamma-glutamyl transpeptidase\",\"gamma-glutamyltransferase\",\"gamma-gt\",\"ggtp\",\"γ-glutamyltransferase\"]},{\"id\":\"biomarker.glucose\",\"label\":\"Glucose\",\"aliases\":[\"blood glucose\",\"blood sugar\",\"blutzucker\",\"fasting blood glucose\",\"fasting glucose\",\"glicemia\",\"gliukozė\",\"glucosa\",\"glucose à jeun\",\"glucose nuchter\",\"glukose\",\"glukoza\",\"glycémie\",\"nüchternblutzucker\"]},{\"id\":\"biomarker.hba1c\",\"label\":\"HbA1c\",\"aliases\":[\"a1c\",\"emoglobina glicata\",\"geglyceerd hemoglobine\",\"glycated hemoglobin\",\"glycosylated hemoglobin\",\"glykiertes hämoglobin\",\"hämoglobin a1c\",\"hb a1c\",\"hemoglobin a1c\",\"hemoglobina glicosilada\",\"hemoglobina glikowana\",\"hémoglobine glyquée\",\"langzeitblutzucker\"]},{\"id\":\"biomarker.hdl_c\",\"label\":\"HDL-C\",\"aliases\":[\"cholestérol hdl\",\"colesterol hdl\",\"colesterolo hdl\",\"didelio tankio lipoproteinų cholesterolis\",\"hdl\",\"hdl cholesterol\",\"hdl-cholesterin\"]},{\"id\":\"biomarker.hematocrit\",\"label\":\"Hematocrit\",\"aliases\":[\"ematocrito\",\"haematocrit\",\"hämatokrit\",\"hct\",\"hematocriet\",\"hématocrite\",\"hematocrito\",\"hematokritas\",\"hematokryt\",\"packed cell volume\",\"packed-cell volume\",\"pcv\"]},{\"id\":\"biomarker.hemoglobin\",\"label\":\"Hemoglobin\",\"aliases\":[\"emoglobina\",\"haemoglobin\",\"hämoglobin\",\"hämoglobinwert\",\"hb\",\"hemoglobin concentration\",\"hemoglobina\",\"hemoglobinas\",\"hemoglobine\",\"hémoglobine\",\"hgb\"]},{\"id\":\"biomarker.ldl_c\",\"label\":\"LDL-C\",\"aliases\":[\"cholesterol ldl\",\"cholestérol ldl\",\"colesterol ldl\",\"colesterolo ldl\",\"ldl\",\"ldl cholesterol\",\"ldl-cholesterin\",\"ldl-cholesterol\",\"mažo tankio lipoproteinų cholesterolis\"]},{\"id\":\"biomarker.mcv\",\"label\":\"MCV\",\"aliases\":[\"gemiddeld corpusculair volume\",\"mean cell volume\",\"mean corpuscular volume\",\"mittleres korpuskuläres volumen\",\"średnia objętość krwinki\",\"vidutinis eritrocitų tūris\",\"volume corpuscolare medio\",\"volume globulaire moyen\",\"volumen corpuscular medio\"]},{\"id\":\"biomarker.total_cholesterol\",\"label\":\"Total cholesterol\",\"aliases\":[\"bendras cholesterolis\",\"cholesterol całkowity\",\"cholesterol total\",\"cholestérol total\",\"colesterol total\",\"colesterolo totale\",\"gesamtcholesterin\",\"totaal cholesterol\"]},{\"id\":\"biomarker.triglycerides\",\"label\":\"Triglycerides\",\"aliases\":[\"trigliceridai\",\"trigliceridi\",\"triglicéridos\",\"triglicerydy\",\"triglyceride\",\"triglyceriden\",\"triglyzeride\"]},{\"id\":\"biomarker.vitamin_b12_total\",\"label\":\"Total vitamin B12\",\"aliases\":[\"cobalamin\",\"kobalamina\",\"plasma vitamin b12\",\"serum vitamin b12\",\"total cobalamin\",\"vitamin b-12\",\"vitamin b12\",\"vitamina b12\",\"vitamina b12 totale\",\"vitamine b12\",\"witamina b12\"]},{\"id\":\"biomarker.vitamin_d_total\",\"label\":\"Total 25-hydroxyvitamin D\",\"aliases\":[\"25 hydroxyvitamin d\",\"25 oh vitamin d\",\"25-hidroksivitaminas d\",\"25-hidroxivitamina d\",\"25-hydroksywitamina d\",\"25-hydroxyvitamin d\",\"25-hydroxyvitamine d\",\"25-idrossivitamina d\",\"25-oh d\",\"25-oh vitamin d\",\"25-oh-vitamin d\",\"25(oh)d\",\"calcidiol\"]}]}",
+      "expected": [
+        {
+          "rowId": "en-urine-glucose",
+          "sourceObservationIds": [
+            "en-urine-glucose-c0",
+            "en-urine-glucose-c1",
+            "en-urine-glucose-c2",
+            "en-urine-glucose-c3"
+          ],
+          "sourceFactObservationIds": [
+            "en-urine-glucose-c1",
+            "en-urine-glucose-c2",
+            "en-urine-glucose-c3"
+          ],
+          "sourceFields": {
+            "label": "en-urine-glucose-c0",
+            "value": "en-urine-glucose-c1",
+            "unit": "en-urine-glucose-c2",
+            "referenceInterval": "en-urine-glucose-c3",
+            "flag": null
+          },
+          "biomarkerId": null,
+          "role": "preserve",
+          "specimenType": "urine",
+          "sourceFacts": {
+            "valueString": "negative",
+            "unit": "qualitative",
+            "referenceInterval": "negative"
+          }
+        }
+      ]
+    },
+    {
+      "id": "gemma-v2-de-columns",
+      "language": "de",
+      "serializedInput": "{\"version\":\"alyte.semantic-ocr-chunk.v5\",\"locale\":\"de\",\"rows\":[{\"key\":\"r0\",\"cells\":[{\"key\":\"c0\",\"text\":\"LDL-Cholesterin\",\"alternatives\":[\"LDL Cholesterin\"]},{\"key\":\"c1\",\"text\":\"mmol/L\",\"alternatives\":[]},{\"key\":\"c2\",\"text\":\"3,8\",\"alternatives\":[\"3.8\"]},{\"key\":\"c3\",\"text\":\"<3,0\",\"alternatives\":[]}]}],\"headings\":[],\"biomarkers\":[{\"id\":\"biomarker.alt\",\"label\":\"ALT\",\"aliases\":[\"alanin-aminotransferase\",\"alanina aminotransferasa\",\"alanina aminotransferasi\",\"alanine aminotransferase\",\"alanine aminotransférase\",\"alanine aminotransferase ifcc\",\"alanine transaminase\",\"alanine-aminotransferase\",\"alat\",\"gpt\",\"sgpt\"]},{\"id\":\"biomarker.ast\",\"label\":\"AST\",\"aliases\":[\"asat\",\"aspartaataminotransferase\",\"aspartat-aminotransferase\",\"aspartate aminotransferase\",\"aspartate aminotransférase\",\"aspartate aminotransferase ifcc\",\"aspartate transaminase\",\"aspartato aminotransferasa\",\"aspartato aminotransferasi\",\"got\",\"sgot\"]},{\"id\":\"biomarker.ferritin\",\"label\":\"Ferritin\",\"aliases\":[\"Feritinas\",\"ferritina\",\"ferritine\",\"ferritine sérique\",\"ferrytyna\",\"plasma ferritin\",\"serum ferritin\"]},{\"id\":\"biomarker.ggt\",\"label\":\"GGT\",\"aliases\":[\"gama glutamil transferase\",\"gamma glutamil transferasa\",\"gamma glutamil transferasi\",\"gamma glutamyl transferase\",\"gamma gt\",\"gamma-glutamyl transferase\",\"gamma-glutamyl transférase\",\"gamma-glutamyl transpeptidase\",\"gamma-glutamyltransferase\",\"gamma-gt\",\"ggtp\",\"γ-glutamyltransferase\"]},{\"id\":\"biomarker.glucose\",\"label\":\"Glucose\",\"aliases\":[\"blood glucose\",\"blood sugar\",\"blutzucker\",\"fasting blood glucose\",\"fasting glucose\",\"glicemia\",\"gliukozė\",\"glucosa\",\"glucose à jeun\",\"glucose nuchter\",\"glukose\",\"glukoza\",\"glycémie\",\"nüchternblutzucker\"]},{\"id\":\"biomarker.hba1c\",\"label\":\"HbA1c\",\"aliases\":[\"a1c\",\"emoglobina glicata\",\"geglyceerd hemoglobine\",\"glycated hemoglobin\",\"glycosylated hemoglobin\",\"glykiertes hämoglobin\",\"hämoglobin a1c\",\"hb a1c\",\"hemoglobin a1c\",\"hemoglobina glicosilada\",\"hemoglobina glikowana\",\"hémoglobine glyquée\",\"langzeitblutzucker\"]},{\"id\":\"biomarker.hdl_c\",\"label\":\"HDL-C\",\"aliases\":[\"cholestérol hdl\",\"colesterol hdl\",\"colesterolo hdl\",\"didelio tankio lipoproteinų cholesterolis\",\"hdl\",\"hdl cholesterol\",\"hdl-cholesterin\"]},{\"id\":\"biomarker.hematocrit\",\"label\":\"Hematocrit\",\"aliases\":[\"ematocrito\",\"haematocrit\",\"hämatokrit\",\"hct\",\"hematocriet\",\"hématocrite\",\"hematocrito\",\"hematokritas\",\"hematokryt\",\"packed cell volume\",\"packed-cell volume\",\"pcv\"]},{\"id\":\"biomarker.hemoglobin\",\"label\":\"Hemoglobin\",\"aliases\":[\"emoglobina\",\"haemoglobin\",\"hämoglobin\",\"hämoglobinwert\",\"hb\",\"hemoglobin concentration\",\"hemoglobina\",\"hemoglobinas\",\"hemoglobine\",\"hémoglobine\",\"hgb\"]},{\"id\":\"biomarker.ldl_c\",\"label\":\"LDL-C\",\"aliases\":[\"cholesterol ldl\",\"cholestérol ldl\",\"colesterol ldl\",\"colesterolo ldl\",\"ldl\",\"ldl cholesterol\",\"ldl-cholesterin\",\"ldl-cholesterol\",\"mažo tankio lipoproteinų cholesterolis\"]},{\"id\":\"biomarker.mcv\",\"label\":\"MCV\",\"aliases\":[\"gemiddeld corpusculair volume\",\"mean cell volume\",\"mean corpuscular volume\",\"mittleres korpuskuläres volumen\",\"średnia objętość krwinki\",\"vidutinis eritrocitų tūris\",\"volume corpuscolare medio\",\"volume globulaire moyen\",\"volumen corpuscular medio\"]},{\"id\":\"biomarker.total_cholesterol\",\"label\":\"Total cholesterol\",\"aliases\":[\"bendras cholesterolis\",\"cholesterol całkowity\",\"cholesterol total\",\"cholestérol total\",\"colesterol total\",\"colesterolo totale\",\"gesamtcholesterin\",\"totaal cholesterol\"]},{\"id\":\"biomarker.triglycerides\",\"label\":\"Triglycerides\",\"aliases\":[\"trigliceridai\",\"trigliceridi\",\"triglicéridos\",\"triglicerydy\",\"triglyceride\",\"triglyceriden\",\"triglyzeride\"]},{\"id\":\"biomarker.vitamin_b12_total\",\"label\":\"Total vitamin B12\",\"aliases\":[\"cobalamin\",\"kobalamina\",\"plasma vitamin b12\",\"serum vitamin b12\",\"total cobalamin\",\"vitamin b-12\",\"vitamin b12\",\"vitamina b12\",\"vitamina b12 totale\",\"vitamine b12\",\"witamina b12\"]},{\"id\":\"biomarker.vitamin_d_total\",\"label\":\"Total 25-hydroxyvitamin D\",\"aliases\":[\"25 hydroxyvitamin d\",\"25 oh vitamin d\",\"25-hidroksivitaminas d\",\"25-hidroxivitamina d\",\"25-hydroksywitamina d\",\"25-hydroxyvitamin d\",\"25-hydroxyvitamine d\",\"25-idrossivitamina d\",\"25-oh d\",\"25-oh vitamin d\",\"25-oh-vitamin d\",\"25(oh)d\",\"calcidiol\"]}]}",
+      "expected": [
+        {
+          "rowId": "de-plasma-ldl",
+          "sourceObservationIds": [
+            "de-plasma-ldl-c0",
+            "de-plasma-ldl-c1",
+            "de-plasma-ldl-c2",
+            "de-plasma-ldl-c3"
+          ],
+          "sourceFactObservationIds": ["de-plasma-ldl-c2", "de-plasma-ldl-c1", "de-plasma-ldl-c3"],
+          "sourceFields": {
+            "label": "de-plasma-ldl-c0",
+            "value": "de-plasma-ldl-c2",
+            "unit": "de-plasma-ldl-c1",
+            "referenceInterval": "de-plasma-ldl-c3",
+            "flag": null
+          },
+          "biomarkerId": "biomarker.ldl_c",
+          "role": "measurement",
+          "specimenType": "plasma",
+          "sourceFacts": {
+            "valueString": "3,8",
+            "unit": "mmol/L",
+            "referenceInterval": "<3,0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "gemma-v2-de-reordered",
+      "language": "de",
+      "serializedInput": "{\"version\":\"alyte.semantic-ocr-chunk.v5\",\"locale\":\"de\",\"rows\":[{\"key\":\"r0\",\"cells\":[{\"key\":\"c0\",\"text\":\"14,2\",\"alternatives\":[]},{\"key\":\"c1\",\"text\":\"Hämoglobin\",\"alternatives\":[]},{\"key\":\"c2\",\"text\":\"12,0–16,0\",\"alternatives\":[]},{\"key\":\"c3\",\"text\":\"g/dL\",\"alternatives\":[]}]}],\"headings\":[],\"biomarkers\":[{\"id\":\"biomarker.alt\",\"label\":\"ALT\",\"aliases\":[\"alanin-aminotransferase\",\"alanina aminotransferasa\",\"alanina aminotransferasi\",\"alanine aminotransferase\",\"alanine aminotransférase\",\"alanine aminotransferase ifcc\",\"alanine transaminase\",\"alanine-aminotransferase\",\"alat\",\"gpt\",\"sgpt\"]},{\"id\":\"biomarker.ast\",\"label\":\"AST\",\"aliases\":[\"asat\",\"aspartaataminotransferase\",\"aspartat-aminotransferase\",\"aspartate aminotransferase\",\"aspartate aminotransférase\",\"aspartate aminotransferase ifcc\",\"aspartate transaminase\",\"aspartato aminotransferasa\",\"aspartato aminotransferasi\",\"got\",\"sgot\"]},{\"id\":\"biomarker.ferritin\",\"label\":\"Ferritin\",\"aliases\":[\"Feritinas\",\"ferritina\",\"ferritine\",\"ferritine sérique\",\"ferrytyna\",\"plasma ferritin\",\"serum ferritin\"]},{\"id\":\"biomarker.ggt\",\"label\":\"GGT\",\"aliases\":[\"gama glutamil transferase\",\"gamma glutamil transferasa\",\"gamma glutamil transferasi\",\"gamma glutamyl transferase\",\"gamma gt\",\"gamma-glutamyl transferase\",\"gamma-glutamyl transférase\",\"gamma-glutamyl transpeptidase\",\"gamma-glutamyltransferase\",\"gamma-gt\",\"ggtp\",\"γ-glutamyltransferase\"]},{\"id\":\"biomarker.glucose\",\"label\":\"Glucose\",\"aliases\":[\"blood glucose\",\"blood sugar\",\"blutzucker\",\"fasting blood glucose\",\"fasting glucose\",\"glicemia\",\"gliukozė\",\"glucosa\",\"glucose à jeun\",\"glucose nuchter\",\"glukose\",\"glukoza\",\"glycémie\",\"nüchternblutzucker\"]},{\"id\":\"biomarker.hba1c\",\"label\":\"HbA1c\",\"aliases\":[\"a1c\",\"emoglobina glicata\",\"geglyceerd hemoglobine\",\"glycated hemoglobin\",\"glycosylated hemoglobin\",\"glykiertes hämoglobin\",\"hämoglobin a1c\",\"hb a1c\",\"hemoglobin a1c\",\"hemoglobina glicosilada\",\"hemoglobina glikowana\",\"hémoglobine glyquée\",\"langzeitblutzucker\"]},{\"id\":\"biomarker.hdl_c\",\"label\":\"HDL-C\",\"aliases\":[\"cholestérol hdl\",\"colesterol hdl\",\"colesterolo hdl\",\"didelio tankio lipoproteinų cholesterolis\",\"hdl\",\"hdl cholesterol\",\"hdl-cholesterin\"]},{\"id\":\"biomarker.hematocrit\",\"label\":\"Hematocrit\",\"aliases\":[\"ematocrito\",\"haematocrit\",\"hämatokrit\",\"hct\",\"hematocriet\",\"hématocrite\",\"hematocrito\",\"hematokritas\",\"hematokryt\",\"packed cell volume\",\"packed-cell volume\",\"pcv\"]},{\"id\":\"biomarker.hemoglobin\",\"label\":\"Hemoglobin\",\"aliases\":[\"emoglobina\",\"haemoglobin\",\"hämoglobin\",\"hämoglobinwert\",\"hb\",\"hemoglobin concentration\",\"hemoglobina\",\"hemoglobinas\",\"hemoglobine\",\"hémoglobine\",\"hgb\"]},{\"id\":\"biomarker.ldl_c\",\"label\":\"LDL-C\",\"aliases\":[\"cholesterol ldl\",\"cholestérol ldl\",\"colesterol ldl\",\"colesterolo ldl\",\"ldl\",\"ldl cholesterol\",\"ldl-cholesterin\",\"ldl-cholesterol\",\"mažo tankio lipoproteinų cholesterolis\"]},{\"id\":\"biomarker.mcv\",\"label\":\"MCV\",\"aliases\":[\"gemiddeld corpusculair volume\",\"mean cell volume\",\"mean corpuscular volume\",\"mittleres korpuskuläres volumen\",\"średnia objętość krwinki\",\"vidutinis eritrocitų tūris\",\"volume corpuscolare medio\",\"volume globulaire moyen\",\"volumen corpuscular medio\"]},{\"id\":\"biomarker.total_cholesterol\",\"label\":\"Total cholesterol\",\"aliases\":[\"bendras cholesterolis\",\"cholesterol całkowity\",\"cholesterol total\",\"cholestérol total\",\"colesterol total\",\"colesterolo totale\",\"gesamtcholesterin\",\"totaal cholesterol\"]},{\"id\":\"biomarker.triglycerides\",\"label\":\"Triglycerides\",\"aliases\":[\"trigliceridai\",\"trigliceridi\",\"triglicéridos\",\"triglicerydy\",\"triglyceride\",\"triglyceriden\",\"triglyzeride\"]},{\"id\":\"biomarker.vitamin_b12_total\",\"label\":\"Total vitamin B12\",\"aliases\":[\"cobalamin\",\"kobalamina\",\"plasma vitamin b12\",\"serum vitamin b12\",\"total cobalamin\",\"vitamin b-12\",\"vitamin b12\",\"vitamina b12\",\"vitamina b12 totale\",\"vitamine b12\",\"witamina b12\"]},{\"id\":\"biomarker.vitamin_d_total\",\"label\":\"Total 25-hydroxyvitamin D\",\"aliases\":[\"25 hydroxyvitamin d\",\"25 oh vitamin d\",\"25-hidroksivitaminas d\",\"25-hidroxivitamina d\",\"25-hydroksywitamina d\",\"25-hydroxyvitamin d\",\"25-hydroxyvitamine d\",\"25-idrossivitamina d\",\"25-oh d\",\"25-oh vitamin d\",\"25-oh-vitamin d\",\"25(oh)d\",\"calcidiol\"]}]}",
+      "expected": [
+        {
+          "rowId": "de-blood-hb",
+          "sourceObservationIds": [
+            "de-blood-hb-c0",
+            "de-blood-hb-c1",
+            "de-blood-hb-c2",
+            "de-blood-hb-c3"
+          ],
+          "sourceFactObservationIds": ["de-blood-hb-c0", "de-blood-hb-c3", "de-blood-hb-c2"],
+          "sourceFields": {
+            "label": "de-blood-hb-c1",
+            "value": "de-blood-hb-c0",
+            "unit": "de-blood-hb-c3",
+            "referenceInterval": "de-blood-hb-c2",
+            "flag": null
+          },
+          "biomarkerId": "biomarker.hemoglobin",
+          "role": "measurement",
+          "specimenType": "blood",
+          "sourceFacts": {
+            "valueString": "14,2",
+            "unit": "g/dL",
+            "referenceInterval": "12,0–16,0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "gemma-v2-lt-supported",
+      "language": "lt",
+      "serializedInput": "{\"version\":\"alyte.semantic-ocr-chunk.v5\",\"locale\":\"lt\",\"rows\":[{\"key\":\"r0\",\"cells\":[{\"key\":\"c0\",\"text\":\"Feritinas\",\"alternatives\":[\"Serumo feritinas\"]},{\"key\":\"c1\",\"text\":\"42\",\"alternatives\":[]},{\"key\":\"c2\",\"text\":\"ng/mL\",\"alternatives\":[]},{\"key\":\"c3\",\"text\":\"15–150\",\"alternatives\":[]}]}],\"headings\":[],\"biomarkers\":[{\"id\":\"biomarker.alt\",\"label\":\"ALT\",\"aliases\":[\"alanin-aminotransferase\",\"alanina aminotransferasa\",\"alanina aminotransferasi\",\"alanine aminotransferase\",\"alanine aminotransférase\",\"alanine aminotransferase ifcc\",\"alanine transaminase\",\"alanine-aminotransferase\",\"alat\",\"gpt\",\"sgpt\"]},{\"id\":\"biomarker.ast\",\"label\":\"AST\",\"aliases\":[\"asat\",\"aspartaataminotransferase\",\"aspartat-aminotransferase\",\"aspartate aminotransferase\",\"aspartate aminotransférase\",\"aspartate aminotransferase ifcc\",\"aspartate transaminase\",\"aspartato aminotransferasa\",\"aspartato aminotransferasi\",\"got\",\"sgot\"]},{\"id\":\"biomarker.ferritin\",\"label\":\"Ferritin\",\"aliases\":[\"Feritinas\",\"ferritina\",\"ferritine\",\"ferritine sérique\",\"ferrytyna\",\"plasma ferritin\",\"serum ferritin\"]},{\"id\":\"biomarker.ggt\",\"label\":\"GGT\",\"aliases\":[\"gama glutamil transferase\",\"gamma glutamil transferasa\",\"gamma glutamil transferasi\",\"gamma glutamyl transferase\",\"gamma gt\",\"gamma-glutamyl transferase\",\"gamma-glutamyl transférase\",\"gamma-glutamyl transpeptidase\",\"gamma-glutamyltransferase\",\"gamma-gt\",\"ggtp\",\"γ-glutamyltransferase\"]},{\"id\":\"biomarker.glucose\",\"label\":\"Glucose\",\"aliases\":[\"blood glucose\",\"blood sugar\",\"blutzucker\",\"fasting blood glucose\",\"fasting glucose\",\"glicemia\",\"gliukozė\",\"glucosa\",\"glucose à jeun\",\"glucose nuchter\",\"glukose\",\"glukoza\",\"glycémie\",\"nüchternblutzucker\"]},{\"id\":\"biomarker.hba1c\",\"label\":\"HbA1c\",\"aliases\":[\"a1c\",\"emoglobina glicata\",\"geglyceerd hemoglobine\",\"glycated hemoglobin\",\"glycosylated hemoglobin\",\"glykiertes hämoglobin\",\"hämoglobin a1c\",\"hb a1c\",\"hemoglobin a1c\",\"hemoglobina glicosilada\",\"hemoglobina glikowana\",\"hémoglobine glyquée\",\"langzeitblutzucker\"]},{\"id\":\"biomarker.hdl_c\",\"label\":\"HDL-C\",\"aliases\":[\"cholestérol hdl\",\"colesterol hdl\",\"colesterolo hdl\",\"didelio tankio lipoproteinų cholesterolis\",\"hdl\",\"hdl cholesterol\",\"hdl-cholesterin\"]},{\"id\":\"biomarker.hematocrit\",\"label\":\"Hematocrit\",\"aliases\":[\"ematocrito\",\"haematocrit\",\"hämatokrit\",\"hct\",\"hematocriet\",\"hématocrite\",\"hematocrito\",\"hematokritas\",\"hematokryt\",\"packed cell volume\",\"packed-cell volume\",\"pcv\"]},{\"id\":\"biomarker.hemoglobin\",\"label\":\"Hemoglobin\",\"aliases\":[\"emoglobina\",\"haemoglobin\",\"hämoglobin\",\"hämoglobinwert\",\"hb\",\"hemoglobin concentration\",\"hemoglobina\",\"hemoglobinas\",\"hemoglobine\",\"hémoglobine\",\"hgb\"]},{\"id\":\"biomarker.ldl_c\",\"label\":\"LDL-C\",\"aliases\":[\"cholesterol ldl\",\"cholestérol ldl\",\"colesterol ldl\",\"colesterolo ldl\",\"ldl\",\"ldl cholesterol\",\"ldl-cholesterin\",\"ldl-cholesterol\",\"mažo tankio lipoproteinų cholesterolis\"]},{\"id\":\"biomarker.mcv\",\"label\":\"MCV\",\"aliases\":[\"gemiddeld corpusculair volume\",\"mean cell volume\",\"mean corpuscular volume\",\"mittleres korpuskuläres volumen\",\"średnia objętość krwinki\",\"vidutinis eritrocitų tūris\",\"volume corpuscolare medio\",\"volume globulaire moyen\",\"volumen corpuscular medio\"]},{\"id\":\"biomarker.total_cholesterol\",\"label\":\"Total cholesterol\",\"aliases\":[\"bendras cholesterolis\",\"cholesterol całkowity\",\"cholesterol total\",\"cholestérol total\",\"colesterol total\",\"colesterolo totale\",\"gesamtcholesterin\",\"totaal cholesterol\"]},{\"id\":\"biomarker.triglycerides\",\"label\":\"Triglycerides\",\"aliases\":[\"trigliceridai\",\"trigliceridi\",\"triglicéridos\",\"triglicerydy\",\"triglyceride\",\"triglyceriden\",\"triglyzeride\"]},{\"id\":\"biomarker.vitamin_b12_total\",\"label\":\"Total vitamin B12\",\"aliases\":[\"cobalamin\",\"kobalamina\",\"plasma vitamin b12\",\"serum vitamin b12\",\"total cobalamin\",\"vitamin b-12\",\"vitamin b12\",\"vitamina b12\",\"vitamina b12 totale\",\"vitamine b12\",\"witamina b12\"]},{\"id\":\"biomarker.vitamin_d_total\",\"label\":\"Total 25-hydroxyvitamin D\",\"aliases\":[\"25 hydroxyvitamin d\",\"25 oh vitamin d\",\"25-hidroksivitaminas d\",\"25-hidroxivitamina d\",\"25-hydroksywitamina d\",\"25-hydroxyvitamin d\",\"25-hydroxyvitamine d\",\"25-idrossivitamina d\",\"25-oh d\",\"25-oh vitamin d\",\"25-oh-vitamin d\",\"25(oh)d\",\"calcidiol\"]}]}",
+      "expected": [
+        {
+          "rowId": "lt-serum-ferritin",
+          "sourceObservationIds": [
+            "lt-serum-ferritin-c0",
+            "lt-serum-ferritin-c1",
+            "lt-serum-ferritin-c2",
+            "lt-serum-ferritin-c3"
+          ],
+          "sourceFactObservationIds": [
+            "lt-serum-ferritin-c1",
+            "lt-serum-ferritin-c2",
+            "lt-serum-ferritin-c3"
+          ],
+          "sourceFields": {
+            "label": "lt-serum-ferritin-c0",
+            "value": "lt-serum-ferritin-c1",
+            "unit": "lt-serum-ferritin-c2",
+            "referenceInterval": "lt-serum-ferritin-c3",
+            "flag": null
+          },
+          "biomarkerId": "biomarker.ferritin",
+          "role": "measurement",
+          "specimenType": "serum",
+          "sourceFacts": {
+            "valueString": "42",
+            "unit": "ng/mL",
+            "referenceInterval": "15–150"
+          }
+        }
+      ]
+    },
+    {
+      "id": "gemma-v2-lt-ambiguous",
+      "language": "lt",
+      "serializedInput": "{\"version\":\"alyte.semantic-ocr-chunk.v5\",\"locale\":\"lt\",\"rows\":[{\"key\":\"r0\",\"cells\":[{\"key\":\"c0\",\"text\":\"Cholesterolis\",\"alternatives\":[]},{\"key\":\"c1\",\"text\":\"5,1\",\"alternatives\":[]},{\"key\":\"c2\",\"text\":\"mmol/L\",\"alternatives\":[]},{\"key\":\"c3\",\"text\":\"—\",\"alternatives\":[]}]}],\"headings\":[],\"biomarkers\":[{\"id\":\"biomarker.alt\",\"label\":\"ALT\",\"aliases\":[\"alanin-aminotransferase\",\"alanina aminotransferasa\",\"alanina aminotransferasi\",\"alanine aminotransferase\",\"alanine aminotransférase\",\"alanine aminotransferase ifcc\",\"alanine transaminase\",\"alanine-aminotransferase\",\"alat\",\"gpt\",\"sgpt\"]},{\"id\":\"biomarker.ast\",\"label\":\"AST\",\"aliases\":[\"asat\",\"aspartaataminotransferase\",\"aspartat-aminotransferase\",\"aspartate aminotransferase\",\"aspartate aminotransférase\",\"aspartate aminotransferase ifcc\",\"aspartate transaminase\",\"aspartato aminotransferasa\",\"aspartato aminotransferasi\",\"got\",\"sgot\"]},{\"id\":\"biomarker.ferritin\",\"label\":\"Ferritin\",\"aliases\":[\"Feritinas\",\"ferritina\",\"ferritine\",\"ferritine sérique\",\"ferrytyna\",\"plasma ferritin\",\"serum ferritin\"]},{\"id\":\"biomarker.ggt\",\"label\":\"GGT\",\"aliases\":[\"gama glutamil transferase\",\"gamma glutamil transferasa\",\"gamma glutamil transferasi\",\"gamma glutamyl transferase\",\"gamma gt\",\"gamma-glutamyl transferase\",\"gamma-glutamyl transférase\",\"gamma-glutamyl transpeptidase\",\"gamma-glutamyltransferase\",\"gamma-gt\",\"ggtp\",\"γ-glutamyltransferase\"]},{\"id\":\"biomarker.glucose\",\"label\":\"Glucose\",\"aliases\":[\"blood glucose\",\"blood sugar\",\"blutzucker\",\"fasting blood glucose\",\"fasting glucose\",\"glicemia\",\"gliukozė\",\"glucosa\",\"glucose à jeun\",\"glucose nuchter\",\"glukose\",\"glukoza\",\"glycémie\",\"nüchternblutzucker\"]},{\"id\":\"biomarker.hba1c\",\"label\":\"HbA1c\",\"aliases\":[\"a1c\",\"emoglobina glicata\",\"geglyceerd hemoglobine\",\"glycated hemoglobin\",\"glycosylated hemoglobin\",\"glykiertes hämoglobin\",\"hämoglobin a1c\",\"hb a1c\",\"hemoglobin a1c\",\"hemoglobina glicosilada\",\"hemoglobina glikowana\",\"hémoglobine glyquée\",\"langzeitblutzucker\"]},{\"id\":\"biomarker.hdl_c\",\"label\":\"HDL-C\",\"aliases\":[\"cholestérol hdl\",\"colesterol hdl\",\"colesterolo hdl\",\"didelio tankio lipoproteinų cholesterolis\",\"hdl\",\"hdl cholesterol\",\"hdl-cholesterin\"]},{\"id\":\"biomarker.hematocrit\",\"label\":\"Hematocrit\",\"aliases\":[\"ematocrito\",\"haematocrit\",\"hämatokrit\",\"hct\",\"hematocriet\",\"hématocrite\",\"hematocrito\",\"hematokritas\",\"hematokryt\",\"packed cell volume\",\"packed-cell volume\",\"pcv\"]},{\"id\":\"biomarker.hemoglobin\",\"label\":\"Hemoglobin\",\"aliases\":[\"emoglobina\",\"haemoglobin\",\"hämoglobin\",\"hämoglobinwert\",\"hb\",\"hemoglobin concentration\",\"hemoglobina\",\"hemoglobinas\",\"hemoglobine\",\"hémoglobine\",\"hgb\"]},{\"id\":\"biomarker.ldl_c\",\"label\":\"LDL-C\",\"aliases\":[\"cholesterol ldl\",\"cholestérol ldl\",\"colesterol ldl\",\"colesterolo ldl\",\"ldl\",\"ldl cholesterol\",\"ldl-cholesterin\",\"ldl-cholesterol\",\"mažo tankio lipoproteinų cholesterolis\"]},{\"id\":\"biomarker.mcv\",\"label\":\"MCV\",\"aliases\":[\"gemiddeld corpusculair volume\",\"mean cell volume\",\"mean corpuscular volume\",\"mittleres korpuskuläres volumen\",\"średnia objętość krwinki\",\"vidutinis eritrocitų tūris\",\"volume corpuscolare medio\",\"volume globulaire moyen\",\"volumen corpuscular medio\"]},{\"id\":\"biomarker.total_cholesterol\",\"label\":\"Total cholesterol\",\"aliases\":[\"bendras cholesterolis\",\"cholesterol całkowity\",\"cholesterol total\",\"cholestérol total\",\"colesterol total\",\"colesterolo totale\",\"gesamtcholesterin\",\"totaal cholesterol\"]},{\"id\":\"biomarker.triglycerides\",\"label\":\"Triglycerides\",\"aliases\":[\"trigliceridai\",\"trigliceridi\",\"triglicéridos\",\"triglicerydy\",\"triglyceride\",\"triglyceriden\",\"triglyzeride\"]},{\"id\":\"biomarker.vitamin_b12_total\",\"label\":\"Total vitamin B12\",\"aliases\":[\"cobalamin\",\"kobalamina\",\"plasma vitamin b12\",\"serum vitamin b12\",\"total cobalamin\",\"vitamin b-12\",\"vitamin b12\",\"vitamina b12\",\"vitamina b12 totale\",\"vitamine b12\",\"witamina b12\"]},{\"id\":\"biomarker.vitamin_d_total\",\"label\":\"Total 25-hydroxyvitamin D\",\"aliases\":[\"25 hydroxyvitamin d\",\"25 oh vitamin d\",\"25-hidroksivitaminas d\",\"25-hidroxivitamina d\",\"25-hydroksywitamina d\",\"25-hydroxyvitamin d\",\"25-hydroxyvitamine d\",\"25-idrossivitamina d\",\"25-oh d\",\"25-oh vitamin d\",\"25-oh-vitamin d\",\"25(oh)d\",\"calcidiol\"]}]}",
+      "expected": [
+        {
+          "rowId": "lt-ambiguous-cholesterol",
+          "sourceObservationIds": [
+            "lt-ambiguous-cholesterol-c0",
+            "lt-ambiguous-cholesterol-c1",
+            "lt-ambiguous-cholesterol-c2",
+            "lt-ambiguous-cholesterol-c3"
+          ],
+          "sourceFactObservationIds": [
+            "lt-ambiguous-cholesterol-c1",
+            "lt-ambiguous-cholesterol-c2",
+            "lt-ambiguous-cholesterol-c3"
+          ],
+          "sourceFields": {
+            "label": "lt-ambiguous-cholesterol-c0",
+            "value": "lt-ambiguous-cholesterol-c1",
+            "unit": "lt-ambiguous-cholesterol-c2",
+            "referenceInterval": "lt-ambiguous-cholesterol-c3",
+            "flag": null
+          },
+          "biomarkerId": null,
+          "role": "preserve",
+          "specimenType": "serum",
+          "sourceFacts": {
+            "valueString": "5,1",
+            "unit": "mmol/L",
+            "referenceInterval": "—"
+          }
+        }
+      ]
+    }
+  ]
+}

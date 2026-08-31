@@ -8,8 +8,20 @@ import type { HomeStackParamList } from '../../navigation/types';
 import { dispatchHomeQuickActionFromStack } from '../../navigation/parent-tab';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppIcon, AppText, LabEmptyState, ScreenScrollView } from '../../ui/primitives';
+import {
+  AppButton,
+  AppIcon,
+  AppText,
+  LabEmptyState,
+  ScreenScrollView,
+  ScreenStatusView,
+} from '../../ui/primitives';
 import { colors, radii, screenStyles, spacing } from '../../theme';
+import {
+  getScreenPlatformPolicy,
+  getScreenSafeAreaEdges,
+  getScreenSurfaceMode,
+} from '../../ui/screen-scroll-model';
 import {
   buildHomeLabViewModel,
   type HomeLabViewModel,
@@ -18,6 +30,8 @@ import {
 } from './home-model';
 
 type HomeNavigation = NativeStackNavigationProp<HomeStackParamList, 'HomeRoot'>;
+
+const screenSafeAreaEdges = getScreenSafeAreaEdges(getScreenPlatformPolicy(process.env.EXPO_OS));
 
 function dateLabel(date: LabDateState, locale: string): string {
   return date.kind === 'known' ? formatLocaleDate(date.value, locale) : t('home.dateMissing');
@@ -341,24 +355,33 @@ export function HomeScreen() {
     model.latestReport === null &&
     model.latestRecord === null &&
     model.recentRecords.length === 0;
+  const surfaceState = loading ? 'loading' : error ? 'error' : isEmptyState ? 'empty' : 'populated';
+  const statusSurface = getScreenSurfaceMode(surfaceState) === 'status';
 
   return (
-    <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScreenScrollView
-        alwaysBounceVertical={!isEmptyState}
-        bounces={!isEmptyState}
-        contentContainerStyle={screenStyles.content}
-        style={screenStyles.scroll}
-        tabBarClearance="native"
-      >
-        {loading && <AppText style={styles.muted}>{t('home.loading')}</AppText>}
-        {error && <AppText style={styles.error}>{t('home.error')}</AppText>}
-        {!loading &&
-          !error &&
-          model !== null &&
-          (isEmptyState ? (
-            <EmptyHome onImport={openImport} />
-          ) : (
+    <SafeAreaView edges={screenSafeAreaEdges} style={screenStyles.safe}>
+      {statusSurface ? (
+        <ScreenStatusView
+          contentContainerStyle={styles.statusState}
+          style={screenStyles.scroll}
+          tabBarClearance="native"
+        >
+          {loading && <AppText style={styles.muted}>{t('home.loading')}</AppText>}
+          {error && <AppText style={styles.error}>{t('home.error')}</AppText>}
+          {isEmptyState && <EmptyHome onImport={openImport} />}
+          {error && (
+            <Pressable accessibilityRole="button" onPress={() => void load()} style={styles.retry}>
+              <AppText style={styles.retryText}>{t('home.retry')}</AppText>
+            </Pressable>
+          )}
+        </ScreenStatusView>
+      ) : (
+        <ScreenScrollView
+          contentContainerStyle={screenStyles.content}
+          style={screenStyles.scroll}
+          tabBarClearance="native"
+        >
+          {model !== null && (
             <PopulatedHome
               locale={locale}
               model={model}
@@ -368,19 +391,16 @@ export function HomeScreen() {
               onOpenReport={openReport}
               onImport={openImport}
             />
-          ))}
-        {error && (
-          <Pressable accessibilityRole="button" onPress={() => void load()} style={styles.retry}>
-            <AppText style={styles.retryText}>{t('home.retry')}</AppText>
-          </Pressable>
-        )}
-      </ScreenScrollView>
+          )}
+        </ScreenScrollView>
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   sections: { gap: spacing.lg, paddingBottom: spacing.lg },
+  statusState: { alignItems: 'center', gap: spacing.sm, justifyContent: 'center' },
   section: { gap: spacing.sm },
   importButton: { alignSelf: 'stretch' },
   eyebrow: {

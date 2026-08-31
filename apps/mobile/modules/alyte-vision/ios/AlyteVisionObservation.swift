@@ -1,6 +1,10 @@
 import Foundation
 import Vision
 
+/// Preference order follows Alyte's report-language quality gate. Automatic detection remains on,
+/// so Lithuanian is available as a non-blocking robustness case after English and German.
+let alyteVisionPreferredRecognitionLanguageIdentifiers = ["en", "de", "lt"]
+
 /// The span limits are deliberately conservative. They bound both the amount of OCR provenance
 /// crossing the Expo bridge and the work needed to validate it later. Exceeding either limit keeps
 /// the complete parent observation and omits only its optional spans.
@@ -8,6 +12,27 @@ let alyteVisionMaxTokenSpansPerObservation = 128
 let alyteVisionMaxTokenParentCharactersPerObservation = 8 * 1024
 let alyteVisionMaxTokenSpanSerializedBytesPerObservation = 16 * 1024
 let alyteVisionMaxTokenSpanSerializedBytesPerPage = 256 * 1024
+
+struct AlyteVisionTableCellCoordinates: Equatable {
+  let rowIndex: Int
+  let columnIndex: Int
+  let identitySuffix: String
+}
+
+/// Vision exposes the authoritative table location as ranges because a cell may span rows or
+/// columns. Array offsets are not column identities once a preceding cell spans more than one
+/// column, so the adapter retains the range starts and binds the opaque source ID to both ranges.
+func alyteVisionTableCellCoordinates(
+  rowRange: ClosedRange<Int>,
+  columnRange: ClosedRange<Int>
+) -> AlyteVisionTableCellCoordinates? {
+  guard rowRange.lowerBound >= 0, columnRange.lowerBound >= 0 else { return nil }
+  return AlyteVisionTableCellCoordinates(
+    rowIndex: rowRange.lowerBound,
+    columnIndex: columnRange.lowerBound,
+    identitySuffix: "r\(rowRange.lowerBound)-\(rowRange.upperBound)-c\(columnRange.lowerBound)-\(columnRange.upperBound)"
+  )
+}
 
 struct AlyteVisionTokenCandidate {
   let text: String
@@ -41,12 +66,14 @@ func alyteDocumentObservations(
     )]
   }
 
-  let lineStructure: [String: Any] = [
-    "kind": "text",
-    "tableId": NSNull(),
-    "rowIndex": NSNull(),
-    "columnIndex": NSNull(),
-  ]
+  let lineStructure: [String: Any] = (structure["kind"] as? String) == "table-cell"
+    ? structure
+    : [
+      "kind": "text",
+      "tableId": NSNull(),
+      "rowIndex": NSNull(),
+      "columnIndex": NSNull(),
+    ]
   return splitLines.enumerated().map { index, line in
     alyteDocumentObservation(
       id: "\(id)-line-\(index)",

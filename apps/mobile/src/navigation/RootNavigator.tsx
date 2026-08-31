@@ -1,11 +1,10 @@
 import { DarkTheme, DefaultTheme, NavigationContainer, type Theme } from '@react-navigation/native';
 import { createNativeBottomTabNavigator } from '@react-navigation/bottom-tabs/unstable';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { Pressable, useColorScheme } from 'react-native';
+import { useColorScheme } from 'react-native';
 import type { AlyteServices } from '../services';
 import { t } from '../localization';
 import { colors } from '../theme';
-import { AppText } from '../ui/primitives';
 import { createNavigationRegistry } from './registry';
 import type { FeatureTarget, NavigationFeature } from './registry-model';
 import { featureStackRootName, preGateTabNames, reportImportDestination } from './registry-model';
@@ -22,7 +21,6 @@ import { RecordSourcePreviewScreen } from '../features/labs/RecordSourcePreviewS
 import { OriginalSourcePreviewScreen } from '../features/labs/OriginalSourcePreviewScreen';
 import { ExtractionProgressScreen } from '../features/labs/ExtractionProgressScreen';
 import { FullExportScreen } from '../features/settings/FullExportScreen';
-import { LocalModelInstallScreen } from '../features/onboarding/LocalModelInstallScreen';
 import { LabRecordFormRoute } from '../features/labs/LabRecordFormRoute';
 import { CloudPaywallScreen } from '../features/commerce/CloudPaywallScreen';
 
@@ -44,9 +42,11 @@ const stackScreenOptions = {
   headerLargeTitle: false,
   headerTransparent: true,
   headerShadowVisible: false,
-  // native-stack's headerStyle typing predates RN's opaque semantic color type; UIKit accepts it
-  // at runtime and resolves it against the current appearance.
+  // Native-stack's headerStyle typing predates RN's opaque semantic color type; UIKit accepts it
+  // at runtime and resolves it against the current appearance. Keep the back affordance/action
+  // accent while the native title itself follows the semantic label color.
   headerTintColor: colors.accent as string,
+  headerTitleStyle: { color: colors.ink as string },
   headerTitleAlign: 'left' as const,
 };
 
@@ -198,37 +198,6 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
             title: t('settings.cloudPlans'),
             headerLargeTitle: false,
           }}
-        />
-        <RootStack.Screen
-          name="ModelInstall"
-          component={LocalModelInstallScreen}
-          options={({ navigation }) => ({
-            presentation: 'fullScreenModal',
-            headerShown: true,
-            title: t('onboarding.contextualNavigationTitle'),
-            headerBackButtonDisplayMode: 'minimal',
-            headerShadowVisible: false,
-            headerTintColor: colors.accent as string,
-            // Keep the native back affordance/gesture and add a clearly labeled dismissal action.
-            headerRight: () => (
-              <Pressable
-                accessibilityLabel={t('onboarding.contextualClose')}
-                accessibilityRole="button"
-                hitSlop={8}
-                onPress={() => navigation.goBack()}
-                style={{
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  minHeight: 44,
-                  minWidth: 44,
-                }}
-              >
-                <AppText variant="label" style={{ color: colors.accent }}>
-                  {t('onboarding.contextualClose')}
-                </AppText>
-              </Pressable>
-            ),
-          })}
         />
         <RootStack.Screen
           name={reportImportDestination.route}

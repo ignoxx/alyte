@@ -1,12 +1,15 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { metabolicMicronutrientBiomarkers } from '@alyte/catalogue';
+import type { ExtractionSemanticCandidateRow } from './extraction.js';
 import {
   buildExtractionConfirmationPlan,
   classifyExtractionPipelineFingerprint,
   createExtractionPipelineFingerprint,
   decodeVisionOCRResult,
   EXTRACTION_PARSER_VERSION,
+  extractionPipelineFingerprintCanonicalJson,
+  PDF_TEXT_LAYER_ADAPTER_VERSION,
   extractionReviewBlocksConfirmation,
   extractionReviewRequiresAttention,
   groupObservationsIntoRows,
@@ -15,8 +18,13 @@ import {
   parseLabDate,
   reparseExtractionRowFromSemanticFields,
   revalidateExtractionRow,
+  mapExtractionSemanticWireRows,
+  sortExtractionSemanticCandidateRows,
   validateSemanticProposals,
+  VISION_OCR_CONTRACT_VERSION,
+  VISION_OCR_PREVIOUS_CONTRACT_VERSION,
   type ExtractionAliasEntry,
+  type VisionTextObservation,
 } from './extraction.js';
 
 const aliases: readonly ExtractionAliasEntry[] = [
@@ -27,6 +35,147 @@ const aliases: readonly ExtractionAliasEntry[] = [
     units: ['mmol/L', 'mg/dL'],
   },
 ];
+
+function semanticCandidateRow(
+  rowId: string,
+  pageIndex: number,
+  x: number,
+  y: number,
+): ExtractionSemanticCandidateRow {
+  const observation = {
+    id: `${rowId}-cell`,
+    text: rowId,
+    alternatives: [],
+    pageIndex,
+    orientation: 0,
+    boundingBox: { x, y, width: 0.1, height: 0.03 },
+    recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+  };
+  return { rowId, sourceObservationIds: [observation.id], observations: [observation] };
+}
+
+it('orders semantic candidates by physical position with a stable ID tie-breaker', () => {
+  const rows = [
+    semanticCandidateRow('same-y-z', 0, 0.6, 0.2),
+    semanticCandidateRow('later', 0, 0.1, 0.8),
+    semanticCandidateRow('same-y-a', 0, 0.6, 0.2),
+    semanticCandidateRow('earlier-page', 1, 0.1, 0.1),
+    semanticCandidateRow('same-y-left', 0, 0.1, 0.2),
+  ];
+
+  assert.deepEqual(
+    sortExtractionSemanticCandidateRows(rows).map((row) => row.rowId),
+    ['same-y-left', 'same-y-a', 'same-y-z', 'later', 'earlier-page'],
+  );
+  assert.deepEqual(
+    rows.map((row) => row.rowId),
+    ['same-y-z', 'later', 'same-y-a', 'earlier-page', 'same-y-left'],
+  );
+});
+
+it('assigns compact row keys in the caller order', () => {
+  const rows = [
+    semanticCandidateRow('physical-first', 0, 0.1, 0.1),
+    semanticCandidateRow('lexically-first', 0, 0.1, 0.2),
+  ];
+  const wireRows = mapExtractionSemanticWireRows(rows);
+
+  assert.deepEqual(
+    wireRows.map(({ row, rowKey }) => [rowKey, row.rowId]),
+    [
+      ['r0', 'physical-first'],
+      ['r1', 'lexically-first'],
+    ],
+  );
+});
+
+it('reparses supported categorical results from exact source cells', () => {
+  const cases = [
+    ['en-US', 'positive'],
+    ['en-US', 'resistant'],
+    ['de-DE', 'positiv'],
+    ['de-DE', 'empfindlich'],
+    ['lt-LT', 'teigiamas'],
+  ] as const;
+  for (const [locale, value] of cases) {
+    const observations = [
+      {
+        id: `${locale}-label`,
+        text: 'Screening marker',
+        alternatives: [],
+        pageIndex: 0,
+        orientation: 0,
+        boundingBox: { x: 0.1, y: 0.2, width: 0.2, height: 0.03 },
+        recognition: {
+          level: 'accurate' as const,
+          language: locale.slice(0, 2),
+          internalConfidence: null,
+        },
+      },
+      {
+        id: `${locale}-value`,
+        text: value,
+        alternatives: [],
+        pageIndex: 0,
+        orientation: 0,
+        boundingBox: { x: 0.4, y: 0.2, width: 0.2, height: 0.03 },
+        recognition: {
+          level: 'accurate' as const,
+          language: locale.slice(0, 2),
+          internalConfidence: null,
+        },
+      },
+    ];
+    const row = groupObservationsIntoRows(observations, {
+      aliases,
+      locale,
+      specimenType: 'serum',
+      collectionDate: { kind: 'known', value: '2026-08-22' },
+    })[0];
+    assert.ok(row);
+    const reparsed = reparseExtractionRowFromSemanticFields(
+      row,
+      {
+        label: `${locale}-label`,
+        value: `${locale}-value`,
+        unit: null,
+        referenceInterval: null,
+        flag: null,
+      },
+      aliases,
+    );
+    assert.deepEqual(reparsed.proposedValue, { kind: 'categorical', value });
+    assert.equal(reparsed.sourceValueString, value);
+    assert.deepEqual(
+      reparsed.source.observations?.map((observation) => observation.id),
+      observations.map((observation) => observation.id),
+    );
+  }
+});
+
+it('does not infer an extended categorical result from the suffix of loose prose', () => {
+  const observations = [
+    {
+      id: 'loose-prose',
+      text: 'Organism may be present',
+      alternatives: [],
+      pageIndex: 0,
+      orientation: 0,
+      boundingBox: { x: 0.1, y: 0.2, width: 0.4, height: 0.03 },
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    },
+  ];
+  const row = groupObservationsIntoRows(observations, {
+    aliases,
+    locale: 'en-US',
+    specimenType: 'serum',
+    collectionDate: { kind: 'known', value: '2026-08-22' },
+    includeUnshapedRows: true,
+  })[0];
+
+  assert.ok(row);
+  assert.deepEqual(row.proposedValue, { kind: 'free_text', value: 'Organism may be present' });
+});
 
 it('fingerprints classify complete extraction inputs without treating a revision as a pipeline change', () => {
   const input = {
@@ -51,6 +200,32 @@ it('fingerprints classify complete extraction inputs without treating a revision
   assert.equal(classifyExtractionPipelineFingerprint(first, laterRevision), 'current');
   assert.equal(classifyExtractionPipelineFingerprint(first, changedParser), 'older');
   assert.equal(first.hash.length, 32);
+  assert.equal(first.pdfTextLayerAdapterVersion, null);
+  assert.equal(
+    extractionPipelineFingerprintCanonicalJson(input),
+    '{"sourceHash":"synthetic-source-hash","ocrContractVersion":"ocr.v2","rowSegmentationVersion":"rows.v1","parserVersion":"parser.v5","semanticAdapterVersion":null,"semanticSchemaVersion":null,"semanticChunkVersion":null,"semanticPromptVersion":null,"modelVersion":null,"runtimeVersion":null,"catalogueVersion":"catalogue.v1"}',
+  );
+  assert.equal(first.hash, 'd8d1f1d4abda1d8a94d5878c00d14022');
+  assert.equal(
+    extractionPipelineFingerprintCanonicalJson({
+      ...input,
+      pdfTextLayerAdapterVersion: null,
+    }),
+    extractionPipelineFingerprintCanonicalJson(input),
+  );
+  assert.equal(
+    extractionPipelineFingerprintCanonicalJson({
+      ...input,
+      pdfTextLayerAdapterVersion: undefined,
+    }),
+    extractionPipelineFingerprintCanonicalJson(input),
+  );
+  const pdfTextLayer = createExtractionPipelineFingerprint({
+    ...input,
+    pdfTextLayerAdapterVersion: PDF_TEXT_LAYER_ADAPTER_VERSION,
+  });
+  assert.equal(pdfTextLayer.pdfTextLayerAdapterVersion, PDF_TEXT_LAYER_ADAPTER_VERSION);
+  assert.notEqual(pdfTextLayer.hash, first.hash);
 });
 
 const tableAliases: readonly ExtractionAliasEntry[] = [
@@ -87,6 +262,81 @@ const tableAliases: readonly ExtractionAliasEntry[] = [
 ];
 
 describe('local extraction domain', () => {
+  it('maps a synthetic Lithuanian ferritin row while preserving source provenance', () => {
+    const ferritin = metabolicMicronutrientBiomarkers.find(
+      (entry) => entry.id === 'biomarker.ferritin',
+    )!;
+    const ferritinAlias: ExtractionAliasEntry = {
+      id: ferritin.id,
+      aliases: ferritin.aliases,
+      specimens: ferritin.specimens,
+      units: ferritin.units,
+      ...(ferritin.methodPolicy === undefined
+        ? {}
+        : {
+            methodPolicy: {
+              version: ferritin.methodPolicy.version,
+              kind: ferritin.methodPolicy.kind,
+              allowedMethods: ferritin.methodPolicy.allowedMethods,
+              unsafePatterns: ferritin.methodPolicy.unsafePatterns,
+            },
+          }),
+    };
+    const observations: readonly VisionTextObservation[] = (
+      [
+        ['lt-ferritin-label', 'Feritinas'],
+        ['lt-ferritin-value', '42'],
+        ['lt-ferritin-unit', 'ng/mL'],
+        ['lt-ferritin-range', '15–150'],
+      ] as const
+    ).map(([id, text], columnIndex) => ({
+      id,
+      text,
+      alternatives: [],
+      pageIndex: 0,
+      orientation: 0,
+      boundingBox: { x: 0.05 + columnIndex * 0.2, y: 0.2, width: 0.15, height: 0.04 },
+      structure: {
+        kind: 'table-cell',
+        tableId: 'synthetic-lithuanian-results',
+        rowIndex: 0,
+        columnIndex,
+      },
+      recognition: { level: 'accurate', language: 'lt', internalConfidence: null },
+    }));
+
+    const [row] = groupObservationsIntoRows(observations, {
+      aliases: [ferritinAlias],
+      locale: 'lt-LT',
+      collectionDate: { kind: 'known', value: '2026-08-22' },
+      specimenType: 'serum',
+    });
+
+    assert.ok(row);
+    assert.equal(row.proposedBiomarkerId, 'biomarker.ferritin');
+    assert.equal(row.reviewState, 'ready');
+    assert.equal(row.sourceLabel, 'Feritinas');
+    assert.equal(row.proposedLabel, 'Feritinas');
+    assert.deepEqual(row.sourceValue, { kind: 'numeric', value: 42 });
+    assert.equal(row.sourceValueString, '42');
+    assert.equal(row.sourceUnit, 'ng/mL');
+    assert.equal(row.sourceReferenceInterval, '15–150');
+    assert.deepEqual(row.source.observationIds, [
+      'lt-ferritin-label',
+      'lt-ferritin-value',
+      'lt-ferritin-unit',
+      'lt-ferritin-range',
+    ]);
+    assert.deepEqual(row.source.raw, {
+      label: 'Feritinas',
+      value: '42',
+      unit: 'ng/mL',
+      referenceInterval: '15–150',
+      flag: null,
+      collectionDate: null,
+    });
+  });
+
   it('fails closed for source-specific assays in the production catalogue extraction path', () => {
     const productionAliases: readonly ExtractionAliasEntry[] = metabolicMicronutrientBiomarkers.map(
       (entry) => ({
@@ -168,6 +418,41 @@ describe('local extraction domain', () => {
         }),
       /bounding box/,
     );
+  });
+
+  it('decodes source spans from both the current and immediately previous OCR contracts', () => {
+    for (const contractVersion of [
+      VISION_OCR_PREVIOUS_CONTRACT_VERSION,
+      VISION_OCR_CONTRACT_VERSION,
+    ]) {
+      const result = decodeVisionOCRResult({
+        contractVersion,
+        pageIndex: 0,
+        orientation: 0,
+        observations: [
+          {
+            id: 'source',
+            text: 'Marker 4.2',
+            alternatives: [],
+            boundingBox: { x: 0.1, y: 0.2, width: 0.4, height: 0.04 },
+            recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            spans: [
+              {
+                id: 'source-span',
+                parentObservationId: 'source',
+                start: 7,
+                end: 10,
+                text: '4.2',
+                boundingBox: { x: 0.35, y: 0.2, width: 0.1, height: 0.04 },
+              },
+            ],
+          },
+        ],
+      });
+
+      assert.equal(result.contractVersion, contractVersion);
+      assert.equal(result.observations[0]?.spans?.[0]?.text, '4.2');
+    }
   });
 
   it('parses German decimal/comparator/date formats and keeps unsupported rows reviewable', () => {
@@ -608,11 +893,21 @@ describe('local extraction domain', () => {
     assert.equal(extractionReviewBlocksConfirmation(row!), false);
     const edited = revalidateExtractionRow(
       row!,
-      { proposedValue: { kind: 'numeric', value: 118 }, decision: 'preserve' },
+      {
+        proposedLabel: 'LDL cholesterol',
+        proposedValue: { kind: 'numeric', value: 118 },
+        proposedUnit: 'mg/dL',
+        proposedReferenceInterval: '100-120',
+        decision: 'resolve',
+      },
       tableAliases,
+      { mode: 'user-correction' },
     );
-    assert.ok(edited.reviewReasons.includes('unsupported-layout'));
-    assert.equal(edited.decision, 'preserve');
+    assert.equal(edited.reviewReasons.includes('unsupported-layout'), false);
+    assert.equal(edited.reviewReasons.includes('unparseable-value'), false);
+    assert.equal(edited.reviewState, 'ready');
+    assert.equal(edited.proposedBiomarkerId, 'biomarker.ldl_c');
+    assert.equal(edited.decision, 'resolve');
     assert.equal(
       buildExtractionConfirmationPlan(
         {
@@ -622,19 +917,179 @@ describe('local extraction domain', () => {
           ocrContractVersion: 'alyte.vision.document.v2',
           parserVersion: EXTRACTION_PARSER_VERSION,
           collectionDate: { kind: 'known', value: '2026-08-20' },
-          rows: row === undefined ? [] : [row],
+          rows: [edited],
           createdAt: '2026-08-20T00:00:00.000Z',
           updatedAt: '2026-08-20T00:00:00.000Z',
           confirmedAt: null,
           pipelineFingerprint: null,
           pipelineStatus: 'older' as const,
           revision: 1,
-          hasUserEdits: false,
+          hasUserEdits: true,
         },
         { record: () => 'record', measurement: () => 'measurement' },
       ).records.length,
-      0,
+      1,
     );
+  });
+
+  it('keeps invalid corrected fields review-only', () => {
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'ambiguous-correction',
+          text: 'LDL cholesterol 100 118 mg/dL',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.8, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+      ],
+      { aliases: tableAliases, collectionDate: { kind: 'known', value: '2026-08-20' } },
+    );
+    assert.ok(row);
+
+    const invalid = revalidateExtractionRow(
+      row,
+      {
+        proposedLabel: 'LDL cholesterol',
+        proposedValue: { kind: 'numeric', value: Number.NaN },
+        proposedUnit: 'g/L',
+        proposedReferenceInterval: 'not a range',
+        decision: 'resolve',
+      },
+      tableAliases,
+      { mode: 'user-correction' },
+    );
+    assert.ok(invalid.reviewReasons.includes('unparseable-value'));
+    assert.ok(invalid.reviewReasons.includes('incompatible-unit'));
+    assert.ok(invalid.reviewReasons.includes('unparseable-reference-interval'));
+    assert.equal(invalid.reviewState, 'needs-review');
+  });
+
+  it('retains a non-empty corrected free-text result while rejecting an empty one', () => {
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'free-text-correction',
+          text: 'LDL cholesterol 100 118 mg/dL',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.8, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+      ],
+      { aliases: tableAliases, collectionDate: { kind: 'known', value: '2026-08-20' } },
+    );
+    assert.ok(row);
+
+    const retained = revalidateExtractionRow(
+      row,
+      {
+        proposedLabel: 'Interpretive marker',
+        proposedValue: { kind: 'free_text', value: 'Detected' },
+        proposedUnit: null,
+        decision: 'preserve',
+      },
+      tableAliases,
+      { mode: 'user-correction' },
+    );
+    assert.equal(retained.reviewReasons.includes('unparseable-value'), false);
+    assert.equal(retained.reviewReasons.includes('missing-value'), false);
+    assert.equal(retained.decision, 'preserve');
+    assert.deepEqual(
+      buildExtractionConfirmationPlan(
+        {
+          id: 'free-text-correction-draft',
+          reportId: 'synthetic-report',
+          state: 'draft',
+          ocrContractVersion: 'alyte.vision.document.v2',
+          parserVersion: EXTRACTION_PARSER_VERSION,
+          collectionDate: { kind: 'known', value: '2026-08-20' },
+          rows: [retained],
+          createdAt: '2026-08-20T00:00:00.000Z',
+          updatedAt: '2026-08-20T00:00:00.000Z',
+          confirmedAt: null,
+          pipelineFingerprint: null,
+          pipelineStatus: 'older' as const,
+          revision: 1,
+          hasUserEdits: true,
+        },
+        { record: () => 'record', measurement: () => 'measurement' },
+      ).records[0]?.measurements[0]?.value,
+      { kind: 'free_text', value: 'Detected' },
+    );
+
+    const rejected = revalidateExtractionRow(
+      row,
+      {
+        proposedLabel: 'Interpretive marker',
+        proposedValue: { kind: 'free_text', value: '   ' },
+        proposedUnit: null,
+        decision: 'preserve',
+      },
+      tableAliases,
+      { mode: 'user-correction' },
+    );
+    assert.ok(rejected.reviewReasons.includes('missing-value'));
+    assert.ok(rejected.reviewReasons.includes('unparseable-value'));
+    assert.equal(rejected.reviewState, 'needs-review');
+  });
+
+  it('preserves an unknown corrected biomarker without forcing a catalogue mapping', () => {
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'unknown-correction',
+          text: 'LDL cholesterol 100 118 mg/dL',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.8, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+      ],
+      { aliases: tableAliases, collectionDate: { kind: 'known', value: '2026-08-20' } },
+    );
+    assert.ok(row);
+    const corrected = revalidateExtractionRow(
+      row,
+      {
+        proposedLabel: 'Apolipoprotein X',
+        proposedValue: { kind: 'numeric', value: 4.2 },
+        proposedUnit: 'mg/dL',
+        proposedReferenceInterval: null,
+        decision: 'preserve',
+      },
+      tableAliases,
+      { mode: 'user-correction' },
+    );
+    assert.equal(corrected.proposedBiomarkerId, null);
+    assert.ok(corrected.reviewReasons.includes('unsupported-alias'));
+    assert.equal(corrected.reviewState, 'needs-review');
+    assert.equal(corrected.decision, 'preserve');
+    const plan = buildExtractionConfirmationPlan(
+      {
+        id: 'unknown-correction-draft',
+        reportId: 'synthetic-report',
+        state: 'draft',
+        ocrContractVersion: 'alyte.vision.document.v2',
+        parserVersion: EXTRACTION_PARSER_VERSION,
+        collectionDate: { kind: 'known', value: '2026-08-20' },
+        rows: [corrected],
+        createdAt: '2026-08-20T00:00:00.000Z',
+        updatedAt: '2026-08-20T00:00:00.000Z',
+        confirmedAt: null,
+        pipelineFingerprint: null,
+        pipelineStatus: 'older' as const,
+        revision: 1,
+        hasUserEdits: true,
+      },
+      { record: () => 'record', measurement: () => 'measurement' },
+    );
+    assert.equal(plan.records[0]?.measurements[0]?.biomarkerId, null);
+    assert.equal(plan.records[0]?.measurements[0]?.reviewState, 'needs-review');
   });
 
   it('keeps incompatible units review-only and blocks confirmation', () => {
@@ -1028,6 +1483,67 @@ describe('local extraction domain', () => {
       aliases,
     );
     assert.deepEqual(crossRow, []);
+  });
+
+  it('revalidates expanded exact source fields from a local selector adapter', () => {
+    const observations = [
+      ['expanded-label', 'Novel marker'],
+      ['expanded-value', '3.8'],
+      ['expanded-unit', 'mmol/L'],
+    ].map(([id, text], index) => ({
+      id: id!,
+      text: text!,
+      alternatives: [],
+      pageIndex: 0,
+      orientation: 0,
+      boundingBox: { x: 0.1 + index * 0.2, y: 0.2, width: 0.15, height: 0.04 },
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    }));
+    const row = {
+      rowId: 'expanded-row',
+      sourceObservationIds: observations.map((item) => item.id),
+      observations,
+    };
+    const proposal = {
+      sourceObservationIds: row.sourceObservationIds,
+      sourceFields: {
+        label: 'expanded-label',
+        value: 'expanded-value',
+        unit: 'expanded-unit',
+        referenceInterval: null,
+        flag: null,
+      },
+      proposedBiomarkerId: null,
+      role: 'preserve' as const,
+    };
+
+    assert.deepEqual(validateSemanticProposals([proposal], [row], aliases), [proposal]);
+    assert.deepEqual(
+      validateSemanticProposals(
+        [
+          {
+            ...proposal,
+            sourceFields: { ...proposal.sourceFields, unit: 'outside-row' },
+          },
+        ],
+        [row],
+        aliases,
+      ),
+      [],
+    );
+    assert.deepEqual(
+      validateSemanticProposals(
+        [
+          {
+            ...proposal,
+            sourceFields: { ...proposal.sourceFields, unit: 'expanded-label' },
+          },
+        ],
+        [row],
+        aliases,
+      ),
+      [],
+    );
   });
 
   it('rejects ambiguous duplicate semantic field aliases', () => {
