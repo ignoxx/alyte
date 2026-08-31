@@ -1,6 +1,6 @@
 import { StyleSheet, View } from 'react-native';
 import { t } from '../../localization';
-import { colors, spacing } from '../../theme';
+import { colors, radii, spacing } from '../../theme';
 import { AppText } from '../../ui/primitives';
 import { hasResumableModelDownload, type LocalModelSnapshot } from './model';
 import { modelProgressPercent } from './model-ui';
@@ -59,11 +59,11 @@ const styles = StyleSheet.create({
   },
   progressTrack: {
     backgroundColor: colors.disabledFill,
-    borderRadius: 99,
+    borderRadius: radii.pill,
     height: 8,
     overflow: 'hidden',
     width: '100%',
   },
-  progressFill: { backgroundColor: colors.accent, borderRadius: 99, height: '100%' },
+  progressFill: { backgroundColor: colors.accent, borderRadius: radii.pill, height: '100%' },
   muted: { color: colors.mutedInk },
 });

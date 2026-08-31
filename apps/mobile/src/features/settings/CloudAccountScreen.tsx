@@ -11,7 +11,7 @@ import { CONSENT_POLICY_VERSION } from '@alyte/contracts';
 import { t } from '../../localization';
 import { useServices } from '../../services';
 import { AppButton, AppIcon, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
-import { colors, screenStyles, spacing } from '../../theme';
+import { colors, radii, screenStyles, spacing, typography } from '../../theme';
 
 function errorCopy(code: string | null): string | null {
   switch (code) {
@@ -455,7 +455,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 14,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     marginBottom: spacing.lg,
     overflow: 'hidden',
@@ -471,7 +471,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   actionCopy: { flex: 1, gap: spacing.xs },
-  actionTitle: { fontSize: 16, lineHeight: 21 },
+  actionTitle: { ...typography.row },
   subtitle: { color: colors.mutedInk },
   rowPressed: { backgroundColor: colors.accentSoft },
   destructive: { color: colors.danger },

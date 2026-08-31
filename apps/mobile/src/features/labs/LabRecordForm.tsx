@@ -21,7 +21,7 @@ import {
 } from '@alyte/domain';
 import { useNavigation, usePreventRemove, type NavigationProp } from '@react-navigation/native';
 import { t } from '../../localization';
-import { colors, radii, screenStyles, spacing } from '../../theme';
+import { colors, radii, screenStyles, spacing, typography } from '../../theme';
 import {
   AppButton,
   AppIcon,
@@ -612,7 +612,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.sm,
     borderWidth: 1,
     color: colors.ink,
-    fontSize: 17,
+    ...typography.input,
     minHeight: 48,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,

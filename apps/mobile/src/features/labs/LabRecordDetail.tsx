@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Pressable, SectionList, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { formatLocaleDate, type LabRecordDetail as Detail, type Measurement } from '@alyte/domain';
 import { t } from '../../localization';
-import { colors, spacing } from '../../theme';
+import { colors, radii, spacing } from '../../theme';
 import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
 import {
   correctionChangedFields,
@@ -372,7 +372,7 @@ const styles = StyleSheet.create({
   details: {
     backgroundColor: colors.surface,
     borderCurve: 'continuous',
-    borderRadius: 16,
+    borderRadius: radii.md,
     gap: spacing.md,
     padding: spacing.md,
     marginBottom: spacing.md,

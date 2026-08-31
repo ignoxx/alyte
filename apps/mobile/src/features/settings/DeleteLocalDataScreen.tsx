@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { useServices } from '../../services';
 import { AppButton, AppIcon, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
-import { colors, screenStyles, spacing } from '../../theme';
+import { colors, radii, screenStyles, spacing, typography } from '../../theme';
 import { deletionCountLabelKeys } from './deletion-ui-model';
 import {
   LOCAL_DELETION_SCOPES,
@@ -237,7 +237,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 14,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     marginBottom: spacing.lg,
     overflow: 'hidden',
@@ -253,19 +253,19 @@ const styles = StyleSheet.create({
   scopeSelected: { backgroundColor: colors.accentSoft },
   rowPressed: { backgroundColor: colors.accentSoft },
   scopeCopy: { flex: 1, gap: spacing.xs },
-  scopeTitle: { fontSize: 16, lineHeight: 21 },
+  scopeTitle: { ...typography.row },
   muted: { color: colors.mutedInk },
   countBlock: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 14,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     gap: spacing.sm,
     marginBottom: spacing.md,
     padding: spacing.lg,
   },
-  countTitle: { fontSize: 16, lineHeight: 21, marginBottom: spacing.xs },
+  countTitle: { ...typography.row, marginBottom: spacing.xs },
   countRow: {
     alignItems: 'center',
     flexDirection: 'row',

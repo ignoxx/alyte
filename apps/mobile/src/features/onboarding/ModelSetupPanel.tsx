@@ -8,6 +8,8 @@ import {
   AppText,
   ScreenScrollView,
   StatusPill,
+  TidalHero,
+  TidalIconStage,
 } from '../../ui/primitives';
 import { colors, screenStyles, spacing, typography } from '../../theme';
 import {
@@ -168,16 +170,20 @@ export function ModelSetupPanel({ model, onComplete, contextual = false }: Model
 
   return (
     <View style={styles.modelCard}>
-      <View accessibilityElementsHidden style={styles.capabilityIcon}>
-        <AppIcon name="lockShield" size={30} color={colors.accent} />
-      </View>
-      <StatusPill tone={modelStatusTone(snapshot)}>{statusLabel}</StatusPill>
-      <AppText variant="heading" selectable>
-        {contextual ? t('onboarding.contextualModelTitle') : t('onboarding.modelTitle')}
-      </AppText>
-      <AppText style={styles.muted} selectable>
-        {contextual ? t('onboarding.contextualModelBody') : t('onboarding.modelBody')}
-      </AppText>
+      <TidalHero style={styles.capabilityHero}>
+        <View style={styles.capabilityHeading}>
+          <TidalIconStage name="lockShield" size="compact" />
+          <View style={styles.capabilityCopy}>
+            <StatusPill tone={modelStatusTone(snapshot)}>{statusLabel}</StatusPill>
+            <AppText variant="title" style={styles.capabilityTitle} selectable>
+              {contextual ? t('onboarding.contextualModelTitle') : t('onboarding.modelTitle')}
+            </AppText>
+            <AppText style={styles.capabilityBody} selectable>
+              {contextual ? t('onboarding.contextualModelBody') : t('onboarding.modelBody')}
+            </AppText>
+          </View>
+        </View>
+      </TidalHero>
 
       <View accessible accessibilityRole="summary" style={styles.packHeader}>
         <AppIcon name="folder" size={28} color={colors.accent} />
@@ -330,16 +336,16 @@ const styles = StyleSheet.create({
   body: { color: colors.mutedInk, ...typography.body, maxWidth: 420 },
   muted: { color: colors.mutedInk },
   modelCard: { gap: spacing.md, marginTop: spacing.md },
-  capabilityIcon: {
+  capabilityHero: { padding: spacing.lg },
+  capabilityHeading: {
     alignItems: 'center',
-    alignSelf: 'flex-start',
-    backgroundColor: colors.accentSoft,
-    borderCurve: 'continuous',
-    borderRadius: 22,
-    height: 64,
-    justifyContent: 'center',
-    width: 64,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
   },
+  capabilityCopy: { flex: 1, gap: spacing.sm, minWidth: 210 },
+  capabilityTitle: { color: colors.onBrand },
+  capabilityBody: { color: colors.onBrandMuted },
   packHeader: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
   packCopy: { flex: 1, gap: spacing.xs },
   facts: { gap: spacing.sm },

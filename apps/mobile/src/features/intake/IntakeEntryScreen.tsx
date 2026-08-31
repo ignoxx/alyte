@@ -17,7 +17,7 @@ import type { LogStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
-import { colors, screenStyles, spacing } from '../../theme';
+import { colors, radii, screenStyles, spacing, typography } from '../../theme';
 import { intakeEventTypeLabel } from './ui';
 
 type Navigation = NativeStackNavigationProp<LogStackParamList>;
@@ -248,10 +248,10 @@ const styles = StyleSheet.create({
   choiceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   input: {
     borderColor: colors.border,
-    borderRadius: 10,
+    borderRadius: radii.sm,
     borderWidth: 1,
     color: colors.ink,
-    fontSize: 17,
+    ...typography.input,
     minHeight: 48,
     paddingHorizontal: spacing.sm,
   },

@@ -22,6 +22,8 @@ import {
   ScreenScrollView,
   ScreenStatusView,
   StatusPill,
+  TidalHero,
+  TidalIconStage,
 } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { LabReportImportError, type PasswordRequest } from './report-service';
@@ -284,8 +286,20 @@ export function LabReportDetailScreen() {
 
   return (
     <DetailScrollView>
-      <AppText variant="heading">{report.originalFilename}</AppText>
-      <StatusPill>{stateLabel(report, integrity)}</StatusPill>
+      <TidalHero style={styles.reportHero}>
+        <View style={styles.reportHeroHeading}>
+          <TidalIconStage name="doc" size="compact" />
+          <View style={styles.reportHeroCopy}>
+            <StatusPill>{stateLabel(report, integrity)}</StatusPill>
+            <AppText style={styles.reportHeroTitle} variant="title">
+              {report.originalFilename}
+            </AppText>
+            <AppText style={styles.reportHeroBody} variant="caption">
+              {t('labs.reportRetainedBody')}
+            </AppText>
+          </View>
+        </View>
+      </TidalHero>
       <AppSurface style={styles.metaSection}>
         <DetailRow
           label={t('labs.reportSourceType')}
@@ -426,6 +440,16 @@ function DetailRow({
 }
 
 const styles = StyleSheet.create({
+  reportHero: { padding: spacing.lg },
+  reportHeroHeading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+  },
+  reportHeroCopy: { flex: 1, gap: spacing.sm, minWidth: 210 },
+  reportHeroTitle: { color: colors.onBrand },
+  reportHeroBody: { color: colors.onBrandMuted },
   body: { color: colors.mutedInk, marginTop: spacing.md },
   center: { alignItems: 'center', gap: spacing.md, justifyContent: 'center', padding: spacing.lg },
   error: { gap: spacing.sm, marginTop: spacing.md },

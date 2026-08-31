@@ -1,5 +1,12 @@
 import { useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, SectionList, StyleSheet, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  SectionList,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -15,8 +22,10 @@ import {
   LabEmptyState,
   ScreenStatusView,
   StatusPill,
+  TidalHero,
+  TidalIconStage,
 } from '../../ui/primitives';
-import { colors, radii, screenStyles, spacing } from '../../theme';
+import { colors, radii, screenStyles, spacing, typography } from '../../theme';
 import {
   getScreenPlatformPolicy,
   getScreenSafeAreaEdges,
@@ -105,6 +114,8 @@ function rowPosition(index: number, length: number) {
 }
 
 export function LabsScreen() {
+  const { fontScale } = useWindowDimensions();
+  const usesAccessibleLayout = fontScale >= 1.4;
   const navigation = useNavigation<Navigation>();
   const services = useServices();
   const { labs } = services;
@@ -394,15 +405,72 @@ export function LabsScreen() {
             />
           }
           ListHeaderComponent={
-            <View style={styles.workspaceHeader}>
-              <AppText style={styles.muted}>{t('labs.workspaceIntro')}</AppText>
+            <TidalHero style={styles.workspaceHeader}>
+              <View
+                style={[
+                  styles.workspaceHeading,
+                  usesAccessibleLayout && styles.workspaceHeadingAccessible,
+                ]}
+              >
+                <TidalIconStage name="library" size="compact" />
+                <View style={styles.workspaceCopy}>
+                  <AppText style={styles.workspaceTitle} variant="title">
+                    {t('labs.workspaceTitle')}
+                  </AppText>
+                  <AppText style={styles.workspaceBody} variant="caption">
+                    {t('labs.workspaceIntro')}
+                  </AppText>
+                </View>
+              </View>
+              <View
+                accessibilityRole="summary"
+                style={[
+                  styles.workspaceFacts,
+                  usesAccessibleLayout && styles.workspaceFactsAccessible,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.workspaceFact,
+                    usesAccessibleLayout && styles.workspaceFactAccessible,
+                  ]}
+                >
+                  <AppText style={styles.workspaceFactValue}>{workspace.attention.length}</AppText>
+                  <AppText style={styles.workspaceFactLabel} variant="caption">
+                    {t('labs.workspaceAttentionLabel')}
+                  </AppText>
+                </View>
+                <View
+                  style={[
+                    styles.workspaceFact,
+                    usesAccessibleLayout && styles.workspaceFactAccessible,
+                  ]}
+                >
+                  <AppText style={styles.workspaceFactValue}>{workspace.reports.length}</AppText>
+                  <AppText style={styles.workspaceFactLabel} variant="caption">
+                    {t('labs.workspaceReportsLabel')}
+                  </AppText>
+                </View>
+                <View
+                  style={[
+                    styles.workspaceFact,
+                    usesAccessibleLayout && styles.workspaceFactAccessible,
+                  ]}
+                >
+                  <AppText style={styles.workspaceFactValue}>{workspace.records.length}</AppText>
+                  <AppText style={styles.workspaceFactLabel} variant="caption">
+                    {t('labs.workspaceRecordsLabel')}
+                  </AppText>
+                </View>
+              </View>
               <AppButton
                 label={t('labs.action')}
                 onPress={() => openReportImportFromStack(navigation)}
+                tone="secondary"
               >
-                <AppIcon color={colors.onAccent} name="plus" size={17} />
+                <AppIcon color={colors.accent} name="plus" size={17} />
               </AppButton>
-            </View>
+            </TidalHero>
           }
           renderItem={renderItem}
           renderSectionHeader={({ section }) => (
@@ -433,7 +501,35 @@ const styles = StyleSheet.create({
   localNote: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
   localNoteText: { color: colors.mutedInk, flexShrink: 1, textAlign: 'center' },
   listContent: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg },
-  workspaceHeader: { gap: spacing.md, paddingBottom: spacing.xl },
+  workspaceHeader: { gap: spacing.lg, marginBottom: spacing.sm, padding: spacing.lg },
+  workspaceHeading: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
+  workspaceHeadingAccessible: { alignItems: 'flex-start', flexDirection: 'column' },
+  workspaceCopy: { flex: 1, gap: spacing.xs, minWidth: 0 },
+  workspaceTitle: { color: colors.onBrand },
+  workspaceBody: { color: colors.onBrandMuted },
+  workspaceFacts: {
+    borderTopColor: colors.onBrandMuted,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingTop: spacing.md,
+  },
+  workspaceFactsAccessible: { flexDirection: 'column' },
+  workspaceFact: { flex: 1, gap: 2, minWidth: 0 },
+  workspaceFactAccessible: {
+    alignItems: 'baseline',
+    flex: 0,
+    flexDirection: 'row',
+    gap: spacing.md,
+    justifyContent: 'space-between',
+    width: '100%',
+  },
+  workspaceFactValue: {
+    ...typography.stat,
+    color: colors.onBrand,
+    fontVariant: ['tabular-nums'],
+  },
+  workspaceFactLabel: { color: colors.onBrandMuted },
   sectionHeader: { gap: spacing.xs, paddingBottom: spacing.sm, paddingTop: spacing.lg },
   sectionLabel: { color: colors.ink },
   sectionBody: { color: colors.mutedInk },

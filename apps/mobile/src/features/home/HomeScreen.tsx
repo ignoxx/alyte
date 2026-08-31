@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { formatLocaleDate, type LabDateState } from '@alyte/domain';
+import { formatLocaleDate } from '@alyte/domain';
 import type { HomeStackParamList } from '../../navigation/types';
 import { dispatchHomeQuickActionFromStack } from '../../navigation/parent-tab';
 import { useServices } from '../../services';
@@ -11,34 +12,22 @@ import { t } from '../../localization';
 import {
   AppButton,
   AppIcon,
-  AppSurface,
   AppText,
-  LabEmptyState,
   ScreenScrollView,
   ScreenStatusView,
-  StatusPill,
+  TidalHero,
+  TidalIconStage,
 } from '../../ui/primitives';
-import { colors, radii, screenStyles, spacing } from '../../theme';
-import {
-  getScreenPlatformPolicy,
-  getScreenSafeAreaEdges,
-  getScreenSurfaceMode,
-} from '../../ui/screen-scroll-model';
+import { colors, radii, screenStyles, spacing, typography } from '../../theme';
+import { getScreenSurfaceMode } from '../../ui/screen-scroll-model';
 import {
   buildHomeLabViewModel,
   getHomeMeasuredChangeColumnCount,
   type HomeLabViewModel,
   type HomeMeasuredChange,
-  type HomeReportRow,
 } from './home-model';
 
 type HomeNavigation = NativeStackNavigationProp<HomeStackParamList, 'HomeRoot'>;
-
-const screenSafeAreaEdges = getScreenSafeAreaEdges(getScreenPlatformPolicy(process.env.EXPO_OS));
-
-function dateLabel(date: LabDateState, locale: string): string {
-  return date.kind === 'known' ? formatLocaleDate(date.value, locale) : t('home.dateMissing');
-}
 
 function measuredValue(
   change: HomeMeasuredChange,
@@ -74,24 +63,23 @@ function changeDirectionIcon(change: HomeMeasuredChange): 'trendUp' | 'trendDown
       : 'trendStable';
 }
 
-function countCopy(count: number, singularKey: string, pluralKey: string): string {
-  return t(count === 1 ? singularKey : pluralKey).replace('{count}', String(count));
-}
-
-function measurementCount(count: number): string {
-  return countCopy(count, 'home.measurementCount', 'home.measurementsCount');
-}
-
 function EmptyHome({ onImport }: { readonly onImport: () => void }) {
   return (
     <View style={styles.emptyComposition}>
-      <LabEmptyState
-        actionLabel={t('home.importAction')}
-        icon="addDocument"
-        onAction={onImport}
-        body={t('home.emptyBody')}
-        title={t('home.emptyTitle')}
-      />
+      <TidalHero style={styles.emptyHero}>
+        <View style={styles.emptyHeroContent}>
+          <TidalIconStage name="addDocument" />
+          <View style={styles.emptyHeroCopy}>
+            <AppText style={styles.onBrand} variant="title">
+              {t('home.emptyTitle')}
+            </AppText>
+            <AppText style={styles.onBrandMuted}>{t('home.emptyBody')}</AppText>
+          </View>
+        </View>
+      </TidalHero>
+      <AppButton label={t('home.importAction')} onPress={onImport} style={styles.emptyAction}>
+        <AppIcon color={colors.onAccent} name="plus" size={17} />
+      </AppButton>
       <View accessibilityRole="text" style={styles.privacyNote}>
         <AppIcon color={colors.mutedInk} name="lockShield" size={16} />
         <AppText style={styles.privacyNoteText} variant="caption">
@@ -99,6 +87,75 @@ function EmptyHome({ onImport }: { readonly onImport: () => void }) {
         </AppText>
       </View>
     </View>
+  );
+}
+
+function HomeSummaryHero({ model }: { readonly model: HomeLabViewModel }) {
+  const { fontScale } = useWindowDimensions();
+  const usesAccessibleLayout = fontScale >= 1.4;
+  const hasComparableHistory = model.measuredChanges.length > 0;
+  const prominentValue = hasComparableHistory ? model.measuredChanges.length : model.recordCount;
+  const prominentLabel = hasComparableHistory
+    ? t(
+        model.measuredChanges.length === 1
+          ? 'home.compatibleChangeLabel'
+          : 'home.compatibleChangesNoun',
+      )
+    : t(model.recordCount === 1 ? 'home.labRecordReadyLabel' : 'home.labRecordsReadyLabel');
+  const facts = [
+    { label: t('home.labRecordsLabel'), value: model.recordCount },
+    { label: t('home.biomarkersLabel'), value: model.biomarkerCount },
+    { label: t('home.compatibleChangesLabel'), value: model.measuredChanges.length },
+  ];
+
+  return (
+    <TidalHero edge="bottom" style={styles.summaryHero}>
+      <View style={[styles.heroLead, usesAccessibleLayout && styles.heroLeadAccessible]}>
+        <View accessibilityRole="summary" style={styles.heroLens}>
+          <View accessibilityElementsHidden style={styles.heroLensOuter} />
+          <View accessibilityElementsHidden style={styles.heroLensMiddle} />
+          <View style={styles.heroLensCore}>
+            <AppText style={styles.heroLensValue}>{prominentValue}</AppText>
+          </View>
+        </View>
+        <View style={[styles.heroCopy, usesAccessibleLayout && styles.heroCopyAccessible]}>
+          <AppText
+            style={[styles.heroEyebrow, usesAccessibleLayout && styles.heroTextAccessible]}
+            variant="label"
+          >
+            {t(hasComparableHistory ? 'home.heroSinceLastReport' : 'home.heroHistoryStarted')}
+          </AppText>
+          <AppText
+            style={[styles.heroTitle, usesAccessibleLayout && styles.heroTextAccessible]}
+            variant="title"
+          >
+            {prominentLabel}
+          </AppText>
+          <AppText
+            style={[styles.heroBody, usesAccessibleLayout && styles.heroTextAccessible]}
+            variant="caption"
+          >
+            {t('home.heroMeasuredOnly')}
+          </AppText>
+        </View>
+      </View>
+      <View
+        accessibilityRole="summary"
+        style={[styles.heroFacts, usesAccessibleLayout && styles.heroFactsAccessible]}
+      >
+        {facts.map((fact) => (
+          <View
+            key={fact.label}
+            style={[styles.heroFact, usesAccessibleLayout && styles.heroFactAccessible]}
+          >
+            <AppText style={styles.heroFactValue}>{fact.value}</AppText>
+            <AppText style={styles.heroFactLabel} variant="caption">
+              {fact.label}
+            </AppText>
+          </View>
+        ))}
+      </View>
+    </TidalHero>
   );
 }
 
@@ -141,42 +198,40 @@ function NextAction({
   );
 }
 
-function LatestMeasuredSummary({
-  item,
-  locale,
-  onPress,
-}: {
-  readonly item: HomeReportRow;
-  readonly locale: string;
-  readonly onPress: () => void;
-}) {
-  const title = item.title ?? t('home.manualRecord');
+function TrendMark({ change }: { readonly change: HomeMeasuredChange }) {
+  const width = 112;
+  const height = 42;
+  const padding = 9;
+  const y1 = change.direction === 'increased' ? 31 : change.direction === 'decreased' ? 11 : 21;
+  const y2 = change.direction === 'decreased' ? 31 : change.direction === 'increased' ? 11 : 21;
+  const run = width - padding * 2;
+  const rise = y2 - y1;
+  const lineWidth = Math.sqrt(run * run + rise * rise);
+  const angle = Math.atan2(rise, run);
+
   return (
-    <Pressable
-      accessibilityHint={t(item.kind === 'record' ? 'home.recordRowHint' : 'home.reportRowHint')}
-      accessibilityLabel={`${title}, ${dateLabel(item.date, locale)}, ${measurementCount(item.measurementCount)}`}
-      accessibilityRole="button"
-      onPress={onPress}
-      style={({ pressed }) => [styles.latestPressable, pressed && styles.pressed]}
-    >
-      <AppSurface style={styles.latestSurface} tone="soft">
-        <View style={styles.latestHeader}>
-          <StatusPill subtle>
-            {t(item.kind === 'record' ? 'home.measuredRecord' : 'home.sourceReport')}
-          </StatusPill>
-          <AppIcon name="chevronRight" size={16} />
-        </View>
-        <AppText selectable variant="title">
-          {dateLabel(item.date, locale)}
-        </AppText>
-        <AppText selectable style={styles.latestTitle} variant="heading">
-          {title}
-        </AppText>
-        <AppText selectable style={styles.muted}>
-          {measurementCount(item.measurementCount)}
-        </AppText>
-      </AppSurface>
-    </Pressable>
+    <View accessibilityElementsHidden style={[styles.trendMark, { height, width }]}>
+      <View
+        style={[
+          styles.trendLine,
+          {
+            left: padding,
+            top: (y1 + y2) / 2 - 1,
+            transform: [{ rotate: `${angle}rad` }],
+            width: lineWidth,
+          },
+        ]}
+      />
+      {[
+        { left: padding, top: y1 },
+        { left: width - padding, top: y2 },
+      ].map((point, index) => (
+        <View
+          key={index}
+          style={[styles.trendPoint, { left: point.left - 5.5, top: point.top - 5.5 }]}
+        />
+      ))}
+    </View>
   );
 }
 
@@ -212,10 +267,12 @@ function MeasuredChanges({
         style={({ pressed }) => [styles.changeCard, pressed && styles.pressed]}
       >
         <View style={styles.changeCardHeader}>
-          <AppText selectable style={styles.changeCardTitle} variant="heading">
+          <AppText selectable style={styles.changeCardTitle} variant="label">
             {change.label}
           </AppText>
-          <AppIcon name="chevronRight" size={14} />
+          <View accessibilityElementsHidden style={styles.directionIcon}>
+            <AppIcon color={colors.accent} name={changeDirectionIcon(change)} size={14} />
+          </View>
         </View>
         <View style={styles.changeLatest}>
           <View style={styles.changeValueLine}>
@@ -230,19 +287,7 @@ function MeasuredChanges({
             {measuredDate(change, true, locale)}
           </AppText>
         </View>
-        <View style={styles.changePrevious}>
-          <View accessibilityElementsHidden style={styles.directionIcon}>
-            <AppIcon color={colors.accent} name={changeDirectionIcon(change)} size={14} />
-          </View>
-          <View style={styles.previousCopy}>
-            <AppText style={styles.previousLabel} variant="caption">
-              {t('home.previousMeasurement')}
-            </AppText>
-            <AppText selectable style={styles.previousValue} variant="label">
-              {measuredValue(change, false, numberFormatter)}
-            </AppText>
-          </View>
-        </View>
+        <TrendMark change={change} />
       </Pressable>
     );
   }
@@ -271,76 +316,47 @@ function MeasuredChanges({
   );
 }
 
-function Coverage({ model }: { readonly model: HomeLabViewModel }) {
-  const records = countCopy(model.recordCount, 'home.recordCount', 'home.recordsCount');
-  const biomarkers = countCopy(model.biomarkerCount, 'home.biomarkerCount', 'home.biomarkersCount');
-  return (
-    <View accessibilityRole="summary" style={styles.coverage}>
-      <AppIcon color={colors.mutedInk} name="chart" size={18} />
-      <View style={styles.flexCopy}>
-        <AppText variant="label">{t('home.historyCoverage')}</AppText>
-        <AppText style={styles.muted}>{`${records} · ${biomarkers}`}</AppText>
-      </View>
-    </View>
-  );
-}
-
 function PopulatedHome({
   model,
   locale,
   onImport,
   onContinueReport,
-  onOpenReport,
-  onOpenRecord,
   onOpenBiomarkerHistory,
 }: {
   readonly model: HomeLabViewModel;
   readonly locale: string;
   readonly onImport: () => void;
   readonly onContinueReport: (reportId: string, draftId?: string) => void;
-  readonly onOpenReport: (reportId: string) => void;
-  readonly onOpenRecord: (recordId: string) => void;
   readonly onOpenBiomarkerHistory: (biomarkerId: string) => void;
 }) {
   const latestItem = model.latestRecord ?? model.latestReport;
   if (latestItem === null) return <EmptyHome onImport={onImport} />;
 
   return (
-    <View style={styles.sections}>
-      <NextAction model={model} onPress={onContinueReport} />
-      <MeasuredChanges
-        changes={model.measuredChanges}
-        locale={locale}
-        onOpen={onOpenBiomarkerHistory}
-      />
-      <View style={styles.section}>
-        <View style={styles.sectionHeading}>
-          <AppText variant="heading">{t('home.overviewTitle')}</AppText>
-          <AppText style={styles.muted}>{t('home.overviewBody')}</AppText>
-        </View>
-        <LatestMeasuredSummary
-          item={latestItem}
+    <View style={styles.populatedHome}>
+      <HomeSummaryHero model={model} />
+      <View style={styles.sections}>
+        <NextAction model={model} onPress={onContinueReport} />
+        <MeasuredChanges
+          changes={model.measuredChanges}
           locale={locale}
-          onPress={() =>
-            latestItem.kind === 'record' ? onOpenRecord(latestItem.id) : onOpenReport(latestItem.id)
-          }
+          onOpen={onOpenBiomarkerHistory}
         />
-        <Coverage model={model} />
+        {model.recordCount === 1 && model.measuredChanges.length === 0 && (
+          <View accessibilityRole="summary" style={styles.secondReportPrompt}>
+            <View style={styles.actionIcon}>
+              <AppIcon color={colors.accent} name="chart" size={21} />
+            </View>
+            <View style={styles.flexCopy}>
+              <AppText variant="heading">{t('home.secondReportTitle')}</AppText>
+              <AppText style={styles.muted}>{t('home.secondReportBody')}</AppText>
+            </View>
+          </View>
+        )}
+        <AppButton label={t('home.importAnotherAction')} onPress={onImport} tone="secondary">
+          <AppIcon color={colors.accent} name="plus" size={17} />
+        </AppButton>
       </View>
-      {model.recordCount === 1 && model.measuredChanges.length === 0 && (
-        <View accessibilityRole="summary" style={styles.secondReportPrompt}>
-          <View style={styles.actionIcon}>
-            <AppIcon color={colors.accent} name="chart" size={21} />
-          </View>
-          <View style={styles.flexCopy}>
-            <AppText variant="heading">{t('home.secondReportTitle')}</AppText>
-            <AppText style={styles.muted}>{t('home.secondReportBody')}</AppText>
-          </View>
-        </View>
-      )}
-      <AppButton label={t('home.importAnotherAction')} onPress={onImport} tone="secondary">
-        <AppIcon color={colors.accent} name="plus" size={17} />
-      </AppButton>
     </View>
   );
 }
@@ -387,14 +403,6 @@ export function HomeScreen() {
     });
   }
 
-  function openReport(reportId: string) {
-    dispatchHomeQuickActionFromStack(navigation, { kind: 'open-report', reportId });
-  }
-
-  function openRecord(recordId: string) {
-    dispatchHomeQuickActionFromStack(navigation, { kind: 'open-record', recordId });
-  }
-
   function openBiomarkerHistory(biomarkerId: string) {
     dispatchHomeQuickActionFromStack(navigation, { kind: 'open-biomarker-history', biomarkerId });
   }
@@ -410,11 +418,12 @@ export function HomeScreen() {
   const statusSurface = getScreenSurfaceMode(surfaceState) === 'status';
 
   return (
-    <SafeAreaView edges={screenSafeAreaEdges} style={screenStyles.safe}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={[screenStyles.safe, styles.homeSafe]}>
+      <StatusBar style="light" />
       {statusSurface ? (
         <ScreenStatusView
           contentContainerStyle={styles.statusState}
-          style={screenStyles.scroll}
+          style={[screenStyles.scroll, styles.canvas]}
           tabBarClearance="native"
         >
           {loading && (
@@ -434,8 +443,8 @@ export function HomeScreen() {
         </ScreenStatusView>
       ) : (
         <ScreenScrollView
-          contentContainerStyle={screenStyles.content}
-          style={screenStyles.scroll}
+          contentContainerStyle={styles.populatedContent}
+          style={[screenStyles.scroll, styles.canvas]}
           tabBarClearance="native"
         >
           {model !== null && (
@@ -444,8 +453,6 @@ export function HomeScreen() {
               model={model}
               onContinueReport={continueReport}
               onOpenBiomarkerHistory={openBiomarkerHistory}
-              onOpenRecord={openRecord}
-              onOpenReport={openReport}
               onImport={openImport}
             />
           )}
@@ -456,7 +463,17 @@ export function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  sections: { gap: spacing.xl, paddingBottom: spacing.lg, width: '100%' },
+  homeSafe: { backgroundColor: colors.brand },
+  canvas: { backgroundColor: colors.canvas },
+  populatedContent: { flexGrow: 1 },
+  populatedHome: { backgroundColor: colors.canvas, width: '100%' },
+  sections: {
+    gap: spacing.xl,
+    paddingBottom: spacing.xl,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.xl,
+    width: '100%',
+  },
   section: { gap: spacing.md },
   sectionHeading: { gap: spacing.xs, width: '100%' },
   sectionEyebrow: {
@@ -465,12 +482,101 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
     textTransform: 'uppercase',
   },
-  statusState: { alignItems: 'center', justifyContent: 'center' },
+  statusState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+  },
   loadingState: { alignItems: 'center', gap: spacing.md },
   errorState: { alignItems: 'center', gap: spacing.md, maxWidth: 340 },
   emptyComposition: { alignItems: 'center', gap: spacing.lg, width: '100%' },
+  emptyHero: { maxWidth: 440, padding: spacing.lg, width: '100%' },
+  emptyHeroContent: { alignItems: 'center', gap: spacing.md },
+  emptyHeroCopy: { alignItems: 'center', gap: spacing.sm, maxWidth: 350 },
+  emptyAction: { alignSelf: 'stretch', maxWidth: 440 },
+  onBrand: { color: colors.onBrand, textAlign: 'center' },
+  onBrandMuted: { color: colors.onBrandMuted, textAlign: 'center' },
   privacyNote: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
   privacyNoteText: { color: colors.mutedInk, flexShrink: 1, textAlign: 'center' },
+  summaryHero: {
+    paddingBottom: spacing.xl,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+  },
+  heroLead: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.lg,
+    minHeight: 172,
+  },
+  heroLeadAccessible: { alignItems: 'center', flexDirection: 'column' },
+  heroLens: {
+    alignItems: 'center',
+    height: 132,
+    justifyContent: 'center',
+    position: 'relative',
+    width: 132,
+  },
+  heroLensOuter: {
+    backgroundColor: colors.brandMid,
+    borderRadius: radii.pill,
+    height: 132,
+    opacity: 0.42,
+    position: 'absolute',
+    width: 132,
+  },
+  heroLensMiddle: {
+    backgroundColor: colors.brandSoft,
+    borderRadius: radii.pill,
+    height: 102,
+    opacity: 0.5,
+    position: 'absolute',
+    width: 102,
+  },
+  heroLensCore: {
+    alignItems: 'center',
+    backgroundColor: colors.brandDeep,
+    borderRadius: radii.pill,
+    height: 74,
+    justifyContent: 'center',
+    position: 'absolute',
+    width: 74,
+  },
+  heroLensValue: {
+    ...typography.metric,
+    color: colors.onBrand,
+    fontVariant: ['tabular-nums'],
+  },
+  heroCopy: { flex: 1, gap: spacing.xs, minWidth: 180 },
+  heroCopyAccessible: { flex: 0, minWidth: 0, width: '100%' },
+  heroTextAccessible: { textAlign: 'center' },
+  heroEyebrow: { color: colors.brandSoft },
+  heroTitle: { color: colors.onBrand },
+  heroBody: { color: colors.onBrandMuted },
+  heroFacts: {
+    borderTopColor: colors.onBrandMuted,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingTop: spacing.lg,
+  },
+  heroFactsAccessible: { flexDirection: 'column' },
+  heroFact: { flex: 1, gap: 2, minWidth: 0 },
+  heroFactAccessible: {
+    alignItems: 'baseline',
+    flex: 0,
+    flexDirection: 'row',
+    gap: spacing.md,
+    justifyContent: 'space-between',
+    width: '100%',
+  },
+  heroFactValue: {
+    ...typography.stat,
+    color: colors.onBrand,
+    fontVariant: ['tabular-nums'],
+  },
+  heroFactLabel: { color: colors.onBrandMuted },
   actionSection: { gap: spacing.sm },
   nextAction: {
     alignItems: 'center',
@@ -493,16 +599,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 42,
   },
-  latestPressable: { borderCurve: 'continuous', borderRadius: radii.lg },
-  latestSurface: { gap: spacing.xs, minHeight: 156, padding: spacing.lg },
-  latestHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
-  latestTitle: { marginTop: spacing.xs },
-  coverage: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.md,
-    paddingHorizontal: spacing.xs,
-  },
   masonryGrid: { alignItems: 'flex-start', flexDirection: 'row', gap: spacing.md },
   masonryColumn: { flex: 1, gap: spacing.md, minWidth: 0 },
   changeList: { gap: spacing.md },
@@ -513,7 +609,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     gap: spacing.sm,
-    minHeight: 178,
+    minHeight: 174,
     minWidth: 0,
     padding: spacing.md,
     width: '100%',
@@ -534,27 +630,31 @@ const styles = StyleSheet.create({
   },
   changeValue: { fontVariant: ['tabular-nums'] },
   changeUnit: { color: colors.mutedInk },
-  changePrevious: {
-    alignItems: 'center',
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: 'auto',
-    paddingTop: spacing.sm,
-  },
   directionIcon: {
     alignItems: 'center',
     backgroundColor: colors.accentSoft,
     borderCurve: 'continuous',
-    borderRadius: radii.sm,
+    borderRadius: radii.pill,
     height: 28,
     justifyContent: 'center',
     width: 28,
   },
-  previousCopy: { flex: 1, gap: 1, minWidth: 0 },
-  previousLabel: { color: colors.mutedInk },
-  previousValue: { color: colors.ink, fontVariant: ['tabular-nums'] },
+  trendMark: { alignSelf: 'center', marginTop: 'auto', position: 'relative' },
+  trendLine: {
+    backgroundColor: colors.accent,
+    borderRadius: radii.pill,
+    height: 2,
+    position: 'absolute',
+  },
+  trendPoint: {
+    backgroundColor: colors.brandSoft,
+    borderColor: colors.surface,
+    borderRadius: radii.pill,
+    borderWidth: 2,
+    height: 11,
+    position: 'absolute',
+    width: 11,
+  },
   limitNote: { color: colors.mutedInk },
   secondReportPrompt: {
     alignItems: 'center',

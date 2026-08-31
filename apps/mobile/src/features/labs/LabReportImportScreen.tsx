@@ -1,12 +1,19 @@
 import { useLayoutEffect, useState } from 'react';
-import { Alert, StyleSheet } from 'react-native';
+import { Alert, StyleSheet, View } from 'react-native';
 import type { LabReport } from '@alyte/domain';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
+import {
+  AppButton,
+  AppSurface,
+  AppText,
+  ScreenScrollView,
+  TidalHero,
+  TidalIconStage,
+} from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import {
   LabReportImportError,
@@ -153,7 +160,19 @@ export function LabReportImportScreen() {
 
   return (
     <ScreenScrollView contentContainerStyle={screenStyles.content} style={screenStyles.scroll}>
-      <AppText style={styles.intro}>{t('labs.reportImportBody')}</AppText>
+      <TidalHero style={styles.importHero}>
+        <View style={styles.importHeroHeading}>
+          <TidalIconStage name="addDocument" size="compact" />
+          <View style={styles.importHeroCopy}>
+            <AppText style={styles.importHeroTitle} variant="title">
+              {t('labs.reportImportTitle')}
+            </AppText>
+            <AppText style={styles.importHeroBody} variant="caption">
+              {t('labs.reportImportBody')}
+            </AppText>
+          </View>
+        </View>
+      </TidalHero>
       <AppSurface style={styles.actions}>
         <AppButton
           disabled={busy}
@@ -186,8 +205,17 @@ export function LabReportImportScreen() {
 }
 
 const styles = StyleSheet.create({
+  importHero: { padding: spacing.lg },
+  importHeroHeading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+  },
+  importHeroCopy: { flex: 1, gap: spacing.xs, minWidth: 210 },
+  importHeroTitle: { color: colors.onBrand },
+  importHeroBody: { color: colors.onBrandMuted },
   actions: { gap: spacing.sm, marginTop: spacing.md },
   error: { gap: spacing.sm, marginTop: spacing.md },
-  intro: { color: colors.mutedInk, marginTop: spacing.sm },
   muted: { color: colors.mutedInk },
 });

@@ -17,7 +17,7 @@ import {
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { colors, screenStyles, spacing, typography } from '../../theme';
+import { colors, radii, screenStyles, spacing, typography } from '../../theme';
 import {
   AppButton,
   AppSurface,
@@ -25,6 +25,7 @@ import {
   ScreenScrollView,
   ScreenStatusView,
   StatusPill,
+  TidalHero,
 } from '../../ui/primitives';
 import {
   buildBiomarkerHistoryViewModel,
@@ -193,17 +194,19 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
       tabBarClearance="native"
     >
       {latestMeasured?.kind === 'point' && (
-        <AppSurface style={styles.latestMeasuredSurface}>
-          <View style={styles.latestMeasuredHeader}>
-            <StatusPill tone="measured">{t('labs.historyMeasuredPoint')}</StatusPill>
-            <AppText style={styles.secondary} variant="caption">
-              {formatLocaleDate(latestMeasured.point.collectionDate, locale)}
+        <View style={styles.latestMeasuredGroup}>
+          <TidalHero style={styles.latestMeasuredSurface}>
+            <View style={styles.latestMeasuredHeader}>
+              <StatusPill tone="measured">{t('labs.historyMeasuredPoint')}</StatusPill>
+              <AppText style={styles.latestMeasuredDate} variant="caption">
+                {formatLocaleDate(latestMeasured.point.collectionDate, locale)}
+              </AppText>
+            </View>
+            <AppText selectable style={styles.latestMeasuredValue} variant="display">
+              {`${formatLocaleDecimal(latestMeasured.point.normalized.value, locale)} ${latestMeasured.point.normalized.unit}`}
             </AppText>
-          </View>
-          <AppText selectable style={styles.latestMeasuredValue} variant="display">
-            {`${formatLocaleDecimal(latestMeasured.point.normalized.value, locale)} ${latestMeasured.point.normalized.unit}`}
-          </AppText>
-          <View style={styles.latestFacts}>
+          </TidalHero>
+          <AppSurface style={styles.latestFacts}>
             <Fact
               label={t('labs.historyLaboratoryInterval')}
               value={latestMeasured.laboratoryReference.interval ?? t('labs.historyNotProvided')}
@@ -220,8 +223,8 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
               label={t('labs.historyOriginalSource')}
               value={originalSourceText(latestMeasured.original) || t('labs.historyNotProvided')}
             />
-          </View>
-        </AppSurface>
+          </AppSurface>
+        </View>
       )}
       <View style={styles.statusBlock}>
         <AppText variant="label" selectable style={styles.secondary}>
@@ -777,6 +780,7 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   statusBlock: { gap: spacing.sm, paddingTop: spacing.sm },
+  latestMeasuredGroup: { gap: spacing.sm },
   latestMeasuredSurface: { gap: spacing.md, padding: spacing.lg },
   latestMeasuredHeader: {
     alignItems: 'center',
@@ -785,12 +789,10 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     justifyContent: 'space-between',
   },
-  latestMeasuredValue: { fontVariant: ['tabular-nums'] },
+  latestMeasuredDate: { color: colors.onBrandMuted },
+  latestMeasuredValue: { color: colors.onBrand, fontVariant: ['tabular-nums'] },
   latestFacts: {
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
     gap: spacing.md,
-    paddingTop: spacing.md,
   },
   secondary: { color: colors.mutedInk },
   section: { gap: spacing.sm },
@@ -805,7 +807,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 16,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
     position: 'relative',
@@ -819,7 +821,7 @@ const styles = StyleSheet.create({
   chartPoint: {
     backgroundColor: colors.accent,
     borderColor: colors.surface,
-    borderRadius: 7,
+    borderRadius: radii.pill,
     borderWidth: 2,
     height: 12,
     position: 'absolute',
@@ -839,7 +841,7 @@ const styles = StyleSheet.create({
   timelineRow: { flexDirection: 'row', gap: spacing.sm },
   timelineMarker: {
     backgroundColor: colors.accent,
-    borderRadius: 6,
+    borderRadius: radii.pill,
     height: 12,
     marginTop: 6,
     width: 12,
@@ -849,7 +851,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 14,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     flex: 1,
     gap: spacing.xs,

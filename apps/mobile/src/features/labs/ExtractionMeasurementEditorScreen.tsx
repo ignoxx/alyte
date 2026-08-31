@@ -17,7 +17,7 @@ import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { AppButton, AppIcon, AppText, StatusPill } from '../../ui/primitives';
-import { colors, spacing } from '../../theme';
+import { colors, radii, spacing } from '../../theme';
 import {
   extractionSourcePresentation,
   extractionSourcePreviewRequestAllowed,
@@ -447,7 +447,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.elevatedSurface,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 10,
+    borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
     color: colors.ink,
     minHeight: 48,

@@ -20,7 +20,7 @@ import type { RootStackParamList } from '../../navigation/types';
 import type { Measurement } from '@alyte/domain';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { colors, spacing } from '../../theme';
+import { colors, radii, spacing, typography } from '../../theme';
 import { AppButton, AppText } from '../../ui/primitives';
 import {
   correctionDraftIsDirty,
@@ -256,11 +256,11 @@ const styles = StyleSheet.create({
   input: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: 12,
+    borderRadius: radii.sm,
     borderCurve: 'continuous',
     borderWidth: 1,
     color: colors.ink,
-    fontSize: 17,
+    ...typography.input,
     minHeight: 48,
     paddingHorizontal: spacing.md,
   },

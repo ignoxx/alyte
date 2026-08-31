@@ -55,11 +55,21 @@ export function AppText({
 }
 
 type AppSurfaceProps = PropsWithChildren<ViewProps> & {
-  tone?: 'default' | 'soft';
+  tone?: 'default' | 'soft' | 'brand';
 };
 
 export function AppSurface({ tone = 'default', style, ...props }: AppSurfaceProps) {
-  return <View style={[styles.surface, tone === 'soft' && styles.softSurface, style]} {...props} />;
+  return (
+    <View
+      style={[
+        styles.surface,
+        tone === 'soft' && styles.softSurface,
+        tone === 'brand' && styles.brandSurface,
+        style,
+      ]}
+      {...props}
+    />
+  );
 }
 
 /**
@@ -371,6 +381,55 @@ export function AppIcon({
   );
 }
 
+export function TidalHero({
+  children,
+  edge = 'rounded',
+  style,
+}: PropsWithChildren<{
+  readonly edge?: 'rounded' | 'bottom';
+  readonly style?: StyleProp<ViewStyle>;
+}>) {
+  return (
+    <View
+      style={[
+        styles.tidalHero,
+        edge === 'bottom' ? styles.tidalHeroBottomEdge : styles.tidalHeroRounded,
+        style,
+      ]}
+    >
+      <View accessibilityElementsHidden pointerEvents="none" style={styles.tidalHeroOrbLarge} />
+      <View accessibilityElementsHidden pointerEvents="none" style={styles.tidalHeroOrbSmall} />
+      <View style={styles.tidalHeroContent}>{children}</View>
+    </View>
+  );
+}
+
+export function TidalIconStage({
+  name,
+  accessibilityLabel,
+  size = 'regular',
+}: {
+  readonly name: AppIconName;
+  readonly accessibilityLabel?: string;
+  readonly size?: 'compact' | 'regular';
+}) {
+  const compact = size === 'compact';
+  return (
+    <View
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole={accessibilityLabel === undefined ? undefined : 'image'}
+      accessible={accessibilityLabel !== undefined}
+      style={[styles.tidalIconStage, compact && styles.tidalIconStageCompact]}
+    >
+      <View style={[styles.tidalIconOuter, compact && styles.tidalIconOuterCompact]} />
+      <View style={[styles.tidalIconMiddle, compact && styles.tidalIconMiddleCompact]} />
+      <View style={[styles.tidalIconCore, compact && styles.tidalIconCoreCompact]}>
+        <AppIcon color={colors.onBrand} name={name} size={compact ? 20 : 28} />
+      </View>
+    </View>
+  );
+}
+
 /** Shared centered empty state for local laboratory surfaces. */
 export function LabEmptyState({
   icon,
@@ -387,9 +446,7 @@ export function LabEmptyState({
 }) {
   return (
     <View style={styles.labEmptyState}>
-      <View accessibilityElementsHidden style={styles.labEmptySymbol}>
-        <AppIcon color={colors.accent} name={icon} size={30} />
-      </View>
+      <TidalIconStage name={icon} />
       <View style={styles.labEmptyCopy}>
         <AppText style={styles.labEmptyTitle} variant="title">
           {title}
@@ -442,15 +499,16 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 14,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     padding: spacing.lg,
   },
   softSurface: { backgroundColor: colors.accentSoft, borderColor: colors.accentSoft },
+  brandSurface: { backgroundColor: colors.brand, borderColor: colors.brandMid },
   button: {
     alignItems: 'center',
     borderCurve: 'continuous',
-    borderRadius: 12,
+    borderRadius: radii.md,
     flexDirection: 'row',
     gap: spacing.sm,
     minHeight: 48,
@@ -462,14 +520,14 @@ const styles = StyleSheet.create({
   quietButton: { minHeight: 44, paddingHorizontal: spacing.sm },
   disabledButton: { backgroundColor: colors.disabledFill, borderColor: colors.disabledFill },
   disabledLabel: { color: colors.disabledInk },
-  pressedButton: { opacity: 0.78 },
+  pressedButton: { opacity: 0.86, transform: [{ scale: 0.98 }] },
   primaryLabel: { color: colors.onAccent },
   secondaryLabel: { color: colors.accent },
   emptyState: { gap: spacing.sm },
   emptyBody: { color: colors.mutedInk },
   pill: {
     alignSelf: 'flex-start',
-    borderRadius: 99,
+    borderRadius: radii.pill,
     flexDirection: 'row',
     maxWidth: '100%',
     paddingHorizontal: spacing.sm,
@@ -495,15 +553,74 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     width: '100%',
   },
-  labEmptySymbol: {
-    alignItems: 'center',
-    backgroundColor: colors.disabledFill,
+  tidalHero: {
+    backgroundColor: colors.brand,
     borderCurve: 'continuous',
-    borderRadius: radii.lg,
-    height: 72,
-    justifyContent: 'center',
-    width: 72,
+    overflow: 'hidden',
+    position: 'relative',
   },
+  tidalHeroRounded: { borderRadius: radii.xl },
+  tidalHeroBottomEdge: {
+    borderBottomLeftRadius: radii.xl,
+    borderBottomRightRadius: radii.xl,
+  },
+  tidalHeroContent: { zIndex: 1 },
+  tidalHeroOrbLarge: {
+    backgroundColor: colors.brandDeep,
+    borderRadius: radii.pill,
+    height: 280,
+    opacity: 0.46,
+    position: 'absolute',
+    right: -148,
+    top: 28,
+    width: 280,
+  },
+  tidalHeroOrbSmall: {
+    backgroundColor: colors.brandSoft,
+    borderRadius: radii.pill,
+    bottom: -84,
+    height: 178,
+    opacity: 0.17,
+    position: 'absolute',
+    right: 38,
+    width: 178,
+  },
+  tidalIconStage: {
+    alignItems: 'center',
+    height: 112,
+    justifyContent: 'center',
+    position: 'relative',
+    width: 112,
+  },
+  tidalIconStageCompact: { height: 72, width: 72 },
+  tidalIconOuter: {
+    backgroundColor: colors.brandMid,
+    borderRadius: radii.pill,
+    height: 112,
+    opacity: 0.24,
+    position: 'absolute',
+    width: 112,
+  },
+  tidalIconOuterCompact: { height: 72, width: 72 },
+  tidalIconMiddle: {
+    backgroundColor: colors.brandSoft,
+    borderRadius: radii.pill,
+    height: 82,
+    opacity: 0.48,
+    position: 'absolute',
+    width: 82,
+  },
+  tidalIconMiddleCompact: { height: 54, width: 54 },
+  tidalIconCore: {
+    alignItems: 'center',
+    backgroundColor: colors.brandDeep,
+    borderRadius: radii.pill,
+    height: 56,
+    justifyContent: 'center',
+    position: 'absolute',
+    width: 56,
+  },
+  tidalIconCoreCompact: { height: 38, width: 38 },
   labEmptyCopy: { alignItems: 'center', gap: spacing.xs, maxWidth: 340 },
   labEmptyTitle: { textAlign: 'center' },
   labEmptyBody: { color: colors.mutedInk, textAlign: 'center' },

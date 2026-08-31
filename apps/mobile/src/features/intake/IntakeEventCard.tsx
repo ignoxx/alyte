@@ -10,7 +10,7 @@ import {
 import { formatIntakeAmount, type IntakeEvent } from '@alyte/domain';
 import { t } from '../../localization';
 import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
-import { colors, spacing } from '../../theme';
+import { colors, radii, spacing } from '../../theme';
 import {
   intakeEventMenuActions,
   intakeEventTypeLabel,
@@ -347,7 +347,7 @@ const styles = StyleSheet.create({
   source: { color: colors.mutedInk },
   moreButton: {
     alignItems: 'center',
-    borderRadius: 16,
+    borderRadius: radii.md,
     justifyContent: 'center',
     minHeight: 44,
     minWidth: 44,

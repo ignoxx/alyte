@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { useServices } from '../../services';
 import { AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
-import { colors, screenStyles, spacing } from '../../theme';
+import { colors, radii, screenStyles, spacing, typography } from '../../theme';
 import type { LocalDataCounts } from '../local-controls/model';
 
 function CountRow({ label, count }: { readonly label: string; readonly count: number }) {
@@ -129,7 +129,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderCurve: 'continuous',
-    borderRadius: 14,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     marginBottom: spacing.lg,
     overflow: 'hidden',
@@ -155,5 +155,5 @@ const styles = StyleSheet.create({
   },
   rowPressed: { backgroundColor: colors.accentSoft },
   actionCopy: { flex: 1, flexShrink: 1, gap: spacing.xs, minWidth: 0 },
-  actionTitle: { flexShrink: 1, fontSize: 16, lineHeight: 21 },
+  actionTitle: { ...typography.row, flexShrink: 1 },
 });
