@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, test } from 'node:test';
@@ -114,6 +114,20 @@ function filesFixture(options: { readonly failPath?: string } = {}) {
   };
 }
 
+function assertNoSqliteStorageTokens(database: NodeDatabase, tokens: readonly string[]): void {
+  for (const path of [
+    database.databasePath,
+    `${database.databasePath}-wal`,
+    `${database.databasePath}-shm`,
+  ]) {
+    if (!existsSync(path)) continue;
+    const bytes = readFileSync(path);
+    for (const token of tokens) {
+      assert.equal(bytes.includes(Buffer.from(token)), false, `${path}: ${token}`);
+    }
+  }
+}
+
 async function seedHealth(database: NodeDatabase) {
   await database.runAsync(
     `INSERT INTO lab_reports
@@ -156,9 +170,13 @@ async function seedHealth(database: NodeDatabase) {
   );
 }
 
-function serviceFor(database: NodeDatabase, files: ReturnType<typeof filesFixture>) {
+function serviceFor(
+  database: NodeDatabase,
+  files: ReturnType<typeof filesFixture>,
+  protect: (requireSidecars?: boolean) => Promise<void> = async () => {},
+) {
   return createLocalControlsService({
-    databaseFactory: async () => ({ database, close: async () => {} }),
+    databaseFactory: async () => ({ database, close: async () => {}, protect }),
     files: files.files,
     now: () => '2026-08-25T00:00:00.000Z',
     idGenerator: (() => {
@@ -184,6 +202,11 @@ test('builds a count-only snapshot, binds execution to a plan hash, and preserve
   assert.equal(summary.counts.records, 1);
   assert.equal(summary.counts.intakeEvents, 1);
   assert.equal(summary.counts.intakeImages, 1);
+  assert.equal(
+    (await database.getAllAsync<{ secure_delete: number }>('PRAGMA secure_delete;'))[0]
+      ?.secure_delete,
+    1,
+  );
   const plan = await service.preview('all-health');
   assert.match(plan.planHash, /^plan-[0-9a-f]{16}$/);
   assert.equal(plan.willRemain.reports, 0);
@@ -213,6 +236,262 @@ test('builds a count-only snapshot, binds execution to a plan hash, and preserve
   assert.equal((await database.getAllAsync('SELECT id FROM lab_combined_deletions')).length, 0);
   assert.ok(fileFixture.removed.includes('protected://original-reports/report.pdf'));
   assert.ok(fileFixture.removed.includes('protected://intake-media/event.jpg'));
+  assertNoSqliteStorageTokens(database, [
+    'report-1',
+    'record-1',
+    'event-1',
+    'capture-1',
+    'protected://original-reports/report.pdf',
+    'protected://intake-media/event.jpg',
+  ]);
+  await database.closeAsync();
+});
+
+test('scrubs the retained all-health completion marker of health IDs and paths', async () => {
+  const database = await databaseFixture();
+  await seedHealth(database);
+  const service = serviceFor(database, filesFixture());
+
+  const result = await service.execute(await service.preview('all-health'));
+  assert.equal(result.state, 'completed');
+  const row = (
+    await database.getAllAsync<{ plan_json: string; plan_hash: string }>(
+      'SELECT plan_json, plan_hash FROM local_deletion_operations WHERE id = ?;',
+      result.operationId,
+    )
+  )[0];
+  assert.equal(row?.plan_json, '{"redacted":true,"scope":"all-health"}');
+  assert.equal(row?.plan_hash, 'plan-redacted');
+  assert.equal(row?.plan_json.includes('report-1'), false);
+  assert.equal(row?.plan_json.includes('protected://'), false);
+  await database.closeAsync();
+});
+
+test('all-health deletion checkpoints and vacuums after its committed database delete', async () => {
+  const database = await databaseFixture();
+  await seedHealth(database);
+  const checkpoints: unknown[] = [];
+  const protectionCalls: (boolean | undefined)[] = [];
+  let vacuumSeen = false;
+  const originalExec = database.execAsync.bind(database);
+  database.execAsync = async (source: string) => {
+    if (/VACUUM/iu.test(source)) vacuumSeen = true;
+    await originalExec(source);
+  };
+  const originalGetAll = database.getAllAsync.bind(database);
+  database.getAllAsync = async <T>(source: string, ...params: any[]) => {
+    const result = await originalGetAll<T>(source, ...params);
+    if (/PRAGMA wal_checkpoint\(TRUNCATE\)/iu.test(source)) checkpoints.push(result[0]);
+    return result;
+  };
+  const service = serviceFor(database, filesFixture(), async (requireSidecars) => {
+    protectionCalls.push(requireSidecars);
+  });
+
+  assert.equal((await service.execute(await service.preview('all-health'))).state, 'completed');
+  assert.equal(checkpoints.length, 2);
+  assert.deepEqual(
+    checkpoints.map((row) => (row as { busy: number }).busy),
+    [0, 0],
+  );
+  assert.equal(vacuumSeen, true);
+  assert.deepEqual(protectionCalls, [true]);
+  await database.closeAsync();
+});
+
+test('report deletion includes owned combined rows and compacts the selected scope', async () => {
+  const database = await databaseFixture();
+  await seedHealth(database);
+  await database.runAsync(
+    `INSERT INTO extraction_drafts
+      (id, report_id, state, ocr_contract_version, parser_version, date_state, created_at, updated_at)
+     VALUES ('draft-report-scrub', 'report-1', 'confirmed', 'ocr-v1', 'parser-v1', 'missing',
+       '2026-08-25', '2026-08-25');`,
+  );
+  await database.runAsync(
+    `INSERT INTO lab_combined_deletions
+      (id, record_id, report_id, state, created_at, updated_at)
+     VALUES ('combined-report', 'record-1', 'report-1', 'requested', '2026-08-25', '2026-08-25');`,
+  );
+  const service = serviceFor(database, filesFixture());
+  const plan = await service.preview('reports');
+
+  assert.equal(plan.counts.combinedDeletions, 1);
+  assert.equal(plan.willRemain.combinedDeletions, 0);
+  assert.equal((await service.execute(plan)).state, 'completed');
+  assert.equal((await database.getAllAsync('SELECT id FROM lab_combined_deletions')).length, 0);
+  assertNoSqliteStorageTokens(database, [
+    'report-1',
+    'draft-report-scrub',
+    'protected://original-reports/report.pdf',
+  ]);
+  await database.closeAsync();
+});
+
+test('reports preview counts only combined rows owned by active selected reports', async () => {
+  const database = await databaseFixture();
+  await seedHealth(database);
+  await database.runAsync(
+    `INSERT INTO lab_reports
+       (id, source_type, original_filename, mime_type, source_hash, original_path, import_state,
+        encrypted, created_at, updated_at)
+     VALUES ('report-soft-deleted', 'pdf', 'old-report.pdf', 'application/pdf', NULL,
+       'protected://original-reports/old-report.pdf', 'deleted', 1, '2026-08-25', '2026-08-25');`,
+  );
+  await database.runAsync(
+    `INSERT INTO lab_combined_deletions
+      (id, record_id, report_id, state, created_at, updated_at)
+     VALUES
+       ('combined-active-report', 'record-1', 'report-1', 'requested', '2026-08-25', '2026-08-25'),
+       ('combined-soft-deleted-report', 'record-1', 'report-soft-deleted', 'requested',
+        '2026-08-25', '2026-08-25');`,
+  );
+  const service = serviceFor(database, filesFixture());
+  const plan = await service.preview('reports');
+
+  assert.deepEqual(plan.targetIds.reportIds, ['report-1']);
+  assert.equal(plan.counts.combinedDeletions, 2);
+  assert.equal(plan.willRemain.combinedDeletions, 1);
+  assert.equal((await service.execute(plan)).state, 'completed');
+  assert.deepEqual(
+    (
+      await database.getAllAsync<{ id: string }>(
+        'SELECT id FROM lab_combined_deletions ORDER BY id ASC;',
+      )
+    ).map((row) => row.id),
+    ['combined-soft-deleted-report'],
+  );
+  assert.deepEqual(
+    (await database.getAllAsync<{ id: string }>('SELECT id FROM lab_reports ORDER BY id ASC;')).map(
+      (row) => row.id,
+    ),
+    ['report-soft-deleted'],
+  );
+  await database.closeAsync();
+});
+
+test('reports deletion exposes compaction failure for retry without reusing its deleted plan', async () => {
+  const database = await databaseFixture();
+  await seedHealth(database);
+  let failCompaction = true;
+  const originalExec = database.execAsync.bind(database);
+  database.execAsync = async (source: string) => {
+    if (failCompaction && /VACUUM/iu.test(source)) throw new Error('synthetic vacuum failure');
+    await originalExec(source);
+  };
+  const service = serviceFor(database, filesFixture());
+  const plan = await service.preview('reports');
+  const failed = await service.execute(plan);
+
+  assert.equal(failed.state, 'failed');
+  assert.deepEqual(failed.failureCategories, ['database-hygiene-pending']);
+  assert.equal((await database.getAllAsync('SELECT id FROM lab_reports')).length, 0);
+  const marker = (
+    await database.getAllAsync<{ state: string; plan_json: string; plan_hash: string }>(
+      'SELECT state, plan_json, plan_hash FROM local_deletion_operations WHERE id = ?;',
+      failed.operationId,
+    )
+  )[0];
+  assert.equal(marker?.state, 'completed');
+  assert.equal(marker?.plan_json, '{"redacted":true,"scope":"reports"}');
+  assert.equal(marker?.plan_hash, 'plan-redacted');
+  assert.equal(marker?.plan_json.includes('report-1'), false);
+
+  failCompaction = false;
+  const retried = await service.retry(failed.operationId);
+  assert.equal(retried.state, 'completed');
+  assert.deepEqual(retried.failureCategories, []);
+  assert.equal((await database.getAllAsync('SELECT id FROM lab_reports')).length, 0);
+  await database.closeAsync();
+});
+
+test('post-vacuum database protection failure remains a hygiene-only retry', async () => {
+  const database = await databaseFixture();
+  await seedHealth(database);
+  let failProtection = true;
+  const service = serviceFor(database, filesFixture(), async () => {
+    if (failProtection) throw new Error('synthetic protection failure');
+  });
+
+  const failed = await service.execute(await service.preview('reports'));
+  assert.equal(failed.state, 'failed');
+  assert.deepEqual(failed.failureCategories, ['database-hygiene-pending']);
+  assert.equal((await database.getAllAsync('SELECT id FROM lab_reports')).length, 0);
+
+  failProtection = false;
+  assert.equal((await service.retry(failed.operationId)).state, 'completed');
+  await database.closeAsync();
+});
+
+test('relaunch clears a committed redacted hygiene marker without replaying its original plan', async () => {
+  const database = await databaseFixture();
+  await seedHealth(database);
+  let failCompaction = true;
+  const originalExec = database.execAsync.bind(database);
+  database.execAsync = async (source: string) => {
+    if (failCompaction && /VACUUM/iu.test(source)) throw new Error('synthetic vacuum failure');
+    await originalExec(source);
+  };
+  const firstService = serviceFor(database, filesFixture());
+  const failed = await firstService.execute(await firstService.preview('reports'));
+  assert.equal(failed.state, 'failed');
+
+  const pending = (
+    await database.getAllAsync<{
+      state: string;
+      plan_json: string;
+      failure_categories_json: string;
+    }>(
+      'SELECT state, plan_json, failure_categories_json FROM local_deletion_operations WHERE id = ?;',
+      failed.operationId,
+    )
+  )[0];
+  assert.equal(pending?.state, 'completed');
+  assert.equal(pending?.plan_json, '{"redacted":true,"scope":"reports"}');
+  assert.deepEqual(JSON.parse(pending?.failure_categories_json ?? 'null'), [
+    'database-hygiene-pending',
+  ]);
+
+  failCompaction = false;
+  await serviceFor(database, filesFixture()).reconcile();
+  const cleared = (
+    await database.getAllAsync<{
+      state: string;
+      plan_json: string;
+      failure_categories_json: string;
+    }>(
+      'SELECT state, plan_json, failure_categories_json FROM local_deletion_operations WHERE id = ?;',
+      failed.operationId,
+    )
+  )[0];
+  assert.equal(cleared?.state, 'completed');
+  assert.equal(cleared?.plan_json, '{"redacted":true,"scope":"reports"}');
+  assert.deepEqual(JSON.parse(cleared?.failure_categories_json ?? 'null'), []);
+  await database.closeAsync();
+});
+
+test('a busy checkpoint is a pending hygiene failure and later retry clears it', async () => {
+  const database = await databaseFixture();
+  await seedHealth(database);
+  const originalGetAll = database.getAllAsync.bind(database);
+  let checkpointCalls = 0;
+  database.getAllAsync = async <T>(source: string, ...params: any[]) => {
+    if (/PRAGMA wal_checkpoint\(TRUNCATE\)/iu.test(source)) {
+      checkpointCalls += 1;
+      if (checkpointCalls === 1) return [{ busy: 1 }] as T[];
+    }
+    return originalGetAll<T>(source, ...params);
+  };
+  const service = serviceFor(database, filesFixture());
+  const failed = await service.execute(await service.preview('all-health'));
+
+  assert.equal(failed.state, 'failed');
+  assert.deepEqual(failed.failureCategories, ['database-hygiene-pending']);
+  assert.equal((await database.getAllAsync('SELECT id FROM lab_reports')).length, 0);
+  const retried = await service.retry(failed.operationId);
+  assert.equal(retried.state, 'completed');
+  assert.deepEqual(retried.failureCategories, []);
+  assert.equal(checkpointCalls, 3);
   await database.closeAsync();
 });
 

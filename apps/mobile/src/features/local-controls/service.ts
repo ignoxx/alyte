@@ -14,6 +14,7 @@ import {
   type LocalDataSummary,
   type LocalDeletionFailureCategory,
   type LocalDeletionScope,
+  stableJson,
 } from './model';
 import {
   reconcileOwnedOrphans,
@@ -212,6 +213,56 @@ async function applyDatabaseDeletion(
     );
     await database.runAsync('DELETE FROM local_deletion_operations WHERE id <> ?;', operationId);
   }
+
+  // A completed operation is a terminal marker, not a second health-data store. Retain only the
+  // scope needed to explain the durable completion state; target IDs and protected paths are no
+  // longer needed after the database/file phases succeed. Keeping this in the same transaction as
+  // deletion means a crash cannot leave either a completed redacted marker or a partially deleted
+  // health dataset.
+  await database.runAsync(
+    'UPDATE local_deletion_operations SET plan_hash = ?, plan_json = ? WHERE id = ?;',
+    'plan-redacted',
+    stableJson({ redacted: true, scope: plan.scope }),
+    operationId,
+  );
+}
+
+/**
+ * SQLite's secure-delete mode clears deleted cells while this boundary removes WAL history and
+ * rebuilds free pages after a destructive local operation. It runs only after the deletion
+ * transaction commits because VACUUM cannot run inside a transaction.
+ */
+async function compactLocalDatabaseStorage(session: ControlDatabaseSession): Promise<void> {
+  const { database } = session;
+  const checkpoint = async (): Promise<void> => {
+    const rows = await database.getAllAsync<{ readonly busy: unknown }>(
+      'PRAGMA wal_checkpoint(TRUNCATE);',
+    );
+    const busy = rows[0]?.busy;
+    if (!((typeof busy === 'number' && busy === 0) || (typeof busy === 'bigint' && busy === 0n))) {
+      throw new Error('Local database checkpoint is busy');
+    }
+  };
+
+  await checkpoint();
+  await database.execAsync('VACUUM;');
+  await checkpoint();
+  // VACUUM may replace the main file and checkpointing may recreate sidecars. Re-enter the
+  // existing native protection boundary after both operations so the final database state is
+  // protected and backup-excluded before the session is released.
+  await session.protect(true);
+}
+
+function isRedactedDeletionPlan(
+  value: unknown,
+): value is { readonly redacted: true; readonly scope: LocalDeletionScope } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.redacted === true &&
+    typeof candidate.scope === 'string' &&
+    LOCAL_DELETION_SCOPES.includes(candidate.scope as LocalDeletionScope)
+  );
 }
 
 export type LocalControlsService = {
@@ -349,10 +400,36 @@ export function createLocalControlsService(
           id: operationId,
           state: 'completed',
           now: now(),
+          // The deletion transaction commits the redacted marker and advertises the remaining
+          // post-commit hygiene work together. A kill before the first checkpoint is therefore
+          // still visible to startup reconciliation.
+          failureCategories: ['database-hygiene-pending'],
         });
       });
+      let hygienePending = false;
+      try {
+        await compactLocalDatabaseStorage(session);
+        await session.database.withTransactionAsync(async () => {
+          await updateOperation(session.database, {
+            id: operationId,
+            state: 'completed',
+            now: now(),
+            failureCategories: [],
+          });
+        });
+      } catch {
+        // The data/file delete has already committed. Keep the terminal state truthful and make
+        // only the storage hygiene retryable; the original plan is already safely redacted.
+        hygienePending = true;
+        // The committed marker already has the pending category. A later startup can retry the
+        // hygiene phase even if SQLite is unavailable for this best-effort category update.
+      }
       await session.close();
-      return { state: 'completed', operationId, failureCategories: [] };
+      return {
+        state: hygienePending ? 'failed' : 'completed',
+        operationId,
+        failureCategories: hygienePending ? ['database-hygiene-pending'] : [],
+      };
     } catch {
       try {
         await session.database.withTransactionAsync(async () => {
@@ -375,16 +452,45 @@ export function createLocalControlsService(
   async function retry(operationId: string): Promise<DeletionResult> {
     const session = await open();
     let parsed: DeletionPlan | null = null;
+    let completedPlan: unknown = null;
     try {
       const rows = await session.database.getAllAsync<{
         readonly scope: unknown;
+        readonly state: unknown;
         readonly plan_json: unknown;
-      }>('SELECT scope, plan_json FROM local_deletion_operations WHERE id = ?;', operationId);
+      }>(
+        'SELECT scope, state, plan_json FROM local_deletion_operations WHERE id = ?;',
+        operationId,
+      );
       const row = rows[0];
       if (row === undefined || typeof row.plan_json !== 'string') {
         return { state: 'failed', operationId, failureCategories: ['database-failed'] };
       }
-      parsed = JSON.parse(row.plan_json) as DeletionPlan;
+      completedPlan = JSON.parse(row.plan_json) as unknown;
+      if (row.state === 'completed' && isRedactedDeletionPlan(completedPlan)) {
+        if (row.scope !== completedPlan.scope) {
+          return { state: 'failed', operationId, failureCategories: ['stale-preview'] };
+        }
+        try {
+          await compactLocalDatabaseStorage(session);
+          await session.database.withTransactionAsync(async () => {
+            await updateOperation(session.database, {
+              id: operationId,
+              state: 'completed',
+              now: now(),
+              failureCategories: [],
+            });
+          });
+          return { state: 'completed', operationId, failureCategories: [] };
+        } catch {
+          return {
+            state: 'failed',
+            operationId,
+            failureCategories: ['database-hygiene-pending'],
+          };
+        }
+      }
+      parsed = completedPlan as DeletionPlan;
     } catch {
       return { state: 'failed', operationId, failureCategories: ['database-failed'] };
     } finally {
@@ -464,7 +570,10 @@ export function createLocalControlsService(
           readonly failure_categories_json: unknown;
         }>(
           `SELECT id, state, plan_json, failure_categories_json
-           FROM local_deletion_operations WHERE state IN ('requested', 'running', 'failed') ORDER BY requested_at ASC;`,
+           FROM local_deletion_operations
+           WHERE state IN ('requested', 'running', 'failed')
+              OR (state = 'completed' AND failure_categories_json LIKE '%database-hygiene-pending%')
+           ORDER BY requested_at ASC;`,
         );
         for (const row of rows) {
           const operationId = operationIdFromRow(row.id);
@@ -482,6 +591,20 @@ export function createLocalControlsService(
             continue;
           }
           if (typeof row.plan_json !== 'string') continue;
+          if (row.state === 'completed') {
+            try {
+              await compactLocalDatabaseStorage(session);
+              await updateOperation(session.database, {
+                id: operationId,
+                state: 'completed',
+                now: now(),
+                failureCategories: [],
+              });
+            } catch {
+              // Keep the completed marker and pending hygiene category for the next launch.
+            }
+            continue;
+          }
           let plan: DeletionPlan;
           try {
             plan = JSON.parse(row.plan_json) as DeletionPlan;
@@ -513,8 +636,21 @@ export function createLocalControlsService(
                 id: operationId,
                 state: 'completed',
                 now: now(),
+                failureCategories: ['database-hygiene-pending'],
               });
             });
+            try {
+              await compactLocalDatabaseStorage(session);
+              await updateOperation(session.database, {
+                id: operationId,
+                state: 'completed',
+                now: now(),
+                failureCategories: [],
+              });
+            } catch {
+              // The committed marker already has the pending category. The completed operation
+              // remains safe to retry from its redacted marker.
+            }
           } catch {
             await updateOperation(session.database, {
               id: operationId,

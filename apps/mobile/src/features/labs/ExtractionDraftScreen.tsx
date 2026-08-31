@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, SectionList, StyleSheet, useWindowDimensions, View } from 'react-native';
+import {
+  Alert,
+  Pressable,
+  SectionList,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+  type NativeSyntheticEvent,
+  type TextInputFocusEventData,
+} from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
@@ -125,7 +134,8 @@ export function ExtractionDraftScreen() {
       headerSearchBarOptions: {
         placeholder: t('labs.extractionSearch'),
         hideWhenScrolling: false,
-        onChangeText: (event) => setSearch(event.nativeEvent.text),
+        onChangeText: (event: NativeSyntheticEvent<TextInputFocusEventData>) =>
+          setSearch(event.nativeEvent.text),
         onCancelButtonPress: () => setSearch(''),
       },
     });
