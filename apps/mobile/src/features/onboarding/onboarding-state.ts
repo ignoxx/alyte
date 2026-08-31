@@ -10,7 +10,7 @@ export const ONBOARDING_MODEL_PAGE = 3;
 export const ONBOARDING_READY_PAGE = 4;
 
 export function onboardingCanContinue(page: number, snapshot: LocalModelSnapshot | null): boolean {
-  if (page < 0 || page >= ONBOARDING_PAGE_COUNT) return false;
+  if (!Number.isInteger(page) || page < 0 || page >= ONBOARDING_PAGE_COUNT) return false;
   if (page < ONBOARDING_MODEL_PAGE) return true;
   return snapshot !== null && canCompleteModelOnboarding(snapshot);
 }
@@ -22,6 +22,8 @@ export function onboardingCanNavigateTo(
   snapshot: LocalModelSnapshot | null,
 ): boolean {
   if (
+    !Number.isInteger(currentPage) ||
+    !Number.isInteger(targetPage) ||
     currentPage < 0 ||
     currentPage >= ONBOARDING_PAGE_COUNT ||
     targetPage < 0 ||
@@ -36,11 +38,7 @@ export function onboardingCanNavigateTo(
   return true;
 }
 
-/**
- * An interrupted first run resumes at the only page that can safely repair it. The app still
- * starts at the welcome page when no model work has begun, so a fresh install always gets the
- * complete explanation before the local model gate.
- */
+/** Resume an interrupted transfer at its repair step without loading the model runtime. */
 export function onboardingResumePage(snapshot: LocalModelSnapshot | null): number {
   if (snapshot !== null && canCompleteModelOnboarding(snapshot)) return ONBOARDING_READY_PAGE;
   if (

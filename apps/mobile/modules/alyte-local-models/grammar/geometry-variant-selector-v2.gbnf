@@ -1,0 +1,6 @@
+root ::= one-row | two-rows
+one-row ::= "{" ws "\"schemaVersion\"" ws ":" ws "\"alyte.geometry-variant-selector.v2\"" ws "," ws "\"selections\"" ws ":" ws "{" ws "\"r0\"" ws ":" ws selection ws "}" ws "}"
+two-rows ::= "{" ws "\"schemaVersion\"" ws ":" ws "\"alyte.geometry-variant-selector.v2\"" ws "," ws "\"selections\"" ws ":" ws "{" ws "\"r0\"" ws ":" ws selection ws "," ws "\"r1\"" ws ":" ws selection ws "}" ws "}"
+selection ::= "null" | "\"v" variant-index "\""
+variant-index ::= "0" | [1-9] [0-9]*
+ws ::= [ \t\n\r]*

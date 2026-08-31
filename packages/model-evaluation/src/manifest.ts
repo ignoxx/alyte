@@ -12,6 +12,18 @@ export const GEMMA_EVALUATION_MANIFEST_VERSION = 'alyte.gemma4-e2b-evaluation.ma
 export const GEMMA_EVALUATION_CONTRACT_VERSION = 'alyte.gemma4-e2b-evaluation.contract.v1' as const;
 export const GEMMA_EVALUATION_PROMPT_BUNDLE_VERSION =
   'alyte.gemma4-e2b-evaluation.prompt.v2' as const;
+export const QWEN3_EVALUATION_MANIFEST_VERSION = 'alyte.qwen3-1.7b-evaluation.manifest.v1' as const;
+export const QWEN3_EVALUATION_CONTRACT_VERSION = 'alyte.qwen3-1.7b-evaluation.contract.v1' as const;
+export const QWEN3_EVALUATION_PROMPT_BUNDLE_VERSION =
+  'alyte.qwen3-1.7b-evaluation.prompt.v1' as const;
+export const LFM2_350M_SOURCE_SELECTOR_MANIFEST_VERSION =
+  'alyte.lfm2-350m-extract-source-selector.manifest.v1' as const;
+export const LFM2_350M_SOURCE_SELECTOR_PROMPT_BUNDLE_VERSION =
+  'alyte.lfm2-350m-extract-source-selector.prompt.v1' as const;
+export const LFM2_1_2B_SOURCE_SELECTOR_MANIFEST_VERSION =
+  'alyte.lfm2-1.2b-extract-source-selector.manifest.v1' as const;
+export const LFM2_1_2B_SOURCE_SELECTOR_PROMPT_BUNDLE_VERSION =
+  'alyte.lfm2-1.2b-extract-source-selector.prompt.v1' as const;
 
 export type EvaluationManifest = {
   readonly manifestVersion: string;
@@ -21,6 +33,8 @@ export type EvaluationManifest = {
     readonly id: string;
     readonly repository: string;
     readonly revision: string;
+    readonly chatTemplateUrl?: string;
+    readonly chatTemplateRevision?: string;
   };
   readonly model: {
     readonly id: string;
@@ -63,7 +77,7 @@ export type EvaluationManifest = {
     readonly topP: number;
     readonly thinking: boolean;
     readonly grammarRoot: string;
-    readonly chatTemplate?: 'gemma4-v1';
+    readonly chatTemplate?: 'gemma4-v1' | 'qwen3-v1' | 'lfm2-v1';
     readonly chatTemplateSource?: string;
   };
   readonly allowedBiomarkerIds: readonly string[];
@@ -165,12 +179,142 @@ export const gemmaEvaluationManifest = Object.freeze({
 
 export type GemmaEvaluationManifest = typeof gemmaEvaluationManifest;
 
+/** Evaluator-only Qwen3 candidate with its reviewed non-thinking raw ChatML template. */
+export const qwen3EvaluationManifest = Object.freeze({
+  manifestVersion: QWEN3_EVALUATION_MANIFEST_VERSION,
+  contractVersion: QWEN3_EVALUATION_CONTRACT_VERSION,
+  promptBundleVersion: QWEN3_EVALUATION_PROMPT_BUNDLE_VERSION,
+  model: Object.freeze({
+    id: 'qwen3-1.7b',
+    repository: 'ggml-org/Qwen3-1.7B-GGUF',
+    revision: 'daeb8e2d528a760970442092f6bf1e55c3b659eb',
+    filename: 'Qwen3-1.7B-Q4_K_M.gguf',
+    publisher: 'Qwen / ggml-org',
+    license: 'Apache-2.0',
+    format: 'GGUF',
+    quantization: 'Q4_K_M',
+    bytes: 1_282_439_264,
+    sha256: 'd2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5',
+    url: 'https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF/resolve/daeb8e2d528a760970442092f6bf1e55c3b659eb/Qwen3-1.7B-Q4_K_M.gguf?download=true',
+    sourceMetadataUrl: 'https://huggingface.co/api/models/ggml-org/Qwen3-1.7B-GGUF',
+  }),
+  runtime: qwenEvaluationManifest.runtime,
+  prompt: Object.freeze({
+    ...qwenEvaluationManifest.prompt,
+    chatTemplate: 'qwen3-v1' as const,
+    chatTemplateSource: 'explicit-pinned-qwen3-non-thinking-chatml-template-v1',
+  }),
+  allowedBiomarkerIds: qwenEvaluationManifest.allowedBiomarkerIds,
+  languages: qwenEvaluationManifest.languages,
+} as const);
+
+export type Qwen3EvaluationManifest = typeof qwen3EvaluationManifest;
+
+function lfm2SourceSelectorPrompt() {
+  return Object.freeze({
+    ...qwenEvaluationManifest.prompt,
+    chatTemplate: 'lfm2-v1' as const,
+    chatTemplateSource: 'explicit-pinned-liquidai-chat-template-v1',
+  });
+}
+
+const LFM2_EXTRACT_SUPPORTED_LANGUAGES = Object.freeze([
+  'en',
+  'ar',
+  'zh',
+  'fr',
+  'de',
+  'ja',
+  'ko',
+  'pt',
+  'es',
+] as const);
+
+export const lfm2_350mExtractEvaluationManifest = Object.freeze({
+  manifestVersion: LFM2_350M_SOURCE_SELECTOR_MANIFEST_VERSION,
+  promptBundleVersion: LFM2_350M_SOURCE_SELECTOR_PROMPT_BUNDLE_VERSION,
+  sourceModel: Object.freeze({
+    id: 'lfm2-350m-extract',
+    repository: 'LiquidAI/LFM2-350M-Extract',
+    revision: 'd99a6f06ea16a2f83998789389a64b66d40c4198',
+    chatTemplateRevision: 'd99a6f06ea16a2f83998789389a64b66d40c4198',
+    chatTemplateUrl:
+      'https://huggingface.co/LiquidAI/LFM2-350M-Extract/resolve/d99a6f06ea16a2f83998789389a64b66d40c4198/chat_template.jinja',
+  }),
+  model: Object.freeze({
+    id: 'lfm2-350m-extract',
+    repository: 'LiquidAI/LFM2-350M-Extract-GGUF',
+    revision: 'b8f758b9ff37b0cad9bedfc5223cb71e31aebe9c',
+    filename: 'LFM2-350M-Extract-Q4_K_M.gguf',
+    publisher: 'LiquidAI',
+    license: 'LFM-Open-License-v1.0',
+    format: 'GGUF',
+    quantization: 'Q4_K_M',
+    bytes: 229_310_080,
+    sha256: '687a31c3e7864647aa181e1feb156e4e5da33978c174d7dbf0d289f6014a5621',
+    url: 'https://huggingface.co/LiquidAI/LFM2-350M-Extract-GGUF/resolve/b8f758b9ff37b0cad9bedfc5223cb71e31aebe9c/LFM2-350M-Extract-Q4_K_M.gguf?download=true',
+    sourceMetadataUrl: 'https://huggingface.co/api/models/LiquidAI/LFM2-350M-Extract-GGUF',
+  }),
+  runtime: qwenEvaluationManifest.runtime,
+  prompt: lfm2SourceSelectorPrompt(),
+  allowedBiomarkerIds: qwenEvaluationManifest.allowedBiomarkerIds,
+  languages: LFM2_EXTRACT_SUPPORTED_LANGUAGES,
+} as const);
+
+export const lfm2_1_2bExtractEvaluationManifest = Object.freeze({
+  manifestVersion: LFM2_1_2B_SOURCE_SELECTOR_MANIFEST_VERSION,
+  promptBundleVersion: LFM2_1_2B_SOURCE_SELECTOR_PROMPT_BUNDLE_VERSION,
+  sourceModel: Object.freeze({
+    id: 'lfm2-1.2b-extract',
+    repository: 'LiquidAI/LFM2-1.2B-Extract',
+    revision: 'e68bdd9af162cfca7d806b456a7a56406e6194fa',
+    chatTemplateRevision: 'e68bdd9af162cfca7d806b456a7a56406e6194fa',
+    chatTemplateUrl:
+      'https://huggingface.co/LiquidAI/LFM2-1.2B-Extract/resolve/e68bdd9af162cfca7d806b456a7a56406e6194fa/chat_template.jinja',
+  }),
+  model: Object.freeze({
+    id: 'lfm2-1.2b-extract',
+    repository: 'LiquidAI/LFM2-1.2B-Extract-GGUF',
+    revision: 'ef65f6005f6a4de8a8e7a60279242b1c96be229a',
+    filename: 'LFM2-1.2B-Extract-Q4_K_M.gguf',
+    publisher: 'LiquidAI',
+    license: 'LFM-Open-License-v1.0',
+    format: 'GGUF',
+    quantization: 'Q4_K_M',
+    bytes: 730_894_048,
+    sha256: '09b60b507ee7d1698b2b4dfce184c75083d7790c7701910ed60afa2801024702',
+    url: 'https://huggingface.co/LiquidAI/LFM2-1.2B-Extract-GGUF/resolve/ef65f6005f6a4de8a8e7a60279242b1c96be229a/LFM2-1.2B-Extract-Q4_K_M.gguf?download=true',
+    sourceMetadataUrl: 'https://huggingface.co/api/models/LiquidAI/LFM2-1.2B-Extract-GGUF',
+  }),
+  runtime: qwenEvaluationManifest.runtime,
+  prompt: lfm2SourceSelectorPrompt(),
+  allowedBiomarkerIds: qwenEvaluationManifest.allowedBiomarkerIds,
+  languages: LFM2_EXTRACT_SUPPORTED_LANGUAGES,
+} as const);
+
+export type Lfm2SourceSelectorCandidate = 'lfm2-350m-extract' | 'lfm2-1.2b-extract';
+
+/** Candidates supported by the generic semantic-mapper contract and native device runner. */
 export const candidateEvaluationManifests = Object.freeze({
   qwen: qwenEvaluationManifest,
   gemma4: gemmaEvaluationManifest,
 } as const);
 
 export type EvaluationCandidate = keyof typeof candidateEvaluationManifests;
+export type GenericEvaluationManifest = EvaluationManifest & {
+  readonly manifestVersion:
+    typeof MODEL_EVALUATION_MANIFEST_VERSION | typeof GEMMA_EVALUATION_MANIFEST_VERSION;
+};
+
+/** Source-selector-only candidates; these must not flow into generic/native contract generation. */
+export const sourceSelectorCandidateManifests = Object.freeze({
+  ...candidateEvaluationManifests,
+  qwen3: qwen3EvaluationManifest,
+  'lfm2-350m-extract': lfm2_350mExtractEvaluationManifest,
+  'lfm2-1.2b-extract': lfm2_1_2bExtractEvaluationManifest,
+} as const);
+
+export type SourceSelectorCandidate = keyof typeof sourceSelectorCandidateManifests;
 
 function candidateIdentity(manifest: EvaluationManifest): string {
   return JSON.stringify({
@@ -242,7 +386,7 @@ export function assertEvaluationManifest(manifest: EvaluationManifest): void {
   }
   if (
     manifest.prompt.chatTemplate !== undefined &&
-    (manifest.prompt.chatTemplate !== 'gemma4-v1' ||
+    (!['gemma4-v1', 'qwen3-v1', 'lfm2-v1'].includes(manifest.prompt.chatTemplate) ||
       manifest.prompt.chatTemplateSource === undefined ||
       manifest.prompt.chatTemplateSource.length === 0)
   ) {
@@ -263,3 +407,18 @@ export function assertEvaluationCandidateManifest(manifest: EvaluationManifest):
 
 assertEvaluationCandidateManifest(qwenEvaluationManifest);
 assertEvaluationCandidateManifest(gemmaEvaluationManifest);
+
+export function assertSourceSelectorCandidateManifest(manifest: EvaluationManifest): void {
+  assertEvaluationManifest(manifest);
+  if (
+    !Object.values(sourceSelectorCandidateManifests).some(
+      (candidate) => candidateIdentity(candidate) === candidateIdentity(manifest),
+    )
+  ) {
+    throw new Error('unsupported_source_selector_candidate_manifest');
+  }
+}
+
+assertSourceSelectorCandidateManifest(qwen3EvaluationManifest);
+assertSourceSelectorCandidateManifest(lfm2_350mExtractEvaluationManifest);
+assertSourceSelectorCandidateManifest(lfm2_1_2bExtractEvaluationManifest);

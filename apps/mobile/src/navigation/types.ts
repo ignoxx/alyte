@@ -9,7 +9,6 @@ export type SettingsStackParamList = {
   CloudAccount: undefined;
   AppLock: undefined;
   PrivacyStorage: undefined;
-  ModelStorage: undefined;
   SupportFaq: undefined;
   Diagnostics: undefined;
   DeleteLocalData: undefined;
@@ -43,7 +42,6 @@ export type LogStackParamList = {
 export type RootStackParamList = {
   MainTabs: NavigatorScreenParams<MainTabParamList> | undefined;
   CloudPaywall: { readonly operation: 'snap' | 'report' | 'settings' };
-  ModelInstall: undefined;
   ReportImport: undefined;
   SnapCapture: undefined;
   PrivacyWorkspace: { readonly reportId: string };

@@ -1,19 +1,24 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { comparableBiomarkers, normalizeCatalogueAlias } from '@alyte/catalogue';
 import type {
   ExtractionAliasEntry,
   ExtractionSemanticCandidateRow,
   VisionTextObservation,
 } from '@alyte/domain';
 import { productionLocalModelManifest } from './manifest';
+import { DOCUMENT_VLM_PROMPT_VERSION, DOCUMENT_VLM_SCHEMA_VERSION } from './document-vlm';
 import {
   SEMANTIC_MAPPER_LIMITS,
+  SEMANTIC_MAPPER_CONTEXT,
   SEMANTIC_MAPPER_PROMPT_VERSION,
   SEMANTIC_MAPPER_SCHEMA_VERSION,
   SEMANTIC_OCR_CHUNK_VERSION,
   createSemanticMapperPrompt,
+  estimateSemanticMapperTokens,
   serializeSemanticMapperChunk,
   validateSemanticMapperOutput,
+  validateSemanticMapperOutputWithState,
 } from './semantic-contract';
 
 function cell(id: string, text: string, language: string, x = 0.1, y = 0.2): VisionTextObservation {
@@ -32,9 +37,10 @@ function row(
   rowId: string,
   language: string,
   values: readonly string[],
+  y = 0.2,
 ): ExtractionSemanticCandidateRow {
   const observations = values.map((text, index) =>
-    cell(`${rowId}-${index}`, text, language, 0.1 + index * 0.2),
+    cell(`${rowId}-${index}`, text, language, 0.1 + index * 0.2, y),
   );
   return {
     rowId,
@@ -42,6 +48,81 @@ function row(
     observations,
   };
 }
+
+function rowWithAlternatives(
+  rowId: string,
+  language: string,
+  values: readonly string[],
+  alternatives: Readonly<Record<number, readonly string[]>>,
+): ExtractionSemanticCandidateRow {
+  const candidate = row(rowId, language, values);
+  return {
+    ...candidate,
+    observations: candidate.observations.map((observation, index) => {
+      const item = alternatives[index];
+      return item === undefined ? observation : { ...observation, alternatives: item };
+    }),
+  };
+}
+
+const frozenLegacyPromptFixtures: readonly {
+  readonly id: string;
+  readonly language: string;
+  readonly rows: readonly ExtractionSemanticCandidateRow[];
+}[] = [
+  {
+    id: 'gemma-v2-en-supported',
+    language: 'en',
+    rows: [
+      rowWithAlternatives('en-serum-ldl', 'en', ['LDL cholesterol', '118', 'mg/dL', '<115'], {
+        0: ['R-017', '2026-08-17 08:42'],
+      }),
+    ],
+  },
+  {
+    id: 'gemma-v2-en-unsupported',
+    language: 'en',
+    rows: [
+      rowWithAlternatives(
+        'en-urine-glucose',
+        'en',
+        ['Glucose', 'negative', 'qualitative', 'negative'],
+        {
+          0: ['Glucose (urine)'],
+        },
+      ),
+    ],
+  },
+  {
+    id: 'gemma-v2-de-columns',
+    language: 'de',
+    rows: [
+      rowWithAlternatives('de-plasma-ldl', 'de', ['LDL-Cholesterin', 'mmol/L', '3,8', '<3,0'], {
+        0: ['LDL Cholesterin'],
+        2: ['3.8'],
+      }),
+    ],
+  },
+  {
+    id: 'gemma-v2-de-reordered',
+    language: 'de',
+    rows: [row('de-blood-hb', 'de', ['14,2', 'Hämoglobin', '12,0–16,0', 'g/dL'])],
+  },
+  {
+    id: 'gemma-v2-lt-supported',
+    language: 'lt',
+    rows: [
+      rowWithAlternatives('lt-serum-ferritin', 'lt', ['Feritinas', '42', 'ng/mL', '15–150'], {
+        0: ['Serumo feritinas'],
+      }),
+    ],
+  },
+  {
+    id: 'gemma-v2-lt-ambiguous',
+    language: 'lt',
+    rows: [row('lt-ambiguous-cholesterol', 'lt', ['Cholesterolis', '5,1', 'mmol/L', '—'])],
+  },
+];
 
 const multilingualAliases: readonly ExtractionAliasEntry[] = [
   { id: 'biomarker.ferritin', aliases: ['Feritinas'], specimens: ['serum'], units: ['ng/mL'] },
@@ -63,7 +144,7 @@ test('serializes candidate rows with compact keys and headings without source ID
     headings: readonly { key: string; text: string }[];
     observations?: unknown;
   };
-  assert.equal(serialized.version, 'alyte.semantic-ocr-chunk.v4');
+  assert.equal(serialized.version, 'alyte.semantic-ocr-chunk.v5');
   assert.equal('observations' in serialized, false);
   assert.equal(serialized.rows[0]?.key, 'r0');
   assert.deepEqual(
@@ -78,6 +159,116 @@ test('serializes candidate rows with compact keys and headings without source ID
     serialized.headings.map((item) => item.key),
     ['h0'],
   );
+});
+
+test('preserves physical caller order when assigning compact keys and heading context', () => {
+  const physicalFirst = row('z-physical-first', 'lt', ['Feritinas', '42', 'ng/mL'], 0.1);
+  const lexicalFirst = row('a-lexical-first', 'lt', ['Hematokryt', '42', '%'], 0.2);
+  const heading = cell('lt-serum-heading', 'Serumas', 'lt', 0.1, 0.05);
+  const serialized = JSON.parse(
+    serializeSemanticMapperChunk([physicalFirst, lexicalFirst], 'lt', [heading]),
+  ) as {
+    rows: readonly { key: string; cells: readonly { text: string }[] }[];
+    headings: readonly { key: string; text: string }[];
+  };
+
+  assert.deepEqual(
+    serialized.rows.map((item) => [item.key, item.cells[0]?.text]),
+    [
+      ['r0', 'Feritinas'],
+      ['r1', 'Hematokryt'],
+    ],
+  );
+  assert.deepEqual(serialized.headings, [{ key: 'h0', text: 'Serumas', alternatives: [] }]);
+});
+
+test('keeps surviving retry rows in physical order while compact keys are reassigned', () => {
+  const first = row('z-first', 'lt', ['Feritinas', '42', 'ng/mL'], 0.1);
+  const middle = row('m-middle', 'lt', ['Hematokryt', '42', '%'], 0.2);
+  const last = row('a-last', 'lt', ['Triglicerydy', '1,7', 'mmol/L'], 0.3);
+  const state = validateSemanticMapperOutputWithState(
+    {
+      schemaVersion: SEMANTIC_MAPPER_SCHEMA_VERSION,
+      proposals: [
+        {
+          rowKey: 'r0',
+          labelKey: 'c0',
+          valueKey: 'c1',
+          unitKey: 'c2',
+          referenceIntervalKey: null,
+          flagKey: null,
+          role: 'measurement',
+          specimenType: 'serum',
+          biomarkerId: 'biomarker.ferritin',
+        },
+      ],
+    },
+    [first, middle, last],
+    multilingualAliases,
+  );
+  const retry = JSON.parse(serializeSemanticMapperChunk(state.rejectedRows, 'lt')) as {
+    rows: readonly { key: string; cells: readonly { text: string }[] }[];
+  };
+
+  assert.deepEqual(
+    state.rejectedRows.map((candidate) => candidate.rowId),
+    ['m-middle', 'a-last'],
+  );
+  assert.deepEqual(
+    retry.rows.map((item) => [item.key, item.cells[0]?.text]),
+    [
+      ['r0', 'Hematokryt'],
+      ['r1', 'Triglicerydy'],
+    ],
+  );
+});
+
+test('serializes only distinct biomarker aliases and preserves the Feritinas hint', () => {
+  const serialized = JSON.parse(serializeSemanticMapperChunk([], 'en')) as {
+    readonly biomarkers: readonly {
+      readonly id: string;
+      readonly label: string;
+      readonly aliases: readonly string[];
+    }[];
+  };
+
+  for (const entry of comparableBiomarkers) {
+    const label = entry.canonicalLabel ?? entry.aliases[0] ?? entry.id;
+    const hint = serialized.biomarkers.find((biomarker) => biomarker.id === entry.id);
+    assert.ok(hint, `missing serialized biomarker ${entry.id}`);
+    assert.deepEqual(
+      hint.aliases,
+      entry.aliases
+        .filter((alias) => normalizeCatalogueAlias(alias) !== normalizeCatalogueAlias(label))
+        .sort((left, right) => left.localeCompare(right)),
+    );
+  }
+
+  const ferritin = comparableBiomarkers.find((entry) => entry.id === 'biomarker.ferritin');
+  const ferritinHint = serialized.biomarkers.find(
+    (biomarker) => biomarker.id === 'biomarker.ferritin',
+  );
+  assert.ok(ferritin);
+  assert.ok(ferritinHint);
+  assert.ok(ferritin.aliases.includes('ferritin'));
+  assert.equal(ferritinHint.aliases.includes('ferritin'), false);
+  assert.equal(ferritinHint.aliases.includes('Feritinas'), true);
+});
+
+test('keeps all six frozen legacy prompts within the unchanged context gate', () => {
+  assert.equal(SEMANTIC_MAPPER_CONTEXT.maxTokens, 2_048);
+  assert.equal(SEMANTIC_MAPPER_LIMITS.outputTokenLimit, 192);
+  for (const fixture of frozenLegacyPromptFixtures) {
+    const prompt = createSemanticMapperPrompt(
+      fixture.language,
+      serializeSemanticMapperChunk(fixture.rows, fixture.language),
+    );
+    assert.ok(
+      estimateSemanticMapperTokens(prompt) + SEMANTIC_MAPPER_LIMITS.outputTokenLimit <=
+        SEMANTIC_MAPPER_CONTEXT.maxTokens,
+      `${fixture.id} exceeds the reserved context gate`,
+    );
+  }
 });
 
 test('requires one exhaustive proposal and preserves an unsupported urine row', () => {
@@ -337,13 +528,17 @@ test('bounds candidate rows, cells, headings, and the complete UTF-8 input', () 
   );
 });
 
-test('keeps production prompt, chunk, and manifest versions aligned', () => {
+test('keeps the legacy semantic contract versioned while production uses the document VLM', () => {
   assert.equal(SEMANTIC_MAPPER_SCHEMA_VERSION, 'alyte.semantic-mapper.v2');
   assert.equal(SEMANTIC_MAPPER_PROMPT_VERSION, 'alyte.semantic-mapper.prompt.v6');
-  assert.equal(SEMANTIC_OCR_CHUNK_VERSION, 'alyte.semantic-ocr-chunk.v4');
+  assert.equal(SEMANTIC_OCR_CHUNK_VERSION, 'alyte.semantic-ocr-chunk.v5');
   assert.equal(
-    SEMANTIC_MAPPER_PROMPT_VERSION,
+    DOCUMENT_VLM_PROMPT_VERSION,
     productionLocalModelManifest.compatibility.promptBundle,
   );
-  assert.equal(SEMANTIC_OCR_CHUNK_VERSION, productionLocalModelManifest.compatibility.ocrChunk);
+  assert.equal(productionLocalModelManifest.compatibility.ocrChunk, 'alyte.document-band.v1');
+  assert.equal(
+    DOCUMENT_VLM_SCHEMA_VERSION,
+    productionLocalModelManifest.compatibility.semanticSchema,
+  );
 });

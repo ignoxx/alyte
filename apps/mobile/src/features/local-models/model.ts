@@ -47,7 +47,7 @@ export const notInstalledSnapshot = (manifest: LocalModelManifest): LocalModelSn
   packId: manifest.pack.id,
   state: 'not-installed',
   bytesReceived: 0,
-  expectedBytes: manifest.pack.artifact.bytes,
+  expectedBytes: manifest.pack.bytes,
   progress: 0,
   failure: null,
   storageBytes: 0,
@@ -66,7 +66,7 @@ export function normalizeLocalModelSnapshot(
     typeof candidate.bytesReceived === 'number' && Number.isSafeInteger(candidate.bytesReceived)
       ? Math.max(0, candidate.bytesReceived)
       : 0;
-  const expectedBytes = manifest.pack.artifact.bytes;
+  const expectedBytes = manifest.pack.bytes;
   const progress = Math.min(1, Math.max(0, bytesReceived / expectedBytes));
   const failure = LOCAL_MODEL_FAILURES.includes(candidate.failure as LocalModelFailure)
     ? (candidate.failure as LocalModelFailure)

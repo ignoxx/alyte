@@ -218,6 +218,7 @@ This is a source-review aid for an authorized qualified human content owner. Rev
   - `plasma ferritin`
   - `ferritine`
   - `ferritina`
+  - `Feritinas`
   - `ferrytyna`
   - `ferritine sérique`
 - unsafe aliases:

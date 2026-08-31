@@ -8,7 +8,7 @@ export type LocalSettingsRoute = Exclude<
 >;
 
 export type LocalSettingsRow = {
-  readonly icon: Extract<AppIconName, 'lockShield' | 'shield' | 'folder' | 'doc'>;
+  readonly icon: Extract<AppIconName, 'lockShield' | 'shield' | 'doc'>;
   readonly title: string;
   readonly subtitle: string;
   readonly route: LocalSettingsRoute;
@@ -47,12 +47,6 @@ export function buildLocalSettingsRows(appLockStatus: string): readonly LocalSet
       title: t('settings.privacy'),
       subtitle: t('settings.privacySubtitle'),
       route: 'PrivacyStorage',
-    },
-    {
-      icon: 'folder',
-      title: t('settings.modelStorage'),
-      subtitle: t('settings.modelStorageSubtitle'),
-      route: 'ModelStorage',
     },
     {
       icon: 'doc',

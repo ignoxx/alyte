@@ -13,22 +13,21 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { colors, radii, screenStyles, spacing, typography } from '../../theme';
-import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
+import { AppButton, AppIcon, AppSurface, AppText } from '../../ui/primitives';
 import {
   canCompleteModelOnboarding,
   hasResumableModelDownload,
   isModelDownloadActive,
   type LocalModelSnapshot,
 } from '../local-models/model';
-import { ModelDetailsDisclosure } from '../local-models/ModelDetailsDisclosure';
-import { ModelProgress } from '../local-models/ModelProgress';
+import { formatModelBytes } from '../local-models/manifest';
 import {
   isExpectedDownloadCancellation,
   modelFailureFromError,
+  modelProgressPercent,
   modelSetupFailureMessageKey,
   modelSetupFailureVisible,
   modelSetupPrimaryAction,
-  modelStatusTone,
 } from '../local-models/model-ui';
 import type { LocalModelService } from '../local-models/native';
 import {
@@ -75,135 +74,6 @@ function IntroPage({
   );
 }
 
-function ModelFact({
-  icon,
-  children,
-}: {
-  readonly icon: 'phone' | 'cloud';
-  readonly children: string;
-}) {
-  return (
-    <View style={styles.fact}>
-      <AppIcon name={icon} size={18} color={colors.accent} />
-      <AppText variant="caption" style={styles.factLabel} selectable>
-        {children}
-      </AppText>
-    </View>
-  );
-}
-
-function ModelPreparationPage({
-  model,
-  snapshot,
-  modelFailure,
-  cancelled,
-  cancelError,
-}: {
-  readonly model: LocalModelService;
-  readonly snapshot: LocalModelSnapshot | null;
-  readonly modelFailure: LocalModelSnapshot['failure'];
-  readonly cancelled: boolean;
-  readonly cancelError: boolean;
-}) {
-  const ready = snapshot !== null && canCompleteModelOnboarding(snapshot);
-  const resumable = hasResumableModelDownload(snapshot);
-  const active = snapshot !== null && isModelDownloadActive(snapshot);
-  const failed = snapshot?.state === 'failed';
-  const failure = failed ? (snapshot?.failure ?? null) : modelFailure;
-  const showCancelError = cancelError && !resumable;
-  const showFailure = modelSetupFailureVisible(snapshot, modelFailure);
-
-  return (
-    <View style={styles.pageBody}>
-      <StatusPill tone={modelStatusTone(snapshot)}>
-        {ready ? t('onboarding.modelReady') : t('onboarding.modelPrepareEyebrow')}
-      </StatusPill>
-      <View style={styles.pageCopy}>
-        <AppText variant="title" style={styles.pageTitle} selectable>
-          {t('onboarding.modelPrepareTitle')}
-        </AppText>
-        <AppText style={styles.pageBodyText} selectable>
-          {t('onboarding.modelPrepareBody')}
-        </AppText>
-      </View>
-
-      <AppSurface style={styles.modelSummary}>
-        <View accessibilityRole="summary" style={styles.packHeader}>
-          <View style={styles.modelIconWell} accessibilityElementsHidden>
-            <AppIcon name="folder" size={26} color={colors.accent} />
-          </View>
-          <View style={styles.packCopy}>
-            <AppText variant="heading" selectable>
-              {t('onboarding.modelName')}
-            </AppText>
-            <AppText variant="caption" style={styles.muted} selectable>
-              {t('onboarding.modelRequiredLabel')}
-            </AppText>
-          </View>
-        </View>
-
-        <View accessibilityRole="summary" style={styles.facts}>
-          <ModelFact icon="phone">{t('onboarding.modelSizeFact')}</ModelFact>
-          <ModelFact icon="phone">{t('onboarding.modelSpaceFact')}</ModelFact>
-          <ModelFact icon="phone">{t('onboarding.modelRunsLocallyFact')}</ModelFact>
-          <ModelFact icon="cloud">{t('onboarding.modelNoUploadFact')}</ModelFact>
-        </View>
-      </AppSurface>
-
-      {snapshot === null && modelFailure === null ? (
-        <View accessibilityRole="progressbar" style={styles.checking}>
-          <ActivityIndicator color={colors.accent as string} />
-          <AppText style={styles.muted} selectable>
-            {t('onboarding.modelChecking')}
-          </AppText>
-        </View>
-      ) : null}
-
-      {resumable && snapshot !== null ? (
-        <AppSurface tone="soft" style={styles.callout}>
-          <AppText variant="heading" selectable>
-            {t('onboarding.modelSetupPartialSaved').replace(
-              '{progress}',
-              String(Math.round(snapshot.progress * 100)),
-            )}
-          </AppText>
-        </AppSurface>
-      ) : null}
-
-      {showFailure && !showCancelError ? (
-        <AppSurface tone="soft" style={styles.callout}>
-          <AppText variant="heading" style={styles.error} selectable>
-            {t(modelSetupFailureMessageKey(failure))}
-          </AppText>
-        </AppSurface>
-      ) : null}
-
-      {showCancelError ? (
-        <AppSurface tone="soft" style={styles.callout}>
-          <AppText variant="heading" style={styles.error} selectable>
-            {t('onboarding.modelCancelFailure')}
-          </AppText>
-        </AppSurface>
-      ) : null}
-
-      {cancelled && !resumable && !showFailure ? (
-        <AppText style={styles.muted} selectable>
-          {t('onboarding.modelSetupCancelDisclosure')}
-        </AppText>
-      ) : null}
-
-      {active || resumable ? <ModelProgress snapshot={snapshot!} /> : null}
-      {active && snapshot?.state !== 'cancelling' ? (
-        <AppText style={styles.muted} selectable>
-          {t('onboarding.modelKeepOpen')}
-        </AppText>
-      ) : null}
-
-      <ModelDetailsDisclosure manifest={model.manifest} />
-    </View>
-  );
-}
-
 function ReadyPage({ completionFailed }: { readonly completionFailed: boolean }) {
   return (
     <IntroPage
@@ -225,6 +95,116 @@ function ReadyPage({ completionFailed }: { readonly completionFailed: boolean })
   );
 }
 
+function ModelPreparationPage({
+  model,
+  snapshot,
+  failure,
+  cancelled,
+}: {
+  readonly model: LocalModelService;
+  readonly snapshot: LocalModelSnapshot | null;
+  readonly failure: LocalModelSnapshot['failure'];
+  readonly cancelled: boolean;
+}) {
+  const ready = snapshot !== null && canCompleteModelOnboarding(snapshot);
+  const active = snapshot !== null && isModelDownloadActive(snapshot);
+  const resumable = hasResumableModelDownload(snapshot);
+  const percent = snapshot === null ? 0 : modelProgressPercent(snapshot);
+  const showFailure = modelSetupFailureVisible(snapshot, failure);
+  const visibleFailure = snapshot?.state === 'failed' ? snapshot.failure : failure;
+  const size = formatModelBytes(model.manifest.pack.bytes);
+  const freeSpace = formatModelBytes(model.manifest.requirements.minimumFreeBytes);
+
+  return (
+    <View style={styles.pageBody}>
+      <View accessibilityElementsHidden style={styles.iconWell}>
+        <AppIcon name={ready ? 'checkmarkCircle' : 'folder'} size={34} color={colors.accent} />
+      </View>
+      <View style={styles.pageCopy}>
+        <AppText variant="title" style={styles.pageTitle} selectable>
+          {t('onboarding.modelPrepareTitle')}
+        </AppText>
+        <AppText style={styles.pageBodyText} selectable>
+          {t('onboarding.modelPrepareBody')}
+        </AppText>
+      </View>
+
+      <AppSurface style={styles.modelSummary}>
+        <View style={styles.packHeader}>
+          <View style={styles.packCopy}>
+            <AppText variant="heading" selectable>
+              {t('onboarding.modelName')}
+            </AppText>
+            <AppText variant="caption" style={styles.muted} selectable>
+              {t('onboarding.modelRequiredLabel')}
+            </AppText>
+          </View>
+          {ready ? <AppIcon name="checkmarkCircle" size={24} color={colors.accent} /> : null}
+        </View>
+        <View style={styles.facts}>
+          <AppText style={styles.factLabel} selectable>
+            {t('onboarding.modelSizeFact').replace('{size}', size)}
+          </AppText>
+          <AppText style={styles.factLabel} selectable>
+            {t('onboarding.modelSpaceFact').replace('{space}', freeSpace)}
+          </AppText>
+          <AppText style={styles.factLabel} selectable>
+            {t('onboarding.modelNoUploadFact')}
+          </AppText>
+        </View>
+      </AppSurface>
+
+      {snapshot === null && failure === null ? (
+        <View accessibilityRole="progressbar" style={styles.checking}>
+          <ActivityIndicator color={colors.accent as string} />
+          <AppText style={styles.muted} selectable>
+            {t('onboarding.modelChecking')}
+          </AppText>
+        </View>
+      ) : null}
+
+      {active || resumable ? (
+        <View style={styles.progressGroup}>
+          <View style={styles.progressCopy}>
+            <AppText style={styles.muted} selectable>
+              {snapshot?.state === 'verifying'
+                ? t('onboarding.modelVerifying')
+                : t(
+                    resumable ? 'onboarding.modelDownloadPaused' : 'onboarding.modelDownloading',
+                  ).replace('{progress}', String(percent))}
+            </AppText>
+            <AppText style={styles.progressPercent} selectable>
+              {percent}%
+            </AppText>
+          </View>
+          <View
+            accessibilityLabel={t('onboarding.modelProgressLabel')}
+            accessibilityRole="progressbar"
+            accessibilityValue={{ min: 0, max: 100, now: percent }}
+            style={styles.progressTrack}
+          >
+            <View style={[styles.progressFill, { width: `${percent}%` }]} />
+          </View>
+        </View>
+      ) : null}
+
+      {showFailure ? (
+        <AppSurface tone="soft" style={styles.callout}>
+          <AppText style={styles.error} selectable>
+            {t(modelSetupFailureMessageKey(visibleFailure))}
+          </AppText>
+        </AppSurface>
+      ) : null}
+
+      {cancelled && !resumable && !showFailure ? (
+        <AppText style={styles.muted} selectable>
+          {t('onboarding.modelSetupCancelDisclosure')}
+        </AppText>
+      ) : null}
+    </View>
+  );
+}
+
 export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -236,16 +216,14 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   const [page, setPage] = useState(0);
   const [snapshot, setSnapshot] = useState<LocalModelSnapshot | null>(null);
   const [modelFailure, setModelFailure] = useState<LocalModelSnapshot['failure']>(null);
-  const [busy, setBusy] = useState(false);
+  const [modelBusy, setModelBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelled, setCancelled] = useState(false);
-  const [cancelError, setCancelError] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [completionFailed, setCompletionFailed] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
   const pagerLocked = onboardingPagerLocked(snapshot);
   const ready = snapshot !== null && canCompleteModelOnboarding(snapshot);
-  const resumable = hasResumableModelDownload(snapshot);
   const modelAction = modelSetupPrimaryAction(snapshot, modelFailure);
 
   useEffect(() => {
@@ -332,10 +310,10 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   async function startDownload() {
     cancellationRequestedRef.current = false;
     setCancelled(false);
-    setCancelError(false);
     setModelFailure(null);
-    setBusy(true);
+    setModelBusy(true);
     try {
+      // Native verification ends in `ready`; onboarding must never call `load()`.
       await model.startDownload();
     } catch (error) {
       if (isExpectedDownloadCancellation(error, cancellationRequestedRef.current)) {
@@ -345,22 +323,20 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
       }
     } finally {
       cancellationRequestedRef.current = false;
-      setBusy(false);
+      setModelBusy(false);
     }
   }
 
   async function cancelDownload() {
     cancellationRequestedRef.current = true;
-    setCancelError(false);
     setCancelBusy(true);
     try {
       await model.cancelDownload();
       setCancelled(true);
       setModelFailure(null);
-    } catch {
+    } catch (error) {
       cancellationRequestedRef.current = false;
-      setCancelled(false);
-      setCancelError(true);
+      setModelFailure(modelFailureFromError(error));
     } finally {
       setCancelBusy(false);
     }
@@ -368,9 +344,9 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
 
   function continueLabel(): string {
     if (page === ONBOARDING_MODEL_PAGE) {
+      if (pagerLocked) return t('onboarding.modelCancel');
       if (ready) return t('onboarding.next');
-      if (pagerLocked || busy) return t('onboarding.modelPreparing');
-      if (resumable) return t('onboarding.modelContinueDownload');
+      if (hasResumableModelDownload(snapshot)) return t('onboarding.modelContinueDownload');
       if (modelAction === 'retry') return t('onboarding.modelRetry');
       if (modelAction === 'checking') return t('onboarding.modelChecking');
       return t('onboarding.modelDownload');
@@ -381,16 +357,20 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   function continueDisabled(): boolean {
     if (finishing || cancelBusy) return true;
     if (page === ONBOARDING_MODEL_PAGE) {
-      if (pagerLocked || busy) return true;
+      if (pagerLocked) return false;
+      if (modelBusy) return true;
       return modelAction === 'checking' || modelAction === 'none';
     }
+    if (modelBusy) return true;
     return !onboardingCanContinue(page, snapshot);
   }
 
   async function handleContinue() {
     if (continueDisabled()) return;
     if (page === ONBOARDING_MODEL_PAGE) {
-      if (ready) {
+      if (pagerLocked) {
+        await cancelDownload();
+      } else if (ready) {
         moveToPage(ONBOARDING_READY_PAGE);
       } else if (
         modelAction === 'download' ||
@@ -439,9 +419,8 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
       key="model"
       model={model}
       snapshot={snapshot}
-      modelFailure={modelFailure}
+      failure={modelFailure}
       cancelled={cancelled}
-      cancelError={cancelError}
     />,
     <ReadyPage key="ready" completionFailed={completionFailed} />,
   ];
@@ -466,17 +445,9 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               disabled={pagerLocked}
               hitSlop={8}
               onPress={() => moveToPage(page - 1)}
-              style={({ pressed }) => [
-                styles.backButton,
-                pagerLocked && styles.backButtonDisabled,
-                pressed && styles.pressed,
-              ]}
+              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
             >
-              <AppIcon
-                name="chevronLeft"
-                size={18}
-                color={pagerLocked ? colors.disabledInk : colors.accent}
-              />
+              <AppIcon name="chevronLeft" size={18} color={colors.accent} />
             </Pressable>
           ) : (
             <View accessibilityElementsHidden style={styles.backButton} />
@@ -529,15 +500,8 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
           label={continueLabel()}
           onPress={() => void handleContinue()}
           style={styles.continueButton}
+          tone={page === ONBOARDING_MODEL_PAGE && pagerLocked ? 'quiet' : 'primary'}
         />
-        {page === ONBOARDING_MODEL_PAGE && pagerLocked ? (
-          <AppButton
-            disabled={cancelBusy}
-            label={cancelBusy ? t('onboarding.modelCancelling') : t('onboarding.modelCancel')}
-            onPress={() => void cancelDownload()}
-            tone="quiet"
-          />
-        ) : null}
       </View>
     </View>
   );
@@ -577,25 +541,29 @@ const styles = StyleSheet.create({
   pageCopy: { alignItems: 'center', gap: spacing.sm },
   pageTitle: { textAlign: 'center' },
   pageBodyText: { color: colors.mutedInk, maxWidth: 380, textAlign: 'center', ...typography.body },
-  muted: { color: colors.mutedInk },
-  modelSummary: { gap: spacing.lg, padding: spacing.lg },
-  modelIconWell: {
-    alignItems: 'center',
-    backgroundColor: colors.accentSoft,
-    borderCurve: 'continuous',
-    borderRadius: radii.sm,
-    height: 48,
-    justifyContent: 'center',
-    width: 48,
-  },
+  callout: { gap: spacing.sm, padding: spacing.md },
+  modelSummary: { gap: spacing.md, padding: spacing.md },
   packHeader: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
   packCopy: { flex: 1, gap: spacing.xs },
   facts: { gap: spacing.sm },
-  fact: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, minHeight: 30 },
-  factLabel: { color: colors.ink, flexShrink: 1 },
-  backButtonDisabled: { opacity: 0.6 },
+  factLabel: { color: colors.ink },
   checking: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, minHeight: 44 },
-  callout: { gap: spacing.sm, padding: spacing.md },
+  progressGroup: { gap: spacing.sm },
+  progressCopy: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    justifyContent: 'space-between',
+  },
+  progressPercent: { color: colors.ink, fontVariant: ['tabular-nums'] },
+  progressTrack: {
+    backgroundColor: colors.disabledFill,
+    borderRadius: 99,
+    height: 8,
+    overflow: 'hidden',
+  },
+  progressFill: { backgroundColor: colors.accent, borderRadius: 99, height: '100%' },
+  muted: { color: colors.mutedInk },
   error: { color: colors.danger },
   readyCopy: { color: colors.ink },
   footer: {

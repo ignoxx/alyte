@@ -64,11 +64,6 @@ export const settingsFeatureDefinitions = {
       titleKey: 'settings.privacyTitle',
     },
     {
-      name: 'ModelStorage',
-      target: 'settings',
-      titleKey: 'settings.modelStorageTitle',
-    },
-    {
       name: 'SupportFaq',
       target: 'settings',
       titleKey: 'settings.supportTitle',

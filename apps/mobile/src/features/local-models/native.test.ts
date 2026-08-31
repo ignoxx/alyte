@@ -17,8 +17,12 @@ test('explicit simulator fake completes the same verified lifecycle without mode
   await assert.rejects(() => service.infer('synthetic prompt'), /not loaded/);
   assert.equal((await service.load()).state, 'loaded');
   assert.deepEqual(JSON.parse(await service.infer('synthetic prompt')), {
-    schemaVersion: 'alyte.semantic-mapper.v2',
-    proposals: [],
+    schemaVersion: 'alyte.geometry-variant-selector.v2',
+    selections: { r0: null },
+  });
+  assert.deepEqual(JSON.parse(await service.infer('synthetic ["r1", prompt')), {
+    schemaVersion: 'alyte.geometry-variant-selector.v2',
+    selections: { r0: null, r1: null },
   });
   assert.equal((await service.unload()).state, 'ready');
   await assert.rejects(() => service.infer('synthetic prompt'), /not loaded/);
@@ -44,6 +48,27 @@ test('native and JavaScript manifest identity mismatch fails closed before downl
   };
   const service = createLocalModelService({ native: mismatchedNative });
   await assert.rejects(() => service.startDownload(), /local model module is unavailable/);
+});
+
+test('passes only bounded contract-specific inference limits to native', async () => {
+  const base = createFakeLocalModelNativeModule();
+  let received: readonly [number, number] | null = null;
+  const native = {
+    ...base,
+    infer: (prompt: string, maxOutputTokens: number, outputCapacity: number) => {
+      received = [maxOutputTokens, outputCapacity];
+      return base.infer(prompt, maxOutputTokens, outputCapacity);
+    },
+  };
+  const service = createLocalModelService({ native });
+  await service.startDownload();
+  await service.load();
+  await service.infer('synthetic prompt', { maxOutputTokens: 96, outputCapacity: 8_192 });
+  assert.deepEqual(received, [96, 8_192]);
+  await assert.rejects(
+    () => service.infer('synthetic prompt', { maxOutputTokens: 193, outputCapacity: 8_192 }),
+    /inference limits are invalid/u,
+  );
 });
 
 test('late native registration can recover without relaxing the manifest gate', async () => {

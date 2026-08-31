@@ -9,7 +9,8 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "tsx --test src/**/*.test.ts && npm run contract:check",
+    "test:gate1": "cd ../.. && tsx --test scripts/model-evaluation-preparation.test.ts scripts/model-evaluation-runner.test.ts scripts/model-evaluation-ab.test.ts scripts/model-evaluation-constrained.test.ts scripts/model-evaluation-final.test.ts scripts/model-evaluation-source-selector.test.ts scripts/model-evaluation-block-selector.test.ts scripts/model-evaluation-variant-selector.test.ts scripts/model-evaluation-privacy.test.ts scripts/model-evaluation-contract-v2.test.ts",
+    "test": "npm run test:gate1 && tsx --test src/**/*.test.ts && npm run contract:check",
     "contract:check": "tsx ../../scripts/model-evaluation-contract.ts --check"
   },
   "dependencies": {

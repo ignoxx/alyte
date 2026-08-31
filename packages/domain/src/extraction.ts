@@ -8,18 +8,27 @@ import type {
   LabDateState,
 } from './labs';
 import { normalizeAlias } from './text';
+import {
+  coreExtractionCategoricalResultSuffix,
+  isExtractionCategoricalResultValue,
+} from './extraction-value-shapes';
 
 export { normalizeAlias } from './text';
+export { isExtractionCategoricalResultValue } from './extraction-value-shapes';
 
 export const VISION_OCR_LEGACY_CONTRACT_VERSION = 'alyte.vision.document.v2' as const;
-export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.document.v3' as const;
-export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v8' as const;
+/** First source-span contract; retained so protected drafts from development builds still decode. */
+export const VISION_OCR_PREVIOUS_CONTRACT_VERSION = 'alyte.vision.document.v3' as const;
+/** v4 corrects native table coordinates to use Vision's authoritative cell ranges. */
+export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.document.v4' as const;
+export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v9' as const;
 /**
  * The physical-row grouping contract is deliberately independent from the parser version.  The
  * geometry/token-lattice work can advance this seam in a later phase without making a parser
  * version look current by accident.
  */
-export const EXTRACTION_ROW_SEGMENTATION_VERSION = 'alyte.row-segmentation.v2' as const;
+export const EXTRACTION_ROW_SEGMENTATION_VERSION = 'alyte.row-segmentation.v3' as const;
+export const PDF_TEXT_LAYER_ADAPTER_VERSION = 'alyte.pdf.text-layer.v3' as const;
 
 export const EXTRACTION_PIPELINE_FINGERPRINT_SCHEMA =
   'alyte.extraction-pipeline-fingerprint.v1' as const;
@@ -36,9 +45,15 @@ export type ExtractionPipelineFingerprintInput = {
   readonly modelVersion: string | null;
   readonly runtimeVersion: string | null;
   readonly catalogueVersion: string | null;
+  /** Optional for legacy callers; null is omitted from the canonical hash. */
+  readonly pdfTextLayerAdapterVersion?: string | null | undefined;
 };
 
-export type ExtractionPipelineFingerprint = ExtractionPipelineFingerprintInput & {
+export type ExtractionPipelineFingerprint = Omit<
+  ExtractionPipelineFingerprintInput,
+  'pdfTextLayerAdapterVersion'
+> & {
+  readonly pdfTextLayerAdapterVersion: string | null;
   readonly schemaVersion: typeof EXTRACTION_PIPELINE_FINGERPRINT_SCHEMA;
   /** Monotonic extraction revision for one report; a full reprocess increments it. */
   readonly revision: number;
@@ -53,7 +68,7 @@ export type ExtractionPipelineFingerprint = ExtractionPipelineFingerprintInput &
 export function extractionPipelineFingerprintCanonicalJson(
   input: ExtractionPipelineFingerprintInput,
 ): string {
-  return JSON.stringify({
+  const canonical: Record<string, string | null> = {
     sourceHash: input.sourceHash,
     ocrContractVersion: input.ocrContractVersion,
     rowSegmentationVersion: input.rowSegmentationVersion,
@@ -65,7 +80,11 @@ export function extractionPipelineFingerprintCanonicalJson(
     modelVersion: input.modelVersion,
     runtimeVersion: input.runtimeVersion,
     catalogueVersion: input.catalogueVersion,
-  });
+  };
+  if (input.pdfTextLayerAdapterVersion !== null && input.pdfTextLayerAdapterVersion !== undefined) {
+    canonical.pdfTextLayerAdapterVersion = input.pdfTextLayerAdapterVersion;
+  }
+  return JSON.stringify(canonical);
 }
 
 /**
@@ -98,6 +117,7 @@ export function createExtractionPipelineFingerprint(
     schemaVersion: EXTRACTION_PIPELINE_FINGERPRINT_SCHEMA,
     revision,
     ...input,
+    pdfTextLayerAdapterVersion: input.pdfTextLayerAdapterVersion ?? null,
     hash: extractionFingerprintDigest(canonical),
   };
 }
@@ -127,7 +147,6 @@ const NUMERIC_TOKEN_PATTERN =
   '[<>≤≥]?\\s*[+-]?(?:(?:\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)|(?:\\d+(?:[.,]\\d+)?)|(?:\\.\\d+))';
 const PLAIN_NUMERIC_TOKEN_PATTERN =
   '[+-]?(?:(?:\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)|(?:\\d+(?:[.,]\\d+)?)|(?:\\.\\d+))';
-
 export type NormalizedBoundingBox = {
   readonly x: number;
   readonly y: number;
@@ -166,7 +185,7 @@ export type VisionTextObservation = {
     readonly rowIndex: number | null;
     readonly columnIndex: number | null;
   };
-  /** Token spans are present only for OCR v3 observations. */
+  /** Token spans are present for OCR v3 and later observations. */
   readonly spans?: readonly VisionTokenSpan[];
   /** Local geometry adapter provenance; native OCR never authors this field. */
   readonly sourceSpan?: VisionSourceSpan;
@@ -180,7 +199,9 @@ export type VisionTextObservation = {
 
 export type VisionOCRResult = {
   readonly contractVersion:
-    typeof VISION_OCR_LEGACY_CONTRACT_VERSION | typeof VISION_OCR_CONTRACT_VERSION;
+    | typeof VISION_OCR_LEGACY_CONTRACT_VERSION
+    | typeof VISION_OCR_PREVIOUS_CONTRACT_VERSION
+    | typeof VISION_OCR_CONTRACT_VERSION;
   readonly pageIndex: number;
   readonly orientation: number;
   readonly observations: readonly VisionTextObservation[];
@@ -241,7 +262,11 @@ export type ExtractionDateContext = {
 };
 
 export type ExtractionSemanticSchemaVersion =
-  'alyte.semantic-mapper.v1' | 'alyte.semantic-mapper.v2';
+  | 'alyte.semantic-mapper.v1'
+  | 'alyte.semantic-mapper.v2'
+  | 'alyte.geometry-variant-selector.v1'
+  | 'alyte.geometry-variant-selector.v2'
+  | 'alyte.document-vlm.flat-rows.v1';
 
 /** Exact source observations selected for deterministic field parsing. */
 export type ExtractionSemanticFieldSelection = {
@@ -414,8 +439,8 @@ export type ExtractionSemanticCandidateRow = {
 
 /**
  * The one compact key mapping shared by the production serializer and response validator. The
- * row sort and observation order are deterministic so a response cannot address a different
- * physical cell merely because one side of the contract assigned keys differently.
+ * caller establishes physical row order; this mapping preserves it so a response cannot address
+ * a different physical cell merely because one side of the contract assigned keys differently.
  */
 export type ExtractionSemanticWireRow = {
   readonly row: ExtractionSemanticCandidateRow;
@@ -423,17 +448,42 @@ export type ExtractionSemanticWireRow = {
   readonly cellIds: ReadonlyMap<string, string>;
 };
 
+function compareStableRowIds(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/**
+ * Sorts semantic candidates in physical document order before a caller groups or chunks them.
+ * Candidate observations are already source-ordered within a row; the first cell is therefore
+ * the row's stable physical anchor. Empty rows are placed last and remain deterministically
+ * ordered by their internal ID.
+ */
+export function sortExtractionSemanticCandidateRows(
+  candidateRows: readonly ExtractionSemanticCandidateRow[],
+): readonly ExtractionSemanticCandidateRow[] {
+  return candidateRows.slice().sort((left, right) => {
+    const leftAnchor = left.observations[0];
+    const rightAnchor = right.observations[0];
+    return (
+      (leftAnchor?.pageIndex ?? Number.MAX_SAFE_INTEGER) -
+        (rightAnchor?.pageIndex ?? Number.MAX_SAFE_INTEGER) ||
+      (leftAnchor?.boundingBox.y ?? Number.MAX_SAFE_INTEGER) -
+        (rightAnchor?.boundingBox.y ?? Number.MAX_SAFE_INTEGER) ||
+      (leftAnchor?.boundingBox.x ?? Number.MAX_SAFE_INTEGER) -
+        (rightAnchor?.boundingBox.x ?? Number.MAX_SAFE_INTEGER) ||
+      compareStableRowIds(left.rowId, right.rowId)
+    );
+  });
+}
+
 export function mapExtractionSemanticWireRows(
   candidateRows: readonly ExtractionSemanticCandidateRow[],
 ): readonly ExtractionSemanticWireRow[] {
-  return candidateRows
-    .slice()
-    .sort((left, right) => left.rowId.localeCompare(right.rowId))
-    .map((row, rowIndex) => ({
-      row,
-      rowKey: `r${rowIndex}`,
-      cellIds: new Map(row.observations.map((observation, index) => [`c${index}`, observation.id])),
-    }));
+  return candidateRows.map((row, rowIndex) => ({
+    row,
+    rowKey: `r${rowIndex}`,
+    cellIds: new Map(row.observations.map((observation, index) => [`c${index}`, observation.id])),
+  }));
 }
 
 export type ExtractionSemanticProvenance = NonNullable<ExtractionSourceLocation['semantic']>;
@@ -584,6 +634,7 @@ export function validateSemanticProposals(
         ])
       : new Set([
           'sourceObservationIds',
+          'sourceFields',
           'proposedBiomarkerId',
           'biomarkerId',
           'proposedSpecimenType',
@@ -648,7 +699,7 @@ export function validateSemanticProposals(
     if (sourceObservationIds.some((id) => typeof id !== 'string')) return [];
     if (
       sourceObservationIds.length === 0 ||
-      sourceObservationIds.length > (compact ? 24 : 8) ||
+      sourceObservationIds.length > 24 ||
       sourceObservationIds.some((id) => id.length === 0 || id.length > 96) ||
       new Set(sourceObservationIds).size !== sourceObservationIds.length ||
       !sourceObservationIds.every((id) => sourceById.has(id))
@@ -658,6 +709,42 @@ export function validateSemanticProposals(
     // The model must copy the complete row ID array, including order. A partial, cross-row,
     // reordered, or extra-ID proposal is rejected rather than inferred or repaired.
     if (row === undefined) return [];
+    if (!compact && value.sourceFields !== undefined) {
+      if (
+        typeof value.sourceFields !== 'object' ||
+        value.sourceFields === null ||
+        Array.isArray(value.sourceFields)
+      )
+        return [];
+      const fields = value.sourceFields as Record<string, unknown>;
+      const fieldKeys = ['label', 'value', 'unit', 'referenceInterval', 'flag'] as const;
+      if (
+        Object.keys(fields).length !== fieldKeys.length ||
+        Object.keys(fields).some((key) => !fieldKeys.includes(key as (typeof fieldKeys)[number])) ||
+        typeof fields.label !== 'string' ||
+        typeof fields.value !== 'string' ||
+        ![fields.unit, fields.referenceInterval, fields.flag].every(
+          (field) => field === null || typeof field === 'string',
+        )
+      )
+        return [];
+      const selected = fieldKeys
+        .map((key) => fields[key])
+        .filter((field): field is string => typeof field === 'string');
+      if (
+        new Set(selected).size !== selected.length ||
+        fields.label === fields.value ||
+        selected.some((id) => !row!.sourceObservationIds.includes(id))
+      )
+        return [];
+      sourceFields = {
+        label: fields.label,
+        value: fields.value,
+        unit: fields.unit as string | null,
+        referenceInterval: fields.referenceInterval as string | null,
+        flag: fields.flag as string | null,
+      };
+    }
     const sourceRows = sourceObservationIds.map((id) => sourceById.get(id));
     if (sourceRows.some((observation) => observation === undefined)) return [];
     const rawBiomarkerId =
@@ -805,7 +892,14 @@ export type ExtractionDraftRowPatch = {
   readonly decision?: ExtractionRowDecision;
 };
 
-type SemanticRevalidationOptions = {
+export type ExtractionRevalidationMode = 'automatic' | 'user-correction';
+
+export type ExtractionRevalidationOptions = {
+  /**
+   * User corrections are validated from the edited proposal, not from the concatenated OCR row.
+   * This clears source-layout blockers while preserving genuine compatibility uncertainty.
+   */
+  readonly mode?: ExtractionRevalidationMode;
   readonly sourceFields?: ExtractionSemanticFieldSelection;
   /** Internal group-date update seam; collection dates are never a per-row public patch. */
   readonly collectionDate?: LabDateState;
@@ -853,9 +947,11 @@ export function decodeVisionOCRResult(input: unknown): VisionOCRResult {
   const contractVersion =
     value.contractVersion === VISION_OCR_CONTRACT_VERSION
       ? VISION_OCR_CONTRACT_VERSION
-      : value.contractVersion === VISION_OCR_LEGACY_CONTRACT_VERSION
-        ? VISION_OCR_LEGACY_CONTRACT_VERSION
-        : null;
+      : value.contractVersion === VISION_OCR_PREVIOUS_CONTRACT_VERSION
+        ? VISION_OCR_PREVIOUS_CONTRACT_VERSION
+        : value.contractVersion === VISION_OCR_LEGACY_CONTRACT_VERSION
+          ? VISION_OCR_LEGACY_CONTRACT_VERSION
+          : null;
   if (contractVersion === null) throw new Error('Unsupported Vision OCR contract version');
   const pageIndex = finiteInteger(value.pageIndex, 'Vision OCR page index', 0);
   const orientation = finiteInteger(value.orientation ?? 0, 'Vision OCR orientation', -360, 360);
@@ -891,7 +987,10 @@ function decodeObservation(
   index: number,
   pageIndex: number,
   pageOrientation: number,
-  contractVersion: typeof VISION_OCR_LEGACY_CONTRACT_VERSION | typeof VISION_OCR_CONTRACT_VERSION,
+  contractVersion:
+    | typeof VISION_OCR_LEGACY_CONTRACT_VERSION
+    | typeof VISION_OCR_PREVIOUS_CONTRACT_VERSION
+    | typeof VISION_OCR_CONTRACT_VERSION,
 ): VisionTextObservation {
   if (typeof input !== 'object' || input === null)
     throw new Error(`Vision OCR observation ${index} is not an object`);
@@ -944,7 +1043,7 @@ function decodeObservation(
       ? value.id
       : `observation-${pageIndex}-${index}`;
   const spans =
-    contractVersion === VISION_OCR_CONTRACT_VERSION
+    contractVersion !== VISION_OCR_LEGACY_CONTRACT_VERSION
       ? decodeVisionTokenSpans(value.spans, text, id, index)
       : undefined;
   return {
@@ -1708,6 +1807,12 @@ export function groupObservationsIntoRows(
     readonly specimenType?: SpecimenType;
     readonly aliases?: readonly ExtractionAliasEntry[];
     readonly artifact?: LabSourceArtifact | null;
+    /**
+     * Internal geometry adapter seam. The ordinary parser remains conservative and filters rows
+     * that are not already measurement-shaped; geometry-qualified callers may inspect the parsed
+     * shape separately before admitting it as a provisional row.
+     */
+    readonly includeUnshapedRows?: boolean;
   } = {},
 ): readonly ExtractionDraftRow[] {
   const aliases = options.aliases ?? [];
@@ -1777,7 +1882,7 @@ export function groupObservationsIntoRows(
         options.artifact ?? null,
       ),
     )
-    .filter(isMeasurementShapedRow);
+    .filter((row) => options.includeUnshapedRows === true || isMeasurementShapedRow(row));
 }
 
 function isMeasurementShapedRow(row: ExtractionDraftRow): boolean {
@@ -1837,17 +1942,28 @@ function parseSourceRow(
     aliasMatch === null ? findUnsafeBiomarkerLabel(sourceText, aliases) : null;
   const { valueCandidates, effectiveReferences } = analyzeSourceValues(sourceText);
   const selectedValue = valueCandidates.length === 1 ? valueCandidates[0] : undefined;
+  const categoricalValueObservations = group.filter((observation) =>
+    isExtractionCategoricalResultValue(observation.text),
+  );
+  const selectedCategoricalObservation =
+    categoricalValueObservations.length === 1 ? categoricalValueObservations[0] : undefined;
   const categoricalMatch =
-    selectedValue === undefined
-      ? /\b(not detected|positive|negative|detected|normal|abnormal|teigiamas|neigiamas|aptikta|neaptikta|positiv|negativ)\s*$/iu.exec(
-          sourceText,
-        )
+    selectedValue === undefined && selectedCategoricalObservation === undefined
+      ? coreExtractionCategoricalResultSuffix(sourceText)
       : null;
-  const rawValue = selectedValue?.raw ?? categoricalMatch?.[1] ?? '';
-  const valueStart = selectedValue?.start ?? categoricalMatch?.index ?? -1;
+  const rawValue =
+    selectedValue?.raw ??
+    selectedCategoricalObservation?.text.trim() ??
+    categoricalMatch?.value ??
+    '';
+  const valueStart =
+    selectedValue?.start ??
+    (selectedCategoricalObservation === undefined
+      ? (categoricalMatch?.index ?? -1)
+      : sourceText.lastIndexOf(selectedCategoricalObservation.text.trim()));
   const rawLabel = valueStart > 0 ? sourceText.slice(0, valueStart).trim() : sourceText;
   const proposedValue =
-    categoricalMatch !== null
+    selectedCategoricalObservation !== undefined || categoricalMatch !== null
       ? { kind: 'categorical' as const, value: rawValue }
       : (parseComparatorValue(rawValue) ?? { kind: 'free_text' as const, value: sourceText });
   const rawUnit = extractUnitToken(sourceText, valueCandidates);
@@ -1863,7 +1979,12 @@ function parseSourceRow(
   if (!label) reasons.push('missing-label');
   if (!rawValue) reasons.push('missing-value');
   if (proposedValue.kind === 'free_text') reasons.push('unparseable-value');
-  if (valueCandidates.length > 1 || effectiveReferences.length > 1 || hasSiblingAlias)
+  if (
+    valueCandidates.length > 1 ||
+    categoricalValueObservations.length > 1 ||
+    effectiveReferences.length > 1 ||
+    hasSiblingAlias
+  )
     reasons.push('unsupported-layout');
   if (biomarkerId === null) reasons.push('unsupported-alias');
   if (unsafeMatch !== null || globalUnsafeMatch !== null || hasSiblingAlias)
@@ -1952,12 +2073,9 @@ function selectedObservationText(row: ExtractionDraftRow, id: string | null): st
   return row.source.observations?.find((observation) => observation.id === id)?.text.trim() ?? null;
 }
 
-const CATEGORICAL_VALUE_PATTERN =
-  /^(?:not detected|positive|negative|detected|normal|abnormal|teigiamas|neigiamas|aptikta|neaptikta|positiv|negativ)$/iu;
-
 function parseSelectedMeasurementValue(input: string): MeasurementValue | null {
   const value = input.trim();
-  if (CATEGORICAL_VALUE_PATTERN.test(value)) return { kind: 'categorical', value };
+  if (isExtractionCategoricalResultValue(value)) return { kind: 'categorical', value };
   // A selected value must be a complete scalar cell. In particular, do not accept a numeric
   // prefix from a cell that also contains a unit, reference range, date, or metadata text.
   if (!new RegExp(`^${NUMERIC_TOKEN_PATTERN}\\s*$`, 'u').test(value)) return null;
@@ -2053,7 +2171,7 @@ export function revalidateExtractionRow(
   row: ExtractionDraftRow,
   patch: ExtractionDraftRowPatch,
   aliases: readonly ExtractionAliasEntry[],
-  options: SemanticRevalidationOptions = {},
+  options: ExtractionRevalidationOptions = {},
 ): ExtractionDraftRow {
   const next = {
     ...row,
@@ -2063,23 +2181,47 @@ export function revalidateExtractionRow(
     sourceValue: row.sourceValue,
   };
   const reasons = new Set<ExtractionReviewReason>();
+  const isUserCorrection =
+    options.mode === 'user-correction' &&
+    patch.proposedLabel !== undefined &&
+    patch.proposedValue !== undefined;
+  const validatesCorrectedProposal = isUserCorrection || options.sourceFields !== undefined;
   if (!next.proposedLabel.trim()) reasons.add('missing-label');
-  if (!next.sourceValueString.trim()) reasons.add('missing-value');
-  if (next.proposedValue.kind === 'free_text' && !next.proposedValue.value.trim())
+  const proposedValueMissing =
+    (next.proposedValue.kind === 'categorical' || next.proposedValue.kind === 'free_text') &&
+    !next.proposedValue.value.trim();
+  if (validatesCorrectedProposal ? proposedValueMissing : !next.sourceValueString.trim())
+    reasons.add('missing-value');
+  if (
+    (next.proposedValue.kind === 'free_text' && !next.proposedValue.value.trim()) ||
+    ((next.proposedValue.kind === 'numeric' || next.proposedValue.kind === 'bounded') &&
+      !Number.isFinite(next.proposedValue.value))
+  )
     reasons.add('unparseable-value');
   const aliasMatches = findAliasMatches(
-    options.sourceFields === undefined ? next.sourceText : next.proposedLabel,
+    validatesCorrectedProposal ? next.proposedLabel : next.sourceText,
     aliases,
   );
   const aliasMatch = aliasMatches[0] ?? null;
-  const hasSiblingAlias = new Set(aliasMatches.map((match) => match.id)).size > 1;
+  // A corrected label is authoritative only for the edited proposal. Keep checking the
+  // immutable OCR row for competing aliases so an explicit correction cannot hide a genuine
+  // assay conflict that was present in the source.
+  const sourceAliasMatches = isUserCorrection ? findAliasMatches(next.sourceText, aliases) : [];
+  const hasSiblingAlias =
+    new Set([...aliasMatches, ...sourceAliasMatches].map((match) => match.id)).size > 1;
+  const correctedBiomarkerId = isUserCorrection
+    ? proposeBiomarkerId(next.proposedLabel, aliases)
+    : next.proposedBiomarkerId;
   const unsafeMatch = findUnsafeBiomarkerLabel(
     next.sourceText,
     aliases,
-    next.proposedBiomarkerId ?? aliasMatch?.id,
+    correctedBiomarkerId ?? aliasMatch?.id,
   );
   const globalUnsafeMatch =
     aliasMatch === null ? findUnsafeBiomarkerLabel(next.sourceText, aliases) : null;
+  const sourceUnsafeMatch = isUserCorrection
+    ? findUnsafeBiomarkerLabel(next.sourceText, aliases)
+    : null;
   const sourceValues =
     options.sourceFields === undefined
       ? analyzeSourceValues(next.sourceText)
@@ -2107,14 +2249,23 @@ export function revalidateExtractionRow(
                 ],
         };
   const id =
-    unsafeMatch === null && globalUnsafeMatch === null && !hasSiblingAlias
-      ? next.proposedBiomarkerId
+    unsafeMatch === null &&
+    globalUnsafeMatch === null &&
+    sourceUnsafeMatch === null &&
+    !hasSiblingAlias
+      ? correctedBiomarkerId
       : null;
   if (id === null) reasons.add('unsupported-alias');
-  if (unsafeMatch !== null || globalUnsafeMatch !== null || hasSiblingAlias)
+  if (
+    unsafeMatch !== null ||
+    globalUnsafeMatch !== null ||
+    sourceUnsafeMatch !== null ||
+    hasSiblingAlias
+  )
     reasons.add('ambiguous-assay');
   else if (!methodCompatible(next.sourceText, id, aliases)) reasons.add('incompatible-method');
   if (
+    !isUserCorrection &&
     options.sourceFields === undefined &&
     (sourceValues.valueCandidates.length > 1 ||
       sourceValues.effectiveReferences.length > 1 ||
@@ -2139,7 +2290,10 @@ export function revalidateExtractionRow(
   }
   const reviewReasons = [...reasons];
   const wasExplicitlySkipped =
-    options.sourceFields === undefined && row.decision === 'skip' && patch.decision === undefined;
+    !isUserCorrection &&
+    options.sourceFields === undefined &&
+    row.decision === 'skip' &&
+    patch.decision === undefined;
   return {
     ...next,
     proposedBiomarkerId: id,

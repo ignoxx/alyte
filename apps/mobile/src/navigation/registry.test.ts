@@ -86,7 +86,6 @@ test('pre-gate Settings has no cloud route while retaining every local route', (
   assert.deepEqual(preGateNames, [
     'AppLock',
     'PrivacyStorage',
-    'ModelStorage',
     'SupportFaq',
     'Diagnostics',
     'DeleteLocalData',

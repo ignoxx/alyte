@@ -6,12 +6,20 @@ import Foundation
 final class AlytePinnedLlamaRuntimeSession: AlyteLocalModelRuntimeSession, @unchecked Sendable {
   private var runtime: UnsafeMutableRawPointer?
 
-  init(modelURL: URL) throws {
+  init(modelURL: URL, projectorURL: URL) throws {
     var failureStage: Int32 = 0
-    let created = modelURL.path.withCString { path in
-      AlyteSemanticMapperGrammar.root.withCString { grammarText in
-        "root".withCString { root in
-          alyte_local_model_runtime_create(path, grammarText, root, &failureStage)
+    let created = modelURL.path.withCString { modelPath in
+      projectorURL.path.withCString { projectorPath in
+        AlyteDocumentVLMGrammar.root.withCString { grammarText in
+          "root".withCString { root in
+            alyte_local_model_runtime_create(
+              modelPath,
+              projectorPath,
+              grammarText,
+              root,
+              &failureStage
+            )
+          }
         }
       }
     }
@@ -57,6 +65,36 @@ final class AlytePinnedLlamaRuntimeSession: AlyteLocalModelRuntimeSession, @unch
       case -7: throw AlyteLocalModelRuntimeError.cancelled
       default: throw AlyteLocalModelRuntimeError.loadFailed(.unknown)
       }
+    }
+    return String(decoding: output.prefix(Int(count)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+  }
+
+  func generateImage(
+    prompt: String,
+    imageData: Data,
+    maxOutputTokens: Int,
+    outputCapacity: Int
+  ) throws -> String {
+    guard let runtime else { throw AlyteLocalModelRuntimeError.unavailable }
+    var output = [CChar](repeating: 0, count: outputCapacity)
+    let count = prompt.withCString { promptText in
+      imageData.withUnsafeBytes { imageBuffer in
+        output.withUnsafeMutableBufferPointer { outputBuffer in
+          alyte_local_model_runtime_generate_image(
+            runtime,
+            promptText,
+            imageBuffer.bindMemory(to: UInt8.self).baseAddress,
+            imageData.count,
+            Int32(maxOutputTokens),
+            outputBuffer.baseAddress,
+            outputCapacity
+          )
+        }
+      }
+    }
+    guard count >= 0 else {
+      if count == -7 { throw AlyteLocalModelRuntimeError.cancelled }
+      throw AlyteLocalModelRuntimeError.loadFailed(.unknown)
     }
     return String(decoding: output.prefix(Int(count)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
   }

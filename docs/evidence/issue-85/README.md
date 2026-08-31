@@ -1,5 +1,13 @@
 # Issue 85 — increased-memory entitlement
 
+> Superseded by issue #171. This README preserves the historical entitlement evidence and
+> screenshots for traceability; it is not the current MVP policy.
+
+Current MVP development, preview, and production variants no longer request either
+`com.apple.developer.kernel.increased-memory-limit` or
+`com.apple.developer.kernel.extended-virtual-addressing`. The retired local-model experiment is
+not part of the mobile dependency or native target.
+
 `apps/mobile/app.config.js` declares Apple's supported
 `com.apple.developer.kernel.increased-memory-limit` entitlement for every iOS variant. Preview and
 production add the related `com.apple.developer.kernel.extended-virtual-addressing` entitlement

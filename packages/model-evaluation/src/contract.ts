@@ -14,6 +14,7 @@ import {
   assertEvaluationCandidateManifest,
   QWEN_EVALUATION_CONTRACT_VERSION,
   qwenEvaluationManifest,
+  type GenericEvaluationManifest,
   SEMANTIC_MAPPER_SCHEMA_VERSION,
   type EvaluationManifest,
 } from './manifest';
@@ -46,7 +47,7 @@ export type CanonicalEvaluationContract = {
     readonly revision: string;
   };
   readonly thinking: boolean;
-  readonly chatTemplate?: 'gemma4-v1';
+  readonly chatTemplate?: 'gemma4-v1' | 'qwen3-v1' | 'lfm2-v1';
   readonly chatTemplateSource?: string;
   readonly grammar: string;
   readonly grammarRoot: string;
@@ -147,7 +148,7 @@ function canonicalFixture(
 }
 
 export function createCanonicalEvaluationContract(
-  manifest: EvaluationManifest = qwenEvaluationManifest,
+  manifest: GenericEvaluationManifest = qwenEvaluationManifest,
 ): CanonicalEvaluationContract {
   assertEvaluationCandidateManifest(manifest);
   return {

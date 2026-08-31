@@ -25,17 +25,11 @@ import {
   type ExtractionProgressTerminalDestination,
 } from './extraction-progress-controller';
 import { extractionFailurePresentation } from './extraction-progress-presentation';
-import { canStartAutomatedExtraction } from '../local-models/model';
 
 type Route = RouteProp<RootStackParamList, 'ExtractionProgress'>;
 type Navigation = NativeStackNavigationProp<RootStackParamList, 'ExtractionProgress'>;
 
-const stages: readonly LabReportExtractionProgress['stage'][] = [
-  'import',
-  'ocr',
-  'model',
-  'review',
-];
+const stages: readonly LabReportExtractionProgress['stage'][] = ['import', 'ocr', 'review'];
 
 function passwordRequest(): PasswordRequest {
   return ({ report }) =>
@@ -58,9 +52,7 @@ function stageLabel(stage: LabReportExtractionProgress['stage']): string {
       ? 'labs.extractionProgressImport'
       : stage === 'ocr'
         ? 'labs.extractionProgressOcr'
-        : stage === 'model'
-          ? 'labs.extractionProgressModel'
-          : 'labs.extractionProgressReview',
+        : 'labs.extractionProgressReview',
   );
 }
 
@@ -68,12 +60,11 @@ export function ExtractionProgressScreen() {
   const navigation = useNavigation<Navigation>();
   const route = useRoute<Route>();
   const isFocused = useIsFocused();
-  const { reports, models } = useServices();
+  const { reports } = useServices();
   const extractionMode = route.params.mode ?? 'start';
   const [progress, setProgress] = useState<LabReportExtractionProgress | null>(() =>
     reports.getExtractionProgress(route.params.reportId),
   );
-  const [modelReady, setModelReady] = useState(false);
   const [failure, setFailure] = useState<LabReportExtractionError['reason'] | null>(null);
   const [activeOperation, setActiveOperation] = useState(false);
   const [cancellationRequested, setCancellationRequested] = useState(false);
@@ -85,7 +76,6 @@ export function ExtractionProgressScreen() {
   const [restoredDraftLookupFailed, setRestoredDraftLookupFailed] = useState(false);
   const [terminalDestination, setTerminalDestination] =
     useState<ExtractionProgressTerminalDestination | null>(null);
-  const [modelStateLoaded, setModelStateLoaded] = useState(false);
   const controller = useMemo(
     () =>
       new ExtractionProgressController({
@@ -96,15 +86,9 @@ export function ExtractionProgressScreen() {
             : reports.startExtraction(reportId, passwordRequest()),
         classifyFailure: (error) =>
           error instanceof LabReportExtractionError ? error.reason : 'recognition',
-        openModelSetup: () => navigation.navigate('ModelInstall'),
         setTerminalDestination,
         setActiveOperation,
         setFailure,
-        setModelUnavailable: () => {
-          setModelReady(false);
-          setModelStateLoaded(true);
-          setFailure(null);
-        },
       }),
     [extractionMode, navigation, reports, route.params.reportId],
   );
@@ -130,14 +114,7 @@ export function ExtractionProgressScreen() {
         next.status === 'interrupted'
       ) {
         setActiveOperation(false);
-        if (next.error === 'model-unavailable') {
-          // Model readiness is a setup concern, not a report-preservation failure screen. The
-          // operation has not produced a draft, so keep the report and progress route in place
-          // while the contextual setup route takes over.
-          controller.modelBecameUnavailable();
-        } else {
-          setFailure(next.error ?? 'recognition');
-        }
+        setFailure(next.error ?? 'recognition');
       }
     });
     const current = reports.getExtractionProgress(route.params.reportId);
@@ -186,14 +163,7 @@ export function ExtractionProgressScreen() {
           durable.status === 'cancelled' ||
           durable.status === 'interrupted'
         ) {
-          if (durable.error === 'model-unavailable') {
-            // A previous model gate may have been interrupted. Let the current native model state
-            // decide whether to resume or reopen setup instead of replaying the old dead end.
-            setFailure(null);
-            setActiveOperation(false);
-          } else {
-            setFailure(durable.error ?? 'recognition');
-          }
+          setFailure(durable.error ?? 'recognition');
         }
       })
       .catch(() => {
@@ -249,37 +219,9 @@ export function ExtractionProgressScreen() {
   }, [activeOperation, failure, isFocused, navigation, terminalDestination]);
 
   useEffect(() => {
-    let active = true;
-    const refresh = async () => {
-      try {
-        const snapshot = await models.getState();
-        if (active) {
-          setModelReady(canStartAutomatedExtraction(snapshot));
-          setModelStateLoaded(true);
-        }
-      } catch {
-        if (active) {
-          setModelReady(false);
-          setModelStateLoaded(true);
-        }
-      }
-    };
-    void refresh();
-    const unsubscribe = models.subscribe((snapshot) => {
-      if (active) setModelReady(canStartAutomatedExtraction(snapshot));
-    });
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, [models]);
-
-  useEffect(() => {
     controller.evaluate({
       focused: isFocused,
       durableLoaded,
-      modelStateLoaded,
-      modelReady,
       hasFailure: failure !== null,
       cancellationRequested,
       restoredProgress: extractionMode === 'reprocess' ? null : restoredProgress,
@@ -292,8 +234,6 @@ export function ExtractionProgressScreen() {
     extractionMode,
     failure,
     isFocused,
-    modelReady,
-    modelStateLoaded,
     restoredDraftId,
     restoredProgress,
   ]);
@@ -302,10 +242,7 @@ export function ExtractionProgressScreen() {
     () => Math.max(0, stages.indexOf(progress?.stage ?? 'import')),
     [progress?.stage],
   );
-  const failurePresentation =
-    failure === null || failure === 'model-unavailable'
-      ? null
-      : extractionFailurePresentation(failure);
+  const failurePresentation = failure === null ? null : extractionFailurePresentation(failure);
   async function cancel() {
     await reports.cancelExtraction(route.params.reportId);
     setCancellationRequested(true);
@@ -402,17 +339,6 @@ export function ExtractionProgressScreen() {
               </AppSurface>
             ) : (
               <>
-                {modelStateLoaded && !modelReady && (
-                  <>
-                    <AppText style={styles.muted}>
-                      {t('labs.extractionProgressModelRequired')}
-                    </AppText>
-                    <AppButton
-                      label={t('labs.extractionModelAction')}
-                      onPress={() => controller.requestModelSetup(isFocused)}
-                    />
-                  </>
-                )}
                 <AppButton
                   label={t('labs.extractionProgressCancel')}
                   tone="quiet"

@@ -1,23 +1,32 @@
 {
-  "manifestVersion": "alyte.local-model.manifest.v1",
+  "manifestVersion": "alyte.local-model.manifest.v2",
   "pack": {
-    "id": "gemma-4-e2b-it-q4-0",
+    "id": "qwen3-vl-2b-instruct-q4-k-m",
     "source": {
-      "repository": "google/gemma-4-E2B-it",
-      "revision": "3e22461f65e89153144f8adb70e3b8c2cc9845a7"
+      "repository": "Qwen/Qwen3-VL-2B-Instruct",
+      "revision": "89644892e4d85e24eaac8bacfd4f463576704203"
     },
     "artifact": {
-      "repository": "ggml-org/gemma-4-E2B-it-GGUF",
-      "revision": "b4243c156154b6dca9324415f8c7ccc098b4aed1",
-      "filename": "gemma-4-E2B-it-Q4_0.gguf",
-      "url": "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/b4243c156154b6dca9324415f8c7ccc098b4aed1/gemma-4-E2B-it-Q4_0.gguf?download=true",
-      "bytes": 2841481184,
-      "sha256": "8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52"
+      "repository": "Qwen/Qwen3-VL-2B-Instruct-GGUF",
+      "revision": "52d6c8ffea26cc873ac5ad116f8631268d7eb503",
+      "filename": "Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+      "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/52d6c8ffea26cc873ac5ad116f8631268d7eb503/Qwen3VL-2B-Instruct-Q4_K_M.gguf?download=true",
+      "bytes": 1107409952,
+      "sha256": "089d75c52f4b7ffc56ba998ffc50aae89fcafc755f9e7208aacca281dca6c2ae"
     },
-    "publisher": "Google / ggml-org",
+    "projector": {
+      "repository": "Qwen/Qwen3-VL-2B-Instruct-GGUF",
+      "revision": "52d6c8ffea26cc873ac5ad116f8631268d7eb503",
+      "filename": "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf",
+      "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/52d6c8ffea26cc873ac5ad116f8631268d7eb503/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf?download=true",
+      "bytes": 445053216,
+      "sha256": "f9a68fabba69c3b81e153367b2c7521030b0fa8bb0de400c9599c8e6725f9c82"
+    },
+    "bytes": 1552463168,
+    "publisher": "Qwen",
     "license": "Apache-2.0",
     "format": "GGUF",
-    "quantization": "Q4_0"
+    "quantization": "Q4_K_M + Q8_0 projector"
   },
   "runtime": {
     "id": "llama.cpp",
@@ -25,15 +34,15 @@
     "revision": "bb4caa7540188872173c44d161602d9271386413"
   },
   "compatibility": {
-    "languages": ["en", "de", "lt", "fr", "es", "it", "pt", "nl", "pl"],
-    "promptBundle": "alyte.semantic-mapper.prompt.v6",
-    "ocrChunk": "alyte.semantic-ocr-chunk.v4",
-    "semanticSchema": "alyte.semantic-mapper.v2"
+    "languages": ["en", "de"],
+    "promptBundle": "alyte.document-vlm.prompt.v1",
+    "ocrChunk": "alyte.document-band.v1",
+    "semanticSchema": "alyte.document-vlm.flat-rows.v1"
   },
   "requirements": {
     "minimumIOS": "26.0",
-    "minimumFreeBytes": 6000000000,
-    "minimumMemoryBytes": 4000000000
+    "minimumFreeBytes": 3500000000,
+    "minimumMemoryBytes": 2800000000
   },
   "allowlist": {
     "hosts": [
@@ -50,6 +59,6 @@
       "transfer.xethub.hf.co",
       "transfer.xethub-eu.hf.co"
     ],
-    "files": ["gemma-4-E2B-it-Q4_0.gguf"]
+    "files": ["Qwen3VL-2B-Instruct-Q4_K_M.gguf", "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"]
   }
 }

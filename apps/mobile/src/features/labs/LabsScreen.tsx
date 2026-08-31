@@ -7,14 +7,28 @@ import { formatLocaleDate, type LabRecord, type LabReport, type SpecimenType } f
 import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppIcon, AppText, LabEmptyState, ScreenScrollView } from '../../ui/primitives';
+import {
+  AppButton,
+  AppIcon,
+  AppText,
+  LabEmptyState,
+  ScreenScrollView,
+  ScreenStatusView,
+} from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
+import {
+  getScreenPlatformPolicy,
+  getScreenSafeAreaEdges,
+  getScreenSurfaceMode,
+} from '../../ui/screen-scroll-model';
 import { listHistoryEntries } from './biomarker-history-model';
 import { summarizeLabReport } from './lab-read-model';
 import { getLabReportFailureRecovery } from './report-detail-model';
 import { openReportImportFromStack } from '../../navigation/parent-tab';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
+
+const screenSafeAreaEdges = getScreenSafeAreaEdges(getScreenPlatformPolicy(process.env.EXPO_OS));
 
 function specimenLabel(value: SpecimenType): string {
   const suffix =
@@ -102,37 +116,44 @@ export function LabsScreen() {
 
   const hasData = records.length > 0 || reports.length > 0;
   const isEmptyState = !loading && !error && !hasData;
+  const surfaceState = loading ? 'loading' : error ? 'error' : isEmptyState ? 'empty' : 'populated';
+  const statusSurface = getScreenSurfaceMode(surfaceState) === 'status';
   return (
-    <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
-      <ScreenScrollView
-        alwaysBounceVertical={!isEmptyState}
-        bounces={!isEmptyState}
-        contentContainerStyle={screenStyles.content}
-        style={screenStyles.scroll}
-        tabBarClearance="native"
-      >
-        {loading && <AppText style={styles.muted}>{t('labs.loading')}</AppText>}
-        {error && (
-          <View style={styles.errorState}>
-            <AppText variant="heading">{t('labs.errorTitle')}</AppText>
-            <AppText style={styles.muted}>{t('labs.errorBody')}</AppText>
-            <AppButton
-              label={t('labs.retry')}
-              onPress={() => void loadRecords()}
-              tone="secondary"
+    <SafeAreaView edges={screenSafeAreaEdges} style={screenStyles.safe}>
+      {statusSurface ? (
+        <ScreenStatusView
+          contentContainerStyle={styles.statusState}
+          style={screenStyles.scroll}
+          tabBarClearance="native"
+        >
+          {loading && <AppText style={styles.muted}>{t('labs.loading')}</AppText>}
+          {error && (
+            <View style={styles.errorState}>
+              <AppText variant="heading">{t('labs.errorTitle')}</AppText>
+              <AppText style={styles.muted}>{t('labs.errorBody')}</AppText>
+              <AppButton
+                label={t('labs.retry')}
+                onPress={() => void loadRecords()}
+                tone="secondary"
+              />
+            </View>
+          )}
+          {isEmptyState && (
+            <LabEmptyState
+              actionLabel={t('labs.action')}
+              icon="addDocument"
+              onAction={() => openReportImportFromStack(navigation)}
+              body={t('labs.emptyBody')}
+              title={t('labs.emptyTitle')}
             />
-          </View>
-        )}
-        {isEmptyState && (
-          <LabEmptyState
-            actionLabel={t('labs.action')}
-            icon="addDocument"
-            onAction={() => openReportImportFromStack(navigation)}
-            body={t('labs.emptyBody')}
-            title={t('labs.emptyTitle')}
-          />
-        )}
-        {!loading && !error && !isEmptyState && (
+          )}
+        </ScreenStatusView>
+      ) : (
+        <ScreenScrollView
+          contentContainerStyle={screenStyles.content}
+          style={screenStyles.scroll}
+          tabBarClearance="native"
+        >
           <View style={styles.sections}>
             <AppButton
               label={t('labs.action')}
@@ -248,14 +269,15 @@ export function LabsScreen() {
               tone="quiet"
             />
           </View>
-        )}
-      </ScreenScrollView>
+        </ScreenScrollView>
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   sections: { gap: spacing.lg, paddingBottom: spacing.lg },
+  statusState: { alignItems: 'center', justifyContent: 'center' },
   section: { gap: spacing.xs },
   sectionLabel: { color: colors.mutedInk, textTransform: 'uppercase' },
   importButton: { alignSelf: 'stretch' },

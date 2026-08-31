@@ -25,6 +25,11 @@ A biological characteristic that can be measured, such as LDL cholesterol or vit
 thing being measured, not the measured value.
 _Avoid_: Result, value
 
+**Resolved Biomarker**:
+A source laboratory label whose identity has been safely mapped to a stable Biomarker. Resolution
+may supply a reviewed English display name but does not make the Biomarker comparable or evidence-backed.
+_Avoid_: Translated marker, OCR match, Comparable Biomarker
+
 **Comparable Biomarker**:
 A Biomarker with tested identity, specimen, value-type, and unit rules that allow compatible
 Measurements to form a Measured Trend.

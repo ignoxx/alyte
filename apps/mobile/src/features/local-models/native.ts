@@ -13,6 +13,12 @@ export type NativeLocalModelsModule = {
     maxOutputTokens: number,
     outputCapacity: number,
   ) => Promise<unknown>;
+  readonly inferImage?: (
+    prompt: string,
+    imageURI: string,
+    maxOutputTokens: number,
+    outputCapacity: number,
+  ) => Promise<unknown>;
   readonly cancelInference: () => unknown;
   readonly unload: () => unknown;
   readonly deletePack: (packId: string) => Promise<unknown>;
@@ -30,7 +36,19 @@ export type LocalModelService = {
   readonly cancelDownload: () => Promise<LocalModelSnapshot>;
   readonly load: () => Promise<LocalModelSnapshot>;
   /** Returns one bounded, grammar-constrained JSON response; raw output never gets logged. */
-  readonly infer: (prompt: string) => Promise<string>;
+  readonly infer: (
+    prompt: string,
+    limits?: {
+      readonly maxOutputTokens: number;
+      readonly outputCapacity: number;
+    },
+  ) => Promise<string>;
+  /** Runs one bounded VLM request against an app-sandboxed page/band image URI. */
+  readonly inferImage: (
+    prompt: string,
+    imageURI: string,
+    limits: { readonly maxOutputTokens: number; readonly outputCapacity: number },
+  ) => Promise<string>;
   /** Signals the native generation loop without waiting behind its serialized work queue. */
   readonly cancelInference: () => void;
   readonly unload: () => Promise<LocalModelSnapshot>;
@@ -136,18 +154,64 @@ export function createLocalModelService(options: LocalModelServiceOptions = {}):
       stateAfter(() => requireNative().startDownload(productionLocalModelManifest.pack.id)),
     cancelDownload: () => stateAfter(() => requireNative().cancelDownload()),
     load: () => stateAfter(() => requireNative().load(productionLocalModelManifest.pack.id)),
-    infer: async (prompt) => {
+    infer: async (prompt, limits) => {
       const resolved = requireNative();
       if (snapshot.state !== 'loaded' || !snapshot.loaded) {
         throw Object.assign(new Error('The local model is not loaded'), { failure: 'unavailable' });
       }
-      const output = await resolved.infer(
-        prompt,
-        SEMANTIC_MAPPER_LIMITS.outputTokenLimit,
-        SEMANTIC_MAPPER_LIMITS.maxOutputBytes,
-      );
+      const maxOutputTokens = limits?.maxOutputTokens ?? SEMANTIC_MAPPER_LIMITS.outputTokenLimit;
+      const outputCapacity = limits?.outputCapacity ?? SEMANTIC_MAPPER_LIMITS.maxOutputBytes;
+      if (
+        !Number.isSafeInteger(maxOutputTokens) ||
+        maxOutputTokens < 1 ||
+        maxOutputTokens > SEMANTIC_MAPPER_LIMITS.outputTokenLimit ||
+        !Number.isSafeInteger(outputCapacity) ||
+        outputCapacity < 1 ||
+        outputCapacity > SEMANTIC_MAPPER_LIMITS.maxOutputBytes
+      ) {
+        throw Object.assign(new Error('The local model inference limits are invalid'), {
+          failure: 'incompatible',
+        });
+      }
+      const output = await resolved.infer(prompt, maxOutputTokens, outputCapacity);
       if (typeof output !== 'string') {
         throw Object.assign(new Error('The local model returned malformed output'), {
+          failure: 'runtime-failed',
+        });
+      }
+      return output;
+    },
+    inferImage: async (prompt, imageURI, limits) => {
+      const resolved = requireNative();
+      if (snapshot.state !== 'loaded' || !snapshot.loaded) {
+        throw Object.assign(new Error('The local model is not loaded'), { failure: 'unavailable' });
+      }
+      if (
+        !imageURI.startsWith('file://') ||
+        !Number.isSafeInteger(limits.maxOutputTokens) ||
+        limits.maxOutputTokens < 1 ||
+        limits.maxOutputTokens > 2_048 ||
+        !Number.isSafeInteger(limits.outputCapacity) ||
+        limits.outputCapacity < 1 ||
+        limits.outputCapacity > 131_072
+      ) {
+        throw Object.assign(new Error('The local VLM inference input is invalid'), {
+          failure: 'incompatible',
+        });
+      }
+      if (resolved.inferImage === undefined) {
+        throw Object.assign(new Error('The local VLM runtime is unavailable'), {
+          failure: 'unavailable',
+        });
+      }
+      const output = await resolved.inferImage(
+        prompt,
+        imageURI,
+        limits.maxOutputTokens,
+        limits.outputCapacity,
+      );
+      if (typeof output !== 'string') {
+        throw Object.assign(new Error('The local VLM returned malformed output'), {
           failure: 'runtime-failed',
         });
       }
@@ -171,7 +235,7 @@ export function createFakeLocalModelNativeModule(): NativeLocalModelsModule {
     packId: productionLocalModelManifest.pack.id,
     state: 'not-installed',
     bytesReceived: 0,
-    expectedBytes: productionLocalModelManifest.pack.artifact.bytes,
+    expectedBytes: productionLocalModelManifest.pack.bytes,
     storageBytes: 0,
     loaded: false,
     failure: null,
@@ -209,7 +273,7 @@ export function createFakeLocalModelNativeModule(): NativeLocalModelsModule {
         state: 'downloading',
         bytesReceived: Math.max(
           Number(state.bytesReceived ?? 0),
-          Math.floor(productionLocalModelManifest.pack.artifact.bytes / 2),
+          Math.floor(productionLocalModelManifest.pack.bytes / 2),
         ),
       });
       await wait(transferPhaseDelay);
@@ -220,8 +284,8 @@ export function createFakeLocalModelNativeModule(): NativeLocalModelsModule {
       return emit({
         ...state,
         state: 'ready',
-        bytesReceived: productionLocalModelManifest.pack.artifact.bytes,
-        storageBytes: productionLocalModelManifest.pack.artifact.bytes,
+        bytesReceived: productionLocalModelManifest.pack.bytes,
+        storageBytes: productionLocalModelManifest.pack.bytes,
         failure: null,
       });
     },
@@ -241,8 +305,16 @@ export function createFakeLocalModelNativeModule(): NativeLocalModelsModule {
       }
       return emit({ ...state, state: 'loaded', loaded: true });
     },
-    infer: async (_prompt, _maxOutputTokens, _outputCapacity) =>
-      JSON.stringify({ schemaVersion: 'alyte.semantic-mapper.v2', proposals: [] }),
+    infer: async (prompt, _maxOutputTokens, _outputCapacity) =>
+      JSON.stringify({
+        schemaVersion: 'alyte.geometry-variant-selector.v2',
+        // The explicit simulator fake represents a valid conservative model: it selects no
+        // source variant, but it must still satisfy the exact one- or two-row production grammar
+        // so integrated extraction reaches honest review instead of a synthetic contract failure.
+        selections: prompt.includes('["r1",') ? { r0: null, r1: null } : { r0: null },
+      }),
+    inferImage: async (_prompt, _imageURI, _maxOutputTokens, _outputCapacity) =>
+      JSON.stringify({ rows: [] }),
     cancelInference: () => undefined,
     unload: () =>
       emit({ ...state, state: state.state === 'loaded' ? 'ready' : state.state, loaded: false }),
