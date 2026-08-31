@@ -56,10 +56,30 @@ if (!runtimePathValue) {
   const deviceFramework = join(runtimePath, 'ios-arm64', 'llama.framework');
   const deviceBinary = join(deviceFramework, 'llama');
   const header = join(deviceFramework, 'Headers', 'llama.h');
+  const mtmdHeader = join(deviceFramework, 'Headers', 'mtmd.h');
+  const mtmdHelperHeader = join(deviceFramework, 'Headers', 'mtmd-helper.h');
   if (!existsSync(identityPath)) fail(`missing identity manifest: ${identityPath}`);
   if (!existsSync(deviceFramework)) fail(`missing device framework: ${deviceFramework}`);
   if (!existsSync(deviceBinary)) fail(`missing device runtime binary: ${deviceBinary}`);
   if (!existsSync(header)) fail(`missing device runtime header: ${header}`);
+  if (!existsSync(mtmdHeader)) fail(`missing device multimodal header: ${mtmdHeader}`);
+  if (!existsSync(mtmdHelperHeader))
+    fail(`missing device multimodal helper header: ${mtmdHelperHeader}`);
+
+  if (existsSync(deviceBinary)) {
+    const binary = readFileSync(deviceBinary);
+    for (const symbol of [
+      'mtmd_init_from_file',
+      'mtmd_helper_bitmap_init_from_buf',
+      'mtmd_tokenize',
+      'mtmd_helper_eval_chunks',
+      'mtmd_input_chunks_free',
+      'mtmd_bitmap_free',
+      'mtmd_free',
+    ]) {
+      if (!binary.includes(Buffer.from(symbol))) fail(`device runtime is missing ${symbol}`);
+    }
+  }
 
   if (existsSync(identityPath)) {
     let identity;

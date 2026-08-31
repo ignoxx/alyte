@@ -19,7 +19,7 @@ export type NativeVisionTokenSpan = {
   readonly boundingBox: NativeVisionBoundingBox;
 };
 
-/** Native v3 observation shape; the parent remains complete when spans are omitted. */
+/** Native v4 observation shape; the parent remains complete when spans are omitted. */
 export type NativeVisionObservation = {
   readonly id: string;
   readonly text: string;
@@ -48,7 +48,8 @@ type NativeVisionModule = {
     orientation: number,
     password: string | null,
   ): Promise<{
-    readonly contractVersion: 'alyte.vision.document.v2' | 'alyte.vision.document.v3';
+    readonly contractVersion:
+      'alyte.vision.document.v2' | 'alyte.vision.document.v3' | 'alyte.vision.document.v4';
     readonly pageIndex: number;
     readonly orientation: number;
     readonly observations: readonly NativeVisionObservation[];

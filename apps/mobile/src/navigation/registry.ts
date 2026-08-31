@@ -11,7 +11,6 @@ import { IntakeEntryScreen } from '../features/intake/IntakeEntryScreen';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
 import { SnapScreen } from '../features/intake/SnapScreen';
 import { PrivacyStorageScreen } from '../features/settings/PrivacyStorageScreen';
-import { ModelStorageScreen } from '../features/settings/ModelStorageScreen';
 import { SupportFaqScreen } from '../features/settings/SupportFaqScreen';
 import { AppLockScreen } from '../features/app-lock/AppLockScreen';
 import { DiagnosticsScreen } from '../features/settings/DiagnosticsScreen';
@@ -86,7 +85,6 @@ const settingsFeatureComponents = {
   CloudAccount: CloudAccountScreen,
   AppLock: AppLockScreen,
   PrivacyStorage: PrivacyStorageScreen,
-  ModelStorage: ModelStorageScreen,
   SupportFaq: SupportFaqScreen,
   Diagnostics: DiagnosticsScreen,
   DeleteLocalData: DeleteLocalDataScreen,

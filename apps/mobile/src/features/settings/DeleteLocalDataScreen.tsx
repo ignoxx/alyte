@@ -6,7 +6,7 @@ import { t } from '../../localization';
 import { useServices } from '../../services';
 import { AppButton, AppIcon, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, radii, screenStyles, spacing, typography } from '../../theme';
-import { deletionCountLabelKeys } from './deletion-ui-model';
+import { deletionCountLabelKeys, shouldHideDeletionPreview } from './deletion-ui-model';
 import {
   LOCAL_DELETION_SCOPES,
   type DeletionPlan,
@@ -65,6 +65,7 @@ export function DeleteLocalDataScreen() {
   const [failure, setFailure] = useState(false);
   const [failedOperationId, setFailedOperationId] = useState<string | null>(null);
   const [completed, setCompleted] = useState(false);
+  const [previewHidden, setPreviewHidden] = useState(false);
 
   usePreventRemove(working, ({ data }) => {
     Alert.alert(t('settings.deleteWorking'), t('settings.deleteConfirmBody'), [
@@ -80,6 +81,7 @@ export function DeleteLocalDataScreen() {
     setFailure(false);
     setFailedOperationId(null);
     setCompleted(false);
+    setPreviewHidden(false);
     void services.controls
       .preview(scope)
       .then((nextPlan) => {
@@ -121,6 +123,7 @@ export function DeleteLocalDataScreen() {
       if (result.state === 'completed') {
         setCompleted(true);
         setFailedOperationId(null);
+        setPreviewHidden(false);
         // Rebuild the plan so the preview remains deterministic after a successful operation and
         // a second tap cannot attempt to apply the stale pre-deletion hash.
         try {
@@ -132,6 +135,20 @@ export function DeleteLocalDataScreen() {
       } else {
         setFailure(true);
         setFailedOperationId(result.operationId);
+        if (shouldHideDeletionPreview(result)) {
+          // The destructive phase has committed. Refresh the count-only state, but hide the old
+          // preview if SQLite is temporarily unavailable; the operation ID remains retryable.
+          setPreviewHidden(true);
+          try {
+            setPlan(await services.controls.preview(scope));
+            setPreviewHidden(false);
+          } catch {
+            // Keep the plan object only so the retry action remains rendered; its stale counts are
+            // hidden until the hygiene retry succeeds or a fresh preview becomes available.
+          }
+        } else {
+          setPreviewHidden(false);
+        }
       }
     } catch {
       setFailure(true);
@@ -187,8 +204,12 @@ export function DeleteLocalDataScreen() {
           <AppText style={styles.muted}>{t('settings.privacyUnavailable')}</AppText>
         ) : plan !== null ? (
           <>
-            <CountBlock title={t('settings.willBeDeleted')} counts={deletedCounts(plan)} />
-            <CountBlock title={t('settings.willRemain')} counts={plan.willRemain} />
+            {!previewHidden && (
+              <>
+                <CountBlock title={t('settings.willBeDeleted')} counts={deletedCounts(plan)} />
+                <CountBlock title={t('settings.willRemain')} counts={plan.willRemain} />
+              </>
+            )}
             {completed && (
               <AppSurface tone="soft" style={styles.successSurface}>
                 <AppText variant="label">{t('settings.deleteCompletedStatus')}</AppText>

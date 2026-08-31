@@ -2,33 +2,41 @@
 import Foundation
 
 enum AlyteLocalModelManifest {
-  static let version = "alyte.local-model.manifest.v1"
-  static let packID = "gemma-4-e2b-it-q4-0"
-  static let sourceRepository = "google/gemma-4-E2B-it"
-  static let sourceRevision = "3e22461f65e89153144f8adb70e3b8c2cc9845a7"
-  static let artifactRepository = "ggml-org/gemma-4-E2B-it-GGUF"
-  static let artifactRevision = "b4243c156154b6dca9324415f8c7ccc098b4aed1"
-  static let filename = "gemma-4-E2B-it-Q4_0.gguf"
-  static let artifactURL = "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/b4243c156154b6dca9324415f8c7ccc098b4aed1/gemma-4-E2B-it-Q4_0.gguf?download=true"
-  static let bytes: Int64 = 2_841_481_184
-  static let sha256 = "8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52"
-  static let publisher = "Google / ggml-org"
+  static let version = "alyte.local-model.manifest.v2"
+  static let packID = "qwen3-vl-2b-instruct-q4-k-m"
+  static let sourceRepository = "Qwen/Qwen3-VL-2B-Instruct"
+  static let sourceRevision = "89644892e4d85e24eaac8bacfd4f463576704203"
+  static let artifactRepository = "Qwen/Qwen3-VL-2B-Instruct-GGUF"
+  static let artifactRevision = "52d6c8ffea26cc873ac5ad116f8631268d7eb503"
+  static let filename = "Qwen3VL-2B-Instruct-Q4_K_M.gguf"
+  static let artifactURL = "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/52d6c8ffea26cc873ac5ad116f8631268d7eb503/Qwen3VL-2B-Instruct-Q4_K_M.gguf?download=true"
+  static let artifactBytes: Int64 = 1_107_409_952
+  static let sha256 = "089d75c52f4b7ffc56ba998ffc50aae89fcafc755f9e7208aacca281dca6c2ae"
+  static let projectorRepository = "Qwen/Qwen3-VL-2B-Instruct-GGUF"
+  static let projectorRevision = "52d6c8ffea26cc873ac5ad116f8631268d7eb503"
+  static let projectorFilename = "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
+  static let projectorArtifactURL = "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/52d6c8ffea26cc873ac5ad116f8631268d7eb503/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf?download=true"
+  static let projectorBytes: Int64 = 445_053_216
+  static let projectorSha256 = "f9a68fabba69c3b81e153367b2c7521030b0fa8bb0de400c9599c8e6725f9c82"
+  static let bytes: Int64 = 1_552_463_168
+  static let publisher = "Qwen"
   static let license = "Apache-2.0"
   static let format = "GGUF"
-  static let quantization = "Q4_0"
+  static let quantization = "Q4_K_M + Q8_0 projector"
   static let runtimeID = "llama.cpp"
   static let runtimeRepository = "ggml-org/llama.cpp"
   static let runtimeRevision = "bb4caa7540188872173c44d161602d9271386413"
-  static let promptBundle = "alyte.semantic-mapper.prompt.v6"
-  static let ocrChunk = "alyte.semantic-ocr-chunk.v4"
-  static let semanticSchema = "alyte.semantic-mapper.v2"
-  static let languages = ["en", "de", "lt", "fr", "es", "it", "pt", "nl", "pl"]
+  static let promptBundle = "alyte.document-vlm.prompt.v1"
+  static let ocrChunk = "alyte.document-band.v1"
+  static let semanticSchema = "alyte.document-vlm.flat-rows.v1"
+  static let languages = ["en", "de"]
   static let minimumIOS = "26.0"
-  static let minimumFreeBytes: Int64 = 6_000_000_000
-  static let minimumMemoryBytes: Int64 = 4_000_000_000
+  static let minimumFreeBytes: Int64 = 3_500_000_000
+  static let minimumMemoryBytes: Int64 = 2_800_000_000
   static let allowedHosts = ["huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.hf.co", "cdn-lfs-eu-1.hf.co", "cdn-lfs.hf.co", "cas-bridge.xethub.hf.co", "us.aws.cdn.hf.co", "us.gcp.cdn.hf.co", "cas-server.xethub.hf.co", "cas-server.xethub-eu.hf.co", "transfer.xethub.hf.co", "transfer.xethub-eu.hf.co"]
 
   static var expectedURL: URL { URL(string: artifactURL)! }
+  static var projectorExpectedURL: URL { URL(string: projectorArtifactURL)! }
 
   static func publicManifest() -> [String: Any] {
     [
@@ -41,9 +49,18 @@ enum AlyteLocalModelManifest {
           "revision": artifactRevision,
           "filename": filename,
           "url": artifactURL,
-          "bytes": bytes,
+          "bytes": artifactBytes,
           "sha256": sha256,
         ],
+        "projector": [
+          "repository": projectorRepository,
+          "revision": projectorRevision,
+          "filename": projectorFilename,
+          "url": projectorArtifactURL,
+          "bytes": projectorBytes,
+          "sha256": projectorSha256,
+        ],
+        "bytes": bytes,
         "publisher": publisher,
         "license": license,
         "format": format,
@@ -61,7 +78,7 @@ enum AlyteLocalModelManifest {
         "minimumFreeBytes": minimumFreeBytes,
         "minimumMemoryBytes": minimumMemoryBytes,
       ],
-      "allowlist": ["hosts": allowedHosts, "files": [filename]],
+      "allowlist": ["hosts": allowedHosts, "files": [filename, projectorFilename]],
     ]
   }
 

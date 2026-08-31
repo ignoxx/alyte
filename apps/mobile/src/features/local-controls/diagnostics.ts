@@ -1,11 +1,10 @@
-export const DIAGNOSTICS_SCHEMA_VERSION = 'alyte.diagnostics.v1' as const;
+export const DIAGNOSTICS_SCHEMA_VERSION = 'alyte.diagnostics.v2' as const;
 
 export const DIAGNOSTIC_FAILURE_CATEGORIES = [
   'database-failed',
   'file-failed',
   'network-unavailable',
   'permission-denied',
-  'model-unavailable',
   'export-failed',
   'deletion-failed',
   'unknown',
@@ -25,7 +24,6 @@ export type DiagnosticsPayload = {
   readonly capabilities: {
     readonly localStorage: 'available' | 'unavailable' | 'unknown';
     readonly protectedFiles: 'available' | 'unavailable' | 'unknown';
-    readonly model: 'available' | 'unavailable' | 'not-managed-here';
   };
   readonly failures: readonly DiagnosticFailureCategory[];
 };
@@ -103,7 +101,7 @@ export function assertDiagnosticsPayload(value: unknown): asserts value is Diagn
   assertKnownObjectKeys(platform, ['name', 'osMajor'], 'diagnostics.platform');
   assertKnownObjectKeys(
     capabilities,
-    ['localStorage', 'protectedFiles', 'model'],
+    ['localStorage', 'protectedFiles'],
     'diagnostics.capabilities',
   );
   if (payload.schema !== DIAGNOSTICS_SCHEMA_VERSION) {
@@ -125,7 +123,6 @@ export function assertDiagnosticsPayload(value: unknown): asserts value is Diagn
   const capabilityValues = {
     localStorage: ['available', 'unavailable', 'unknown'],
     protectedFiles: ['available', 'unavailable', 'unknown'],
-    model: ['available', 'unavailable', 'not-managed-here'],
   } as const;
   for (const [key, allowed] of Object.entries(capabilityValues)) {
     if (!allowed.includes(capabilities[key] as never)) {
@@ -155,7 +152,6 @@ export function createDiagnosticsPayload(input: {
     capabilities: {
       localStorage: input.localStorage ?? 'unknown',
       protectedFiles: input.protectedFiles ?? 'unknown',
-      model: 'not-managed-here',
     },
     failures: [...new Set(input.failures ?? [])].sort(),
   };

@@ -1,6 +1,7 @@
 export * from './fixtures';
 export * from './contract';
 export * from './manifest';
+export * from './physical-row-evaluation';
 export * from './schema';
 export * from './scorer';
 export * from './serialization';

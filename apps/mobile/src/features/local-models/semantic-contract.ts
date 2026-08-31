@@ -1,4 +1,4 @@
-import { CATALOGUE_VERSION, comparableBiomarkers } from '@alyte/catalogue';
+import { CATALOGUE_VERSION, comparableBiomarkers, normalizeCatalogueAlias } from '@alyte/catalogue';
 import {
   mapExtractionSemanticWireRows,
   validateSemanticProposals,
@@ -7,16 +7,13 @@ import {
   type ExtractionSemanticCandidateRow,
   type VisionTextObservation,
 } from '@alyte/domain';
-import { productionLocalModelManifest } from './production-manifest.generated';
 import { ALYTE_SEMANTIC_MAPPER_GRAMMAR } from './semantic-mapper-grammar.generated';
 
 /** Production-owned semantic mapper wire contract. Evaluation code may compare against it, but
  * the application must not depend on the evaluation package at runtime. */
-export const SEMANTIC_MAPPER_SCHEMA_VERSION =
-  productionLocalModelManifest.compatibility.semanticSchema;
-export const SEMANTIC_MAPPER_PROMPT_VERSION =
-  productionLocalModelManifest.compatibility.promptBundle;
-export const SEMANTIC_OCR_CHUNK_VERSION = productionLocalModelManifest.compatibility.ocrChunk;
+export const SEMANTIC_MAPPER_SCHEMA_VERSION = 'alyte.semantic-mapper.v2' as const;
+export const SEMANTIC_MAPPER_PROMPT_VERSION = 'alyte.semantic-mapper.prompt.v6' as const;
+export const SEMANTIC_OCR_CHUNK_VERSION = 'alyte.semantic-ocr-chunk.v5' as const;
 export const SEMANTIC_MAPPER_GRAMMAR = ALYTE_SEMANTIC_MAPPER_GRAMMAR;
 
 export const SEMANTIC_MAPPER_LIMITS = Object.freeze({
@@ -50,13 +47,19 @@ type SerializedBiomarker = {
 };
 
 const checkedInBiomarkers: readonly SerializedBiomarker[] = comparableBiomarkers
-  .map((entry) => ({
-    id: entry.id,
-    label: entry.canonicalLabel ?? entry.aliases[0] ?? entry.id,
-    // The catalogue owns aliases and translations. These are input hints only and never become
-    // model-authored source facts.
-    aliases: [...entry.aliases].sort((left, right) => left.localeCompare(right)),
-  }))
+  .map((entry) => {
+    const label = entry.canonicalLabel ?? entry.aliases[0] ?? entry.id;
+    return {
+      id: entry.id,
+      label,
+      // The catalogue owns aliases and translations. These are input hints only and never become
+      // model-authored source facts. The canonical label is already serialized separately, so a
+      // case/diacritic-normalized duplicate adds no matching information to the model.
+      aliases: entry.aliases
+        .filter((alias) => normalizeCatalogueAlias(alias) !== normalizeCatalogueAlias(label))
+        .sort((left, right) => left.localeCompare(right)),
+    };
+  })
   .sort((left, right) => left.id.localeCompare(right.id));
 
 function observationForWire(

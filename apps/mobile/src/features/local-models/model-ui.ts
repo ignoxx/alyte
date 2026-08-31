@@ -6,7 +6,7 @@ import {
   type LocalModelSnapshot,
   type LocalModelState,
 } from './model';
-import { t } from '../../localization';
+import researchStrings from './research-en.json';
 
 export type ModelStatusTone = 'neutral' | 'measured' | 'reviewNeeded';
 export type ModelOperation =
@@ -150,25 +150,17 @@ export function isExpectedDownloadCancellation(
   return cancellationRequested && errorFailureCategory(error) === 'cancelled';
 }
 
-export function formatModelApproximateSize(bytes: number, locale: string): string {
-  const decimalFormat = new Intl.NumberFormat(locale, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 1,
-  });
-  return `${decimalFormat.format(bytes / 1_000_000_000)} ${t('model.gigabytesUnit')}`;
-}
-
 export function formatModelDownloadSize(bytes: number, locale: string): string {
   const numberFormat = new Intl.NumberFormat(locale);
   const decimalFormat = new Intl.NumberFormat(locale, {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
   });
-  return t('model.downloadSizeValue')
+  return researchStrings.downloadSizeValue
     .replace('{bytes}', numberFormat.format(bytes))
-    .replace('{bytesUnit}', t('model.bytesUnit'))
+    .replace('{bytesUnit}', researchStrings.bytesUnit)
     .replace('{gigabytes}', decimalFormat.format(bytes / 1_000_000_000))
-    .replace('{gigabytesUnit}', t('model.gigabytesUnit'));
+    .replace('{gigabytesUnit}', researchStrings.gigabytesUnit);
 }
 
 export function modelFailureMessageKey(failure: LocalModelFailure | null): string {

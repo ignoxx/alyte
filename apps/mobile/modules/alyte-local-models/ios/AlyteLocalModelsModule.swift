@@ -63,6 +63,23 @@ public final class AlyteLocalModelsModule: Module {
       }
     }
 
+    AsyncFunction("inferImage") {
+      (prompt: String, imageURI: String, maxOutputTokens: Int, outputCapacity: Int) async throws -> String in
+      do {
+        guard let imageURL = URL(string: imageURI), imageURL.isFileURL else {
+          throw AlyteLocalModelError.failed(.runtimeFailed)
+        }
+        return try await self.store.inferImage(
+          prompt: prompt,
+          imageURL: imageURL,
+          maxOutputTokens: maxOutputTokens,
+          outputCapacity: outputCapacity
+        )
+      } catch {
+        throw Self.nativeError(error, message: "The local document extraction could not finish", code: 6)
+      }
+    }
+
     // This is deliberately synchronous/non-queueing: JS timeouts and OS pressure must reach the
     // native generation loop while the serialized infer task is still running.
     Function("cancelInference") {

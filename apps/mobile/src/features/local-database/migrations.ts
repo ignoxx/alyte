@@ -19,7 +19,7 @@ type CallbackMigration = {
 
 export type Migration = SqlMigration | CallbackMigration;
 
-export const CURRENT_SCHEMA_VERSION = 14;
+export const CURRENT_SCHEMA_VERSION = 15;
 
 const INTAKE_CAPTURE_RECOVERY_DDL = `
   CREATE TABLE IF NOT EXISTS intake_capture_recovery (
@@ -99,7 +99,7 @@ const EXTRACTION_DRAFT_DDL = `
   CREATE TABLE IF NOT EXISTS extraction_operations (
     report_id TEXT PRIMARY KEY NOT NULL REFERENCES lab_reports(id) ON DELETE CASCADE,
     state TEXT NOT NULL CHECK (state IN ('active', 'interrupted', 'failed', 'cancelled', 'complete')),
-    stage TEXT NOT NULL CHECK (stage IN ('import', 'ocr', 'model', 'review')),
+    stage TEXT NOT NULL CHECK (stage IN ('import', 'ocr', 'review')),
     completed INTEGER NOT NULL DEFAULT 0,
     total INTEGER NOT NULL DEFAULT 0,
     error TEXT,
@@ -472,7 +472,7 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
             : `CREATE TABLE IF NOT EXISTS extraction_operations (
           report_id TEXT PRIMARY KEY NOT NULL REFERENCES lab_reports(id) ON DELETE CASCADE,
           state TEXT NOT NULL CHECK (state IN ('active', 'interrupted', 'failed', 'cancelled', 'complete')),
-          stage TEXT NOT NULL CHECK (stage IN ('import', 'ocr', 'model', 'review')),
+          stage TEXT NOT NULL CHECK (stage IN ('import', 'ocr', 'review')),
           completed INTEGER NOT NULL DEFAULT 0,
           total INTEGER NOT NULL DEFAULT 0,
           error TEXT,
@@ -676,5 +676,58 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
       UPDATE extraction_operations SET pipeline_fingerprint_json = NULL
         WHERE pipeline_fingerprint_json IS NOT NULL;
     `,
+  },
+  {
+    version: 15,
+    apply: async (database) => {
+      const operationTables = await database.getAllAsync<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'extraction_operations';",
+      );
+      if (operationTables.length === 0) return;
+
+      // v14 allowed a model-only progress stage. Replace the table so the durable contract no
+      // longer permits that stage, while preserving every operation and making an interrupted
+      // model-stage operation explicitly retryable at Review.
+      await database.execAsync(`
+        ALTER TABLE extraction_operations RENAME TO extraction_operations_v14;
+        CREATE TABLE extraction_operations (
+          report_id TEXT PRIMARY KEY NOT NULL REFERENCES lab_reports(id) ON DELETE CASCADE,
+          state TEXT NOT NULL CHECK (state IN ('active', 'interrupted', 'failed', 'cancelled', 'complete')),
+          stage TEXT NOT NULL CHECK (stage IN ('import', 'ocr', 'review')),
+          completed INTEGER NOT NULL DEFAULT 0,
+          total INTEGER NOT NULL DEFAULT 0,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          mode TEXT NOT NULL DEFAULT 'start' CHECK (mode IN ('start', 'reprocess', 'improve')),
+          pipeline_fingerprint_json TEXT,
+          pipeline_fingerprint_hash TEXT,
+          revision INTEGER NOT NULL DEFAULT 1
+        );
+        INSERT INTO extraction_operations
+          (report_id, state, stage, completed, total, error, created_at, updated_at, mode,
+           pipeline_fingerprint_json, pipeline_fingerprint_hash, revision)
+        SELECT report_id,
+          CASE WHEN stage = 'model' AND state = 'active' THEN 'interrupted' ELSE state END,
+          CASE WHEN stage = 'model' THEN 'review' ELSE stage END,
+          completed,
+          total,
+          CASE
+            WHEN stage = 'model' AND state = 'active' THEN COALESCE(error, 'interrupted-after-model-stage')
+            ELSE error
+          END,
+          created_at,
+          updated_at,
+          COALESCE(mode, 'start'),
+          pipeline_fingerprint_json,
+          pipeline_fingerprint_hash,
+          COALESCE(revision, 1)
+        FROM extraction_operations_v14;
+        DROP TABLE extraction_operations_v14;
+        -- Dropping the old table also drops its existing index before the replacement is created.
+        CREATE INDEX extraction_operations_state_idx
+          ON extraction_operations(state, updated_at ASC);
+      `);
+    },
   },
 ];

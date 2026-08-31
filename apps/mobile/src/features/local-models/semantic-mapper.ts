@@ -343,13 +343,15 @@ export function createLocalSemanticMapper(
             ? validateSemanticMapperOutputWithState(parsed, currentRows, options.aliases)
             : { proposals: [], rejectedRows: currentRows, malformedEnvelope: true };
           accepted.push(...result.proposals);
-          if (result.rejectedRows.length === 0 || attempt === 1) return accepted;
+          if (result.rejectedRows.length === 0)
+            return { proposals: accepted, incomplete: false } as const;
+          if (attempt === 1) return { proposals: accepted, incomplete: true } as const;
           // Retry only rows that were not accepted. Valid siblings are never sent again, even
           // when one envelope entry is malformed, duplicated, or crosses a physical row.
           currentRows = result.rejectedRows;
           if (cancellation?.isCancelled()) throw new Error('semantic-inference-cancelled');
         }
-        return accepted;
+        return { proposals: accepted, incomplete: true } as const;
       }),
   };
 }

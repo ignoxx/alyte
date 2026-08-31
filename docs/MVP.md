@@ -71,6 +71,10 @@ A person with two real Lab Reports can, without creating an account:
 This journey is the non-negotiable release path. Other features compete for the time remaining after
 it is reliable, understandable, private, and polished.
 
+The 95 percent under-five-minute Gate 1 target remains open until private aggregate evaluation and
+integrated physical-device acceptance demonstrate it. Improving one upstream extraction source does
+not by itself pass the gate.
+
 Without an account or any cloud processing, the app remains a complete local laboratory-history
 tool: people can import reports, review all extracted results, read concise educational context for
 supported Biomarkers, and understand Measured Trends across multiple Lab Records.
@@ -121,28 +125,20 @@ headroom rather than treating it as abuse.
 - User-configured providers, BYOK, custom OpenAI-compatible endpoints, and an open-source backend are
   post-MVP. The internal backend boundary may remain provider-neutral without exposing credentials
   or routing controls to users at launch.
-- Core local functionality does not require Apple Intelligence or a model bundled in the App Store
-  binary. PDFKit, Vision recognition, privacy review, existing history, charts, reviewed content,
-  record management, manual entry, and export remain account-free. Alyte requires one verified
-  local semantic model pack to complete first-launch onboarding, while later pack deletion affects
-  only new automated Lab Report extraction and never removes access to existing local records.
-- The first release supports one Alyte-recommended pack: Gemma 4 E2B (Q4_0). Alyte downloads its exact
-  allowlisted file only after installation from a public, ungated Hugging Face repository at a
-  pinned commit; model weights are never bundled with the app. The app shows the model, publisher,
-  license, download size, device-space requirement, and source before download and verifies the
-  expected SHA-256 before promoting the artifact to on-disk `ready`. Runtime activation/load is
-  separate and happens lazily only for semantic extraction. It does not ask for or embed a
-  Hugging Face account token,
-  use a gated model, silently follow a moving branch such as `main`, or expose an experimental
-  model picker.
-- Onboarding presents Gemma 4 E2B (Q4_0) as the sole first-release model pack and requires the person
-  to download, verify, and reach on-disk `ready` before entering Alyte. It never activates or loads
-  the runtime during onboarding. There is no skip, account, or
-  paywall gate. Offline, cancelled, failed, or insufficient-space downloads remain in the download
-  step with a safe retry. If the pack is deleted later, Alyte presents the same disclosure as a
-  contextual reinstall gate before new automated extraction while existing local history remains
-  usable. After extraction begins, an inference/runtime failure falls back to Vision structure,
-  locale parsing, aliases, deterministic validation, and focused review.
+- Core local functionality does not require Apple Intelligence, an account, or a network connection.
+  PDFKit text-layer extraction with per-page Vision fallback, deterministic validation, privacy
+  review, history, charts, reviewed content, record management, manual entry, and export remain
+  account-free.
+- The accepted local import pipeline uses one reviewed on-device document model. Its single
+  verified Qwen3-VL 2B pack is a mandatory onboarding dependency. Onboarding downloads and verifies
+  the pack without loading it; the app loads it only immediately before the import stage that needs
+  it and unloads it after success, failure, cancellation, backgrounding, or memory pressure. The
+  MVP exposes no model picker.
+- Every report language follows that same PDFKit/Vision, layout reconstruction, document-model, and
+  source-grounding pipeline. English and German are the launch accuracy benchmarks, not routing
+  gates. The model transcribes source labels verbatim; reviewed catalogue aliases may resolve known
+  labels to canonical English display names, while unknown labels remain preserved rather than
+  being model-translated.
 
 ## Laboratory-history model
 
@@ -213,10 +209,24 @@ Biomarker is not currently included in the person's comparable laboratory trends
 - A user can create a laboratory record and its Measurements manually without attaching a Lab
   Report.
 - A user can correct every extracted date, name, value, unit, and reference interval before saving.
-- Vision document recognition reads the protected Original Report on-device and preserves text plus
-  page geometry. Raw text observations remain
-  internal provenance; only table rows or other measurement-shaped candidates enter an Extraction
-  Draft. Headers, addresses, licences, footers, and unrelated prose do not become user review work.
+- For each PDF page, local extraction first asks the strict `alyte.pdf.text-layer.v3` PDFKit adapter
+  for a complete text-layer result from the protected Original Report. A trusted page contributes
+  only its PDFKit observations. An unavailable or untrusted page uses only Vision recognition; image
+  imports and image-only PDF pages use Vision as well. PDFKit and Vision observations are never
+  merged for the same page. Both paths preserve source text and page geometry as internal
+  provenance; only table rows or other measurement-shaped candidates enter an Extraction Draft.
+  Headers, addresses, licences, footers, and unrelated prose do not become user review work.
+  Selectable-text pages detect English or German locally from bounded page text before deterministic
+  parsing. Sparse, mixed, unsupported, or uncertain pages remain language-unknown instead of
+  inheriting the phone locale; deterministic extraction and review still continue.
+- On a trusted selectable-PDF page, a supported laboratory Result header may identify a repeated
+  result column before candidate parsing. A physical row with exactly one result-column anchor is narrowed
+  to that source-backed value; zero or multiple plausible anchors remain focused review work. A
+  missing or contradictory header fails open instead of hiding candidates. This admission policy is
+  not applied to Vision pages until scanned-report evaluation proves an equivalent boundary.
+- The Original path and immutable hash are verified immediately before and after every native page
+  read. Wrong passwords, cancellation, a missing Original, or a hash mismatch are actionable hard
+  failures. An unavailable or untrusted PDF text layer is a normal per-page Vision fallback.
 - Recognition of a specific Biomarker depends on the supported alias catalogue and semantic
   validators. An unknown measurement-shaped result is preserved with its original label and shown
   as unsupported; an arbitrary OCR line is not treated as a result merely to avoid dropping it.
@@ -224,13 +234,16 @@ Biomarker is not currently included in the person's comparable laboratory trends
   A mixed report may therefore keep blood, serum, and plasma Measurements separate from urine or
   other specimen results. Uncertain specimen context remains visible for review instead of being
   silently discarded.
-- Launch parsing fixtures prioritize English, German, and Lithuanian, then French, Spanish, Italian,
-  Portuguese, Dutch, and Polish. Other US and EU report languages are best effort locally and may
-  use paid cloud fallback.
-  When a label maps safely, the interface shows its canonical
-  English Biomarker name while retaining the exact original label beside it and in provenance.
-  Translation never replaces source text. Multilingual model support does not replace fixtures for
-  OCR, aliases, decimal formats, dates, units, bounds, and categorical results.
+- Launch import quality is gated on English first and German second. Checked-in extraction identity
+  rules advertise only those two report languages for the MVP. A
+  Lithuanian report remains a useful non-blocking stress case for locale and layout robustness, but
+  its accuracy does not block release or drive architecture. Other report languages are best effort:
+  Alyte preserves credible source-backed rows for review without claiming supported mapping.
+  The interface itself remains English-only. When a German or other source label resolves safely
+  to a Biomarker, the interface shows its reviewed canonical English name while retaining the exact
+  original label beside it and in provenance. Resolution never replaces source text or imply that
+  the Biomarker is comparable or evidence-backed. Fixtures still cover OCR, aliases, decimal
+  formats, dates, units, bounds, and categorical results.
 - The app imports and retains laboratory-provided results beyond blood-derived Measurements. The
   levels of support for storage, longitudinal comparison, and intake-influence insights remain
   intentionally separate and need to be defined precisely.
@@ -246,7 +259,7 @@ Biomarker is not currently included in the person's comparable laboratory trends
   person reviews a compact grouped table, can inspect or edit any candidate, and resolves only the
   exceptions before confirmation. Nothing becomes confirmed history until that review completes.
 - When local extraction is incomplete or unusable, the person can retry the calm Import → OCR →
-  On-device model → Review journey, enter results manually, or explicitly request later paid cloud
+  Review journey, enter results manually, or explicitly request later paid cloud
   extraction. The report-keyed operation status survives suspension/relaunch as an honest
   interrupted/retry state, and the Original Report itself remains locally available even when no
   structured result can be recovered. Drafts from before the artifact-provenance contract are
@@ -540,9 +553,8 @@ messages, medication reminders, biomarker warnings, and inferred-health alerts a
   ongoing processing cost.
 - Local Lab Reports, local OCR, manual Lab Records, supported Measured Trends, manual Intake Events,
   local export, and account-free use are not held behind a subscription.
-- Downloading the required local semantic model pack does not require an Alyte account or paid
-  entitlement. Deleting it does not delete Lab Reports, Lab Records, Measurements, or Extraction
-  Drafts; it blocks only new automated extraction until the pack is downloaded and verified again.
+- Local extraction remains available without an Alyte account, subscription, or network connection
+  after the required import pack has been installed and verified.
 - Cloud report extraction and Intake Image analysis require a paid entitlement.
 - Launch offers one `Cloud Plus` subscription with monthly and annual billing and an included
   monthly Cloud Analysis allowance. A bounded starter purchase and a way for subscribers to obtain
@@ -606,21 +618,10 @@ messages, medication reminders, biomarker warnings, and inferred-health alerts a
 
 ## Onboarding and support
 
-- First launch uses a concise sequence covering the product promise; local-first/no-account
-  privacy; the need to verify imports and distinguish measured results from general research; the
-  optional paid cloud boundary plus adult-only/non-diagnostic scope; and the required local model
-  preparation, verification, and retry path.
-- Onboarding leads directly into the local app after the model pack verifies and never forces
-  account creation or a paywall.
-- The release onboarding is a concise five-page journey: Welcome, measured history, Private and
-  honest, one combined Prepare local extraction page, and Ready. Each page earns its place and
-  emphasizes the two-report outcome over implementation details.
-- The combined Prepare local extraction page presents Gemma 4 E2B (Q4_0) as Alyte's sole reviewed
-  pack, with its source, publisher, license, download size, and device-space requirement. That
-  page owns download, resume, verification, failure, and retry; completion requires a verified
-  on-disk `ready` artifact. Runtime activation/load happens only immediately before semantic
-  extraction. Gemma is not a public multi-model picker. Permissions, account creation, and payment
-  remain deferred until contextually needed.
+- First launch uses a concise sequence covering the product promise; local-first/no-account privacy;
+  the need to verify imports and distinguish measured results from general research; the required
+  import-pack download and verification; and a Ready handoff. Model setup never activates or loads
+  the runtime. Onboarding never forces account creation or a paywall.
 - Detailed teaching is contextual and appears when the person first imports, verifies, analyzes,
   or explores evidence rather than lengthening the opening tour.
 - Settings provides clear Contact, Feedback, and Billing Help actions for complaints or assistance.

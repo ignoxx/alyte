@@ -10,8 +10,8 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { colors, radii, screenStyles, spacing, typography } from '../../theme';
 import {
@@ -19,7 +19,6 @@ import {
   AppIcon,
   AppSurface,
   AppText,
-  StatusPill,
   TidalHero,
   TidalIconStage,
 } from '../../ui/primitives';
@@ -29,16 +28,14 @@ import {
   isModelDownloadActive,
   type LocalModelSnapshot,
 } from '../local-models/model';
-import { ModelDetailsDisclosure } from '../local-models/ModelDetailsDisclosure';
-import { ModelProgress } from '../local-models/ModelProgress';
+import { formatModelBytes } from '../local-models/manifest';
 import {
   isExpectedDownloadCancellation,
   modelFailureFromError,
+  modelProgressPercent,
   modelSetupFailureMessageKey,
   modelSetupFailureVisible,
   modelSetupPrimaryAction,
-  modelStatusTone,
-  formatModelApproximateSize,
 } from '../local-models/model-ui';
 import type { LocalModelService } from '../local-models/native';
 import {
@@ -87,153 +84,6 @@ function IntroPage({
   );
 }
 
-function ModelFact({
-  icon,
-  children,
-}: {
-  readonly icon: 'phone' | 'cloud' | 'folder';
-  readonly children: string;
-}) {
-  return (
-    <View style={styles.fact}>
-      <AppIcon name={icon} size={18} color={colors.accent} />
-      <AppText variant="caption" style={styles.factLabel} selectable>
-        {children}
-      </AppText>
-    </View>
-  );
-}
-
-function ModelPreparationPage({
-  model,
-  snapshot,
-  modelFailure,
-  cancelled,
-  cancelError,
-}: {
-  readonly model: LocalModelService;
-  readonly snapshot: LocalModelSnapshot | null;
-  readonly modelFailure: LocalModelSnapshot['failure'];
-  readonly cancelled: boolean;
-  readonly cancelError: boolean;
-}) {
-  const ready = snapshot !== null && canCompleteModelOnboarding(snapshot);
-  const resumable = hasResumableModelDownload(snapshot);
-  const active = snapshot !== null && isModelDownloadActive(snapshot);
-  const failed = snapshot?.state === 'failed';
-  const failure = failed ? (snapshot?.failure ?? null) : modelFailure;
-  const showCancelError = cancelError && !resumable;
-  const showFailure = modelSetupFailureVisible(snapshot, modelFailure);
-  const locale = Intl.NumberFormat().resolvedOptions().locale;
-  const downloadSize = formatModelApproximateSize(model.manifest.pack.artifact.bytes, locale);
-  const freeSpace = formatModelApproximateSize(
-    model.manifest.requirements.minimumFreeBytes,
-    locale,
-  );
-
-  return (
-    <View style={styles.pageBody}>
-      <TidalHero edge="bottom" style={styles.modelHero}>
-        <View style={styles.modelHeroHeading}>
-          <TidalIconStage name="lockShield" />
-          <View style={styles.modelHeroCopy}>
-            <StatusPill tone={modelStatusTone(snapshot)}>
-              {ready ? t('onboarding.modelReady') : t('onboarding.modelPrepareEyebrow')}
-            </StatusPill>
-            <AppText variant="title" style={styles.modelHeroTitle} selectable>
-              {t('onboarding.modelPrepareTitle')}
-            </AppText>
-            <AppText style={styles.modelHeroBody} selectable>
-              {t('onboarding.modelPrepareBody')}
-            </AppText>
-          </View>
-        </View>
-      </TidalHero>
-
-      <View style={styles.modelPageContent}>
-        <AppSurface style={styles.modelSummary}>
-          <View accessibilityRole="summary" style={styles.packHeader}>
-            <View style={styles.modelIconWell} accessibilityElementsHidden>
-              <AppIcon name="folder" size={26} color={colors.accent} />
-            </View>
-            <View style={styles.packCopy}>
-              <AppText variant="heading" selectable>
-                {t('onboarding.privateCapabilityName')}
-              </AppText>
-              <AppText variant="caption" style={styles.muted} selectable>
-                {t('onboarding.privateCapabilityRequired')}
-              </AppText>
-            </View>
-          </View>
-
-          <View accessibilityRole="summary" style={styles.facts}>
-            <ModelFact icon="phone">
-              {t('onboarding.modelDownloadSizeFact').replace('{size}', downloadSize)}
-            </ModelFact>
-            <ModelFact icon="phone">
-              {t('onboarding.modelFreeSpaceFact').replace('{size}', freeSpace)}
-            </ModelFact>
-            <ModelFact icon="phone">{t('onboarding.modelRunsLocallyFact')}</ModelFact>
-            <ModelFact icon="cloud">{t('onboarding.modelNoUploadFact')}</ModelFact>
-            <ModelFact icon="folder">{t('onboarding.privateCapabilityDeletionFact')}</ModelFact>
-          </View>
-        </AppSurface>
-
-        {snapshot === null && modelFailure === null ? (
-          <View accessibilityRole="progressbar" style={styles.checking}>
-            <ActivityIndicator color={colors.accent as string} />
-            <AppText style={styles.muted} selectable>
-              {t('onboarding.modelChecking')}
-            </AppText>
-          </View>
-        ) : null}
-
-        {resumable && snapshot !== null ? (
-          <AppSurface tone="soft" style={styles.callout}>
-            <AppText variant="heading" selectable>
-              {t('onboarding.modelSetupPartialSaved').replace(
-                '{progress}',
-                String(Math.round(snapshot.progress * 100)),
-              )}
-            </AppText>
-          </AppSurface>
-        ) : null}
-
-        {showFailure && !showCancelError ? (
-          <AppSurface tone="soft" style={styles.callout}>
-            <AppText variant="heading" style={styles.error} selectable>
-              {t(modelSetupFailureMessageKey(failure))}
-            </AppText>
-          </AppSurface>
-        ) : null}
-
-        {showCancelError ? (
-          <AppSurface tone="soft" style={styles.callout}>
-            <AppText variant="heading" style={styles.error} selectable>
-              {t('onboarding.modelCancelFailure')}
-            </AppText>
-          </AppSurface>
-        ) : null}
-
-        {cancelled && !resumable && !showFailure ? (
-          <AppText style={styles.muted} selectable>
-            {t('onboarding.modelSetupCancelDisclosure')}
-          </AppText>
-        ) : null}
-
-        {active || resumable ? <ModelProgress snapshot={snapshot!} /> : null}
-        {active && snapshot?.state !== 'cancelling' ? (
-          <AppText style={styles.muted} selectable>
-            {t('onboarding.modelKeepOpen')}
-          </AppText>
-        ) : null}
-
-        <ModelDetailsDisclosure manifest={model.manifest} />
-      </View>
-    </View>
-  );
-}
-
 function ReadyPage({ completionFailed }: { readonly completionFailed: boolean }) {
   return (
     <IntroPage
@@ -255,6 +105,123 @@ function ReadyPage({ completionFailed }: { readonly completionFailed: boolean })
   );
 }
 
+function ModelPreparationPage({
+  model,
+  snapshot,
+  failure,
+  cancelled,
+}: {
+  readonly model: LocalModelService;
+  readonly snapshot: LocalModelSnapshot | null;
+  readonly failure: LocalModelSnapshot['failure'];
+  readonly cancelled: boolean;
+}) {
+  const ready = snapshot !== null && canCompleteModelOnboarding(snapshot);
+  const active = snapshot !== null && isModelDownloadActive(snapshot);
+  const resumable = hasResumableModelDownload(snapshot);
+  const percent = snapshot === null ? 0 : modelProgressPercent(snapshot);
+  const showFailure = modelSetupFailureVisible(snapshot, failure);
+  const visibleFailure = snapshot?.state === 'failed' ? snapshot.failure : failure;
+  const size = formatModelBytes(model.manifest.pack.bytes);
+  const freeSpace = formatModelBytes(model.manifest.requirements.minimumFreeBytes);
+
+  return (
+    <View style={styles.pageBody}>
+      <TidalHero edge="bottom" style={styles.modelHero}>
+        <View style={styles.modelHeroHeading}>
+          <TidalIconStage name={ready ? 'checkmarkCircle' : 'lockShield'} />
+          <View style={styles.modelHeroCopy}>
+            <AppText variant="title" style={styles.modelHeroTitle} selectable>
+              {t('onboarding.modelPrepareTitle')}
+            </AppText>
+            <AppText style={styles.modelHeroBody} selectable>
+              {t('onboarding.modelPrepareBody')}
+            </AppText>
+          </View>
+        </View>
+      </TidalHero>
+
+      <View style={styles.modelPageContent}>
+        <AppSurface style={styles.modelSummary}>
+          <View style={styles.packHeader}>
+            <View accessibilityElementsHidden style={styles.modelIconWell}>
+              <AppIcon name="folder" size={25} color={colors.accent} />
+            </View>
+            <View style={styles.packCopy}>
+              <AppText variant="heading" selectable>
+                {t('onboarding.modelName')}
+              </AppText>
+              <AppText variant="caption" style={styles.muted} selectable>
+                {t('onboarding.modelRequiredLabel')}
+              </AppText>
+            </View>
+            {ready ? <AppIcon name="checkmarkCircle" size={24} color={colors.accent} /> : null}
+          </View>
+          <View style={styles.facts}>
+            <AppText style={styles.factLabel} selectable>
+              {t('onboarding.modelSizeFact').replace('{size}', size)}
+            </AppText>
+            <AppText style={styles.factLabel} selectable>
+              {t('onboarding.modelSpaceFact').replace('{space}', freeSpace)}
+            </AppText>
+            <AppText style={styles.factLabel} selectable>
+              {t('onboarding.modelNoUploadFact')}
+            </AppText>
+          </View>
+        </AppSurface>
+
+        {snapshot === null && failure === null ? (
+          <View accessibilityRole="progressbar" style={styles.checking}>
+            <ActivityIndicator color={colors.accent as string} />
+            <AppText style={styles.muted} selectable>
+              {t('onboarding.modelChecking')}
+            </AppText>
+          </View>
+        ) : null}
+
+        {active || resumable ? (
+          <View style={styles.progressGroup}>
+            <View style={styles.progressCopy}>
+              <AppText style={styles.muted} selectable>
+                {snapshot?.state === 'verifying'
+                  ? t('onboarding.modelVerifying')
+                  : t(
+                      resumable ? 'onboarding.modelDownloadPaused' : 'onboarding.modelDownloading',
+                    ).replace('{progress}', String(percent))}
+              </AppText>
+              <AppText style={styles.progressPercent} selectable>
+                {percent}%
+              </AppText>
+            </View>
+            <View
+              accessibilityLabel={t('onboarding.modelProgressLabel')}
+              accessibilityRole="progressbar"
+              accessibilityValue={{ min: 0, max: 100, now: percent }}
+              style={styles.progressTrack}
+            >
+              <View style={[styles.progressFill, { width: `${percent}%` }]} />
+            </View>
+          </View>
+        ) : null}
+
+        {showFailure ? (
+          <AppSurface tone="soft" style={styles.callout}>
+            <AppText style={styles.error} selectable>
+              {t(modelSetupFailureMessageKey(visibleFailure))}
+            </AppText>
+          </AppSurface>
+        ) : null}
+
+        {cancelled && !resumable && !showFailure ? (
+          <AppText style={styles.muted} selectable>
+            {t('onboarding.modelSetupCancelDisclosure')}
+          </AppText>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -266,16 +233,14 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   const [page, setPage] = useState(0);
   const [snapshot, setSnapshot] = useState<LocalModelSnapshot | null>(null);
   const [modelFailure, setModelFailure] = useState<LocalModelSnapshot['failure']>(null);
-  const [busy, setBusy] = useState(false);
+  const [modelBusy, setModelBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelled, setCancelled] = useState(false);
-  const [cancelError, setCancelError] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [completionFailed, setCompletionFailed] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
   const pagerLocked = onboardingPagerLocked(snapshot);
   const ready = snapshot !== null && canCompleteModelOnboarding(snapshot);
-  const resumable = hasResumableModelDownload(snapshot);
   const modelAction = modelSetupPrimaryAction(snapshot, modelFailure);
 
   useEffect(() => {
@@ -362,10 +327,10 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   async function startDownload() {
     cancellationRequestedRef.current = false;
     setCancelled(false);
-    setCancelError(false);
     setModelFailure(null);
-    setBusy(true);
+    setModelBusy(true);
     try {
+      // Native verification ends in `ready`; onboarding must never call `load()`.
       await model.startDownload();
     } catch (error) {
       if (isExpectedDownloadCancellation(error, cancellationRequestedRef.current)) {
@@ -375,22 +340,20 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
       }
     } finally {
       cancellationRequestedRef.current = false;
-      setBusy(false);
+      setModelBusy(false);
     }
   }
 
   async function cancelDownload() {
     cancellationRequestedRef.current = true;
-    setCancelError(false);
     setCancelBusy(true);
     try {
       await model.cancelDownload();
       setCancelled(true);
       setModelFailure(null);
-    } catch {
+    } catch (error) {
       cancellationRequestedRef.current = false;
-      setCancelled(false);
-      setCancelError(true);
+      setModelFailure(modelFailureFromError(error));
     } finally {
       setCancelBusy(false);
     }
@@ -398,9 +361,9 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
 
   function continueLabel(): string {
     if (page === ONBOARDING_MODEL_PAGE) {
+      if (pagerLocked) return t('onboarding.modelCancel');
       if (ready) return t('onboarding.next');
-      if (pagerLocked || busy) return t('onboarding.modelPreparing');
-      if (resumable) return t('onboarding.modelContinueDownload');
+      if (hasResumableModelDownload(snapshot)) return t('onboarding.modelContinueDownload');
       if (modelAction === 'retry') return t('onboarding.modelRetry');
       if (modelAction === 'checking') return t('onboarding.modelChecking');
       return t('onboarding.modelDownload');
@@ -411,16 +374,20 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
   function continueDisabled(): boolean {
     if (finishing || cancelBusy) return true;
     if (page === ONBOARDING_MODEL_PAGE) {
-      if (pagerLocked || busy) return true;
+      if (pagerLocked) return false;
+      if (modelBusy) return true;
       return modelAction === 'checking' || modelAction === 'none';
     }
+    if (modelBusy) return true;
     return !onboardingCanContinue(page, snapshot);
   }
 
   async function handleContinue() {
     if (continueDisabled()) return;
     if (page === ONBOARDING_MODEL_PAGE) {
-      if (ready) {
+      if (pagerLocked) {
+        await cancelDownload();
+      } else if (ready) {
         moveToPage(ONBOARDING_READY_PAGE);
       } else if (
         modelAction === 'download' ||
@@ -469,9 +436,8 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
       key="model"
       model={model}
       snapshot={snapshot}
-      modelFailure={modelFailure}
+      failure={modelFailure}
       cancelled={cancelled}
-      cancelError={cancelError}
     />,
     <ReadyPage key="ready" completionFailed={completionFailed} />,
   ];
@@ -506,14 +472,14 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
               <AppIcon
                 name="chevronLeft"
                 size={18}
-                color={pagerLocked ? colors.onBrandMuted : colors.brandSoft}
+                color={pagerLocked ? colors.onBrandMuted : colors.onBrand}
               />
             </Pressable>
           ) : (
             <View accessibilityElementsHidden style={styles.backButton} />
           )}
         </View>
-        <AppText variant="label" style={styles.brandLabel}>
+        <AppText variant="label" style={styles.brandLabel} selectable>
           {t('onboarding.brand')}
         </AppText>
         <View accessibilityElementsHidden style={styles.topBarControlSlot} />
@@ -558,15 +524,8 @@ export function OnboardingScreen({ model, onComplete }: OnboardingScreenProps) {
           label={continueLabel()}
           onPress={() => void handleContinue()}
           style={styles.continueButton}
+          tone={page === ONBOARDING_MODEL_PAGE && pagerLocked ? 'quiet' : 'primary'}
         />
-        {page === ONBOARDING_MODEL_PAGE && pagerLocked ? (
-          <AppButton
-            disabled={cancelBusy}
-            label={cancelBusy ? t('onboarding.modelCancelling') : t('onboarding.modelCancel')}
-            onPress={() => void cancelDownload()}
-            tone="quiet"
-          />
-        ) : null}
       </View>
     </View>
   );
@@ -585,61 +544,74 @@ const styles = StyleSheet.create({
   topBarControlSlot: { alignItems: 'center', height: 44, justifyContent: 'center', width: 44 },
   backButton: {
     alignItems: 'center',
-    borderRadius: radii.pill,
+    borderRadius: 99,
     height: 44,
     justifyContent: 'center',
     width: 44,
   },
+  backButtonDisabled: { opacity: 0.56 },
   brandLabel: { color: colors.onBrand, letterSpacing: 0.2 },
   pagerContent: { backgroundColor: colors.canvas, flexGrow: 1 },
   pageScrollContent: { flexGrow: 1 },
-  pageBody: { flex: 1, width: '100%' },
+  pageBody: { flex: 1, maxWidth: 520, width: '100%' },
   introHero: {
-    minHeight: 460,
-    paddingBottom: spacing.xxl,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xl,
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 470,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.xxl,
   },
-  introHeroContent: { alignItems: 'center', gap: spacing.lg, justifyContent: 'center' },
-  pageCopy: { alignItems: 'center', gap: spacing.sm },
+  introHeroContent: {
+    alignItems: 'center',
+    gap: spacing.xl,
+  },
+  pageCopy: { alignItems: 'center', gap: spacing.md },
   pageTitle: { color: colors.onBrand, maxWidth: 390, textAlign: 'center' },
   pageBodyText: {
     color: colors.onBrandMuted,
-    maxWidth: 380,
+    maxWidth: 390,
     textAlign: 'center',
     ...typography.body,
   },
   pageDetails: { gap: spacing.md, padding: spacing.lg },
-  modelHero: { padding: spacing.lg },
-  modelHeroHeading: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.lg,
-  },
-  modelHeroCopy: { flex: 1, gap: spacing.sm, minWidth: 210 },
-  modelHeroTitle: { color: colors.onBrand },
-  modelHeroBody: { color: colors.onBrandMuted },
+  callout: { gap: spacing.sm, padding: spacing.md },
+  modelHero: { paddingHorizontal: spacing.xl, paddingVertical: spacing.xl },
+  modelHeroHeading: { alignItems: 'center', gap: spacing.lg },
+  modelHeroCopy: { alignItems: 'center', gap: spacing.sm },
+  modelHeroTitle: { color: colors.onBrand, maxWidth: 390, textAlign: 'center' },
+  modelHeroBody: { color: colors.onBrandMuted, maxWidth: 400, textAlign: 'center' },
   modelPageContent: { gap: spacing.md, padding: spacing.lg },
-  muted: { color: colors.mutedInk },
   modelSummary: { gap: spacing.lg, padding: spacing.lg },
+  packHeader: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
   modelIconWell: {
     alignItems: 'center',
     backgroundColor: colors.accentSoft,
     borderCurve: 'continuous',
-    borderRadius: radii.sm,
+    borderRadius: radii.md,
     height: 48,
     justifyContent: 'center',
     width: 48,
   },
-  packHeader: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
   packCopy: { flex: 1, gap: spacing.xs },
   facts: { gap: spacing.sm },
-  fact: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, minHeight: 30 },
-  factLabel: { color: colors.ink, flexShrink: 1 },
-  backButtonDisabled: { opacity: 0.6 },
+  factLabel: { color: colors.ink },
   checking: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, minHeight: 44 },
-  callout: { gap: spacing.sm, padding: spacing.md },
+  progressGroup: { gap: spacing.sm },
+  progressCopy: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    justifyContent: 'space-between',
+  },
+  progressPercent: { color: colors.ink, fontVariant: ['tabular-nums'] },
+  progressTrack: {
+    backgroundColor: colors.disabledFill,
+    borderRadius: 99,
+    height: 8,
+    overflow: 'hidden',
+  },
+  progressFill: { backgroundColor: colors.accent, borderRadius: 99, height: '100%' },
+  muted: { color: colors.mutedInk },
   error: { color: colors.danger },
   readyCopy: { color: colors.ink },
   footer: {

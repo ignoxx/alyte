@@ -143,12 +143,16 @@ export function ExtractionMeasurementEditorScreen() {
     }
     setBusy(true);
     try {
-      const updated = await reports.updateExtractionRow(row.id, {
-        proposedLabel: edit.label.trim(),
-        proposedValue: value,
-        proposedUnit: edit.unit.trim() || null,
-        proposedReferenceInterval: edit.reference.trim() || null,
-      });
+      const updated = await reports.updateExtractionRow(
+        row.id,
+        {
+          proposedLabel: edit.label.trim(),
+          proposedValue: value,
+          proposedUnit: edit.unit.trim() || null,
+          proposedReferenceInterval: edit.reference.trim() || null,
+        },
+        { submission: 'correction-form' },
+      );
       setRow(updated);
       setEdit(editFrom(updated));
       setError(false);

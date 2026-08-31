@@ -55,7 +55,7 @@ test('cancelling a partial keeps its bytes available for a later continuation', 
 test('normalizing incomplete ready state never grants readiness', async () => {
   const { normalizeLocalModelSnapshot } = await import('./model');
   const snapshot = normalizeLocalModelSnapshot(
-    { state: 'ready', bytesReceived: productionLocalModelManifest.pack.artifact.bytes - 1 },
+    { state: 'ready', bytesReceived: productionLocalModelManifest.pack.bytes - 1 },
     productionLocalModelManifest,
   );
   assert.equal(snapshot.progress < 1, true);
@@ -65,7 +65,7 @@ test('normalizing incomplete ready state never grants readiness', async () => {
   const failedReady = normalizeLocalModelSnapshot(
     {
       state: 'ready',
-      bytesReceived: productionLocalModelManifest.pack.artifact.bytes,
+      bytesReceived: productionLocalModelManifest.pack.bytes,
       failure: 'checksum-mismatch',
     },
     productionLocalModelManifest,

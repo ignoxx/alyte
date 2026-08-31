@@ -24,29 +24,26 @@ function readExpoIntrospection(variant) {
 }
 
 const expected = {
-  development: { bundleIdentifier: 'com.alyte.app.dev', extendedVirtualAddressing: false },
-  preview: { bundleIdentifier: 'com.alyte.app.preview', extendedVirtualAddressing: true },
-  production: { bundleIdentifier: 'com.alyte.app', extendedVirtualAddressing: true },
+  development: { bundleIdentifier: 'com.alyte.app.dev' },
+  preview: { bundleIdentifier: 'com.alyte.app.preview' },
+  production: { bundleIdentifier: 'com.alyte.app' },
 };
 
 for (const [variant, policy] of Object.entries(expected)) {
   const config = readExpoIntrospection(variant);
   assert.equal(config.ios.bundleIdentifier, policy.bundleIdentifier);
   assert.equal(config.ios.deploymentTarget, '26.0');
-  assert.equal(config.ios.entitlements['com.apple.developer.kernel.increased-memory-limit'], true);
+  assert.equal(
+    Object.hasOwn(config.ios.entitlements, 'com.apple.developer.kernel.increased-memory-limit'),
+    false,
+  );
   assert.equal(
     Object.hasOwn(
       config.ios.entitlements,
       'com.apple.developer.kernel.extended-virtual-addressing',
     ),
-    policy.extendedVirtualAddressing,
+    false,
   );
-  if (policy.extendedVirtualAddressing) {
-    assert.equal(
-      config.ios.entitlements['com.apple.developer.kernel.extended-virtual-addressing'],
-      true,
-    );
-  }
   assert.equal(config.extra.variant, variant);
   assert.equal(config.extra.apiEnvironment, variant === 'production' ? 'production' : 'none');
   assert.equal(config.extra.showcaseAllowed, variant !== 'production');
@@ -59,16 +56,18 @@ const configWithUpstreamEntitlement = appConfig({
 });
 assert.equal(configWithUpstreamEntitlement.ios.entitlements[upstreamEntitlement], true);
 assert.equal(
-  configWithUpstreamEntitlement.ios.entitlements[
-    'com.apple.developer.kernel.increased-memory-limit'
-  ],
-  true,
+  Object.hasOwn(
+    configWithUpstreamEntitlement.ios.entitlements,
+    'com.apple.developer.kernel.increased-memory-limit',
+  ),
+  false,
 );
 assert.equal(
-  configWithUpstreamEntitlement.ios.entitlements[
-    'com.apple.developer.kernel.extended-virtual-addressing'
-  ],
-  true,
+  Object.hasOwn(
+    configWithUpstreamEntitlement.ios.entitlements,
+    'com.apple.developer.kernel.extended-virtual-addressing',
+  ),
+  false,
 );
 
 assert.notEqual(expected.development.bundleIdentifier, expected.preview.bundleIdentifier);

@@ -16,10 +16,16 @@ import {
 import {
   groupObservationsIntoRows,
   extractOCRDateContexts,
+  buildGeometryCandidateWindows,
+  groupGeometryCandidateWindows,
+  admitGeometryCandidateGroupsByResultColumn,
+  parseGeometryCandidateVariantAsProvisional,
   enumerateGeometryFieldCandidates,
+  proposeBiomarkerId,
   reconstructGeometryLattice,
   reparseExtractionRowFromSemanticFields,
   revalidateExtractionRow,
+  sortExtractionSemanticCandidateRows,
   validateSemanticProposals,
   type ExtractionAliasEntry,
   type ExtractionDraft,
@@ -28,6 +34,7 @@ import {
   type ExtractionDateContext,
   type ExtractionSemanticCandidateRow,
   type ExtractionSemanticCancellation,
+  type ExtractionSemanticFieldSelection,
   type ExtractionSemanticLease,
   type ExtractionSemanticMapper,
   type ExtractionSemanticProposal,
@@ -37,9 +44,12 @@ import {
   type ExtractionPipelineFingerprint,
   type OCRDateContextObservation,
   type GeometryRow,
+  type GeometryCandidateWindowGroup,
   type GeometrySourceObservation,
+  type NormalizedBoundingBox,
   type VisionSourceSpan,
   createExtractionPipelineFingerprint,
+  PDF_TEXT_LAYER_ADAPTER_VERSION,
   EXTRACTION_ROW_SEGMENTATION_VERSION,
   EXTRACTION_PARSER_VERSION,
   VISION_OCR_CONTRACT_VERSION,
@@ -47,6 +57,7 @@ import {
 import { CATALOGUE_VERSION, comparableBiomarkers } from '@alyte/catalogue';
 import {
   openProtectedLabDatabase,
+  type ExtractionDraftRowUpdateOptions,
   type LabReportExtractionOperation,
   type LabRepository,
 } from './persistence';
@@ -66,6 +77,7 @@ import {
   nativePdfInspector,
   type PdfInspection,
   type PdfInspector,
+  type PdfInspectionSession,
   type PdfSanitizationResult,
   type PdfSanitizedVerification,
   type PdfViewerSession,
@@ -81,6 +93,17 @@ import {
   createSemanticMapperPrompt,
   serializeSemanticMapperChunk,
 } from '../local-models/semantic-contract';
+import {
+  createGeometryVariantSelectorPrompt,
+  GEOMETRY_VARIANT_SELECTOR_SCHEMA_VERSION,
+  serializeGeometryVariantSelectorChunk,
+} from '../local-models/geometry-variant-contract';
+import {
+  DocumentVLMUnavailableError,
+  type DocumentVLMExtractor,
+  type DocumentVLMRow,
+} from '../local-models/document-vlm';
+import { groundDocumentVLMRows } from '../local-models/document-vlm-grounding';
 
 export type PasswordRequest = (context: {
   readonly report: LabReport;
@@ -177,7 +200,7 @@ export type LabReportExtractionReadiness = {
 export type LabReportExtractionProgress = {
   readonly reportId: string;
   readonly mode: LabReportExtractionMode;
-  readonly stage: 'import' | 'ocr' | 'model' | 'review';
+  readonly stage: 'import' | 'ocr' | 'review';
   readonly status: 'active' | 'complete' | 'failed' | 'cancelled' | 'interrupted';
   readonly completed: number;
   readonly total: number;
@@ -237,10 +260,10 @@ export class LabReportExtractionError extends Error {
       | 'sanitized-source'
       | 'recognition'
       | 'no-reviewable-measurements'
-      | 'model-unavailable'
       | 'original-source'
       | 'persistence'
       | 'wrong-password'
+      | 'model-unavailable'
       | 'cancelled'
       | 'interrupted'
       | 'improve-deferred',
@@ -297,7 +320,11 @@ export type LabReportsService = {
   listOpenExtractionDrafts(): Promise<readonly LabReportExtractionDraftReference[]>;
   countOpenExtractionDrafts(): Promise<number>;
   getExtractionDraft(id: string): Promise<ExtractionDraft | null>;
-  updateExtractionRow(id: string, patch: ExtractionDraftRowPatch): Promise<ExtractionDraftRow>;
+  updateExtractionRow(
+    id: string,
+    patch: ExtractionDraftRowPatch,
+    options?: ExtractionDraftRowUpdateOptions,
+  ): Promise<ExtractionDraftRow>;
   updateExtractionGroupDate(
     draftId: string,
     currentDate: LabDateState,
@@ -319,6 +346,7 @@ export type LabReportsServiceOptions = {
   readonly imageInspector?: ImageInspector;
   readonly extractionAliases?: readonly ExtractionAliasEntry[];
   readonly semanticMapper?: ExtractionSemanticMapper;
+  readonly documentVLM?: DocumentVLMExtractor;
 };
 
 /**
@@ -351,6 +379,19 @@ export function createDefaultExtractionAliases(): readonly ExtractionAliasEntry[
 }
 
 type ImportOutcome = LabReportImportResult;
+
+type ExtractionPageResultOrigin = 'trusted-pdf-text-layer' | 'vision';
+
+type ExtractionPageResult = {
+  readonly result: VisionOCRResult;
+  readonly origin: ExtractionPageResultOrigin;
+};
+
+function extractionObservationKey(
+  observation: Pick<VisionTextObservation, 'pageIndex' | 'id'>,
+): string {
+  return `${observation.pageIndex}:${observation.id}`;
+}
 
 function isLabSourceSelection(value: unknown): value is LabSourceSelection {
   if (value === null || typeof value !== 'object') return false;
@@ -401,6 +442,50 @@ export function localCalendarDateFromInstant(instant: string): LabDateState {
       .toString()
       .padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`,
   };
+}
+
+/**
+ * Removes only rows replaced by a promoted physical group. Shared labels or adjacent source
+ * observations are not enough: the complete immutable source sequence must match, or a
+ * deterministic subset must contain the group's exact selected anchor.
+ */
+export function retainRowsOutsidePromotedPhysicalGroups<
+  T extends { readonly source: { readonly observationIds: readonly string[] } },
+>(rows: readonly T[], promotedRows: readonly T[]): readonly T[] {
+  type PromotedSource = {
+    readonly observationIds: readonly string[];
+    readonly semantic?: {
+      readonly sourceFieldObservationIds?: { readonly value?: string };
+    } | null;
+  };
+  const promotedGroups = promotedRows.map((row) => {
+    const source = row.source as PromotedSource;
+    return {
+      sourceIds: new Set(source.observationIds),
+      sourceKey: JSON.stringify(source.observationIds),
+      anchorIds: new Set(
+        source.semantic?.sourceFieldObservationIds?.value === undefined
+          ? []
+          : [source.semantic.sourceFieldObservationIds.value],
+      ),
+    };
+  });
+  return rows.filter((row) => {
+    const sourceIds = row.source.observationIds;
+    const sourceKey = JSON.stringify(sourceIds);
+    return !promotedGroups.some((group) => {
+      if (group.sourceKey === sourceKey) return true;
+      // Deterministic parsing can leave a value/unit subset beside a promoted semantic group.
+      // Remove that subset only when it contains the exact selected anchor; an adjacent row that
+      // merely shares a label observation remains independently reviewable.
+      return (
+        group.anchorIds.size > 0 &&
+        sourceIds.length < group.sourceIds.size &&
+        sourceIds.every((sourceId) => group.sourceIds.has(sourceId)) &&
+        sourceIds.some((sourceId) => group.anchorIds.has(sourceId))
+      );
+    });
+  });
 }
 
 function isCancellation(error: unknown): boolean {
@@ -555,6 +640,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   const visionOCR = options.visionOCR ?? nativeVisionOCR;
   const extractionAliases = options.extractionAliases ?? createDefaultExtractionAliases();
   const semanticMapper = options.semanticMapper;
+  const documentVLM = options.documentVLM;
   const extractionProgress = new Map<string, LabReportExtractionProgress>();
   const extractionProgressListeners = new Set<(progress: LabReportExtractionProgress) => void>();
   let nextExtractionOperation = 0;
@@ -606,10 +692,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       'sanitized-source',
       'recognition',
       'no-reviewable-measurements',
-      'model-unavailable',
       'original-source',
       'persistence',
       'wrong-password',
+      'model-unavailable',
       'cancelled',
       'interrupted',
       'improve-deferred',
@@ -651,6 +737,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   function currentExtractionPipelineFingerprint(
     sourceHash: string | null,
     revision = 1,
+    sourceType?: LabReport['sourceType'],
   ): ExtractionPipelineFingerprint {
     return createExtractionPipelineFingerprint(
       {
@@ -658,13 +745,27 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         ocrContractVersion: VISION_OCR_CONTRACT_VERSION,
         rowSegmentationVersion: EXTRACTION_ROW_SEGMENTATION_VERSION,
         parserVersion: EXTRACTION_PARSER_VERSION,
-        semanticAdapterVersion: semanticMapper?.adapterVersion ?? null,
-        semanticSchemaVersion: semanticMapper?.schemaVersion ?? null,
+        semanticAdapterVersion:
+          documentVLM?.adapterVersion ?? semanticMapper?.adapterVersion ?? null,
+        semanticSchemaVersion: documentVLM?.schemaVersion ?? semanticMapper?.schemaVersion ?? null,
         semanticChunkVersion: semanticMapper?.provenance?.chunkVersion ?? null,
-        semanticPromptVersion: semanticMapper?.provenance?.promptVersion ?? null,
-        modelVersion: semanticMapper?.provenance?.modelVersion ?? null,
-        runtimeVersion: semanticMapper?.provenance?.runtimeVersion ?? null,
+        semanticPromptVersion:
+          documentVLM?.provenance.promptVersion ??
+          semanticMapper?.provenance?.promptVersion ??
+          null,
+        modelVersion:
+          documentVLM?.provenance.modelVersion ?? semanticMapper?.provenance?.modelVersion ?? null,
+        runtimeVersion:
+          documentVLM?.provenance.runtimeVersion ??
+          semanticMapper?.provenance?.runtimeVersion ??
+          null,
         catalogueVersion: semanticMapper?.provenance?.catalogueVersion ?? CATALOGUE_VERSION,
+        pdfTextLayerAdapterVersion:
+          sourceType === 'pdf' &&
+          (pdfInspector.textLayerAdapterVersion === PDF_TEXT_LAYER_ADAPTER_VERSION ||
+            pdfInspector.readTextLayerPage !== undefined)
+            ? PDF_TEXT_LAYER_ADAPTER_VERSION
+            : null,
       },
       revision,
     );
@@ -1798,9 +1899,9 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     });
   }
 
-  function localeForObservation(observation: VisionTextObservation): string {
-    const language = observation.recognition.language?.toLowerCase().split(/[-_]/u)[0];
-    const languageLocales: Record<string, string> = {
+  function localeForRecognitionLanguage(languageTag: string | null): string | null {
+    const language = languageTag?.toLowerCase().split(/[-_]/u)[0];
+    const languageLocales: Readonly<Record<string, string>> = {
       de: 'de-DE',
       fr: 'fr-FR',
       es: 'es-ES',
@@ -1809,9 +1910,25 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       nl: 'nl-NL',
       pl: 'pl-PL',
       lt: 'lt-LT',
-      en: Intl.DateTimeFormat().resolvedOptions().locale,
+      en: 'en-US',
     };
-    return languageLocales[language ?? ''] ?? Intl.DateTimeFormat().resolvedOptions().locale;
+    return languageLocales[language ?? ''] ?? null;
+  }
+
+  function localeForObservation(observation: VisionTextObservation): string | null {
+    return localeForRecognitionLanguage(observation.recognition.language);
+  }
+
+  function extractionLocaleFromOCR(results: readonly VisionOCRResult[]): string {
+    const locales = new Set(
+      results
+        .flatMap((result) => result.observations)
+        .map(localeForObservation)
+        .filter((locale): locale is string => locale !== null),
+    );
+    // Mixed or unknown attribution is intentionally stable and independent of the phone locale.
+    // Per-observation date contexts retain their own locale (or null) above.
+    return locales.size === 1 ? ([...locales][0] ?? 'en-US') : 'en-US';
   }
 
   function dateContextFromOCR(results: readonly VisionOCRResult[]) {
@@ -1970,6 +2087,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   type GeometryExtractionRows = {
     readonly rows: readonly ExtractionDraftRow[];
     readonly semanticCandidateRowIds: ReadonlySet<string>;
+    readonly candidateWindows: readonly GeometryCandidateWindowGroup[];
   };
 
   /**
@@ -2025,6 +2143,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       readonly collectionDateContexts: readonly ExtractionDateContext[];
       readonly aliases: readonly ExtractionAliasEntry[];
       readonly artifact: LabSourceArtifact;
+      /** Ephemeral origin marker; only trusted PDFKit observations opt into independent spans. */
+      readonly trustedPdfTextLayerObservationKeys?: ReadonlySet<string>;
     },
   ): GeometryExtractionRows {
     const sourceById = new Map(observations.map((observation) => [observation.id, observation]));
@@ -2069,9 +2189,48 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             specimenKey: specimenByObservationId.get(observation.id) ?? 'unknown',
             collectionDateKey: dateKeyFor(observation),
           },
+          ...(options.trustedPdfTextLayerObservationKeys?.has(extractionObservationKey(observation))
+            ? { spanPolicy: 'trusted-independent' as const }
+            : {}),
         };
       }),
     );
+    const unfilteredCandidateWindows = groupGeometryCandidateWindows(
+      buildGeometryCandidateWindows(lattice, observations),
+    );
+    // PDFKit supplies exact source text but no native table identity. On those pages only, a
+    // local Result-header corridor removes reference-range numbers from semantic input. Vision
+    // pages retain their native structured-document path until an equally strong scan benchmark
+    // exists; mixing the two admission policies would hide that provenance distinction.
+    const trustedObservationIds = new Set(
+      observations
+        .filter((observation) =>
+          options.trustedPdfTextLayerObservationKeys?.has(extractionObservationKey(observation)),
+        )
+        .map((observation) => observation.id),
+    );
+    const trustedCandidateWindows = unfilteredCandidateWindows.filter((group) =>
+      group.physicalRowCells.every((cell) => trustedObservationIds.has(cell.sourceObservationId)),
+    );
+    const resultColumnAdmission = admitGeometryCandidateGroupsByResultColumn(
+      lattice,
+      trustedCandidateWindows,
+      { scope: 'page-wide' },
+    );
+    const admittedTrustedById = new Map(
+      resultColumnAdmission.groups.map((group) => [group.physicalRowId, group]),
+    );
+    const trustedCandidateWindowIds = new Set(
+      trustedCandidateWindows.map((group) => group.physicalRowId),
+    );
+    const excludedTrustedIds = new Set(
+      resultColumnAdmission.excludedGroups.map((group) => group.physicalRowId),
+    );
+    const candidateWindows = unfilteredCandidateWindows.flatMap((group) => {
+      if (!trustedCandidateWindowIds.has(group.physicalRowId)) return [group];
+      const admitted = admittedTrustedById.get(group.physicalRowId);
+      return admitted === undefined ? [] : [admitted];
+    });
     const rows: ExtractionDraftRow[] = [];
     const semanticCandidateRowIds = new Set<string>();
     for (const physicalRow of lattice.rows) {
@@ -2110,6 +2269,60 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           semanticCandidateRowIds.add(parsedRow.id);
       }
     }
+    // A multi-anchor physical row must remain visible even when concatenated deterministic
+    // parsing cannot produce a measurement-shaped row. Keep one source-backed review exception
+    // with an unparsed value rather than selecting an arbitrary anchor or dropping the row.
+    const groupsBySourceId = new Map<string, GeometryCandidateWindowGroup[]>();
+    for (const group of unfilteredCandidateWindows) {
+      for (const sourceId of group.sourceObservationIds) {
+        const groups = groupsBySourceId.get(sourceId) ?? [];
+        groups.push(group);
+        groupsBySourceId.set(sourceId, groups);
+      }
+    }
+    const rowsByGroupId = new Map<string, ExtractionDraftRow[]>();
+    for (const row of rows) {
+      const groupIds = new Set(
+        row.source.observationIds.flatMap((sourceId) =>
+          (groupsBySourceId.get(sourceId) ?? []).map((group) => group.physicalRowId),
+        ),
+      );
+      for (const groupId of groupIds) {
+        const relatedRows = rowsByGroupId.get(groupId) ?? [];
+        relatedRows.push(row);
+        rowsByGroupId.set(groupId, relatedRows);
+      }
+    }
+    const rowsToReplace = new Set<ExtractionDraftRow>();
+    const fallbackRows: ExtractionDraftRow[] = [];
+    for (const group of unfilteredCandidateWindows) {
+      if (!excludedTrustedIds.has(group.physicalRowId)) continue;
+      for (const row of rowsByGroupId.get(group.physicalRowId) ?? []) rowsToReplace.add(row);
+    }
+    for (const group of resultColumnAdmission.reviewGroups) {
+      for (const row of rowsByGroupId.get(group.physicalRowId) ?? []) rowsToReplace.add(row);
+      fallbackRows.push(physicalGroupReviewFallback(group, options));
+    }
+    for (const reviewRow of resultColumnAdmission.unrepresentedRows) {
+      const sourceCellIds = new Set(reviewRow.physicalRow.cells.map((cell) => cell.id));
+      for (const row of rows)
+        if (row.source.observationIds.some((id) => sourceCellIds.has(id))) rowsToReplace.add(row);
+      const fallback = physicalRowReviewFallback(reviewRow.physicalRow, options);
+      if (fallback !== null) fallbackRows.push(fallback);
+    }
+    for (const group of candidateWindows) {
+      const relatedRows = rowsByGroupId.get(group.physicalRowId) ?? [];
+      // A physical row with multiple exact anchors is never safe to admit through deterministic
+      // parsing, even if that parser happened to produce one survivor from the concatenated text.
+      // Keep the complete source group as one review exception until semantic mapping selects an
+      // exact anchor.
+      if (group.anchorCellIds.length === 1 && relatedRows.length === 1) {
+        continue;
+      }
+      for (const row of relatedRows) rowsToReplace.add(row);
+      fallbackRows.push(physicalGroupReviewFallback(group, options));
+    }
+    rows.splice(0, rows.length, ...rows.filter((row) => !rowsToReplace.has(row)), ...fallbackRows);
     rows.sort((left, right) => {
       const leftSource = left.source.observations?.[0];
       const rightSource = right.source.observations?.[0];
@@ -2122,7 +2335,346 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     return {
       rows: rows.map((row, order) => ({ ...row, order })),
       semanticCandidateRowIds,
+      candidateWindows,
     };
+
+    function physicalGroupReviewFallback(
+      group: GeometryCandidateWindowGroup,
+      extraction: {
+        readonly collectionDate: LabDateState;
+        readonly collectionDateDefaulted: boolean;
+        readonly collectionDateContexts: readonly ExtractionDateContext[];
+        readonly artifact: LabSourceArtifact;
+      },
+    ): ExtractionDraftRow {
+      return sourceReviewFallback(
+        {
+          id: group.physicalRowId,
+          context: group.context,
+          sourceObservations: [...group.observations],
+          sourceCells: group.sourceCells,
+        },
+        extraction,
+      );
+    }
+
+    function physicalRowReviewFallback(
+      physicalRow: GeometryRow,
+      extraction: {
+        readonly collectionDate: LabDateState;
+        readonly collectionDateDefaulted: boolean;
+        readonly collectionDateContexts: readonly ExtractionDateContext[];
+        readonly artifact: LabSourceArtifact;
+      },
+    ): ExtractionDraftRow | null {
+      const sourceObservations = physicalRow.cells.flatMap((cell) => {
+        const parent = sourceById.get(cell.sourceObservationId);
+        return parent === undefined ? [] : [geometryCellObservation(cell, parent)];
+      });
+      if (sourceObservations.length !== physicalRow.cells.length) return null;
+      return sourceReviewFallback(
+        {
+          id: physicalRow.id,
+          context: {
+            pageIndex: physicalRow.pageIndex,
+            tableId: physicalRow.tableId,
+            sectionId: physicalRow.sectionId,
+            specimenKey: physicalRow.specimenKey,
+            collectionDateKey: physicalRow.collectionDateKey,
+          },
+          sourceObservations,
+          sourceCells: physicalRow.cells,
+        },
+        extraction,
+      );
+    }
+
+    function sourceReviewFallback(
+      reviewSource: {
+        readonly id: string;
+        readonly context: GeometryCandidateWindowGroup['context'];
+        readonly sourceObservations: readonly VisionTextObservation[];
+        readonly sourceCells: readonly GeometryRow['cells'][number][];
+      },
+      extraction: {
+        readonly collectionDate: LabDateState;
+        readonly collectionDateDefaulted: boolean;
+        readonly collectionDateContexts: readonly ExtractionDateContext[];
+        readonly artifact: LabSourceArtifact;
+      },
+    ): ExtractionDraftRow {
+      const sourceObservations = [...reviewSource.sourceObservations];
+      const sourceText = sourceObservations
+        .map((observation) => observation.text.trim())
+        .join('  ');
+      const sourceBox = sourceObservations[0]?.boundingBox ?? {
+        x: 0,
+        y: 0,
+        width: 0.000001,
+        height: 0.000001,
+      };
+      const boundingBox = sourceObservations.slice(1).reduce(
+        (box, observation) => ({
+          x: Math.min(box.x, observation.boundingBox.x),
+          y: Math.min(box.y, observation.boundingBox.y),
+          width:
+            Math.max(box.x + box.width, observation.boundingBox.x + observation.boundingBox.width) -
+            Math.min(box.x, observation.boundingBox.x),
+          height:
+            Math.max(
+              box.y + box.height,
+              observation.boundingBox.y + observation.boundingBox.height,
+            ) - Math.min(box.y, observation.boundingBox.y),
+        }),
+        { ...sourceBox },
+      );
+      const collectionDateContext =
+        extraction.collectionDateContexts.find(
+          (context) =>
+            context.pageIndex === reviewSource.context.pageIndex &&
+            reviewSource.context.collectionDateKey === geometryCollectionDateKey(context),
+        ) ?? null;
+      const value: ExtractionDraftRow['sourceValue'] = { kind: 'free_text', value: sourceText };
+      const aliasCandidates = reviewSource.sourceCells.flatMap((cell) => {
+        const id = proposeBiomarkerId(cell.text, options.aliases);
+        return id === null ? [] : [{ id, text: cell.text }];
+      });
+      const aliasIds = [...new Set(aliasCandidates.map((candidate) => candidate.id))];
+      const supportedAlias =
+        aliasIds.length === 1
+          ? (aliasCandidates.find((candidate) => candidate.id === aliasIds[0]) ?? null)
+          : null;
+      const aliasReviewReasons =
+        aliasIds.length === 0
+          ? (['unsupported-alias'] as const)
+          : aliasIds.length > 1
+            ? (['ambiguous-assay'] as const)
+            : ([] as const);
+      const label = supportedAlias?.text ?? sourceText;
+      const specimenType = specimenTypeFromGeometryContext(reviewSource.context.specimenKey);
+      return {
+        id: reviewSource.id,
+        order: Number.MAX_SAFE_INTEGER,
+        panelLabel: null,
+        sourceText,
+        sourceLabel: label,
+        sourceValue: value,
+        sourceValueString: sourceText,
+        sourceUnit: null,
+        sourceReferenceInterval: null,
+        sourceFlag: null,
+        source: {
+          pageIndex: reviewSource.context.pageIndex,
+          orientation: sourceObservations[0]?.orientation ?? 0,
+          artifact: extraction.artifact,
+          observationIds: sourceObservations.map((observation) => observation.id),
+          observations: sourceObservations,
+          semantic: null,
+          boundingBox,
+          raw: {
+            label,
+            value: null,
+            unit: null,
+            referenceInterval: null,
+            flag: null,
+            collectionDate: null,
+          },
+        },
+        collectionDateContext,
+        proposedLabel: label,
+        proposedValue: value,
+        proposedUnit: null,
+        proposedReferenceInterval: null,
+        proposedFlag: null,
+        proposedBiomarkerId: supportedAlias?.id ?? null,
+        proposedSpecimenType: specimenType,
+        collectionDate: collectionDateContext?.collectionDate ?? extraction.collectionDate,
+        reviewReasons: [
+          'unsupported-layout',
+          'unparseable-value',
+          ...aliasReviewReasons,
+          ...(extraction.collectionDateDefaulted ? ['defaulted-collection-date' as const] : []),
+        ],
+        reviewState: 'needs-review',
+        decision: 'preserve',
+        editState: 'automatic',
+      };
+    }
+
+    function geometryCollectionDateKey(context: ExtractionDateContext): string {
+      return `${context.pageIndex}:${context.observationId}:${context.collectionDate.kind === 'known' ? context.collectionDate.value : 'missing'}`;
+    }
+
+    function specimenTypeFromGeometryContext(value: string | null): SpecimenType {
+      return value === 'blood' ||
+        value === 'serum' ||
+        value === 'plasma' ||
+        value === 'urine' ||
+        value === 'stool' ||
+        value === 'saliva'
+        ? value
+        : 'unknown';
+    }
+  }
+
+  type SemanticMappingCandidate = {
+    readonly candidate: ExtractionSemanticCandidateRow;
+    readonly deterministicRow: ExtractionDraftRow | null;
+    readonly windowGroup: GeometryCandidateWindowGroup | null;
+  };
+
+  type SemanticMappingContext = {
+    readonly locale: string;
+    readonly collectionDate: LabDateState;
+    readonly collectionDateDefaulted: boolean;
+    readonly collectionDateContexts: readonly ExtractionDateContext[];
+    readonly artifact: LabSourceArtifact;
+  };
+
+  type DocumentRefinementInput = {
+    readonly report: LabReport;
+    readonly sourcePath: string;
+    readonly password: string | null;
+    readonly pageIndices: readonly number[];
+    readonly candidateWindows: readonly GeometryCandidateWindowGroup[];
+    readonly locale: string;
+    readonly cancellation: ExtractionSemanticCancellation;
+    readonly requireVerifiedOriginal: () => Promise<void>;
+  };
+
+  async function extractDocumentVLMRows(
+    input: DocumentRefinementInput,
+  ): Promise<ReadonlyMap<number, readonly DocumentVLMRow[]>> {
+    if (documentVLM === undefined || !documentVLM.supports(input.locale)) return new Map();
+    const pages = input.pageIndices.filter((pageIndex) =>
+      input.candidateWindows.some(
+        (window) =>
+          window.context.pageIndex === pageIndex &&
+          window.withinInputBounds &&
+          window.anchorCellIds.length > 0,
+      ),
+    );
+    if (pages.length === 0) return new Map();
+
+    let lease: ExtractionSemanticLease;
+    try {
+      lease = await documentVLM.prepare();
+    } catch (error) {
+      throw new LabReportExtractionError(
+        'model-unavailable',
+        'The required on-device import model is unavailable',
+        { cause: error },
+      );
+    }
+    const output = new Map<number, DocumentVLMRow[]>();
+    try {
+      for (const pageIndex of pages) {
+        if (input.cancellation.isCancelled())
+          throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
+        const anchorCount = input.candidateWindows
+          .filter(
+            (window) =>
+              window.context.pageIndex === pageIndex &&
+              window.withinInputBounds &&
+              window.anchorCellIds.length > 0,
+          )
+          .reduce((sum, window) => sum + window.anchorCellIds.length, 0);
+        // Dense pages benefit from two overlapping horizontal bands; sparse English/German pages
+        // retain the whole-page context that scored better in the accepted benchmark.
+        const rects =
+          anchorCount >= 14
+            ? [
+                { x: 0, y: 0, width: 1, height: 0.54 },
+                { x: 0, y: 0.46, width: 1, height: 0.54 },
+              ]
+            : [{ x: 0, y: 0, width: 1, height: 1 }];
+        const pageRows: DocumentVLMRow[] = [];
+        for (const rect of rects) {
+          if (input.cancellation.isCancelled())
+            throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
+          await input.requireVerifiedOriginal();
+          let imageURI: string;
+          let cleanup: (() => Promise<void>) | null = null;
+          if (input.report.sourceType === 'pdf') {
+            if (
+              pdfInspector.renderExtractionBand === undefined ||
+              pdfInspector.deleteExtractionBand === undefined
+            ) {
+              throw new LabReportExtractionError(
+                'recognition',
+                'Native document-band rendering is unavailable',
+              );
+            }
+            const rendered = await pdfInspector.renderExtractionBand(
+              input.sourcePath,
+              pageIndex,
+              rect,
+              input.password,
+            );
+            imageURI = rendered.uri;
+            cleanup = () => pdfInspector.deleteExtractionBand!(rendered.uri);
+          } else {
+            imageURI = input.sourcePath.startsWith('file://')
+              ? input.sourcePath
+              : encodeURI(`file://${input.sourcePath}`);
+          }
+          try {
+            // Rendering and both integrity checks share one cleanup scope. A source mutation after
+            // the temporary band is created must never strand that private image on disk.
+            await input.requireVerifiedOriginal();
+            const rows = await documentVLM.extract({
+              pageIndex,
+              imageURI,
+              locale: input.locale,
+              cancellation: input.cancellation,
+            });
+            await input.requireVerifiedOriginal();
+            pageRows.push(...rows);
+          } catch (error) {
+            if (
+              error instanceof LabReportExtractionError &&
+              (error.reason === 'original-source' || error.reason === 'cancelled')
+            ) {
+              throw error;
+            }
+            if (error instanceof DocumentVLMUnavailableError) {
+              throw new LabReportExtractionError(
+                'model-unavailable',
+                'The required on-device import model became unavailable',
+                { cause: error },
+              );
+            }
+            if (input.cancellation.isCancelled())
+              throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
+            // One malformed/failed band must not discard already source-linked OCR rows. Its
+            // unresolved source windows remain visible as ordinary review work.
+          } finally {
+            if (cleanup !== null) await cleanup();
+          }
+        }
+        const seen = new Set<string>();
+        output.set(
+          pageIndex,
+          pageRows.filter((row) => {
+            const key = JSON.stringify(row);
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          }),
+        );
+      }
+      return output;
+    } finally {
+      try {
+        await lease.release();
+      } catch (error) {
+        throw new LabReportExtractionError(
+          'model-unavailable',
+          'The on-device import model could not be released',
+          { cause: error },
+        );
+      }
+    }
   }
 
   async function applySemanticMappings(
@@ -2132,11 +2684,17 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     cancellation?: ExtractionSemanticCancellation,
     semanticCandidateRowIds?: ReadonlySet<string>,
     lockSpecimenType = false,
+    candidateWindows: readonly GeometryCandidateWindowGroup[] = [],
+    mappingContext?: SemanticMappingContext,
+    onSemanticFailure?: (reason: 'recognition' | 'model-unavailable') => void,
   ): Promise<readonly ExtractionDraftRow[]> {
     if (semanticMapper === undefined) {
       onProgress?.(0, 0);
       return rows;
     }
+    const activeSemanticMapper = semanticMapper;
+    const usesGeometryVariantSelector =
+      semanticMapper.schemaVersion === GEOMETRY_VARIANT_SELECTOR_SCHEMA_VERSION;
     // Deterministically complete rows do not benefit from semantic mapping. Keep them out of the
     // request entirely; unresolved, ambiguous, and unsupported rows remain eligible for refinement.
     const candidateRowsForMapping = rows.filter((row) =>
@@ -2144,43 +2702,137 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         ? row.proposedBiomarkerId === null || row.reviewReasons.length > 0
         : semanticCandidateRowIds.has(row.id),
     );
-    if (candidateRowsForMapping.length === 0) {
-      onProgress?.(0, 0);
-      return rows;
-    }
     // A model request is a bounded set of already-filtered candidate rows. Never send the whole
     // page or a raw OCR wall: unrelated headers, addresses, and footers are not model input.
     const observationById = new Map(
       observations.map((observation) => [observation.id, observation]),
     );
-    const rowGroups = new Map<string, ExtractionDraftRow[]>();
-    const allRowSourceIds = new Set(rows.flatMap((row) => row.source.observationIds));
-    const allRowParentIds = new Set(
-      rows.flatMap((row) =>
-        (row.source.observations ?? []).flatMap((observation) => {
-          const parentId = observation.sourceSpan?.parentObservationId;
-          return parentId === undefined ? [] : [parentId];
-        }),
+    const candidateGroupSourceIds = new Set(
+      candidateWindows.flatMap((group) => group.sourceObservationIds),
+    );
+    const deterministicCandidates = (
+      usesGeometryVariantSelector ? [] : candidateRowsForMapping
+    ).flatMap((row): SemanticMappingCandidate[] => {
+      // A geometry group is the source-row admission unit. The deterministic fallback for the
+      // same physical source must remain available as draft data, but it must not be submitted as
+      // a second semantic row alongside that group.
+      if (row.source.observationIds.some((id) => candidateGroupSourceIds.has(id))) return [];
+      const rowObservations =
+        row.source.observations === undefined
+          ? row.source.observationIds.flatMap((id) => {
+              const observation = observationById.get(id);
+              return observation === undefined ? [] : [observation];
+            })
+          : [...row.source.observations];
+      return rowObservations.length === row.source.observationIds.length
+        ? [
+            {
+              candidate: {
+                rowId: row.id,
+                sourceObservationIds: [...row.source.observationIds],
+                observations: rowObservations,
+              },
+              deterministicRow: row,
+              windowGroup: null,
+            },
+          ]
+        : [];
+    });
+    const deterministicSourceAnchors = new Set(
+      rows.flatMap((row) => {
+        // Only rows excluded from semantic refinement lock an exact anchor. An unsupported row
+        // still needs the mapper to identify its biomarker; its exact value remains source-locked
+        // by the geometry group below.
+        if (semanticCandidateRowIds?.has(row.id)) return [];
+        if (
+          row.reviewReasons.includes('missing-label') ||
+          row.reviewReasons.includes('missing-value') ||
+          row.sourceLabel.trim().length === 0 ||
+          row.sourceLabel.trim() === row.sourceText.trim() ||
+          row.sourceLabel.trim() === row.sourceValueString.trim() ||
+          row.sourceLabel.trim() === row.sourceUnit?.trim()
+        )
+          return [];
+        const matchingValueObservations =
+          row.source.observations?.filter(
+            (observation) => observation.text.trim() === row.sourceValueString.trim(),
+          ) ?? [];
+        return matchingValueObservations.length === 1 ? [matchingValueObservations[0]!.id] : [];
+      }),
+    );
+    const windowCandidates = candidateWindows.flatMap((windowGroup): SemanticMappingCandidate[] =>
+      // A complete deterministic row already owns the single exact anchor. Multi-anchor groups
+      // are always retained as one mapper row so they can never be split by chunking.
+      windowGroup.anchorCellIds.length === 1 &&
+      deterministicSourceAnchors.has(windowGroup.anchorCellIds[0]!)
+        ? []
+        : [
+            {
+              candidate: windowGroup,
+              deterministicRow: null,
+              windowGroup,
+            },
+          ],
+    );
+    const mappingCandidates = [...deterministicCandidates, ...windowCandidates];
+    if (mappingCandidates.length === 0) {
+      onProgress?.(0, 0);
+      return rows;
+    }
+    const physicalOrder = new Map(
+      sortExtractionSemanticCandidateRows(mappingCandidates.map(({ candidate }) => candidate)).map(
+        (candidate, index) => [candidate, index],
       ),
     );
-    for (const row of candidateRowsForMapping) {
-      const first = row.source.observations?.[0];
+    const orderedMappingCandidates = mappingCandidates
+      .slice()
+      .sort(
+        (left, right) =>
+          (physicalOrder.get(left.candidate) ?? Number.MAX_SAFE_INTEGER) -
+          (physicalOrder.get(right.candidate) ?? Number.MAX_SAFE_INTEGER),
+      );
+    const rowGroups = new Map<string, SemanticMappingCandidate[]>();
+    const allRowSourceIds = new Set([
+      ...rows.flatMap((row) => row.source.observationIds),
+      ...candidateWindows.flatMap((window) => window.sourceObservationIds),
+    ]);
+    const allRowParentIds = new Set(
+      [
+        ...rows.flatMap((row) => row.source.observations ?? []),
+        ...candidateWindows.flatMap((row) => row.observations),
+      ].flatMap((observation) => {
+        const parentId = observation.sourceSpan?.parentObservationId;
+        return parentId === undefined ? [] : [parentId];
+      }),
+    );
+    // Establish one physical order before page/table grouping. Group iteration may later be
+    // table-local, but every group's row sequence and first anchor now share the same ordering
+    // source as compact r0/r1 serialization.
+    for (const candidate of orderedMappingCandidates) {
+      const first = candidate.candidate.observations[0];
       const table = first?.structure?.tableId ?? 'page';
-      const key = `${first?.pageIndex ?? row.source.pageIndex}:${table}`;
+      const key =
+        candidate.windowGroup === null
+          ? `${first?.pageIndex ?? candidate.deterministicRow?.source.pageIndex ?? 0}:${table}`
+          : `${first?.pageIndex ?? 0}:${table}`;
       const group = rowGroups.get(key) ?? [];
-      group.push(row);
+      group.push(candidate);
       rowGroups.set(key, group);
     }
     const chunks: {
+      readonly candidates: readonly SemanticMappingCandidate[];
       readonly rows: readonly ExtractionSemanticCandidateRow[];
       readonly headings: VisionTextObservation[];
     }[] = [];
+    let semanticStageFailed = false;
     // The production adapter advertises the compact-contract bound. Legacy test/provider seams
     // without an explicit bound retain their historical row limit until they migrate to v2.
     const maxRowsPerChunk = Math.max(
       1,
       Math.min(
-        semanticMapper.schemaVersion === 'alyte.semantic-mapper.v2' ? 2 : Number.MAX_SAFE_INTEGER,
+        semanticMapper.schemaVersion === 'alyte.semantic-mapper.v2' || usesGeometryVariantSelector
+          ? 2
+          : Number.MAX_SAFE_INTEGER,
         Math.floor(semanticMapper.maxRowsPerChunk ?? 12),
       ),
     );
@@ -2189,29 +2841,15 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       Math.floor(semanticMapper.maxObservationsPerChunk ?? 48),
     );
     const candidateRowsFor = (
-      rowChunk: readonly ExtractionDraftRow[],
-    ): readonly ExtractionSemanticCandidateRow[] =>
-      rowChunk.flatMap((row): ExtractionSemanticCandidateRow[] => {
-        const rowObservations =
-          row.source.observations === undefined
-            ? row.source.observationIds.flatMap((id) => {
-                const observation = observationById.get(id);
-                return observation === undefined ? [] : [observation];
-              })
-            : [...row.source.observations];
-        return rowObservations.length === row.source.observationIds.length
-          ? [
-              {
-                rowId: row.id,
-                sourceObservationIds: [...row.source.observationIds],
-                observations: rowObservations,
-              },
-            ]
-          : [];
-      });
-    const headingsFor = (rowChunk: readonly ExtractionDraftRow[]): VisionTextObservation[] => {
+      rowChunk: readonly SemanticMappingCandidate[],
+    ): readonly ExtractionSemanticCandidateRow[] => rowChunk.map(({ candidate }) => candidate);
+    const headingsFor = (
+      rowChunk: readonly SemanticMappingCandidate[],
+    ): VisionTextObservation[] => {
       // Preserve nearby section/table headings as context; they are never added to candidate rows.
-      const anchor = rowChunk[0]?.source.observations?.[0];
+      // Derive the anchor through the same converter used for serialization so r0 and heading
+      // context cannot disagree.
+      const anchor = candidateRowsFor(rowChunk)[0]?.observations[0];
       const anchorY = anchor?.boundingBox.y ?? 0;
       const anchorTableId = anchor?.structure?.tableId ?? null;
       return observations.filter((observation) => {
@@ -2228,10 +2866,29 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         return specimenHeading && isAbove && anchorY - observation.boundingBox.y <= 0.25;
       });
     };
-    const fitsProductionWireBudget = (rowChunk: readonly ExtractionDraftRow[]): boolean => {
+    const fitsProductionWireBudget = (rowChunk: readonly SemanticMappingCandidate[]): boolean => {
       // An explicitly bounded adapter is the production v2 seam. Check the complete prompt and
       // response reserve before handing a chunk to native inference; older custom seams retain
       // their pre-v2 test contract and do not serialize this wire format.
+      if (usesGeometryVariantSelector) {
+        const groups = rowChunk.flatMap(({ windowGroup }) =>
+          windowGroup === null ? [] : [windowGroup],
+        );
+        if (groups.length !== rowChunk.length) return false;
+        const anchor = groups[0]?.observations[0];
+        const locale = anchor?.recognition.language ?? 'en';
+        try {
+          const serialized = serializeGeometryVariantSelectorChunk(
+            groups,
+            headingsFor(rowChunk),
+            locale,
+          );
+          createGeometryVariantSelectorPrompt(locale, serialized);
+          return true;
+        } catch {
+          return false;
+        }
+      }
       if (
         semanticMapper.maxRowsPerChunk === undefined ||
         semanticMapper.schemaVersion !== 'alyte.semantic-mapper.v2' ||
@@ -2254,20 +2911,29 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       }
     };
     for (const group of rowGroups.values()) {
-      let rowChunk: ExtractionDraftRow[] = [];
+      let rowChunk: SemanticMappingCandidate[] = [];
       let rowObservationCount = 0;
       const flushChunk = () => {
         if (rowChunk.length === 0) return;
         const candidateRows = candidateRowsFor(rowChunk);
         if (candidateRows.length > 0)
-          chunks.push({ rows: candidateRows, headings: headingsFor(rowChunk) });
+          chunks.push({
+            candidates: [...rowChunk],
+            rows: candidateRows,
+            headings: headingsFor(rowChunk),
+          });
         rowChunk = [];
         rowObservationCount = 0;
       };
-      for (const row of group) {
-        const observationCount = row.source.observationIds.length;
-        if (observationCount > maxObservationsPerChunk || !fitsProductionWireBudget([row])) {
-          // Keep the deterministic row, but never hand an oversized row to the model adapter.
+      for (const candidate of group) {
+        const observationCount = candidate.candidate.sourceObservationIds.length;
+        if (
+          observationCount > maxObservationsPerChunk ||
+          candidate.windowGroup?.withinInputBounds === false ||
+          !fitsProductionWireBudget([candidate])
+        ) {
+          // Keep the deterministic row or window, but never hand an oversized row to the model adapter.
+          semanticStageFailed = true;
           flushChunk();
           continue;
         }
@@ -2275,11 +2941,11 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           rowChunk.length > 0 &&
           (rowChunk.length >= maxRowsPerChunk ||
             rowObservationCount + observationCount > maxObservationsPerChunk ||
-            !fitsProductionWireBudget([...rowChunk, row]))
+            !fitsProductionWireBudget([...rowChunk, candidate]))
         ) {
           flushChunk();
         }
-        rowChunk.push(row);
+        rowChunk.push(candidate);
         rowObservationCount += observationCount;
       }
       flushChunk();
@@ -2298,6 +2964,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         const locale = chunk.rows[0]?.observations[0]?.recognition.language ?? null;
         try {
           if (!semanticMapper.supports(locale)) {
+            semanticStageFailed = true;
             onProgress?.(chunkIndex + 1, chunks.length);
             continue;
           }
@@ -2317,12 +2984,31 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             pageIndex: chunk.rows[0]?.observations[0]?.pageIndex ?? 0,
             rows: chunk.rows,
             headings: chunk.headings,
+            locale: locale ?? 'en',
             ...(cancellation === undefined ? {} : { cancellation }),
           };
           const mapped = await semanticMapper.map(input);
           if (cancellation?.isCancelled())
             throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-          proposals.push(...validateSemanticProposals(mapped, chunk.rows, extractionAliases));
+          const mappedRecord =
+            typeof mapped === 'object' && mapped !== null && !Array.isArray(mapped)
+              ? (mapped as Record<string, unknown>)
+              : null;
+          const mappedIsWellShaped =
+            Array.isArray(mapped) ||
+            (mappedRecord !== null &&
+              Array.isArray(mappedRecord.proposals) &&
+              (mappedRecord.incomplete === undefined ||
+                typeof mappedRecord.incomplete === 'boolean'));
+          if (!mappedIsWellShaped) {
+            semanticStageFailed = true;
+          } else {
+            proposals.push(...validateSemanticProposals(mapped, chunk.rows, extractionAliases));
+            // Contract adapters must keep terminal failure distinct from a valid empty/all-null
+            // review result. Accepted siblings remain useful, while the overall stage stays
+            // explicitly retryable instead of becoming an empty-success draft.
+            if (mappedRecord?.incomplete === true) semanticStageFailed = true;
+          }
         } catch (error) {
           if (error instanceof LabReportExtractionError && error.reason === 'cancelled')
             throw error;
@@ -2331,6 +3017,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             // optional refinement stage must not erase that work or block Review.
             semanticModelUnavailable = true;
           }
+          semanticStageFailed = true;
           if (preparationFailed) semanticModelUnavailable = true;
           // Timeouts, runtime failures, and malformed output all preserve the deterministic rows.
           // A later chunk is still allowed to complete independently; explicit cancellation aborts
@@ -2369,12 +3056,62 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         }
       }
     }
-    return rows.map((row) => {
-      const proposal = proposals.find(
-        (item) =>
-          item.sourceObservationIds.length === row.source.observationIds.length &&
-          item.sourceObservationIds.every((id, index) => id === row.source.observationIds[index]),
-      );
+    if (semanticStageFailed)
+      onSemanticFailure?.(semanticModelUnavailable ? 'model-unavailable' : 'recognition');
+    const proposalsBySourceKey = new Map<string, ExtractionSemanticProposal[]>();
+    for (const proposal of proposals) {
+      const key = JSON.stringify(proposal.sourceObservationIds);
+      const matching = proposalsBySourceKey.get(key) ?? [];
+      matching.push(proposal);
+      proposalsBySourceKey.set(key, matching);
+    }
+    const proposalsForSourceIds = (
+      sourceObservationIds: readonly string[],
+    ): readonly ExtractionSemanticProposal[] =>
+      proposalsBySourceKey.get(JSON.stringify(sourceObservationIds)) ?? [];
+    const promotedWindowRows: ExtractionDraftRow[] = [];
+    // A failed chunk does not invalidate proposals accepted from independent chunks. Those
+    // proposals still pass the same exact-source reparse/revalidation gate; the caller records
+    // the overall semantic stage as incomplete so the result remains retryable.
+    for (const candidate of windowCandidates) {
+      const group = candidate.windowGroup;
+      if (group === null || !group.withinInputBounds) continue;
+      const groupProposals = proposalsForSourceIds(candidate.candidate.sourceObservationIds);
+      // Never select an arbitrary survivor. A duplicate response for one physical row is an
+      // ambiguity and remains one reviewable fallback group.
+      const proposal = groupProposals.length === 1 ? groupProposals[0] : undefined;
+      const selectedAnchorIds =
+        proposal?.sourceFields === undefined
+          ? []
+          : group.anchorCellIds.filter((anchorId) => proposal.sourceFields?.value === anchorId);
+      if (
+        proposal === undefined ||
+        (proposal.role !== 'measurement' && proposal.role !== 'preserve') ||
+        proposal.sourceFields === undefined ||
+        selectedAnchorIds.length !== 1
+      )
+        continue;
+      const provisional = candidateWindowDraftRow(group, proposal.sourceFields);
+      if (provisional === null) continue;
+      const promoted = applyProposalToRow(provisional, proposal, group.sourceObservationIds);
+      if (promoted === null) continue;
+      promotedWindowRows.push({
+        ...promoted,
+        reviewReasons: [
+          ...new Set<ExtractionDraftRow['reviewReasons'][number]>([
+            ...promoted.reviewReasons,
+            ...provisional.reviewReasons,
+          ]),
+        ],
+        // A geometry-qualified candidate remains explicit review work even after the model picks
+        // exact source cells. The accepted proposal is extraction, not measured truth.
+        reviewState: 'needs-review',
+        decision: 'preserve',
+      });
+    }
+    const mappedRows = rows.map((row) => {
+      const matchingProposals = proposalsForSourceIds(row.source.observationIds);
+      const proposal = matchingProposals.length === 1 ? matchingProposals[0] : undefined;
       if (proposal === undefined) return row;
       if (proposal.role === 'ignore' || proposal.role === 'specimen-context') return row;
       const mappedSpecimenType =
@@ -2427,17 +3164,421 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         source: {
           ...row.source,
           semantic: {
-            adapterVersion: semanticMapper.adapterVersion,
-            schemaVersion: semanticMapper.schemaVersion,
+            adapterVersion: activeSemanticMapper.adapterVersion,
+            schemaVersion: activeSemanticMapper.schemaVersion,
             sourceObservationIds: row.source.observationIds,
             ...(proposal.sourceFields === undefined
               ? {}
               : { sourceFieldObservationIds: proposal.sourceFields }),
-            ...semanticMapper.provenance,
+            ...activeSemanticMapper.provenance,
           },
         },
       };
     });
+    const groupsBySourceId = new Map<string, GeometryCandidateWindowGroup[]>();
+    for (const candidate of windowCandidates) {
+      const group = candidate.windowGroup;
+      if (group === null) continue;
+      for (const sourceId of group.sourceObservationIds) {
+        const matching = groupsBySourceId.get(sourceId) ?? [];
+        matching.push(group);
+        groupsBySourceId.set(sourceId, matching);
+      }
+    }
+    const legacyMappedRows = mappedRows.map((row) => {
+      // v1 adapters do not return field selections. A single-anchor group can still refine the
+      // deterministic fallback's identity, but it cannot select a value. Multi-anchor groups are
+      // deliberately left untouched until a v2 adapter selects exactly one source anchor.
+      const groups = new Set<GeometryCandidateWindowGroup>();
+      for (const sourceId of row.source.observationIds) {
+        for (const group of groupsBySourceId.get(sourceId) ?? []) groups.add(group);
+      }
+      const singleAnchorGroups = [...groups].filter((group) => group.anchorCellIds.length === 1);
+      if (singleAnchorGroups.length !== 1) return row;
+      const group = singleAnchorGroups[0]!;
+      const groupProposals = proposalsForSourceIds(group.sourceObservationIds);
+      if (groupProposals.length !== 1 || groupProposals[0]!.sourceFields !== undefined) return row;
+      return applyProposalToRow(row, groupProposals[0]!, row.source.observationIds) ?? row;
+    });
+    if (promotedWindowRows.length === 0) return legacyMappedRows;
+    return [
+      ...retainRowsOutsidePromotedPhysicalGroups(legacyMappedRows, promotedWindowRows),
+      ...promotedWindowRows,
+    ]
+      .sort((left, right) => {
+        const leftSource = left.source.observations?.[0];
+        const rightSource = right.source.observations?.[0];
+        return (
+          (leftSource?.pageIndex ?? 0) - (rightSource?.pageIndex ?? 0) ||
+          (leftSource?.boundingBox.y ?? 0) - (rightSource?.boundingBox.y ?? 0) ||
+          (leftSource?.boundingBox.x ?? 0) - (rightSource?.boundingBox.x ?? 0) ||
+          left.id.localeCompare(right.id)
+        );
+      })
+      .map((row, order) => ({ ...row, order }));
+
+    function candidateWindowDraftRow(
+      window: GeometryCandidateWindowGroup,
+      sourceFields: ExtractionSemanticFieldSelection,
+    ): ExtractionDraftRow | null {
+      if (mappingContext === undefined) return null;
+      const matchingVariants = window.variants.filter(
+        (variant) => variant.anchorCellId === sourceFields.value,
+      );
+      if (matchingVariants.length !== 1) return null;
+      const selectedVariant = matchingVariants[0]!;
+      const selectedFieldIds = Object.values(sourceFields).filter(
+        (value): value is string => value !== null,
+      );
+      if (
+        new Set(selectedFieldIds).size !== selectedFieldIds.length ||
+        selectedFieldIds.some((id) => !selectedVariant.sourceObservationIds.includes(id))
+      )
+        return null;
+      const specimenType = specimenTypeFromGeometryContext(window.context.specimenKey);
+      const collectionDateContexts = mappingContext.collectionDateContexts.filter(
+        (context) =>
+          context.pageIndex === window.context.pageIndex &&
+          window.context.collectionDateKey === geometryCollectionDateKey(context),
+      );
+      const provisional = parseGeometryCandidateVariantAsProvisional(
+        { ...selectedVariant, provisionalSourceFields: sourceFields },
+        {
+          locale: mappingContext.locale,
+          collectionDate: mappingContext.collectionDate,
+          collectionDateDefaulted: mappingContext.collectionDateDefaulted,
+          collectionDateContexts,
+          specimenType,
+          aliases: extractionAliases,
+          artifact: mappingContext.artifact,
+          resultTableContext: window.context.tableId !== null,
+        },
+      );
+      if (provisional === null) return null;
+      const sourceObservations = [...window.observations];
+      const sourceText = sourceObservations
+        .map((observation) => observation.text.trim())
+        .join('  ');
+      return {
+        ...provisional.row,
+        id: window.physicalRowId,
+        sourceText,
+        source: {
+          ...provisional.row.source,
+          observationIds: [...window.sourceObservationIds],
+          observations: sourceObservations,
+          boundingBox: unionObservationBoxes(sourceObservations),
+        },
+        collectionDateContext:
+          provisional.row.collectionDateContext ??
+          mappingContext.collectionDateContexts.find(
+            (context) =>
+              context.pageIndex === window.context.pageIndex &&
+              window.context.collectionDateKey === geometryCollectionDateKey(context),
+          ) ??
+          null,
+      };
+    }
+
+    function applyProposalToRow(
+      row: ExtractionDraftRow,
+      proposal: ExtractionSemanticProposal,
+      sourceObservationIds: readonly string[] = row.source.observationIds,
+    ): ExtractionDraftRow | null {
+      if (proposal.role === 'ignore' || proposal.role === 'specimen-context') return null;
+      const mappedSpecimenType =
+        proposal.proposedSpecimenType === 'other' ? 'unknown' : proposal.proposedSpecimenType;
+      const proposedSpecimenType = lockSpecimenType ? undefined : mappedSpecimenType;
+      if (
+        proposedSpecimenType !== undefined &&
+        row.proposedSpecimenType !== 'unknown' &&
+        proposedSpecimenType !== row.proposedSpecimenType
+      )
+        return null;
+      let next = row;
+      try {
+        if (proposal.sourceFields !== undefined) {
+          next = reparseExtractionRowFromSemanticFields(
+            row,
+            proposal.sourceFields,
+            extractionAliases,
+          );
+        }
+        next = revalidateExtractionRow(
+          next,
+          {
+            ...(proposal.proposedBiomarkerId === null
+              ? {}
+              : { proposedBiomarkerId: proposal.proposedBiomarkerId }),
+            ...(proposedSpecimenType === undefined ? {} : { proposedSpecimenType }),
+          },
+          extractionAliases,
+          proposal.sourceFields === undefined
+            ? {}
+            : {
+                sourceFields: proposal.sourceFields,
+                ...(mappingContext === undefined
+                  ? {}
+                  : {
+                      collectionDate: mappingContext.collectionDate,
+                      collectionDateDefaulted: mappingContext.collectionDateDefaulted,
+                    }),
+              },
+        );
+      } catch {
+        return null;
+      }
+      if (
+        next.reviewReasons.includes('incompatible-unit') ||
+        next.reviewReasons.includes('incompatible-specimen')
+      )
+        return null;
+      return {
+        ...next,
+        source: {
+          ...row.source,
+          semantic: {
+            adapterVersion: activeSemanticMapper.adapterVersion,
+            schemaVersion: activeSemanticMapper.schemaVersion,
+            sourceObservationIds: [...sourceObservationIds],
+            ...(proposal.sourceFields === undefined
+              ? {}
+              : { sourceFieldObservationIds: proposal.sourceFields }),
+            ...activeSemanticMapper.provenance,
+          },
+        },
+      };
+    }
+
+    function specimenTypeFromGeometryContext(value: string | null): SpecimenType {
+      return value === 'blood' ||
+        value === 'serum' ||
+        value === 'plasma' ||
+        value === 'urine' ||
+        value === 'stool' ||
+        value === 'saliva'
+        ? value
+        : 'unknown';
+    }
+
+    function geometryCollectionDateKey(context: ExtractionDateContext): string {
+      return `${context.pageIndex}:${context.observationId}:${context.collectionDate.kind === 'known' ? context.collectionDate.value : 'missing'}`;
+    }
+
+    function unionObservationBoxes(
+      sourceObservations: readonly VisionTextObservation[],
+    ): NormalizedBoundingBox {
+      const first = sourceObservations[0]?.boundingBox;
+      if (first === undefined) return { x: 0, y: 0, width: 0, height: 0 };
+      return sourceObservations.slice(1).reduce(
+        (box, observation) => ({
+          x: Math.min(box.x, observation.boundingBox.x),
+          y: Math.min(box.y, observation.boundingBox.y),
+          width:
+            Math.max(box.x + box.width, observation.boundingBox.x + observation.boundingBox.width) -
+            Math.min(box.x, observation.boundingBox.x),
+          height:
+            Math.max(
+              box.y + box.height,
+              observation.boundingBox.y + observation.boundingBox.height,
+            ) - Math.min(box.y, observation.boundingBox.y),
+        }),
+        { ...first },
+      );
+    }
+  }
+
+  function extractionSourceKey(row: Pick<ExtractionDraftRow, 'source'>): string {
+    // The source observation sequence is immutable provenance. It is the only safe join key for
+    // an automatic retry; labels, values, and model output are all editable or untrusted.
+    return JSON.stringify(row.source.observationIds);
+  }
+
+  function mergeSemanticRetryRows(
+    existingRows: readonly ExtractionDraftRow[],
+    regeneratedRows: readonly ExtractionDraftRow[],
+    physicalGroups: readonly GeometryCandidateWindowGroup[] = [],
+  ): readonly ExtractionDraftRow[] {
+    const existingBySource = new Map<string, ExtractionDraftRow[]>();
+    const existingBySourceId = new Map<string, ExtractionDraftRow[]>();
+    for (const row of existingRows) {
+      const sourceKey = extractionSourceKey(row);
+      const matchingBySource = existingBySource.get(sourceKey) ?? [];
+      matchingBySource.push(row);
+      existingBySource.set(sourceKey, matchingBySource);
+      for (const sourceId of row.source.observationIds) {
+        const matchingById = existingBySourceId.get(sourceId) ?? [];
+        matchingById.push(row);
+        existingBySourceId.set(sourceId, matchingById);
+      }
+    }
+    const physicalGroupsBySource = new Map(
+      physicalGroups.map((group) => [JSON.stringify(group.sourceObservationIds), group] as const),
+    );
+    const promotedWindowRows = regeneratedRows.filter(
+      (row) => row.source.semantic?.sourceFieldObservationIds !== undefined,
+    );
+    const promotedAnchorIds = new Set(
+      promotedWindowRows
+        .map((row) => row.source.semantic?.sourceFieldObservationIds?.value)
+        .filter((id): id is string => id !== undefined),
+    );
+    const userEditedAnchorIds = new Set(
+      existingRows
+        .filter((row) => row.editState === 'user-edited')
+        .flatMap((row) => row.source.observationIds)
+        .filter((id) => promotedAnchorIds.has(id)),
+    );
+    const regeneratedKeys = new Set<string>();
+    const consumedExistingRows = new Set<ExtractionDraftRow>();
+    const merged: ExtractionDraftRow[] = [];
+    for (const row of regeneratedRows) {
+      const key = extractionSourceKey(row);
+      const physicalGroup = physicalGroupsBySource.get(key);
+      if (physicalGroup !== undefined) {
+        const relatedRows = existingRowsForPhysicalGroup(physicalGroup);
+        for (const related of relatedRows) consumedExistingRows.add(related);
+        regeneratedKeys.add(key);
+        merged.push(mergePhysicalGroupRows(row, relatedRows));
+        continue;
+      }
+      const existing = existingBySource.get(key)?.[0];
+      if (existing !== undefined) {
+        regeneratedKeys.add(key);
+        consumedExistingRows.add(existing);
+        // Keep user decisions and edits intact. Row order is recomputed below because a retry may
+        // add a newly accepted geometry window alongside the retained source row.
+        if (existing.editState === 'user-edited' || row.source.semantic === null) {
+          merged.push(existing);
+        } else {
+          merged.push({ ...row, id: existing.id });
+        }
+        continue;
+      }
+      // A retry may add a newly accepted geometry window, but never an unlinked deterministic
+      // row that was absent from the retained fallback draft.
+      if (
+        row.source.semantic !== null &&
+        row.source.semantic?.sourceFieldObservationIds !== undefined &&
+        ![...row.source.observationIds].some((id) => userEditedAnchorIds.has(id))
+      )
+        merged.push(row);
+    }
+    for (const row of existingRows) {
+      if (
+        !consumedExistingRows.has(row) &&
+        !regeneratedKeys.has(extractionSourceKey(row)) &&
+        (row.editState === 'user-edited' ||
+          ![...row.source.observationIds].some((id) => promotedAnchorIds.has(id)))
+      )
+        merged.push(row);
+    }
+    return merged
+      .sort((left, right) => {
+        const leftSource = left.source.observations?.[0];
+        const rightSource = right.source.observations?.[0];
+        return (
+          (leftSource?.pageIndex ?? 0) - (rightSource?.pageIndex ?? 0) ||
+          (leftSource?.boundingBox.y ?? 0) - (rightSource?.boundingBox.y ?? 0) ||
+          (leftSource?.boundingBox.x ?? 0) - (rightSource?.boundingBox.x ?? 0) ||
+          left.id.localeCompare(right.id)
+        );
+      })
+      .map((row, order) => ({ ...row, order }));
+
+    function existingRowsForPhysicalGroup(
+      group: GeometryCandidateWindowGroup,
+    ): readonly ExtractionDraftRow[] {
+      const groupSourceIds = new Set(group.sourceObservationIds);
+      const groupAnchorIds = new Set(group.anchorCellIds);
+      const related = new Set<ExtractionDraftRow>();
+      for (const sourceId of group.anchorCellIds) {
+        for (const row of existingBySourceId.get(sourceId) ?? []) {
+          if (
+            row.source.observationIds.some((id) => groupAnchorIds.has(id)) &&
+            row.source.observationIds.every((id) => groupSourceIds.has(id))
+          )
+            related.add(row);
+        }
+      }
+      return [...related].sort((left, right) => left.id.localeCompare(right.id));
+    }
+
+    function mergePhysicalGroupRows(
+      regenerated: ExtractionDraftRow,
+      existing: readonly ExtractionDraftRow[],
+    ): ExtractionDraftRow {
+      if (existing.length === 0) return regenerated;
+      const userEdited = existing.filter((row) => row.editState === 'user-edited');
+      if (userEdited.length === 0) return { ...regenerated, id: existing[0]!.id };
+      const editSignatures = new Set(userEdited.map(userEditSignature));
+      if (editSignatures.size === 1) return preserveUserEdit(regenerated, userEdited[0]!);
+
+      // Competing edits cannot identify a safe survivor. Keep one deterministic row, preserve its
+      // user-edited state, and turn the result into an honest review exception without selecting
+      // either value or silently treating the accepted semantic variant as authoritative.
+      const sourceValue = { kind: 'free_text' as const, value: regenerated.sourceText };
+      return {
+        ...regenerated,
+        id: userEdited[0]!.id,
+        sourceValue,
+        sourceValueString: regenerated.sourceText,
+        proposedValue: sourceValue,
+        proposedUnit: null,
+        proposedReferenceInterval: null,
+        proposedFlag: null,
+        proposedBiomarkerId: regenerated.proposedBiomarkerId,
+        reviewReasons: [
+          ...new Set<ExtractionDraftRow['reviewReasons'][number]>([
+            ...regenerated.reviewReasons,
+            'unsupported-layout',
+            'unparseable-value',
+          ]),
+        ],
+        reviewState: 'needs-review',
+        decision: 'preserve',
+        editState: 'user-edited',
+        source: { ...regenerated.source, semantic: null },
+      };
+    }
+
+    function preserveUserEdit(
+      regenerated: ExtractionDraftRow,
+      existing: ExtractionDraftRow,
+    ): ExtractionDraftRow {
+      return {
+        ...regenerated,
+        id: existing.id,
+        proposedLabel: existing.proposedLabel,
+        proposedValue: existing.proposedValue,
+        proposedUnit: existing.proposedUnit,
+        proposedReferenceInterval: existing.proposedReferenceInterval,
+        proposedFlag: existing.proposedFlag,
+        proposedBiomarkerId: existing.proposedBiomarkerId,
+        proposedSpecimenType: existing.proposedSpecimenType,
+        collectionDate: existing.collectionDate,
+        collectionDateContext: existing.collectionDateContext,
+        reviewReasons: existing.reviewReasons,
+        reviewState: existing.reviewState,
+        decision: existing.decision,
+        editState: 'user-edited',
+        source: { ...regenerated.source, semantic: null },
+      };
+    }
+
+    function userEditSignature(row: ExtractionDraftRow): string {
+      return JSON.stringify([
+        row.proposedLabel,
+        row.proposedValue,
+        row.proposedUnit,
+        row.proposedReferenceInterval,
+        row.proposedFlag,
+        row.proposedBiomarkerId,
+        row.proposedSpecimenType,
+        row.collectionDate,
+        row.decision,
+      ]);
+    }
   }
 
   async function runExtraction(
@@ -2459,6 +3600,20 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       let activeRepo: LabRepository | null = null;
       let operationPipelineFingerprint: ExtractionPipelineFingerprint | null = null;
       let extractionRevision = 1;
+      let unlockedPdfSession: PdfInspectionSession | null = null;
+      const closeUnlockedPdfSession = async (): Promise<void> => {
+        const session = unlockedPdfSession;
+        password = '';
+        if (session === null) return;
+        try {
+          await session.close();
+          unlockedPdfSession = null;
+        } catch {
+          // The operation's primary result must not be replaced by best-effort capability
+          // cleanup. Keeping the session retains an outer-finally retry when close fails.
+        }
+      };
+      let replacingExistingDraft = false;
       const isCancelled = () =>
         extractionOperations.get(id) !== operationToken || operationToken.cancelled;
       const cancellation: ExtractionSemanticCancellation = {
@@ -2484,11 +3639,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         const existingDraft = await repo.getExtractionDraftForReport(
           id,
           extractionAliases,
-          currentExtractionPipelineFingerprint(report.sourceHash),
+          currentExtractionPipelineFingerprint(report.sourceHash, 1, report.sourceType),
         );
+        const staleOpenDraft =
+          existingDraft?.state === 'draft' && existingDraft.pipelineStatus === 'older';
         // Starting extraction is intentionally idempotent. Returning the existing draft before
-        // touching durable progress avoids a fake OCR/model pass and makes cached work explicit.
-        if (mode === 'start' && existingDraft !== null && existingDraft.state !== 'failed') {
+        // touching durable progress avoids a fake OCR pass and makes cached work explicit.
+        if (mode === 'start' && existingDraft !== null && !staleOpenDraft) {
           return existingDraft;
         }
         if (mode === 'reprocess') {
@@ -2502,10 +3659,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             );
           }
         }
-        extractionRevision = mode === 'reprocess' ? (existingDraft?.revision ?? 0) + 1 : 1;
+        replacingExistingDraft =
+          existingDraft?.state === 'draft' && (mode === 'reprocess' || staleOpenDraft);
+        extractionRevision =
+          mode === 'reprocess' || staleOpenDraft ? (existingDraft?.revision ?? 0) + 1 : 1;
         const pipelineFingerprint = currentExtractionPipelineFingerprint(
           report.sourceHash,
           extractionRevision,
+          report.sourceType,
         );
         operationPipelineFingerprint = pipelineFingerprint;
         await persistExtractionOperation(
@@ -2535,26 +3696,27 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           await repo.discardLegacyExtractionDraft(id);
         }
 
-        // The verified-pack gate is the only model condition allowed to block a new automated
-        // extraction. Once OCR starts, mapper preparation/inference failures fall back to Review.
-        try {
-          await semanticMapper?.checkAvailability?.();
-        } catch (error) {
-          if (isSemanticModelUnavailable(error)) {
-            throw new LabReportExtractionError(
-              'model-unavailable',
-              'The verified on-device model pack is not available for extraction',
-              { cause: error },
-            );
-          }
-          throw error;
-        }
-
         const sourcePath = await openOriginal(id);
         let inspection: PdfInspection | null = null;
+        const requireVerifiedOriginal = async (): Promise<void> => {
+          if ((await verifySource(id)) !== 'verified') {
+            throw new LabReportExtractionError(
+              'original-source',
+              'The Original Report changed and must be imported again',
+            );
+          }
+        };
+        const requireNotCancelled = (): void => {
+          if (isCancelled())
+            throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
+        };
         if (report.sourceType === 'pdf') {
           try {
+            requireNotCancelled();
+            await requireVerifiedOriginal();
             const initial = await pdfInspector.inspect(sourcePath);
+            await requireVerifiedOriginal();
+            requireNotCancelled();
             if (initial.locked) {
               const request = passwordRequest ?? options.passwordRequest;
               if (request === undefined) {
@@ -2568,16 +3730,18 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
                 throw new LabReportExtractionError('cancelled', 'Password entry was cancelled');
               }
               password = entered;
+              requireNotCancelled();
+              await requireVerifiedOriginal();
               const session = await pdfInspector.unlock(sourcePath, password);
-              try {
-                inspection = session.inspection;
-              } finally {
-                await session.close();
-              }
+              unlockedPdfSession = session;
+              await requireVerifiedOriginal();
+              requireNotCancelled();
+              inspection = session.inspection;
             } else {
               inspection = initial;
             }
           } catch (error) {
+            await closeUnlockedPdfSession();
             if (error instanceof LabReportExtractionError) throw error;
             throw new LabReportExtractionError(
               isPdfPasswordFailure(error) ? 'wrong-password' : 'recognition',
@@ -2594,8 +3758,9 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             ? (inspection?.pages ?? []).map((page) => ({
                 pageIndex: page.pageIndex,
                 rotation: 0,
+                hasTextLayer: page.hasTextLayer,
               }))
-            : [{ pageIndex: 0, rotation: 0 }];
+            : [{ pageIndex: 0, rotation: 0, hasTextLayer: false }];
         if (pages.length === 0) {
           throw new LabReportExtractionError('recognition', 'The report has no readable pages');
         }
@@ -2612,55 +3777,105 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           extractionRevision,
         );
         extractionProgressEvent(id, mode, 'ocr', 'active', 0, pages.length);
-        const results: VisionOCRResult[] = [];
-        for (const [pageNumber, page] of pages.entries()) {
-          if (isCancelled())
-            throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-          // Hash and existence are checked immediately before every Vision call. The resolved
-          // path never crosses into a screen and the password exists only for this operation.
-          if ((await verifySource(id)) !== 'verified') {
-            throw new LabReportExtractionError(
-              'original-source',
-              'The Original Report changed and must be imported again',
-            );
-          }
-          try {
-            results.push(
-              await visionOCR.recognize(
-                sourcePath,
-                page.pageIndex,
-                page.rotation,
-                password || null,
-              ),
-            );
-          } catch (error) {
-            if (isPdfPasswordFailure(error) && report.sourceType === 'pdf') {
-              throw new LabReportExtractionError(
-                'wrong-password',
-                'The PDF password was not accepted',
-                { cause: error },
-              );
+        const pageResults: ExtractionPageResult[] = [];
+        try {
+          for (const [pageNumber, page] of pages.entries()) {
+            requireNotCancelled();
+            const usePdfTextLayer =
+              report.sourceType === 'pdf' &&
+              page.hasTextLayer &&
+              (unlockedPdfSession?.readTextLayerPage !== undefined ||
+                (unlockedPdfSession === null && pdfInspector.readTextLayerPage !== undefined));
+            let trustedTextLayer: VisionOCRResult | null = null;
+            if (usePdfTextLayer) {
+              await requireVerifiedOriginal();
+              requireNotCancelled();
+              try {
+                if (unlockedPdfSession?.readTextLayerPage !== undefined) {
+                  trustedTextLayer = await unlockedPdfSession.readTextLayerPage(page.pageIndex);
+                } else if (pdfInspector.readTextLayerPage !== undefined) {
+                  trustedTextLayer = await pdfInspector.readTextLayerPage(
+                    sourcePath,
+                    page.pageIndex,
+                    password || null,
+                  );
+                } else {
+                  throw new Error('PDF text-layer reader disappeared during extraction');
+                }
+              } catch (error) {
+                if (error instanceof LabReportExtractionError) throw error;
+                throw new LabReportExtractionError(
+                  isPdfPasswordFailure(error) ? 'wrong-password' : 'recognition',
+                  isPdfPasswordFailure(error)
+                    ? 'The PDF password was not accepted'
+                    : 'Local PDF text-layer recognition failed',
+                  { cause: error },
+                );
+              }
+              // Verify before interpreting or storing the native result. A changed source makes
+              // the result unusable and must not trigger Vision fallback or later-page reads.
+              await requireVerifiedOriginal();
+              requireNotCancelled();
+              if (trustedTextLayer === undefined) {
+                throw new LabReportExtractionError(
+                  'recognition',
+                  'Local PDF text-layer recognition returned an invalid result',
+                );
+              }
             }
-            throw new LabReportExtractionError('recognition', 'Local document recognition failed', {
-              cause: error,
-            });
+
+            if (trustedTextLayer === null) {
+              requireNotCancelled();
+              await requireVerifiedOriginal();
+              try {
+                const visionResult = await visionOCR.recognize(
+                  sourcePath,
+                  page.pageIndex,
+                  page.rotation,
+                  password || null,
+                );
+                await requireVerifiedOriginal();
+                requireNotCancelled();
+                pageResults.push({ result: visionResult, origin: 'vision' });
+              } catch (error) {
+                if (error instanceof LabReportExtractionError) throw error;
+                if (isPdfPasswordFailure(error) && report.sourceType === 'pdf') {
+                  throw new LabReportExtractionError(
+                    'wrong-password',
+                    'The PDF password was not accepted',
+                    { cause: error },
+                  );
+                }
+                throw new LabReportExtractionError(
+                  'recognition',
+                  'Local document recognition failed',
+                  { cause: error },
+                );
+              }
+            } else {
+              pageResults.push({ result: trustedTextLayer, origin: 'trusted-pdf-text-layer' });
+            }
+
+            await persistExtractionOperation(
+              repo,
+              id,
+              mode,
+              'active',
+              'ocr',
+              pageNumber,
+              pages.length,
+              null,
+              pipelineFingerprint,
+              extractionRevision,
+            );
+            extractionProgressEvent(id, mode, 'ocr', 'active', pageNumber + 1, pages.length);
           }
-          if (isCancelled())
-            throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-          await persistExtractionOperation(
-            repo,
-            id,
-            mode,
-            'active',
-            'ocr',
-            pageNumber,
-            pages.length,
-            null,
-            pipelineFingerprint,
-            extractionRevision,
-          );
-          extractionProgressEvent(id, mode, 'ocr', 'active', pageNumber + 1, pages.length);
+        } finally {
+          // Close the unlocked document immediately after the last native page acquisition and
+          // before any semantic mapping or other interpretation of the OCR results.
+          await closeUnlockedPdfSession();
         }
+        const results = pageResults.map(({ result }) => result);
         await persistExtractionOperation(
           repo,
           id,
@@ -2691,12 +3906,19 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
               .map((observation) => [observation.id, observation] as const),
           ).values(),
         ];
+        const trustedPdfTextLayerObservationKeys = new Set(
+          pageResults.flatMap(({ result, origin }) =>
+            origin === 'trusted-pdf-text-layer'
+              ? result.observations.map(extractionObservationKey)
+              : [],
+          ),
+        );
         const sourceArtifact: LabSourceArtifact = {
           kind: 'original',
           id: null,
           hash: report.sourceHash,
         };
-        const locale = Intl.DateTimeFormat().resolvedOptions().locale;
+        const locale = extractionLocaleFromOCR(results);
         const geometryExtraction = results.some(
           (result) => result.contractVersion === VISION_OCR_CONTRACT_VERSION,
         )
@@ -2707,6 +3929,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
               collectionDateContexts: dateContext.contexts,
               aliases: extractionAliases,
               artifact: sourceArtifact,
+              trustedPdfTextLayerObservationKeys,
             })
           : null;
         const deterministicRows =
@@ -2733,48 +3956,118 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
               );
             })
             .map((row, order) => ({ ...row, order }));
-        await persistExtractionOperation(
-          repo,
-          id,
-          mode,
-          'active',
-          'model',
-          0,
-          0,
-          null,
-          pipelineFingerprint,
-          extractionRevision,
+        const documentRows =
+          geometryExtraction === null
+            ? new Map<number, readonly DocumentVLMRow[]>()
+            : await extractDocumentVLMRows({
+                report,
+                sourcePath,
+                password: password || null,
+                pageIndices: pages.map((page) => page.pageIndex),
+                candidateWindows: geometryExtraction.candidateWindows,
+                locale,
+                cancellation,
+                requireVerifiedOriginal,
+              });
+        const deterministicValueSourceIDs = new Set(
+          deterministicRows.flatMap((row) =>
+            (row.source.observations ?? []).flatMap((observation) =>
+              observation.text.trim() === row.sourceValueString.trim() ? [observation.id] : [],
+            ),
+          ),
         );
-        extractionProgressEvent(id, mode, 'model', 'active', 0, 0);
+        const grounding =
+          geometryExtraction === null
+            ? null
+            : groundDocumentVLMRows(documentRows, geometryExtraction.candidateWindows, {
+                locale,
+                collectionDate,
+                collectionDateDefaulted,
+                collectionDateContexts: dateContext.contexts,
+                aliases: extractionAliases,
+                artifact: sourceArtifact,
+                existingSourceObservationIds: deterministicValueSourceIDs,
+              });
+        const matchedGroups = new Map(
+          (geometryExtraction?.candidateWindows ?? [])
+            .filter((group) => grounding?.matchedPhysicalRowIds.has(group.physicalRowId))
+            .map((group) => [group.physicalRowId, group] as const),
+        );
+        const deterministicRowsWithoutPromotedFallbacks = deterministicRows.filter((row) => {
+          const rowIDs = row.source.observationIds;
+          return ![...matchedGroups.values()].some((group) => {
+            const sourceIDs = new Set(group.sourceObservationIds);
+            const anchorIDs = new Set(group.anchorCellIds);
+            return (
+              rowIDs.length > 0 &&
+              rowIDs.every((id) => sourceIDs.has(id)) &&
+              rowIDs.some((id) => anchorIDs.has(id))
+            );
+          });
+        });
+        const sourceRows = [
+          ...deterministicRowsWithoutPromotedFallbacks,
+          ...(grounding?.rows ?? []),
+        ]
+          .sort((left, right) => {
+            const leftSource = left.source.observations?.[0];
+            const rightSource = right.source.observations?.[0];
+            return (
+              (leftSource?.pageIndex ?? left.source.pageIndex) -
+                (rightSource?.pageIndex ?? right.source.pageIndex) ||
+              (leftSource?.boundingBox.y ?? left.source.boundingBox.y) -
+                (rightSource?.boundingBox.y ?? right.source.boundingBox.y) ||
+              (leftSource?.boundingBox.x ?? left.source.boundingBox.x) -
+                (rightSource?.boundingBox.x ?? right.source.boundingBox.x)
+            );
+          })
+          .map((row, order) => ({ ...row, order }));
+        let semanticFailure: 'recognition' | 'model-unavailable' | null = null;
         const rows = await applySemanticMappings(
-          deterministicRows,
+          sourceRows,
           observations,
-          (completed, total) =>
-            extractionProgressEvent(id, mode, 'model', 'active', completed, total),
+          undefined,
           cancellation,
           geometryExtraction?.semanticCandidateRowIds,
           geometryExtraction !== null,
+          geometryExtraction?.candidateWindows,
+          {
+            locale,
+            collectionDate,
+            collectionDateDefaulted,
+            collectionDateContexts: dateContext.contexts,
+            artifact: sourceArtifact,
+          },
+          (reason) => {
+            if (semanticFailure === null || reason === 'model-unavailable')
+              semanticFailure = reason;
+          },
         );
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-        const modelTotal = extractionProgress.get(id)?.total ?? 0;
-        await persistExtractionOperation(
-          repo,
-          id,
-          mode,
-          'active',
-          'model',
-          modelTotal,
-          modelTotal,
-          null,
-          pipelineFingerprint,
-          extractionRevision,
-        );
-        extractionProgressEvent(id, mode, 'model', 'complete', modelTotal, modelTotal);
         if (rows.length === 0) {
           throw new LabReportExtractionError(
             'no-reviewable-measurements',
             'Local OCR found no reviewable Measurements',
           );
+        }
+        // Reprocessing must not replace an edited current draft when optional research-only
+        // refinement fails. The deterministic MVP path still completes successfully and the
+        // existing draft remains the user's current work.
+        if (semanticFailure !== null && replacingExistingDraft && !staleOpenDraft) {
+          await persistExtractionOperation(
+            repo,
+            id,
+            mode,
+            'complete',
+            'review',
+            1,
+            1,
+            null,
+            pipelineFingerprint,
+            extractionRevision,
+          );
+          extractionProgressEvent(id, mode, 'review', 'complete', 1, 1);
+          return existingDraft!;
         }
         await persistExtractionOperation(
           repo,
@@ -2796,20 +4089,32 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             'The Original Report changed and must be imported again',
           );
         }
+        const preserveExistingRows = staleOpenDraft && existingDraft?.state === 'draft';
+        const draftRows = preserveExistingRows
+          ? mergeSemanticRetryRows(existingDraft.rows, rows, geometryExtraction?.candidateWindows)
+          : rows;
         const draftInput = {
           reportId: id,
           collectionDate,
-          rows,
+          rows: draftRows,
           sourceArtifact,
           pipelineFingerprint,
           revision: extractionRevision,
         } as const;
+        const replacementDraft =
+          replacingExistingDraft && existingDraft?.state === 'draft' ? existingDraft : null;
+        if (replacingExistingDraft && replacementDraft === null)
+          throw new LabReportExtractionError(
+            'persistence',
+            'Only an open Extraction Draft can be reprocessed',
+          );
         const draft =
-          mode === 'reprocess' && existingDraft?.state === 'draft'
+          replacementDraft !== null
             ? await repo.replaceExtractionDraft({
-                previousDraftId: existingDraft.id,
+                previousDraftId: replacementDraft.id,
                 ...draftInput,
                 revision: extractionRevision,
+                ...(preserveExistingRows ? { preserveRowIds: true } : {}),
               })
             : await repo.createExtractionDraft(draftInput);
         createdDraft = draft;
@@ -2817,18 +4122,18 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         // after the atomic commit as well as immediately before it. A replaced open draft is
         // restored from the exact in-memory snapshot if this post-write check fails.
         if ((await verifySource(id)) !== 'verified') {
-          if (mode === 'reprocess' && existingDraft?.state === 'draft') {
+          if (replacementDraft !== null) {
             await repo.replaceExtractionDraft({
               previousDraftId: draft.id,
-              id: existingDraft.id,
-              reportId: existingDraft.reportId,
-              collectionDate: existingDraft.collectionDate,
-              rows: existingDraft.rows,
-              sourceArtifact: existingDraft.sourceArtifact ?? null,
-              pipelineFingerprint: existingDraft.pipelineFingerprint,
-              revision: existingDraft.revision,
-              ocrContractVersion: existingDraft.ocrContractVersion,
-              parserVersion: existingDraft.parserVersion,
+              id: replacementDraft.id,
+              reportId: replacementDraft.reportId,
+              collectionDate: replacementDraft.collectionDate,
+              rows: replacementDraft.rows,
+              sourceArtifact: replacementDraft.sourceArtifact ?? null,
+              pipelineFingerprint: replacementDraft.pipelineFingerprint,
+              revision: replacementDraft.revision,
+              ocrContractVersion: replacementDraft.ocrContractVersion,
+              parserVersion: replacementDraft.parserVersion,
               preserveRowIds: true,
             });
           } else {
@@ -2842,7 +4147,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         }
         // Cancellation at the write seam is a committed success. This avoids reporting failure
         // while exposing a replacement or deleting the exact prior draft after atomic replace.
-        if (mode === 'start' && isCancelled()) {
+        if (mode === 'start' && !replacingExistingDraft && isCancelled()) {
           await repo.deleteExtractionDraft(draft.id);
           createdDraft = null;
           throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
@@ -2860,7 +4165,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           extractionRevision,
         );
         extractionProgressEvent(id, mode, 'review', 'complete', 1, 1);
-        if (isCancelled() && mode !== 'reprocess') {
+        if (isCancelled() && mode !== 'reprocess' && !replacingExistingDraft) {
           await repo.deleteExtractionDraft(draft.id);
           createdDraft = null;
           await persistExtractionOperation(
@@ -2891,7 +4196,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
                 { cause: error },
               );
         const cancelled = isCancelled() || extractionError.reason === 'cancelled';
-        if (cancelled && createdDraft !== null && mode !== 'reprocess') {
+        if (cancelled && createdDraft !== null && mode !== 'reprocess' && !replacingExistingDraft) {
           try {
             await activeRepo?.deleteExtractionDraft(createdDraft.id);
           } catch {
@@ -2932,6 +4237,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         }
         throw extractionError;
       } finally {
+        await closeUnlockedPdfSession();
         password = '';
         operationToken.cancellationListeners.clear();
         if (extractionOperations.get(id) === operationToken) extractionOperations.delete(id);
@@ -2984,10 +4290,15 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         const draft = await repo.getExtractionDraftForReport(
           id,
           extractionAliases,
-          currentExtractionPipelineFingerprint(report.sourceHash),
+          currentExtractionPipelineFingerprint(report.sourceHash, 1, report.sourceType),
         );
         if (draft === null || draft.state !== 'draft')
           throw new LabReportExtractionError('persistence', 'Only an open draft can be improved');
+        if (draft.pipelineStatus === 'older')
+          throw new LabReportExtractionError(
+            'persistence',
+            'This Extraction Draft must be reprocessed before it can be improved',
+          );
         const sourceArtifact = draft.sourceArtifact ?? null;
         if (
           sourceArtifact === null ||
@@ -3061,6 +4372,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             modelVersion: semanticMapper.provenance?.modelVersion ?? null,
             runtimeVersion: semanticMapper.provenance?.runtimeVersion ?? null,
             catalogueVersion: semanticMapper.provenance?.catalogueVersion ?? CATALOGUE_VERSION,
+            pdfTextLayerAdapterVersion: base?.pdfTextLayerAdapterVersion ?? null,
           },
           draft.revision,
         );
@@ -3086,7 +4398,11 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     return repo.getExtractionDraft(
       id,
       extractionAliases,
-      currentExtractionPipelineFingerprint(report?.sourceHash ?? null, draft.revision),
+      currentExtractionPipelineFingerprint(
+        report?.sourceHash ?? null,
+        draft.revision,
+        report?.sourceType,
+      ),
     );
   }
 
@@ -3103,9 +4419,10 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   async function updateExtractionRow(
     id: string,
     patch: ExtractionDraftRowPatch,
+    options?: ExtractionDraftRowUpdateOptions,
   ): Promise<ExtractionDraftRow> {
     await ensureInitialized();
-    return (await repository()).updateExtractionDraftRow(id, patch, extractionAliases);
+    return (await repository()).updateExtractionDraftRow(id, patch, extractionAliases, options);
   }
 
   async function updateExtractionGroupDate(
@@ -3135,6 +4452,19 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       // readable after the user explicitly deletes its source.
       if (draft.state === 'draft') {
         const report = await repo.getReport(draft.reportId);
+        const currentDraft =
+          report === null
+            ? null
+            : await repo.getExtractionDraft(
+                id,
+                extractionAliases,
+                currentExtractionPipelineFingerprint(report.sourceHash, 1, report.sourceType),
+              );
+        if (currentDraft?.pipelineStatus === 'older')
+          throw new LabReportExtractionError(
+            'persistence',
+            'This Extraction Draft must be reprocessed before it can be confirmed',
+          );
         const artifact = draft.sourceArtifact;
         if (
           report === null ||

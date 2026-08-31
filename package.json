@@ -24,6 +24,7 @@
     "test:contracts-build": "node --test scripts/contracts-build.test.mjs",
     "test:model-evaluation-embedding": "node --test scripts/model-evaluation-embedding.test.mjs",
     "test:mobile-bundle": "node scripts/mobile-bundle.test.mjs",
+    "test:production-model-boundary": "node --test scripts/production-model-boundary.test.mjs",
     "test:boundaries": "node --test scripts/boundaries.test.mjs",
     "test:showcase": "tsx --test scripts/showcase.test.ts",
     "test:native:protection": "bash scripts/run-native-protection-tests.sh",
@@ -40,7 +41,7 @@
     "ios:local-model-runtime:build": "bash scripts/build-local-model-runtime.sh",
     "contract:check": "npm run build --workspace=@alyte/contracts && npm run contract:check --workspace=@alyte/contracts",
     "ios:config:check": "node scripts/check-expo-config.mjs",
-    "ci": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run check:local-model-manifest && npm run check:semantic-mapper-grammar && npm run test && npm run test:mobile-bundle && npm run test:boundaries && npm run test:showcase && npm run contract:check && npm run ios:config:check && npm run test:local-model-runtime && npm run test:local-model-runtime-packaging && npm run test:native:local-models"
+    "ci": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run check:local-model-manifest && npm run check:semantic-mapper-grammar && npm run test && npm run test:mobile-bundle && npm run test:production-model-boundary && npm run test:boundaries && npm run test:showcase && npm run contract:check && npm run ios:config:check && npm run test:local-model-runtime && npm run test:local-model-runtime-packaging && npm run test:native:local-models"
   },
   "devDependencies": {
     "@types/node": "26.2.0",
@@ -52,5 +53,10 @@
     "prettier": "3.9.6",
     "tsx": "4.23.12",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "expo": "~57.0.15",
+    "react": "19.2.3",
+    "react-native": "0.86.2"
   }
 }

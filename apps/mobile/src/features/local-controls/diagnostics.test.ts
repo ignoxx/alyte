@@ -11,7 +11,6 @@ test('diagnostics payload is allowlisted and contains no automatic health attach
     protectedFiles: 'available',
     failures: ['database-failed'],
   });
-  assert.deepEqual(payload.capabilities.model, 'not-managed-here');
   assert.doesNotThrow(() => assertDiagnosticsPayload(payload));
   assert.throws(
     () => assertDiagnosticsPayload({ ...payload, healthData: { value: 'secret' } }),

@@ -226,6 +226,88 @@ private func loadDocument(_ path: String) throws -> PDFDocument {
   return document
 }
 
+private func loadTextLayerDocument(_ path: String, password: String?) throws -> PDFDocument {
+  guard let document = PDFDocument(url: URL(fileURLWithPath: alytePDFFilePath(path))) else {
+    throw AlytePDFError.unreadable
+  }
+  if document.isLocked {
+    guard let password, !password.isEmpty, document.unlock(withPassword: password) else {
+      throw AlytePDFError.locked
+    }
+  }
+  return document
+}
+
+private func renderExtractionBand(
+  path: String,
+  pageIndex: Int,
+  rect: Any,
+  password: String?
+) throws -> [String: Any] {
+  let document = try loadTextLayerDocument(path, password: password)
+  guard pageIndex >= 0, pageIndex < document.pageCount,
+    let page = document.page(at: pageIndex)
+  else { throw AlytePDFError.renderFailed }
+  let crop = try normalizedRect(rect)
+  let image = try renderImage(page: page, crop: crop, rotation: 0, redactions: [])
+  guard let data = image.jpegData(compressionQuality: 0.92), !data.isEmpty else {
+    throw AlytePDFError.renderFailed
+  }
+  let directory = FileManager.default.temporaryDirectory
+    .appendingPathComponent("AlyteDocumentBands", isDirectory: true)
+  try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+  try FileManager.default.setAttributes(
+    [.protectionKey: FileProtectionType.complete],
+    ofItemAtPath: directory.path
+  )
+  var directoryValues = URLResourceValues()
+  directoryValues.isExcludedFromBackup = true
+  var mutableDirectory = directory
+  try mutableDirectory.setResourceValues(directoryValues)
+  let destination = directory.appendingPathComponent(UUID().uuidString).appendingPathExtension("jpg")
+  try data.write(to: destination, options: [.atomic, .completeFileProtection])
+  var values = URLResourceValues()
+  values.isExcludedFromBackup = true
+  var mutableDestination = destination
+  try mutableDestination.setResourceValues(values)
+  return [
+    "uri": destination.absoluteString,
+    "width": Int(image.size.width.rounded()),
+    "height": Int(image.size.height.rounded()),
+  ]
+}
+
+private func deleteExtractionBand(_ uri: String) throws {
+  guard let url = URL(string: uri), url.isFileURL else { throw AlytePDFError.renderFailed }
+  let allowed = FileManager.default.temporaryDirectory
+    .appendingPathComponent("AlyteDocumentBands", isDirectory: true).standardizedFileURL
+  let target = url.standardizedFileURL
+  guard target.path.hasPrefix(allowed.path + "/") else { throw AlytePDFError.renderFailed }
+  if FileManager.default.fileExists(atPath: target.path) {
+    try FileManager.default.removeItem(at: target)
+  }
+  guard !FileManager.default.fileExists(atPath: target.path) else {
+    throw AlytePDFError.renderFailed
+  }
+}
+
+/// Reads exactly one PDFKit text-layer page. A nil result means that this page's complete text
+/// layer is unavailable or untrusted; path, password, and session failures remain thrown errors.
+func alytePDFTextLayerPage(path: String, pageIndex: Int, password: String?) throws
+  -> [String: Any]?
+{
+  let document = try loadTextLayerDocument(path, password: password)
+  return alytePDFTextLayerPage(document: document, pageIndex: pageIndex)
+}
+
+/// Reads exactly one page from an already-unlocked, short-lived PDFKit session.
+func alytePDFTextLayerPage(sessionId: String, pageIndex: Int) throws -> [String: Any]? {
+  guard let document = AlytePDFSessionStore.shared.document(for: sessionId) else {
+    throw AlytePDFError.unreadable
+  }
+  return alytePDFTextLayerPage(document: document, pageIndex: pageIndex)
+}
+
 /// Short-lived, opaque PDF capabilities shared by the module and PDFKit view. Keeping the
 /// document here lets PDFKit render one page at a time without handing protected paths to React.
 final class AlytePDFSessionStore {
@@ -255,7 +337,8 @@ final class AlytePDFSessionStore {
   }
 
   private func evictOldestLocked() {
-    guard let oldest = documents.min(by: { $0.value.accessOrder < $1.value.accessOrder })?.key else {
+    guard let oldest = documents.min(by: { $0.value.accessOrder < $1.value.accessOrder })?.key
+    else {
       return
     }
     documents.removeValue(forKey: oldest)
@@ -682,6 +765,25 @@ public final class AlytePDFModule: Module {
     AsyncFunction("renderPreview") { (path: String) throws -> [String] in
       let document = try loadDocument(path)
       return try self.renderPreview(document)
+    }
+
+    AsyncFunction("renderExtractionBand") {
+      (path: String, pageIndex: Int, rect: [String: Double], password: String?) throws -> [String: Any] in
+      try renderExtractionBand(path: path, pageIndex: pageIndex, rect: rect, password: password)
+    }
+
+    AsyncFunction("deleteExtractionBand") { (uri: String) throws in
+      try deleteExtractionBand(uri)
+    }
+
+    AsyncFunction("textLayerPage") {
+      (path: String, pageIndex: Int, password: String?) throws -> [String: Any]? in
+      try alytePDFTextLayerPage(path: path, pageIndex: pageIndex, password: password)
+    }
+
+    AsyncFunction("textLayerPageSession") {
+      (sessionId: String, pageIndex: Int) throws -> [String: Any]? in
+      try alytePDFTextLayerPage(sessionId: sessionId, pageIndex: pageIndex)
     }
 
     AsyncFunction("renderPreviewSession") { (sessionId: String) throws -> [String] in

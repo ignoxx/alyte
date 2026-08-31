@@ -15,7 +15,11 @@ function makeRuntime() {
   const framework = join(runtime, 'ios-arm64', 'llama.framework');
   mkdirSync(join(framework, 'Headers'), { recursive: true });
   writeFileSync(join(framework, 'Headers', 'llama.h'), 'synthetic llama header');
-  const binary = Buffer.from('synthetic pinned llama runtime');
+  writeFileSync(join(framework, 'Headers', 'mtmd.h'), 'synthetic mtmd header');
+  writeFileSync(join(framework, 'Headers', 'mtmd-helper.h'), 'synthetic mtmd helper header');
+  const binary = Buffer.from(
+    'synthetic pinned llama runtime mtmd_init_from_file mtmd_helper_bitmap_init_from_buf mtmd_tokenize mtmd_helper_eval_chunks mtmd_input_chunks_free mtmd_bitmap_free mtmd_free',
+  );
   writeFileSync(join(framework, 'llama'), binary);
   const digest = createHash('sha256').update(binary).digest('hex');
   writeFileSync(

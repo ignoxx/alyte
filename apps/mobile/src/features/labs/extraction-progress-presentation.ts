@@ -13,7 +13,7 @@ export type ExtractionFailurePresentation = {
 };
 
 export function extractionFailurePresentation(
-  reason: Exclude<LabReportExtractionError['reason'], 'model-unavailable'>,
+  reason: LabReportExtractionError['reason'],
 ): ExtractionFailurePresentation {
   const titleKey =
     reason === 'no-reviewable-measurements'
