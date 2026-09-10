@@ -2,8 +2,9 @@
 
 ## Status
 
-This is the implementation architecture for the first public iOS release. Product behavior belongs
-in `MVP.md`; canonical terms belong in `CONTEXT.md`; durable trade-offs belong in `docs/adr/`.
+This describes the local release architecture and the optional later cloud/intake extension.
+Product behavior belongs in `MVP.md`; canonical terms belong in `CONTEXT.md`; durable trade-offs
+belong in `docs/adr/`.
 
 ## Architecture goals
 
@@ -142,12 +143,15 @@ Build narrow, typed modules rather than one general native bridge.
 - supports explicit recognition-language hints while allowing automatic detection; and
 - never logs recognized content.
 
-The accepted production pipeline uses the `alyte-local-models` module and one mandatory verified
-Qwen3-VL 2B pack with no MVP picker. Onboarding may download and verify the pack, but module creation
-and app startup remain metadata-only: weights load lazily only immediately before the
-model-dependent import stage and unload after success, failure, cancellation, backgrounding, or
-memory pressure. Deterministic source-ID validation remains authoritative and the model cannot
-weaken review or provenance boundaries. The evaluation harness remains available for reproducible
+The `alyte-local-models` module uses the pinned PaddleOCR-VL 1.6 pack for local document recognition;
+Qwen3-VL remains an evaluation baseline. There is one verified pack with no MVP picker. The pack's
+two immutable artifacts and runtime identity are owned by the generated production manifest.
+Module creation and app startup remain metadata-only: weights
+load lazily only immediately before the model-dependent import stage and unload after success,
+failure, cancellation, backgrounding, or memory pressure. Deterministic validation remains
+authoritative. Native-source-grounded fields retain their exact observation IDs. Additional model
+transcriptions retain Original Report/page and model provenance and require review; they are not
+represented as independently verified native readings. The evaluation harness remains available for reproducible
 replacement-model comparisons.
 
 All report languages traverse this same adapter. `compatibility.languages` records the benchmarked
@@ -277,6 +281,18 @@ for that future cloud operation and its exact preview.
 
 ## Local import pipeline
 
+The selected implementation combines source-owned header-table parsing on trusted selectable-PDF
+pages with bounded PaddleOCR-VL recognition when additional extraction is needed. Vision remains
+the native reader for images and unavailable or untrusted PDF text layers. The earlier Qwen
+adapter remains available for evaluation. Preserve source evidence independently of proposed fields,
+and score extraction separately from canonical mapping. Temporary experimental findings remain in
+private evaluation artifacts rather than this architecture document.
+
+The device and speed/recall priorities are defined in `MVP.md`. Mac extraction quality and iteration
+time do not establish iPhone latency, memory, thermal behavior, or compatibility. A larger desktop
+model is an evaluation benchmark until device evidence justifies its use. Product scope and the
+proposed local history unlock are also owned by `MVP.md`; cloud/Snap architecture below is deferred.
+
 ```text
 Files/Photos selection
   → copy into protected app storage
@@ -286,6 +302,8 @@ Files/Photos selection
   → Vision document/table recognition for images and unavailable/untrusted PDF pages
   → verify Original hash immediately after each native page read
   → source-specific table/result-column reconstruction and measurement-candidate filtering
+  → bounded local PaddleOCR recognition for unresolved pages when the verified pack is available
+  → exact-source grounding where available; otherwise page-linked candidates requiring review
   → locale-aware alias and unit mapper
   → deterministic semantic validation
   → compact editable Extraction Draft
@@ -334,8 +352,10 @@ unrelated headers, addresses, licences, and prose do not become user review work
 
 The MVP local contract remains deterministic at its trust boundary: locale parsing, catalogue
 aliasing, and validation preserve unknown or ambiguous measurement-shaped rows for focused review.
-The accepted Qwen document model is an automated-import prerequisite completed during onboarding.
-Its output remains untrusted and is grounded back to exact source IDs or bounded source spans. It
+PaddleOCR output remains untrusted. Exact-source grounding links fields to native source IDs or
+bounded source spans where available. Additional measurement-shaped transcriptions may enter the
+draft with explicit model and page provenance, mandatory review, and preserved original fields.
+Correcting a proposal does not erase that original recognition provenance. A model
 cannot author authoritative labels, values, units, ranges, conversions, translations, identifiers,
 dates, confidence, or medical explanations. The catalogue owns reviewed canonical English display
 names and localized source aliases while exact source labels remain provenance.
@@ -467,7 +487,7 @@ the SQLite database, its WAL/SHM companions, transient upload directory, and enc
 envelopes below the mounted runtime path. Railway configuration and the start command own runtime
 migrations because the volume is not present during the image build or pre-deploy phase.
 
-The first release intentionally has no Postgres, Redis, separate queue service, or object store.
+The later cloud design has no Postgres, Redis, separate queue service, or object store.
 The backend remains internally modular so database, queue, upload, and result-store adapters can be
 replaced when real usage requires multiple machines or stronger availability. Do not increase the
 Railway replica count while SQLite and the transient file store remain attached to one volume.
@@ -569,7 +589,10 @@ with cross-language test vectors. TLS still protects uploads and status calls; d
 limits readable result retention after processing, but it does not pretend the worker or selected
 AI provider never saw the submitted content.
 
-### Identity, purchases, and usage
+### Deferred cloud identity, purchases, and usage
+
+These boundaries apply if the later cloud extension is accepted. `MVP.md` owns commercial scope;
+the former cloud tiers are not launch commitments or a specification for the proposed local unlock.
 
 - Local mode has no account.
 - The first cloud action presents the disclosure, Sign in with Apple, and purchase flow.
@@ -577,8 +600,7 @@ AI provider never saw the submitted content.
   stored in Keychain.
 - RevenueCat handles StoreKit products and webhooks; the backend remains authoritative for cloud
   allowance consumption.
-- Starter Pack units persist on the account until used. Subscription units reset at the StoreKit
-  billing-period boundary and do not roll over.
+- Future cloud allowance expiry and reset rules require a separately accepted product contract.
 - Home does not show a permanent meter. The backend returns coarse warning state around 80%, 95%,
   and exhaustion.
 - Account deletion revokes sessions and deletes the account, purchase-linked app data where legally

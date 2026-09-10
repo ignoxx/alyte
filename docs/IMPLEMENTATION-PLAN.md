@@ -16,14 +16,16 @@ Build one complete vertical path before adding breadth:
 > account and no cloud.
 
 That path is the release. Current implementation stays entirely on this local path until it passes
-physical-device acceptance. Snap, cloud recognition, purchases, and wider catalogue coverage remain
-required later slices, but none runs in parallel with a broken or visually unaccepted local journey.
+physical-device acceptance. Import is the immediate priority, followed by clear measured-history
+presentation. Snap and cloud are one optional later extension, not required launch slices; neither
+starts until the on-device product works well and provides meaningful value. The proposed one-time
+history unlock and unsettled limits are specified in `MVP.md`.
 
 Agent scheduling, worktree isolation, delegated execution, and Sol integration follow
 `docs/agents/SOL-LUNA-ORCHESTRATION.md`. Planning artifacts alone do not authorize implementation.
 
 Delivery priorities are sequential: first make the smallest complete product work; then validate
-users, cloud economics, and payment; then improve breadth, polish, architecture, and coverage. Tests
+usefulness and payment; then improve breadth, polish, architecture, and coverage. Tests
 are risk-based rather than exhaustive, with effort concentrated on privacy, data integrity, money,
 health wording, parsing, and asynchronous recovery.
 
@@ -69,16 +71,17 @@ Build:
   privacy workspace for page selection, zoom, pan, crop, rotation, and direct redaction;
 - direct Original Report extraction with hash/password verification immediately before and after
   every native page read; trusted selectable PDF pages use the strict PDFKit text-layer adapter,
-  while unavailable or untrusted pages and image imports use Vision only, with no same-page merge;
+  while unavailable or untrusted pages and image imports use Vision as their native reader;
   the calm Import → OCR → Review journey and independent source provenance remain
   intact; Sanitized Report creation remains reserved for a future explicit cloud upload. This
   native adapter changes the native fingerprint and requires a new development/TestFlight binary,
   but adds no dependency, entitlement, permission, or database migration;
 - Vision document/table recognition, measurement-candidate filtering, locale parsing, alias mapping,
   unit normalization, and preservation of every credible result;
-- bounded local-model feasibility benchmarks selected the Qwen3-VL 2B document pipeline; its
-  verified pack is mandatory for automated import while deterministic source validation remains
-  authoritative;
+- integrate the selected trusted-PDF header parser and bounded local PaddleOCR fallback, preserving
+  Qwen3-VL 2B as an evaluation baseline. Keep native source observations distinct from additional
+  model transcriptions requiring review. Follow the device and speed/recall priorities in `MVP.md`;
+  desktop extraction results do not close the physical-device acceptance gate;
 - section/table/row specimen context so mixed blood, serum, plasma, urine, and unknown results are
   not assigned one report-wide specimen;
 - English fixtures and real-report evaluation first, German fixtures and de-identified evaluation
@@ -94,8 +97,8 @@ Completion criteria:
   minutes without an account;
 - the 95 percent under-five-minute Gate 1 target is evaluated separately from upstream candidate
   recovery and remains open until private aggregate results and physical-device acceptance pass;
-- selectable PDF pages use trusted PDFKit observations only, while unavailable or image-only pages
-  fall back to Vision without regression on the image-based report;
+- selectable PDF pages retain trusted PDFKit provenance, while unavailable or image-only pages
+  use Vision; additional PaddleOCR candidates retain their separate recognition provenance;
 - the app presents no serial review of unrelated OCR text and the common path requires decisions
   only for genuine ambiguities;
 - originals remain unchanged and sanitized derivatives pass recovery checks;
@@ -103,8 +106,10 @@ Completion criteria:
 - unknown markers and incompatible units remain visible but cannot enter a false trend; and
 - migration, parser, deletion, redaction, and provenance tests pass.
 
-Real personal reports are used only on-device for manual acceptance testing and never enter source,
-fixtures, logs, screenshots, or agent context.
+Private report evaluation requires explicit permission for the intended processing and inspection.
+Approved reports, source renders, extraction output, and hash-bound ground truth stay in a designated
+private, git-ignored evaluation location. Evaluation permission does not authorize redistribution.
+Synthetic fixtures alone belong in source control.
 
 ### September 3–8: trends and factual understanding
 
@@ -125,9 +130,10 @@ Completion criteria:
 - source range, General Guidance, and no-range states are visually distinct; and
 - wording fixtures contain no diagnosis, treatment, universal-optimal-range, or causal claim.
 
-### After local Gate A: fast intake and cloud-backed timeline
+### Deferred optional extension: intake and cloud-backed timeline
 
-This milestone does not start until the local two-report journey is accepted. Existing intake code
+This milestone is not required for launch and does not start until the local two-report journey is
+accepted and the on-device product demonstrates meaningful value. Existing intake code
 and persistence remain intact while Snap and Log stay hidden from the local laboratory shell.
 
 Build:
@@ -146,11 +152,11 @@ Completion criteria:
 - correction and exclusion invalidate/recompute dependent local output; and
 - packaging never becomes a confirmed consumed dose without user confirmation.
 
-### After local Gate A: cloud path
+### Deferred optional extension: cloud path
 
-Cloud remains required; it is sequenced after the local core rather than discarded. Backend-only
-preparation may continue only when it cannot consume the product-application owner or destabilize
-the local acceptance path.
+Cloud and Snap are considered together after the useful on-device core is accepted. No cloud or
+intake implementation is dispatched during the import investigation. Existing designs below are
+constraints for a possible later extension, not launch requirements or authorization to build it.
 
 Build:
 
@@ -171,10 +177,10 @@ Completion criteria:
 - uploaded media is deleted immediately after provider use and defensively expires;
 - plaintext results are not durably stored, logged, or included in traces;
 - a result produced while the app is closed applies on next launch;
-- Starter Pack and Cloud Plus purchase/restore/exhaustion paths work in StoreKit sandbox; and
-- Cloud Max is hidden if cost evidence is not ready by the gate below.
+- any separately accepted cloud purchase/restore/exhaustion paths work in StoreKit sandbox; and
+- cloud products stay hidden until cost and privacy evidence is accepted.
 
-### September 14–18: evidence-backed relationships
+### Deferred optional extension: evidence-backed relationships
 
 Build only the reviewed relationship set completed by the research workstream. Likely first
 concepts include saturated fat, fiber, refined carbohydrate/added sugar, alcohol, vitamin D
@@ -196,20 +202,20 @@ laboratory-history release.
 
 Build:
 
-- concise onboarding that explains local mode, measured versus estimated data, cloud consent,
+- concise onboarding that explains local mode and measured versus estimated data,
   adult-only scope, and the required import-pack download/verification without loading the model;
-- privacy dashboard, app lock, exact-upload preview, support/FAQ, terms and privacy links;
-- Full Export, local deletion, cloud account export/deletion, and StoreKit restore;
-- paywall copy and the provisional EUR prices/allowances from `MVP.md`;
-- 80/95/100 percent usage warnings without a permanent Home meter; and
+- privacy dashboard, app lock, support/FAQ, terms and privacy links;
+- Full Export and local deletion;
+- the proposed history unlock only after its limits and price are decided, including restore and
+  continued access to existing records as specified in `MVP.md`; and
 - deterministic showcase fixtures and App Store screenshot automation.
 
 Completion criteria:
 
-- fresh install completes onboarding without authentication; setup requires network only to
-  download and verify the required pack, never to load it. After setup, the local product launches
-  to Home and its core flows work offline;
-- local data remains after cloud sign-out/account deletion;
+- fresh install completes onboarding without authentication; the verified import pack is downloaded
+  through explicit setup and recognition then works offline. Setup remains reachable for existing
+  installations, while viewing, correction, export, and deletion do not depend on pack availability;
+- existing records remain viewable, correctable, exportable, and deletable in every purchase state;
 - export contains every selected local record and clearly warns about sensitive content;
 - no support or analytics path attaches health content; and
 - VoiceOver, Dynamic Type, reduced motion, dark mode, and offline states receive an integrated pass.
@@ -254,7 +260,7 @@ This workstream may continue after release for catalogue updates. Unreviewed con
 
 ### Cost evaluation
 
-Before enabling Cloud Plus or Cloud Max, run a private representative fixture set through candidate
+Before enabling any later cloud products, run a separately authorized private fixture set through candidate
 models with production image resizing/detail settings. Measure:
 
 - useful schema-valid result rate;
@@ -264,8 +270,8 @@ models with production image resizing/detail settings. Measure:
 - retry and moderation/failure rate; and
 - expected monthly cost at 300, 500, and 1,500 Snaps plus report allowances.
 
-Pricing is a launch target, not proof of margin. Cloud Max stays hidden until the observed high-usage
-cost plus infrastructure, StoreKit commission, taxes, support, and safety margin fits EUR 12.99.
+These historical cloud workload sizes are evaluation examples only. Earlier cloud prices and tiers
+are retired launch proposals; `MVP.md` owns the current commercial direction.
 
 ## Release gates
 
@@ -281,27 +287,19 @@ without the private aggregate and integrated physical-device evidence. Finish it
 If range/explanation review is incomplete, ship only reviewed entries and show honest unsupported
 states. Do not generate missing health copy at runtime.
 
-### Gate C — cloud cost and privacy, September 16
+### Gate C — later cloud cost and privacy (not a launch gate)
 
-If cleanup, idempotent charging, result encryption, or purchase restoration fails, hide cloud
-features. If only Cloud Max economics fail, ship Starter Pack and Cloud Plus.
+Before any future cloud launch, establish cleanup, idempotent charging, result encryption, purchase
+restoration, and viable economics. Passing the local gate does not automatically authorize cloud work.
 
 ### Gate D — release candidate, September 20
 
-Cut in this order when unfinished:
+Snap, cloud processing, cloud commerce, and intake relationships are already outside required launch
+scope. Defer camera scanning, wider catalogue coverage, granular feedback, and encrypted restore
+before compromising Files/Photos import, review/correction, clear measured history, ordinary Full
+Export, deletion, onboarding, and support.
 
-1. Cloud Max;
-2. integrated lab camera scanner;
-3. granular feedback categories;
-4. encrypted export and restore;
-5. cloud Lab Report fallback;
-6. wider Evidence Relationship breadth.
-
-Protect Files/Photos lab import, correction, measured trends, privacy/redaction, ordinary Full
-Export, onboarding, and support first. Protect manual intake and Snap only after Gate A passes and
-Cloud Plus passes Gate C.
-
-## MVP backlog by vertical slice
+## Local release and deferred extension slices
 
 1. **Accepted local shell** — three native tabs, variant-lab selection, neutral semantic visual
    foundation, localization resources, service container.
@@ -313,19 +311,22 @@ Cloud Plus passes Gate C.
    document/tables, measurement filtering, English/German locale parsing and fixtures, non-blocking
    Lithuanian stress coverage, per-section
    specimen context, deterministic validation, and structured-fixture candidate evaluation through
-   #50 and #66. Local model experiments remain isolated from the production dependency graph until
-   separately accepted.
+   #50 and #66. The selected PaddleOCR adapter uses the existing native runtime boundary; other
+   model experiments remain isolated from the production dependency graph.
 7. **Laboratory history and review** — compact draft, Reports, Records, Measurements, manual entry,
    source inspection, correction, provenance.
 8. **Comparison** — canonical aliases, units, trends, missing/incompatible behavior.
 9. **Education** — explanations, ranges/guidance, sources, signed catalogue.
 10. **Local control** — export, deletion, app lock, support, privacy dashboard.
-11. **Cloud transport** — outbox, auth, consent, upload, status, result envelope.
-12. **Cloud intelligence** — intake recognition, report fallback, candidate validation.
-13. **Intake core** — cloud-useful capture, Log, Snap, manual entry, correction, inclusion.
-14. **Commerce** — products, entitlements, usage ledger, warnings, restore.
-15. **Relationships** — Potential Relationships and locally derived interval context.
-16. **Release** — fixtures, screenshots, metadata, device matrix, TestFlight, submission.
+11. **Release** — fixtures, screenshots, metadata, device matrix, TestFlight, submission.
+
+The remaining cloud/intake slices are deferred optional work, not release blockers:
+
+12. **Cloud transport** — outbox, auth, consent, upload, status, result envelope.
+13. **Cloud intelligence** — intake recognition, report fallback, candidate validation.
+14. **Intake core** — cloud-useful capture, Log, Snap, manual entry, correction, inclusion.
+15. **Commerce** — products, entitlements, usage ledger, warnings, restore.
+16. **Relationships** — Potential Relationships and locally derived interval context.
 
 Each slice is complete when its material reverse and failure states, privacy behavior, highest-risk
 tests, and user-visible integrated flow are accounted for. Low-risk obvious wiring does not require

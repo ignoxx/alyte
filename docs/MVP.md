@@ -16,24 +16,24 @@ App Review, and submission materials before that deadline.
 Alyte primarily helps people import their historical blood-test reports and understand how
 their measured biomarkers changed over time.
 
-Intake awareness is a supporting part of the product: people can record what they put into their
-bodies and explore evidence-based ways those inputs might relate to biomarkers. It must not weaken
-the completeness or reliability of the laboratory-history experience.
+The core is import → review and correction → clear measured-history visualizations → export and
+deletion. Import is the current priority; neither import nor presentation is yet accepted.
+Alyte is a focused indie utility built for enjoyment and learning, with modest income sufficient
+and Shipaton as the launch trigger.
 
-Delivery is sequential. Alyte first ships internally as an excellent account-free laboratory-
-history product. Intake capture and optional cloud intelligence remain required product slices,
-but their interface is introduced only after the complete local two-report journey passes its
-device acceptance gate. The local phase does not expose incomplete Snap, Log, account, or paywall
-surfaces merely to reserve their future position.
+The first public release is the complete account-free laboratory-history product. Snap and cloud
+belong together as an optional later extension, not required launch scope. Do not start that work
+until the on-device core works well and demonstrates meaningful value. The local phase does not
+expose incomplete Snap, Log, account, or cloud paywall surfaces.
 
-The first-release intake slice is deliberately narrow:
+The later intake extension, if pursued, is deliberately narrow:
 
 - quick structured logging for food, drinks, supplements, and medications;
 - an Intake Event may record a name, approximate amount, unit, and time when applicable;
 - optional cloud recognition of an Intake Image, with automatic editable results and targeted
   review only when recognition is uncertain;
 - approximate nutrition patterns rather than calorie goals or exact photo-derived macros; and
-- possible intake-to-biomarker relationships only where the first-release evidence catalogue
+- possible intake-to-biomarker relationships only where the reviewed evidence catalogue
   explicitly supports them.
 
 An Intake Image may depict a meal, drink, supplement, medication, package, label, or ingredient
@@ -96,6 +96,12 @@ Once reports exist, Home shows the latest report, unfinished import or review wo
 important measured changes since the previous compatible record, and recent reports. It is not a
 day log, global health score, warning dashboard, or predicted-biomarker surface.
 
+Home's recent measured-change cards use a masonry layout by default. Settings offers a local
+`Home layout` choice between `Masonry` and `List`, remembered across launches. Masonry falls back
+to one column when the available width or text size requires it. This preference changes only
+presentation; the Measurements and comparison rules remain the same. Deleting health data keeps
+the preference, while resetting Alyte restores the default.
+
 The later cloud/intake slice must integrate with this accepted shell without making the local
 product incomplete or unexpectedly rearranging navigation at sign-in. Its final capture placement
 is decided and device-tested when that slice begins; the current phase does not reserve a dead Snap
@@ -122,21 +128,31 @@ headroom rather than treating it as abuse.
   changes.
 - HealthKit, wearables, Android, multi-person profiles, caregiver sharing, and cloud synchronization
   are outside the first release.
-- User-configured providers, BYOK, custom OpenAI-compatible endpoints, and an open-source backend are
-  post-MVP. The internal backend boundary may remain provider-neutral without exposing credentials
-  or routing controls to users at launch.
+- User-configured providers, BYOK, and custom OpenAI-compatible endpoints are post-MVP. The app is
+  intended to be open source for transparency and trust. Publishing source code does not authorize
+  publishing evaluation reports, extracted health data, credentials, or third-party materials;
+  redistribution permissions must be established separately.
 - Core local functionality does not require Apple Intelligence, an account, or a network connection.
   PDFKit text-layer extraction with per-page Vision fallback, deterministic validation, privacy
   review, history, charts, reviewed content, record management, manual entry, and export remain
   account-free.
-- The accepted local import pipeline uses one reviewed on-device document model. Its single
-  verified Qwen3-VL 2B pack is a mandatory onboarding dependency. Onboarding downloads and verifies
-  the pack without loading it; the app loads it only immediately before the import stage that needs
-  it and unloads it after success, failure, cancellation, backgrounding, or memory pressure. The
-  MVP exposes no model picker.
-- Every report language follows that same PDFKit/Vision, layout reconstruction, document-model, and
-  source-grounding pipeline. English and German are the launch accuracy benchmarks, not routing
-  gates. The model transcribes source labels verbatim; reviewed catalogue aliases may resolve known
+- The selected import approach uses deterministic parsing for supported selectable-PDF tables and
+  local PaddleOCR-VL recognition for pages needing additional extraction. Its single verified pack
+  is an explicit download; report contents never accompany that download. Weights load only for
+  recognition and unload after success, failure, cancellation, or interruption. Existing records
+  remain accessible when the pack is absent or unavailable, and setup remains reachable after
+  onboarding. There is no MVP model picker or Apple Intelligence dependency. Qwen remains an
+  evaluation baseline. Device acceptance is required before claiming iPhone accuracy or speed.
+- Automated import targets iPhone 15 Pro and newer first; support for older iPhones is desirable
+  when it does not compromise the primary experience. Prefer fast recovery of roughly 80–90% of
+  source Measurements over a much slower attempt at exhaustive recovery. This is a recall target,
+  not permission for wrong value, unit, or collection-date associations: uncertain fields remain
+  explicit and correctable. Select model size and processing stages from measured device behavior;
+  a larger desktop model may establish an accuracy benchmark without becoming the shipping choice.
+- Every report language follows the same PDFKit/Vision, layout reconstruction, and local OCR
+  pipeline. Routing depends on source structure and unresolved extraction, rather than the report
+  language. English and German are the launch accuracy benchmarks. Any model
+  transcribes source labels verbatim; reviewed catalogue aliases may resolve known
   labels to canonical English display names, while unknown labels remain preserved rather than
   being model-translated.
 
@@ -290,7 +306,7 @@ provenance, and correction controls.
   token, response, health data, or exportable user content and then expires.
 - Data export covers both the complete local dataset and any app-controlled cloud account data.
 
-The first-release backend performs only:
+The optional later backend is limited to:
 
 - enhanced Lab Report extraction when local OCR and parsing are insufficient and the user requests
   cloud processing; and
@@ -315,7 +331,7 @@ Biomarkers. A separate evidence-validation step determines which candidates may 
 app never fills a quota with unsupported suggestions: zero, one, or two grounded relationships are
 better than five plausible inventions.
 
-In the first release, only Evidence Relationships reviewed and shipped in the versioned catalogue
+In the later intake extension, only Evidence Relationships reviewed and shipped in the versioned catalogue
 may pass validation. Runtime model research cannot approve a new health relationship. When one or
 more Influence Candidates cannot be verified, the app may say that other possibilities were
 considered but not supported strongly enough to show; it does not name the unsupported Biomarkers.
@@ -324,7 +340,7 @@ Each Measured Trend and Related Wellness Context explains how it was produced. R
 Context shows the relevant logged inputs, interpreted property, Evidence Relationship, time
 horizon, caveats, and source material in a simple progressive-disclosure presentation.
 
-The first release may place a person's logged interval and Measured Trend beside general research,
+The later intake extension may place a person's logged interval and Measured Trend beside general research,
 but it does not conclude that the intake caused or probably contributed to the change. Safe wording
 is: `During this interval you logged [pattern]. [Biomarker] [changed]. Research describes a general
 relationship between them. Alyte cannot determine why your result changed.`
@@ -548,47 +564,18 @@ messages, medication reminders, biomarker warnings, and inferred-health alerts a
 
 ## Free and paid principle
 
-- Functionality performed entirely on-device is free.
-- Any operation that sends data to the Alyte backend is paid because each request creates an
-  ongoing processing cost.
-- Local Lab Reports, local OCR, manual Lab Records, supported Measured Trends, manual Intake Events,
-  local export, and account-free use are not held behind a subscription.
-- Local extraction remains available without an Alyte account, subscription, or network connection
-  after the required import pack has been installed and verified.
-- Cloud report extraction and Intake Image analysis require a paid entitlement.
-- Launch offers one `Cloud Plus` subscription with monthly and annual billing and an included
-  monthly Cloud Analysis allowance. A bounded starter purchase and a way for subscribers to obtain
-  additional capacity may sit alongside it.
-- Provisional launch pricing is EUR 6.99 per month or EUR 59.99 per year.
-- The launch allowance must cover both frequent Intake Image analyses and rare cloud Lab Report
-  extractions. The earlier provisional limit of 30 total operations is rejected as too low; the
-  first pricing fixtures use separate, plainly described allowances despite presenting one simple
-  subscription benefit.
-- An ordinary engaged user is expected to submit approximately 240–300 Intake Images per month, so
-  the base paid experience requires meaningful headroom above that range.
-- The provisional `Cloud Plus` fixture is 500 Snap Analyses and 4 cloud Lab Report imports per
-  month at EUR 6.99 monthly or EUR 59.99 annually.
-- The provisional `Cloud Max` fixture is 1,500 Snap Analyses and 12 cloud Lab Report imports per
-  month at EUR 12.99 monthly or EUR 109.99 annually.
-- Both tiers reset monthly without rollover. Final prices and allowances may change after
-  representative usage, cost, quality, and abuse testing; the app never silently reduces an active
-  subscriber's purchased entitlement.
-- Final pricing and allowance are confirmed only after representative fixture tests establish
-  provider, retry, backend, Apple commission, and support cost envelopes.
-- A Cloud Analysis consumes the allowance only after a schema-valid, usable result is returned.
-- When the included allowance is exhausted, local mode remains fully usable and the next reset date
-  is shown. A Cloud Plus subscriber may upgrade to Cloud Max for additional monthly capacity rather
-  than purchasing a carryover credit balance.
-- If Cloud Max is exhausted, further cloud analysis pauses until reset; the first release adds no
-  third tier or boost. Exceptional legitimate cases can contact Support.
-- A one-time EUR 0.99 `Starter Pack` for new cloud users provides five Snap Analyses plus one
-  cloud Lab Report import after Sign in with Apple. It is paid, does not start a subscription, and
-  any unused purchased contents do not expire.
-- Exact allowance details are always available in the paywall and Settings. Home shows no permanent
-  counter; the app gives clear notices at approximately 80%, 95%, and exhaustion.
-- The product must maintain a positive margin at the tested high-usage boundary; a cheap price is
-  not allowed to create an uncapped loss.
-- Shipaton judges receive access through an offer or promotional code.
+- Free download includes a complete two-report experience without an Alyte account.
+- The proposed commercial starting point is a one-time unlock to extend laboratory history.
+  Exact history limits, price, and purchase rules remain unsettled; this is not authorization to
+  implement a particular paywall or entitlement contract.
+- Viewing, correction, Full Export, and deletion remain available for existing records regardless
+  of purchase state. Extending history must not hold an existing record hostage.
+- On-device processing remains account-free. The existing import-pack setup is a baseline under
+  evaluation, not a reason to preserve unnecessary model work.
+- Snap and cloud processing are a later extension with separate ongoing economics. Earlier Cloud
+  Plus, Cloud Max, Starter Pack prices and allowances are retired launch proposals, not current
+  product promises. Decide any future cloud pricing from measured cost and usefulness.
+- Restore and clear purchase disclosure are required for any shipped unlock.
 
 ## Evidence publishing
 
@@ -661,20 +648,15 @@ organization conversion remains a fallback if review requires it.
 The product decisions are settled, but implementation must still validate:
 
 - exact normalization factors and fixtures for the initial Biomarker catalogue;
-- cost validation of the provisional subscription price and allowance;
+- the one-time history-unlock price, exact limits, and access rules;
 - German trader, business-registration, tax, and public-contact implementation requirements.
 
 ## Deadline cut order
 
-The first release first protects local laboratory history, Files/Photos import, compact extraction
-review and correction, Measured Trends, irreversible redaction, ordinary Full Export, onboarding,
-and support. Cloud Plus, enhanced report extraction, Snaps, and intake-to-biomarker relationships
-remain planned launch slices only after the local acceptance gate stays green.
+Protect local laboratory history, Files/Photos import, compact extraction review and correction,
+clear Measured Trends, ordinary Full Export, deletion, onboarding, and support. Snap, cloud report
+fallback, intake relationships, and cloud commerce are outside required launch scope.
 
-If schedule risk requires cuts, remove or defer in this order:
-
-1. Cloud Max launch support;
-2. wider intake relationship breadth;
-3. integrated camera scanning for Lab Reports;
-4. granular Insight Feedback categories while retaining basic correction and dismissal; and
-5. password-encrypted Full Export while retaining the complete ordinary export and its warning.
+Defer integrated document-camera scanning, broader catalogue coverage, granular Insight Feedback,
+and encrypted export/restore before compromising the complete local journey. Existing redaction
+remains a separate future-upload capability; its expansion is not a launch prerequisite.
