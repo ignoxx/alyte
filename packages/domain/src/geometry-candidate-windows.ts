@@ -188,9 +188,9 @@ const METADATA_LABELS = new Set([
  * analyte labels (including labels that contain words such as "total" or "cholesterol").
  */
 const PROSE_METADATA_PREFIX = new RegExp(
-  String.raw`^(?:this|that|these|those|there|it|no|not|please|see|patient\p{L}*|report\p{L}*|laborator\p{L}*|specimen\p{L}*|sample\p{L}*|reference\p{L}*|result\p{L}*|comment\p{L}*|note|interpret\p{L}*|value|unit|date|page|` +
-    String.raw`dies|der|die|das|ein|eine|kein\p{L}*|bitte|siehe|patient\p{L}*|bericht\p{L}*|labor\p{L}*|probe|referenz\p{L}*|ergebnis\p{L}*|bemerk\p{L}*|hinweis\p{L}*|interpretation\p{L}*|methode|wert|einheit|seite|` +
-    String.raw`tai|šis|šio|šį|nėra|prašome|žr|pacient\p{L}*|ataskait\p{L}*|laborator\p{L}*|mėgin\p{L}*|pamat\p{L}*|referenc\p{L}*|rezultat\p{L}*|tyrim\p{L}*|pastab\p{L}*|komentar\p{L}*|interpretac\p{L}*|metod\p{L}*|vert\p{L}*|puslap\p{L}*)(?:\s|$)`,
+  String.raw`^(?:this|that|these|those|there|it|no|not|please|see|patient\p{L}*|report\p{L}*|laborator\p{L}*|specimen\p{L}*|sample\p{L}*|reference\p{L}*|result\p{L}*|comment\p{L}*|note|interpret\p{L}*|company|business|registration|licen[cs]\p{L}*|value|unit|date|page|` +
+    String.raw`dies|der|die|das|ein|eine|kein\p{L}*|bitte|siehe|patient\p{L}*|bericht\p{L}*|labor\p{L}*|probe|referenz\p{L}*|ergebnis\p{L}*|bemerk\p{L}*|hinweis\p{L}*|interpretation\p{L}*|methode|firma|unternehmen|handelsregister|lizenz\p{L}*|wert|einheit|seite|` +
+    String.raw`tai|šis|šio|šį|nėra|prašome|žr|pacient\p{L}*|ataskait\p{L}*|laborator\p{L}*|mėgin\p{L}*|pamat\p{L}*|referenc\p{L}*|rezultat\p{L}*|tyrim\p{L}*|pastab\p{L}*|komentar\p{L}*|interpretac\p{L}*|metod\p{L}*|įmon\p{L}*|imon\p{L}*|licenc\p{L}*|vert\p{L}*|puslap\p{L}*)(?:\s|$)`,
   'iu',
 );
 const DATE_ONLY = /^(?:\d{1,4}[./-]\d{1,2}[./-]\d{1,4}|\d{1,2}[/-]\d{1,2})$/u;
@@ -585,9 +585,17 @@ export function isGeometryCandidateLabelText(text: string): boolean {
     !UNIT_ONLY.test(normalized) &&
     !RANGE_VALUE.test(normalized) &&
     !FLAG_ONLY.test(normalized) &&
-    !PROSE_METADATA_PREFIX.test(normalized) &&
-    !isMetadataCell(normalized)
+    !isNonMeasurementMetadataText(normalized)
   );
+}
+
+/**
+ * Returns true for headings, administrative fields, and explanatory prose that must not become a
+ * reviewable Measurement merely because another cell on the row looks numeric.
+ */
+export function isNonMeasurementMetadataText(text: string): boolean {
+  const normalized = normalizeCellText(text);
+  return PROSE_METADATA_PREFIX.test(normalized) || isMetadataCell(normalized);
 }
 
 function isMetadataCell(text: string): boolean {
@@ -889,18 +897,20 @@ function geometryCellObservation(
     cell.sourceObservationId === parent.id &&
     cell.sourceStart === 0 &&
     cell.sourceEnd === parent.text.length;
+  const retainsParentIdentity = cell.id === parent.id;
   return {
     ...parentWithoutSpans,
     id: cell.id,
     text: sourceText,
     boundingBox: cell.boundingBox,
     alternatives: sameAsParent ? parent.alternatives : [],
-    ...(sameAsParent && parentSpans === undefined
+    ...(retainsParentIdentity && parentSpans === undefined
       ? {}
-      : sameAsParent
+      : retainsParentIdentity
         ? { spans: parentSpans }
         : {}),
-    sourceSpan: sameAsParent && parentSourceSpan !== undefined ? parentSourceSpan : sourceSpan,
+    sourceSpan:
+      retainsParentIdentity && parentSourceSpan !== undefined ? parentSourceSpan : sourceSpan,
   };
 }
 

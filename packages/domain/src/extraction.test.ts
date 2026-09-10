@@ -341,6 +341,7 @@ describe('local extraction domain', () => {
     const productionAliases: readonly ExtractionAliasEntry[] = metabolicMicronutrientBiomarkers.map(
       (entry) => ({
         id: entry.id,
+        ...(entry.canonicalLabel === undefined ? {} : { canonicalLabel: entry.canonicalLabel }),
         aliases: entry.aliases,
         specimens: entry.specimens,
         units: entry.units,
@@ -378,6 +379,7 @@ describe('local extraction domain', () => {
         observation('vitamin-d3', 'Vitamin D3 20 ng/mL', 4),
         observation('vitamin-d1-25', '1,25-dihydroxyvitamin D 20 pg/mL', 5),
         observation('glucose-ogtt', 'Oral glucose tolerance 126 mg/dL', 6),
+        observation('vitaminas-b12', 'Vitaminas B12 594 pmol/L', 7),
       ],
       {
         aliases: productionAliases,
@@ -395,11 +397,17 @@ describe('local extraction domain', () => {
     );
     assert.equal(byId.get('vitamin-d-unknown-method')?.reviewState, 'needs-review');
     assert.ok(byId.get('vitamin-d-unknown-method')?.reviewReasons.includes('incompatible-method'));
+    assert.equal(byId.get('vitaminas-b12')?.proposedBiomarkerId, 'biomarker.vitamin_b12_total');
+    assert.equal(byId.get('vitaminas-b12')?.sourceLabel, 'Vitaminas B12');
+    assert.equal(byId.get('vitaminas-b12')?.proposedLabel, 'Total vitamin B12');
+    assert.equal(byId.get('vitaminas-b12')?.proposedUnit, 'pmol/L');
+    assert.equal(byId.get('vitaminas-b12')?.reviewState, 'needs-review');
+    assert.ok(byId.get('vitaminas-b12')?.reviewReasons.includes('incompatible-method'));
     for (const id of ['vitamin-d2', 'vitamin-d3', 'vitamin-d1-25', 'glucose-ogtt']) {
       const row = byId.get(id);
       assert.equal(row?.proposedBiomarkerId, null, id);
       assert.ok(row?.reviewReasons.includes('ambiguous-assay'), id);
-      assert.equal(row?.decision, 'preserve', id);
+      assert.equal(row?.decision, 'unresolved', id);
       assert.ok(
         row?.source.observations?.some((item) => item.text.includes(row.sourceText)),
         id,
@@ -583,8 +591,59 @@ describe('local extraction domain', () => {
     assert.equal(row?.source.raw?.unit, 'mg/L');
     assert.equal(row?.proposedUnit, 'mg/L');
     assert.ok(row?.reviewReasons.includes('incompatible-unit'));
-    assert.equal(row?.decision, 'skip');
-    assert.equal(extractionReviewBlocksConfirmation(row!), false);
+    assert.equal(row?.decision, 'unresolved');
+    assert.equal(extractionReviewBlocksConfirmation(row!), true);
+  });
+
+  it('accepts lower-case Greek micro-mole units for an explicit Zinc correction', () => {
+    const zincAliases: readonly ExtractionAliasEntry[] = [
+      {
+        id: 'biomarker.zinc',
+        canonicalLabel: 'Zinc',
+        aliases: ['Cinkas', 'Zinc'],
+        specimens: ['serum', 'plasma', 'unknown'],
+        units: ['µmol/L'],
+      },
+    ];
+    const [row] = groupObservationsIntoRows(
+      [
+        {
+          id: 'zinc-row',
+          text: 'Cinkas 12.96 μmol/l 11,1–19,5',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.8, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'lt', internalConfidence: null },
+        },
+      ],
+      {
+        aliases: zincAliases,
+        locale: 'lt-LT',
+        collectionDate: { kind: 'known', value: '2026-08-22' },
+        specimenType: 'serum',
+      },
+    );
+    assert.ok(row);
+    assert.equal(row.proposedBiomarkerId, 'biomarker.zinc');
+    assert.equal(row.proposedUnit, 'µmol/L');
+    assert.deepEqual(row.proposedValue, { kind: 'numeric', value: 12.96 });
+    assert.equal(row.proposedReferenceInterval, '11,1–19,5');
+
+    const corrected = revalidateExtractionRow(
+      row,
+      {
+        proposedLabel: 'Zinc',
+        proposedValue: { kind: 'numeric', value: 12.96 },
+        proposedUnit: 'μmol/l',
+        proposedReferenceInterval: '11,1–19,5',
+      },
+      zincAliases,
+      { mode: 'user-correction' },
+    );
+    assert.equal(corrected.proposedBiomarkerId, 'biomarker.zinc');
+    assert.equal(corrected.reviewReasons.includes('incompatible-unit'), false);
+    assert.equal(corrected.reviewState, 'ready');
   });
 
   it('rejects URLs and slash paths as units on numeric footer text', () => {
@@ -761,7 +820,7 @@ describe('local extraction domain', () => {
     assert.ok(Math.abs((rows[0]?.source.boundingBox.height ?? 0) - 0.04) < 0.000001);
   });
 
-  it('includes credible unmapped rows by default while preserving them as needs-review', () => {
+  it('includes credible unmapped rows by default while confirming explicitly included history', () => {
     const rows = groupObservationsIntoRows(
       [
         {
@@ -792,17 +851,17 @@ describe('local extraction domain', () => {
       revision: 1,
       hasUserEdits: false,
     };
-    assert.equal(rows[0]?.decision, 'preserve');
+    assert.equal(rows[0]?.decision, 'unresolved');
     const defaultPlan = buildExtractionConfirmationPlan(base, {
       record: () => 'r',
       measurement: () => 'm',
     });
-    assert.equal(defaultPlan.records[0]?.measurements[0]?.reviewState, 'needs-review');
+    assert.equal(defaultPlan.records[0]?.measurements[0]?.reviewState, 'confirmed');
     const plan = buildExtractionConfirmationPlan(
       { ...base, rows: rows.map((row) => ({ ...row, decision: 'preserve' as const })) },
       { record: () => 'r', measurement: () => 'm' },
     );
-    assert.equal(plan.records[0]?.measurements[0]?.reviewState, 'needs-review');
+    assert.equal(plan.records[0]?.measurements[0]?.reviewState, 'confirmed');
     assert.equal(plan.records[0]?.measurements[0]?.provenance, 'extracted');
   });
 
@@ -888,9 +947,9 @@ describe('local extraction domain', () => {
     assert.equal(row?.proposedBiomarkerId, 'biomarker.ldl_c');
     assert.ok(row?.reviewReasons.includes('unsupported-layout'));
     assert.equal(row?.proposedValue.kind, 'free_text');
-    assert.equal(row?.decision, 'skip');
+    assert.equal(row?.decision, 'unresolved');
     assert.equal(extractionReviewRequiresAttention(row!), true);
-    assert.equal(extractionReviewBlocksConfirmation(row!), false);
+    assert.equal(extractionReviewBlocksConfirmation(row!), true);
     const edited = revalidateExtractionRow(
       row!,
       {
@@ -1089,7 +1148,7 @@ describe('local extraction domain', () => {
       { record: () => 'record', measurement: () => 'measurement' },
     );
     assert.equal(plan.records[0]?.measurements[0]?.biomarkerId, null);
-    assert.equal(plan.records[0]?.measurements[0]?.reviewState, 'needs-review');
+    assert.equal(plan.records[0]?.measurements[0]?.reviewState, 'confirmed');
   });
 
   it('keeps incompatible units review-only and blocks confirmation', () => {
@@ -1110,29 +1169,50 @@ describe('local extraction domain', () => {
     assert.equal(row?.proposedBiomarkerId, 'biomarker.ldl_c');
     assert.ok(row?.reviewReasons.includes('incompatible-unit'));
     assert.equal(row?.reviewState, 'needs-review');
-    assert.equal(row?.decision, 'skip');
-    assert.equal(
-      buildExtractionConfirmationPlan(
-        {
-          id: 'incompatible-unit-draft',
-          reportId: 'synthetic-report',
-          state: 'draft',
-          ocrContractVersion: 'alyte.vision.document.v2',
-          parserVersion: EXTRACTION_PARSER_VERSION,
-          collectionDate: { kind: 'known', value: '2026-08-20' },
-          rows: row === undefined ? [] : [row],
-          createdAt: '2026-08-20T00:00:00.000Z',
-          updatedAt: '2026-08-20T00:00:00.000Z',
-          confirmedAt: null,
-          pipelineFingerprint: null,
-          pipelineStatus: 'older' as const,
-          revision: 1,
-          hasUserEdits: false,
-        },
-        { record: () => 'record', measurement: () => 'measurement' },
-      ).records.length,
-      0,
+    assert.equal(row?.decision, 'unresolved');
+    assert.throws(
+      () =>
+        buildExtractionConfirmationPlan(
+          {
+            id: 'incompatible-unit-draft',
+            reportId: 'synthetic-report',
+            state: 'draft',
+            ocrContractVersion: 'alyte.vision.document.v2',
+            parserVersion: EXTRACTION_PARSER_VERSION,
+            collectionDate: { kind: 'known', value: '2026-08-20' },
+            rows: row === undefined ? [] : [row],
+            createdAt: '2026-08-20T00:00:00.000Z',
+            updatedAt: '2026-08-20T00:00:00.000Z',
+            confirmedAt: null,
+            pipelineFingerprint: null,
+            pipelineStatus: 'older' as const,
+            revision: 1,
+            hasUserEdits: false,
+          },
+          { record: () => 'record', measurement: () => 'measurement' },
+        ),
+      /unresolved required fields/,
     );
+    const skippedPlan = buildExtractionConfirmationPlan(
+      {
+        id: 'incompatible-unit-skipped-draft',
+        reportId: 'synthetic-report',
+        state: 'draft',
+        ocrContractVersion: 'alyte.vision.document.v2',
+        parserVersion: EXTRACTION_PARSER_VERSION,
+        collectionDate: { kind: 'known', value: '2026-08-20' },
+        rows: row === undefined ? [] : [{ ...row, decision: 'skip' as const }],
+        createdAt: '2026-08-20T00:00:00.000Z',
+        updatedAt: '2026-08-20T00:00:00.000Z',
+        confirmedAt: null,
+        pipelineFingerprint: null,
+        pipelineStatus: 'older' as const,
+        revision: 1,
+        hasUserEdits: false,
+      },
+      { record: () => 'record', measurement: () => 'measurement' },
+    );
+    assert.equal(skippedPlan.records.length, 0);
   });
 
   it('keeps a malformed multi-row OCR scalar review-only when its unit is missing', () => {
@@ -1159,30 +1239,31 @@ describe('local extraction domain', () => {
     assert.equal(row?.proposedUnit, null);
     assert.ok(row?.reviewReasons.includes('missing-unit'));
     assert.equal(row?.reviewState, 'needs-review');
-    assert.equal(row?.decision, 'skip');
+    assert.equal(row?.decision, 'unresolved');
     assert.equal(row === undefined ? false : extractionReviewRequiresAttention(row), true);
-    assert.equal(row === undefined ? false : extractionReviewBlocksConfirmation(row), false);
-    assert.equal(
-      buildExtractionConfirmationPlan(
-        {
-          id: 'multi-row-draft',
-          reportId: 'synthetic-report',
-          state: 'draft',
-          ocrContractVersion: 'alyte.vision.document.v2',
-          parserVersion: EXTRACTION_PARSER_VERSION,
-          collectionDate: { kind: 'known', value: '2026-08-20' },
-          rows: row === undefined ? [] : [row],
-          createdAt: '2026-08-20T00:00:00.000Z',
-          updatedAt: '2026-08-20T00:00:00.000Z',
-          confirmedAt: null,
-          pipelineFingerprint: null,
-          pipelineStatus: 'older' as const,
-          revision: 1,
-          hasUserEdits: false,
-        },
-        { record: () => 'record', measurement: () => 'measurement' },
-      ).records.length,
-      0,
+    assert.equal(row === undefined ? false : extractionReviewBlocksConfirmation(row), true);
+    assert.throws(
+      () =>
+        buildExtractionConfirmationPlan(
+          {
+            id: 'multi-row-draft',
+            reportId: 'synthetic-report',
+            state: 'draft',
+            ocrContractVersion: 'alyte.vision.document.v2',
+            parserVersion: EXTRACTION_PARSER_VERSION,
+            collectionDate: { kind: 'known', value: '2026-08-20' },
+            rows: row === undefined ? [] : [row],
+            createdAt: '2026-08-20T00:00:00.000Z',
+            updatedAt: '2026-08-20T00:00:00.000Z',
+            confirmedAt: null,
+            pipelineFingerprint: null,
+            pipelineStatus: 'older' as const,
+            revision: 1,
+            hasUserEdits: false,
+          },
+          { record: () => 'record', measurement: () => 'measurement' },
+        ),
+      /unresolved required fields/,
     );
   });
 

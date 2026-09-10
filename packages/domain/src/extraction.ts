@@ -21,13 +21,13 @@ export const VISION_OCR_LEGACY_CONTRACT_VERSION = 'alyte.vision.document.v2' as 
 export const VISION_OCR_PREVIOUS_CONTRACT_VERSION = 'alyte.vision.document.v3' as const;
 /** v4 corrects native table coordinates to use Vision's authoritative cell ranges. */
 export const VISION_OCR_CONTRACT_VERSION = 'alyte.vision.document.v4' as const;
-export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v9' as const;
+export const EXTRACTION_PARSER_VERSION = 'alyte.local-parser.v14' as const;
 /**
  * The physical-row grouping contract is deliberately independent from the parser version.  The
  * geometry/token-lattice work can advance this seam in a later phase without making a parser
  * version look current by accident.
  */
-export const EXTRACTION_ROW_SEGMENTATION_VERSION = 'alyte.row-segmentation.v3' as const;
+export const EXTRACTION_ROW_SEGMENTATION_VERSION = 'alyte.row-segmentation.v4' as const;
 export const PDF_TEXT_LAYER_ADAPTER_VERSION = 'alyte.pdf.text-layer.v3' as const;
 
 export const EXTRACTION_PIPELINE_FINGERPRINT_SCHEMA =
@@ -266,7 +266,8 @@ export type ExtractionSemanticSchemaVersion =
   | 'alyte.semantic-mapper.v2'
   | 'alyte.geometry-variant-selector.v1'
   | 'alyte.geometry-variant-selector.v2'
-  | 'alyte.document-vlm.flat-rows.v1';
+  | 'alyte.document-vlm.flat-rows.v1'
+  | 'alyte.paddleocr-vl.flat-rows.v1';
 
 /** Exact source observations selected for deterministic field parsing. */
 export type ExtractionSemanticFieldSelection = {
@@ -307,12 +308,6 @@ const REQUIRED_EXTRACTION_REVIEW_REASONS = new Set<ExtractionReviewReason>([
   'unsupported-layout',
 ]);
 
-const AUTO_EXCLUDED_EXTRACTION_REVIEW_REASONS = new Set<ExtractionReviewReason>([
-  'missing-unit',
-  'incompatible-unit',
-  'unsupported-layout',
-]);
-
 export function extractionReviewRequiresAttention(
   row: Pick<ExtractionDraftRow, 'reviewReasons'>,
 ): boolean {
@@ -335,11 +330,10 @@ export function extractionReviewHasOnlyNonBlockingReasons(
 function defaultExtractionDecision(
   reasons: readonly ExtractionReviewReason[],
 ): ExtractionRowDecision {
-  return reasons.some((reason) => AUTO_EXCLUDED_EXTRACTION_REVIEW_REASONS.has(reason))
-    ? 'skip'
-    : extractionReviewHasOnlyNonBlockingReasons(reasons)
-      ? 'resolve'
-      : 'preserve';
+  // Automatic extraction must never make a source row disappear. Any review reason becomes an
+  // explicit decision for the person importing the report; only the user's Skip action may remove
+  // it from confirmation. This also keeps unsafe-but-readable values available for correction.
+  return extractionReviewHasOnlyNonBlockingReasons(reasons) ? 'resolve' : 'unresolved';
 }
 
 export type ExtractionDraftRow = {
@@ -934,7 +928,7 @@ export type ExtractionConfirmationPlan = {
         readonly flag: string | null;
       };
       readonly sourceRowId: string;
-      readonly reviewState: 'confirmed' | 'needs-review';
+      readonly reviewState: 'confirmed';
       readonly provenance: 'extracted' | 'user-corrected';
     }[];
   }[];
@@ -1284,6 +1278,8 @@ export function normalizeUnit(input: string | null): string | null {
     'ng/ml': 'ng/mL',
     'ug/l': 'µg/L',
     'µg/l': 'µg/L',
+    'umol/l': 'µmol/L',
+    'µmol/l': 'µmol/L',
     'nmol/l': 'nmol/L',
     'pg/ml': 'pg/mL',
     'pmol/l': 'pmol/L',
@@ -1442,7 +1438,14 @@ function escapeRegExp(value: string): string {
 function aliasPattern(alias: string): RegExp | null {
   const words = normalizeAlias(alias).split(' ').filter(Boolean);
   if (words.length === 0) return null;
-  return new RegExp(words.map(escapeRegExp).join('[^\\p{L}\\p{N}]+'), 'iu');
+  // Match aliases as complete tokens. Without these guards, the short Hemoglobin alias `hb`
+  // also matches the start of `HbA1c`, turning a clear specialized assay into a false sibling
+  // ambiguity. Separators inside a multi-word alias remain intentionally permissive for OCR
+  // punctuation and whitespace.
+  return new RegExp(
+    `(?<![\\p{L}\\p{N}])${words.map(escapeRegExp).join('[^\\p{L}\\p{N}]+')}(?![\\p{L}\\p{N}])`,
+    'iu',
+  );
 }
 
 /**
@@ -1975,6 +1978,10 @@ function parseSourceRow(
   const safeAliasMatch = unsafeMatch === null && !hasSiblingAlias ? aliasMatch : null;
   const label = safeAliasMatch?.text ?? (rawLabel.trim() || sourceText);
   const biomarkerId = safeAliasMatch?.id ?? proposeBiomarkerId(label, aliases);
+  const proposedLabel =
+    biomarkerId === null
+      ? label
+      : (aliases.find((entry) => entry.id === biomarkerId)?.canonicalLabel ?? label);
   const reasons: ExtractionReviewReason[] = [];
   if (!label) reasons.push('missing-label');
   if (!rawValue) reasons.push('missing-value');
@@ -2053,7 +2060,7 @@ function parseSourceRow(
       },
     },
     collectionDateContext: nearestDateContext ?? null,
-    proposedLabel: label,
+    proposedLabel,
     proposedValue,
     proposedUnit: unit,
     proposedReferenceInterval: reference,
@@ -2363,7 +2370,10 @@ export function buildExtractionConfirmationPlan(
       source: row.source,
       original,
       sourceRowId: row.id,
-      reviewState: row.reviewState === 'ready' ? 'confirmed' : 'needs-review',
+      // Passing the confirmation boundary means this included row is now confirmed history.
+      // Draft review state remains an extraction-time signal; it does not make a preserved,
+      // non-comparable result unfinished after the person confirms the draft.
+      reviewState: 'confirmed',
       provenance:
         semanticSnapshot === null &&
         (row.proposedLabel !== row.sourceLabel ||

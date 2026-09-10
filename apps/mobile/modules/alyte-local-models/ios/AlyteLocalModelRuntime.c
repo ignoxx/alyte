@@ -42,12 +42,25 @@ enum {
     ALYTE_LOCAL_MODEL_STATUS_PROMPT_DECODE_FAILED = -5,
     ALYTE_LOCAL_MODEL_STATUS_TOKEN_DECODE_FAILED = -6,
     ALYTE_LOCAL_MODEL_STATUS_CANCELLED = -7,
+    // A token ceiling is an actionable runtime outcome. Never return the partial OCR text as
+    // success: the caller must be able to retry with a larger bound or review the page again.
+    ALYTE_LOCAL_MODEL_STATUS_TRUNCATED = -8,
 };
 
-// GPU activation can create Metal allocations before llama.cpp reports a context failure. Keep
-// a conservative amount of live headroom so iOS can fall back to CPU before that allocation
-// becomes a Jetsam event. The Swift admission gate still enforces the manifest's minimum.
-static const uint64_t ALYTE_LOCAL_MODEL_MIN_GPU_HEADROOM_BYTES = 5ULL * 1000ULL * 1000ULL * 1000ULL;
+// PaddleOCR-VL's GGUF chat template is:
+//   <|begin_of_sentence|>User: <|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>OCR:\nAssistant:\n
+// mtmd represents the image placeholder with its fixed media marker and inserts the image
+// boundary tokens while tokenizing.
+// Keep this contract native so callers cannot accidentally pass a Qwen or generic VLM prompt.
+static const char * const ALYTE_LOCAL_MODEL_PADDLE_OCR_TASK = "OCR:";
+static const char * const ALYTE_LOCAL_MODEL_PADDLE_OCR_PROMPT =
+    "<|begin_of_sentence|>User: <__media__>OCR:\nAssistant:\n";
+
+// GPU activation can create Metal allocations before llama.cpp reports a context failure. Use
+// the same 2.8 GB current-headroom gate as the Swift pack admission check so eligible iPhones use
+// the bounded 16-layer Metal path; devices under pressure take the explicit CPU fallback before
+// allocation rather than risking a Jetsam event.
+static const uint64_t ALYTE_LOCAL_MODEL_MIN_GPU_HEADROOM_BYTES = 2800000000ULL;
 static const int32_t ALYTE_LOCAL_MODEL_GPU_LAYER_LIMIT = 16;
 static const size_t ALYTE_LOCAL_MODEL_MAX_IMAGE_BYTES = 16U * 1024U * 1024U;
 
@@ -56,6 +69,7 @@ struct AlyteLocalModelRuntime {
     struct llama_context *context;
     const struct llama_vocab *vocab;
     struct llama_sampler *sampler_chain;
+    struct llama_sampler *raw_sampler_chain;
     mtmd_context *vision;
     int context_tokens;
     int batch_tokens;
@@ -182,7 +196,9 @@ static struct llama_model *alyte_local_model_load(
 static struct llama_context_params alyte_local_model_context_params(
     uint32_t batch_tokens) {
     struct llama_context_params context_params = llama_context_default_params();
-    context_params.n_ctx = 4096;
+    // The reviewed OCR evaluation uses an 8192-token context. Image position accounting can
+    // consume a large part of that budget before text generation begins.
+    context_params.n_ctx = 8192;
     context_params.n_batch = batch_tokens;
     context_params.n_ubatch = batch_tokens;
     context_params.n_seq_max = 1;
@@ -325,8 +341,37 @@ void *alyte_local_model_runtime_create(
         return NULL;
     }
     llama_sampler_chain_add(sampler_chain, greedy_sampler);
+
+    // OCR is deliberately sampled without the JSON grammar. Keep a second chain because the
+    // grammar sampler cannot be removed safely while a context is live.
+    struct llama_sampler_chain_params raw_chain_params = llama_sampler_chain_default_params();
+    raw_chain_params.no_perf = true;
+    struct llama_sampler *raw_sampler_chain = llama_sampler_chain_init(raw_chain_params);
+    if (raw_sampler_chain == NULL) {
+        llama_sampler_free(sampler_chain);
+        llama_free(context);
+        llama_model_free(model);
+        alyte_local_model_set_failure_stage(
+            failure_stage_out,
+            ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_SAMPLER);
+        return NULL;
+    }
+    struct llama_sampler *raw_greedy_sampler = llama_sampler_init_greedy();
+    if (raw_greedy_sampler == NULL) {
+        llama_sampler_free(raw_sampler_chain);
+        llama_sampler_free(sampler_chain);
+        llama_free(context);
+        llama_model_free(model);
+        alyte_local_model_set_failure_stage(
+            failure_stage_out,
+            ALYTE_LOCAL_MODEL_RUNTIME_FAILURE_SAMPLER);
+        return NULL;
+    }
+    llama_sampler_chain_add(raw_sampler_chain, raw_greedy_sampler);
+
     struct AlyteLocalModelRuntime *runtime = (struct AlyteLocalModelRuntime *) calloc(1, sizeof(*runtime));
     if (runtime == NULL) {
+        llama_sampler_free(raw_sampler_chain);
         llama_sampler_free(sampler_chain);
         llama_free(context);
         llama_model_free(model);
@@ -339,7 +384,8 @@ void *alyte_local_model_runtime_create(
     runtime->context = context;
     runtime->vocab = vocab;
     runtime->sampler_chain = sampler_chain;
-    runtime->context_tokens = 4096;
+    runtime->raw_sampler_chain = raw_sampler_chain;
+    runtime->context_tokens = 8192;
     runtime->batch_tokens = (int) batch_tokens;
     atomic_init(&runtime->cancel_requested, false);
     llama_set_abort_callback(context, alyte_local_model_abort_callback, runtime);
@@ -347,8 +393,9 @@ void *alyte_local_model_runtime_create(
     vision_params.use_gpu = activation.backend_mode == ALYTE_LOCAL_MODEL_BACKEND_GPU_PREFERRED;
     vision_params.print_timings = false;
     vision_params.n_threads = 4;
-    vision_params.image_min_tokens = 1024;
-    vision_params.image_max_tokens = 1024;
+    // Leave PaddleOCR's dynamic-resolution image token bounds at mtmd's model defaults. A fixed
+    // 1024-token cap silently discards detail from the 1800px benchmark pages before OCR starts.
+    // `mtmd_context_params_default()` supplies -1, which delegates to the projector's defaults.
     vision_params.batch_max_tokens = 1024;
     vision_params.progress_callback = alyte_local_model_should_continue;
     vision_params.progress_callback_user_data = runtime;
@@ -357,6 +404,7 @@ void *alyte_local_model_runtime_create(
     runtime->vision = mtmd_init_from_file(projector_path, model, vision_params);
     if (runtime->vision == NULL || !mtmd_support_vision(runtime->vision)) {
         if (runtime->vision != NULL) mtmd_free(runtime->vision);
+        llama_sampler_free(raw_sampler_chain);
         llama_sampler_free(sampler_chain);
         llama_free(context);
         llama_model_free(model);
@@ -451,18 +499,20 @@ int alyte_local_model_runtime_generate(
     return (int) output_length;
 }
 
-int alyte_local_model_runtime_generate_image(
+static int alyte_local_model_runtime_generate_image_with_sampler(
     void *opaque_runtime,
     const char *prompt,
     const unsigned char *image_data,
     size_t image_length,
     int max_output_tokens,
     char *output,
-    size_t output_capacity) {
+    size_t output_capacity,
+    struct llama_sampler *sampler_chain,
+    bool fail_on_token_ceiling) {
     struct AlyteLocalModelRuntime *runtime = (struct AlyteLocalModelRuntime *) opaque_runtime;
     if (runtime == NULL || runtime->vision == NULL || prompt == NULL || image_data == NULL ||
         image_length == 0 || image_length > ALYTE_LOCAL_MODEL_MAX_IMAGE_BYTES || output == NULL ||
-        output_capacity == 0 || max_output_tokens <= 0) {
+        output_capacity == 0 || max_output_tokens <= 0 || sampler_chain == NULL) {
         return ALYTE_LOCAL_MODEL_STATUS_INVALID_ARGUMENT;
     }
     if (atomic_exchange_explicit(&runtime->cancel_requested, false, memory_order_acq_rel)) {
@@ -470,7 +520,7 @@ int alyte_local_model_runtime_generate_image(
     }
     output[0] = '\0';
     llama_memory_clear(llama_get_memory(runtime->context), true);
-    llama_sampler_reset(runtime->sampler_chain);
+    llama_sampler_reset(sampler_chain);
 
     struct mtmd_helper_bitmap_wrapper bitmap_wrapper = mtmd_helper_bitmap_init_from_buf(
         runtime->vision,
@@ -524,18 +574,22 @@ int alyte_local_model_runtime_generate_image(
     }
 
     size_t output_length = 0;
+    bool reached_end_of_generation = false;
     for (int index = 0; index < max_output_tokens; index += 1) {
         if (atomic_load_explicit(&runtime->cancel_requested, memory_order_acquire)) {
             output[0] = '\0';
             atomic_store_explicit(&runtime->cancel_requested, false, memory_order_release);
             return ALYTE_LOCAL_MODEL_STATUS_CANCELLED;
         }
-        llama_token token = llama_sampler_sample(runtime->sampler_chain, runtime->context, -1);
+        llama_token token = llama_sampler_sample(sampler_chain, runtime->context, -1);
         if (token < 0) {
             output[0] = '\0';
             return ALYTE_LOCAL_MODEL_STATUS_TOKEN_DECODE_FAILED;
         }
-        if (llama_vocab_is_eog(runtime->vocab, token)) break;
+        if (llama_vocab_is_eog(runtime->vocab, token)) {
+            reached_end_of_generation = true;
+            break;
+        }
         char piece[256];
         int32_t piece_length = llama_token_to_piece(
             runtime->vocab,
@@ -552,6 +606,10 @@ int alyte_local_model_runtime_generate_image(
         output_length += (size_t) piece_length;
         output[output_length] = '\0';
 
+        // The image prefix was decoded with PaddleOCR-VL's 2D M-RoPE positions. Text
+        // continuation intentionally uses a scalar token position, matching mtmd-cli.cpp:
+        // llama's batch allocator broadcasts that position across the model's four M-RoPE
+        // planes when n_pos_per_embd is 4.
         struct llama_batch next = llama_batch_init(1, 0, 1);
         next.n_tokens = 1;
         next.token[0] = token;
@@ -566,14 +624,71 @@ int alyte_local_model_runtime_generate_image(
             return ALYTE_LOCAL_MODEL_STATUS_TOKEN_DECODE_FAILED;
         }
     }
+    if (fail_on_token_ceiling && !reached_end_of_generation) {
+        // OCR text is source evidence. Returning a partial string as a successful extraction
+        // would make a token ceiling indistinguishable from a complete page.
+        output[0] = '\0';
+        atomic_store_explicit(&runtime->cancel_requested, false, memory_order_release);
+        return ALYTE_LOCAL_MODEL_STATUS_TRUNCATED;
+    }
     atomic_store_explicit(&runtime->cancel_requested, false, memory_order_release);
     return (int) output_length;
+}
+
+int alyte_local_model_runtime_generate_image(
+    void *opaque_runtime,
+    const char *prompt,
+    const unsigned char *image_data,
+    size_t image_length,
+    int max_output_tokens,
+    char *output,
+    size_t output_capacity) {
+    struct AlyteLocalModelRuntime *runtime = (struct AlyteLocalModelRuntime *) opaque_runtime;
+    return alyte_local_model_runtime_generate_image_with_sampler(
+        opaque_runtime,
+        prompt,
+        image_data,
+        image_length,
+        max_output_tokens,
+        output,
+        output_capacity,
+        runtime == NULL ? NULL : runtime->sampler_chain,
+        false);
+}
+
+int alyte_local_model_runtime_generate_image_raw(
+    void *opaque_runtime,
+    const char *prompt,
+    const unsigned char *image_data,
+    size_t image_length,
+    int max_output_tokens,
+    char *output,
+    size_t output_capacity) {
+    struct AlyteLocalModelRuntime *runtime = (struct AlyteLocalModelRuntime *) opaque_runtime;
+    if (runtime == NULL || prompt == NULL || strcmp(prompt, ALYTE_LOCAL_MODEL_PADDLE_OCR_TASK) != 0) {
+        return ALYTE_LOCAL_MODEL_STATUS_INVALID_ARGUMENT;
+    }
+
+    // mtmd_tokenize requires one media marker in the text. Build the exact PaddleOCR-VL chat
+    // template here instead of trusting a JS prompt that may omit the marker or use another
+    // model's framing. The runtime's raw sampler deliberately bypasses the JSON grammar.
+    return alyte_local_model_runtime_generate_image_with_sampler(
+        opaque_runtime,
+        ALYTE_LOCAL_MODEL_PADDLE_OCR_PROMPT,
+        image_data,
+        image_length,
+        max_output_tokens,
+        output,
+        output_capacity,
+        runtime->raw_sampler_chain,
+        true);
 }
 
 void alyte_local_model_runtime_destroy(void *opaque_runtime) {
     struct AlyteLocalModelRuntime *runtime = (struct AlyteLocalModelRuntime *) opaque_runtime;
     if (runtime == NULL) return;
     mtmd_free(runtime->vision);
+    llama_sampler_free(runtime->raw_sampler_chain);
     llama_sampler_free(runtime->sampler_chain);
     llama_free(runtime->context);
     llama_model_free(runtime->model);
@@ -612,6 +727,23 @@ int alyte_local_model_runtime_generate(
 }
 
 int alyte_local_model_runtime_generate_image(
+    void *runtime,
+    const char *prompt,
+    const unsigned char *image_data,
+    size_t image_length,
+    int max_output_tokens,
+    char *output,
+    size_t output_capacity) {
+    (void) runtime;
+    (void) prompt;
+    (void) image_data;
+    (void) image_length;
+    (void) max_output_tokens;
+    if (output != NULL && output_capacity > 0) output[0] = '\0';
+    return -1;
+}
+
+int alyte_local_model_runtime_generate_image_raw(
     void *runtime,
     const char *prompt,
     const unsigned char *image_data,

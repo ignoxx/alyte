@@ -2,7 +2,7 @@ Pod::Spec.new do |s|
   s.name           = 'AlyteLocalModels'
   s.version        = '0.1.0'
   s.summary        = 'Alyte verified local semantic model storage'
-  s.description    = 'Downloads, verifies, protects, activates, and releases the pinned Qwen VLM pack.'
+  s.description    = 'Downloads, verifies, protects, activates, and releases the pinned PaddleOCR-VL pack.'
   s.author         = 'Alyte'
   s.homepage       = 'https://alyte.app'
   s.platforms      = { :ios => '26.0' }
@@ -15,7 +15,7 @@ Pod::Spec.new do |s|
   s.dependency 'ExpoModulesCore'
   repository_root = File.expand_path('../../../../..', __dir__)
   pod_root = File.expand_path(__dir__)
-  staged_runtime_root = File.join(pod_root, 'Vendor')
+  staged_runtime_root = ENV['ALYTE_LOCAL_MODEL_RUNTIME_STAGING_ROOT'] || File.join(pod_root, 'Vendor')
   require File.join(pod_root, 'stage-runtime.rb')
   runtime_xcframework = ENV['ALYTE_LOCAL_MODEL_RUNTIME_XCFRAMEWORK'] || ENV['ALYTE_MODEL_EVAL_LLAMA_XCFRAMEWORK']
   runtime_manifest = runtime_xcframework && "#{runtime_xcframework}.alyte-eval.json"
@@ -62,9 +62,10 @@ Pod::Spec.new do |s|
     s.vendored_frameworks = staged_relative_framework
     runtime_conditions = '$(inherited) ALYTE_LLAMA_RUNTIME'
     runtime_cflags = '$(inherited) -DALYTE_LLAMA_RUNTIME'
-    # Expo resolves an omitted APP_VARIANT to development. Keep that same safe default here;
-    # only the explicitly named distribution variants may opt into the bounded Metal path.
-    unless ['preview', 'production'].include?(ENV['APP_VARIANT'])
+    # Physical-device development must exercise the same bounded Metal-first runtime as the
+    # distribution variants. Keep CPU-only available as an explicit diagnostic override rather
+    # than silently making every development import too slow to represent the shipped app.
+    if ENV['ALYTE_LOCAL_MODEL_CPU_ONLY'] == '1'
       runtime_conditions += ' ALYTE_LOCAL_MODEL_CPU_ONLY'
       runtime_cflags += ' -DALYTE_LOCAL_MODEL_CPU_ONLY'
     end

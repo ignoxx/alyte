@@ -41,16 +41,23 @@ type DateAssociation = {
 };
 
 type VisualRow = {
-  observations: OCRDateContextObservation[];
-  centerY: number;
-  height: number;
+  readonly pageIndex: number;
+  readonly observations: OCRDateContextObservation[];
+  /** The first observation anchors this row; it must not drift as more observations arrive. */
+  readonly anchorCenterY: number;
+  readonly anchorHeight: number;
 };
 
 const collectionDateLabelPattern =
   /\b(?:date of collection|collection|collected|sample|specimen|abnahme|entnahme|proben(?:entnahme)?|prélèvement|prelevement|muestra|toma de muestra|prelievo|campione|colheita|amostra|afname|monster|pobranie|próbka|paėmimo data|mėgin(?:ys|io data)|ėminys|paimta)\b/giu;
 const nonCollectionDateLabelPattern =
   /\b(?:date of birth|date reported|report date|reported|report|issued|birth|dob|ausgestellt|geburt|naissance|nacimiento|nascita|nascimento|geboorte|urodzenia|wydania|ataskaitos data|išdavimo data|gimimo data)\b/giu;
-const dateTokenPattern = /(?<![\p{L}\p{N}.,-])\d{1,4}[./-]\d{1,2}[./-]\d{1,4}(?![\p{L}\p{N}.,-])/gu;
+const writtenMonthPattern =
+  'jan(?:uary|uar)?|feb(?:ruary|ruar)?|mar(?:ch)?|märz|maerz|apr(?:il)?|may|mai|jun(?:e|i)?|jul(?:y|i)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|okt(?:ober)?|nov(?:ember)?|dec(?:ember)?|dez(?:ember)?';
+const dateTokenPattern = new RegExp(
+  String.raw`(?<![\p{L}\p{N}.,-])(?:\d{1,4}[./-]\d{1,2}[./-]\d{1,4}|\d{1,2}\.?\s+(?:${writtenMonthPattern})\s+\d{4}|(?:${writtenMonthPattern})\s+\d{1,2},?\s+\d{4})(?![\p{L}\p{N}.,-])`,
+  'giu',
+);
 
 /**
  * Extract only explicitly labelled collection dates from OCR observations.
@@ -96,28 +103,38 @@ export function extractOCRDateContexts(
     association: associateDate(token, observations, rowByObservationId, scopeByObservationId),
   }));
   const excludedObservationIds = new Set<string>();
-  for (const { association } of associations) {
-    if (association.kind !== 'missing')
-      association.neighbors.forEach((observation) => excludedObservationIds.add(observation.id));
+  for (const { token, association } of associations) {
+    if (association.kind === 'missing') continue;
+
+    // Date context is metadata cleanup. Exclude only pure date/header observations so a mixed
+    // OCR parent that also contains a measurement remains available to source parsing.
+    if (isPureDateObservation(token.observation)) excludedObservationIds.add(token.observation.id);
+    if (association.label !== null && isPureDateObservation(association.label.observation))
+      excludedObservationIds.add(association.label.observation.id);
   }
 
   const collectionCandidates = associations.filter(
     ({ association }) => association.kind === 'collection' || association.kind === 'ambiguous',
   );
   const contexts: ExtractionDateContext[] = collectionCandidates.map(({ token, association }) => {
-    const localeAmbiguous = dateIsAmbiguous(token.raw);
-    const parsed = localeAmbiguous
-      ? null
-      : parseLabDate(token.raw, token.observation.locale ?? 'en-US');
+    // A date-only OCR cell often has no language attribution even when its adjacent label does.
+    // The explicitly associated collection label is safe locale context; the phone locale is not.
+    const contextLocale = token.observation.locale ?? association.label?.observation.locale ?? null;
+    const localeAmbiguous = dateIsAmbiguous(token.raw, contextLocale);
+    const parsed = localeAmbiguous ? null : parseContextDate(token.raw, contextLocale ?? 'en-US');
     const sameScope = collectionCandidates.filter(
       (candidate) => candidate.association.scopeKey === association.scopeKey,
     );
     const distinctDates = new Set(
       sameScope.map(({ token: candidateToken, association: candidateAssociation }) => {
         if (candidateAssociation.kind === 'ambiguous') return 'ambiguous';
-        const candidateDate = dateIsAmbiguous(candidateToken.raw)
+        const candidateLocale =
+          candidateToken.observation.locale ??
+          candidateAssociation.label?.observation.locale ??
+          null;
+        const candidateDate = dateIsAmbiguous(candidateToken.raw, candidateLocale)
           ? null
-          : parseLabDate(candidateToken.raw, candidateToken.observation.locale ?? 'en-US');
+          : parseContextDate(candidateToken.raw, candidateLocale ?? 'en-US');
         return candidateDate?.kind === 'known' ? candidateDate.value : 'invalid';
       }),
     );
@@ -131,7 +148,7 @@ export function extractOCRDateContexts(
       centerY: token.centerY,
       centerX: token.centerX,
       scopeKey: association.scopeKey,
-      locale: token.observation.locale,
+      locale: contextLocale,
       context: 'collection',
       ambiguous,
       collectionDate: ambiguous ? { kind: 'missing' } : (parsed ?? { kind: 'missing' }),
@@ -155,26 +172,48 @@ export function extractOCRDateContexts(
 
 function visualRows(observations: readonly OCRDateContextObservation[]): VisualRow[] {
   const rows: VisualRow[] = [];
-  const sorted = [...observations].sort((left, right) => centerY(left) - centerY(right));
+  const sorted = [...observations].sort(
+    (left, right) =>
+      left.pageIndex - right.pageIndex ||
+      centerY(left) - centerY(right) ||
+      left.boundingBox.x - right.boundingBox.x,
+  );
   for (const observation of sorted) {
     const center = centerY(observation);
     const prior = rows.at(-1);
     if (
       prior !== undefined &&
-      Math.abs(center - prior.centerY) <=
-        Math.max(observation.boundingBox.height, prior.height) * 1.5
+      prior.pageIndex === observation.pageIndex &&
+      Math.abs(center - prior.anchorCenterY) <=
+        Math.max(observation.boundingBox.height, prior.anchorHeight) * 1.5
     ) {
       prior.observations.push(observation);
-      prior.centerY = (prior.centerY + center) / 2;
-      prior.height = Math.max(prior.height, observation.boundingBox.height);
     } else
       rows.push({
+        pageIndex: observation.pageIndex,
         observations: [observation],
-        centerY: center,
-        height: observation.boundingBox.height,
+        anchorCenterY: center,
+        anchorHeight: observation.boundingBox.height,
       });
   }
   return rows;
+}
+
+/**
+ * Keep a source observation excluded only when it contains date metadata by itself. A parent
+ * carrying other source text may still contain a credible measurement, so it remains parseable.
+ */
+function isPureDateObservation(observation: OCRDateContextObservation): boolean {
+  const remainder = observation.text
+    .replace(dateTokenPattern, '')
+    .replace(collectionDateLabelPattern, '')
+    .replace(nonCollectionDateLabelPattern, '')
+    // These words are part of common split labels such as "Collection date" and "Date Collected".
+    .replace(/\b(?:date|datum|data)\b/giu, '')
+    // Times commonly accompany a collection date but are still date-header metadata.
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/gu, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+  return remainder.length === 0;
 }
 
 function horizontalObservationGroups(
@@ -349,8 +388,72 @@ function horizontalGap(left: OCRDateContextObservation, right: OCRDateContextObs
   );
 }
 
-function dateIsAmbiguous(candidate: string): boolean {
+function dateIsAmbiguous(candidate: string, locale: string | null): boolean {
   const parts = candidate.split(/[./-]/u).map(Number);
   if (parts.length !== 3 || String(parts[0]).length === 4) return false;
-  return (parts[0] ?? 0) <= 12 && (parts[1] ?? 0) <= 12;
+  const numericOrderNeedsLocale = (parts[0] ?? 0) <= 12 && (parts[1] ?? 0) <= 12;
+  // A source-attributed report language makes numeric order deterministic through parseLabDate.
+  // Without that source context, keep 04/01-style dates visibly ambiguous.
+  return numericOrderNeedsLocale && locale === null;
+}
+
+const monthNumbers: Readonly<Record<string, number>> = {
+  jan: 1,
+  january: 1,
+  januar: 1,
+  feb: 2,
+  february: 2,
+  februar: 2,
+  mar: 3,
+  march: 3,
+  märz: 3,
+  maerz: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  mai: 5,
+  jun: 6,
+  june: 6,
+  juni: 6,
+  jul: 7,
+  july: 7,
+  juli: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  okt: 10,
+  oktober: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
+  dez: 12,
+  dezember: 12,
+};
+
+function parseContextDate(input: string, locale: string): LabDateState | null {
+  const numeric = parseLabDate(input, locale);
+  if (numeric !== null) return numeric;
+  const normalized = input.trim().toLocaleLowerCase(locale).replace(/\s+/gu, ' ');
+  const dayFirst = normalized.match(/^(\d{1,2})\.?\s+([\p{L}]+)\s+(\d{4})$/u);
+  const monthFirst = normalized.match(/^([\p{L}]+)\s+(\d{1,2}),?\s+(\d{4})$/u);
+  const parts = dayFirst ?? monthFirst;
+  if (parts === null) return null;
+  const monthName = dayFirst === null ? parts[1] : parts[2];
+  const dayText = dayFirst === null ? parts[2] : parts[1];
+  const yearText = parts[3];
+  const month = monthNumbers[monthName ?? ''];
+  const day = Number(dayText);
+  const year = Number(yearText);
+  if (month === undefined || !Number.isInteger(day) || !Number.isInteger(year)) return null;
+  const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (year < 1 || day < 1 || day > days) return null;
+  return {
+    kind: 'known',
+    value: `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+  };
 }

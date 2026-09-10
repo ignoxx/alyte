@@ -67,13 +67,13 @@ test('sanitizer failures stay compact when the source document remains available
     }),
     {
       kind: 'sanitization-verification',
-      title: 'Sanitized Report needs attention',
-      body: 'Verification failed. Retry or cancel to keep the Original Report unchanged.',
+      title: "Couldn't verify this copy",
+      body: 'Try again, or cancel to keep the Original Report unchanged.',
       recovery: 'sanitize',
       mode: 'compact',
       maxVisibleLines: 2,
       accessibilityText:
-        'Sanitized Report needs attention. Verification failed. Retry or cancel to keep the Original Report unchanged. A long verification explanation remains available to VoiceOver.',
+        "Couldn't verify this copy. Try again, or cancel to keep the Original Report unchanged. A long verification explanation remains available to VoiceOver.",
     },
   );
   assert.deepEqual(
@@ -84,13 +84,13 @@ test('sanitizer failures stay compact when the source document remains available
     }),
     {
       kind: 'document-load',
-      title: 'The Sanitized Report editor could not open.',
+      title: "Alyte couldn't open the redaction editor.",
       body: 'The Sanitized Report editor could not open.',
       recovery: 'load',
       mode: 'blocking',
       maxVisibleLines: null,
       accessibilityText:
-        'The Sanitized Report editor could not open. The Sanitized Report editor could not open.',
+        "Alyte couldn't open the redaction editor. The Sanitized Report editor could not open.",
     },
   );
   assert.deepEqual(
@@ -101,13 +101,13 @@ test('sanitizer failures stay compact when the source document remains available
     }),
     {
       kind: 'viewer-load',
-      title: 'Document preview needs attention',
-      body: 'The document view could not be refreshed. Continue editing or cancel.',
+      title: "Couldn't update the preview",
+      body: 'Keep editing, or cancel.',
       recovery: null,
       mode: 'compact',
       maxVisibleLines: 2,
       accessibilityText:
-        'Document preview needs attention. The document view could not be refreshed. Continue editing or cancel.',
+        "Couldn't update the preview. Keep editing, or cancel. The document view could not be refreshed. Continue editing or cancel.",
     },
   );
 });

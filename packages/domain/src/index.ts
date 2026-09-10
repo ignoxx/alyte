@@ -26,6 +26,7 @@ export * from './intake';
 export * from './extraction';
 export * from './geometry';
 export * from './geometry-candidate-windows';
+export * from './header-table';
 export * from './geometry-extraction';
 export * from './geometry-result-columns';
 export * from './date-context';

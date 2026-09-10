@@ -553,6 +553,130 @@ describe('local schema forward migrations', () => {
     await database.closeAsync();
   });
 
+  test('v16 preserves extraction operations and accepts observable post-OCR stages', async () => {
+    const database = new NodeSqliteDatabase(temporaryDatabase());
+    await createBoundary(
+      database,
+      LOCAL_MIGRATIONS.filter((migration) => migration.version <= 15),
+    ).initialize();
+    await database.execAsync(`
+      INSERT INTO lab_reports
+        (id, source_type, original_filename, mime_type, byte_size, source_hash, original_path,
+         import_state, failure_reason, encrypted, page_count, created_at, updated_at, imported_at)
+      VALUES
+        ('report-v15', 'pdf', 'synthetic.pdf', 'application/pdf', 1, 'hash-v15',
+         'protected://report-v15', 'imported', NULL, 1, 2, '2026-08-22T09:00:00.000Z',
+         '2026-08-22T09:01:00.000Z', '2026-08-22T09:00:00.000Z'),
+        ('report-organize', 'pdf', 'organize.pdf', 'application/pdf', 1, 'hash-organize',
+         'protected://report-organize', 'imported', NULL, 1, 1, '2026-08-22T09:00:00.000Z',
+         '2026-08-22T09:00:00.000Z', '2026-08-22T09:00:00.000Z'),
+        ('report-refine', 'pdf', 'refine.pdf', 'application/pdf', 1, 'hash-refine',
+         'protected://report-refine', 'imported', NULL, 1, 1, '2026-08-22T09:00:00.000Z',
+         '2026-08-22T09:00:00.000Z', '2026-08-22T09:00:00.000Z');
+      INSERT INTO extraction_operations
+        (report_id, state, stage, completed, total, error, created_at, updated_at, mode,
+         pipeline_fingerprint_json, pipeline_fingerprint_hash, revision)
+      VALUES
+        ('report-v15', 'failed', 'ocr', 2, 2, 'recognition',
+         '2026-08-22T09:00:00.000Z', '2026-08-22T09:01:00.000Z', 'reprocess',
+         '{"parser":"v15"}', 'fingerprint-v15', 3);
+    `);
+
+    await createBoundary(database).initialize();
+
+    const preserved = await database.getAllAsync<{
+      report_id: string;
+      state: string;
+      stage: string;
+      completed: number;
+      total: number;
+      error: string | null;
+      mode: string;
+      pipeline_fingerprint_json: string | null;
+      pipeline_fingerprint_hash: string | null;
+      revision: number;
+    }>('SELECT * FROM extraction_operations WHERE report_id = ?;', 'report-v15');
+    assert.deepEqual(
+      preserved.map((operation) => ({ ...operation })),
+      [
+        {
+          report_id: 'report-v15',
+          state: 'failed',
+          stage: 'ocr',
+          completed: 2,
+          total: 2,
+          error: 'recognition',
+          created_at: '2026-08-22T09:00:00.000Z',
+          updated_at: '2026-08-22T09:01:00.000Z',
+          mode: 'reprocess',
+          pipeline_fingerprint_json: '{"parser":"v15"}',
+          pipeline_fingerprint_hash: 'fingerprint-v15',
+          revision: 3,
+        },
+      ],
+    );
+
+    await database.execAsync(`
+      INSERT INTO extraction_operations
+        (report_id, state, stage, completed, total, created_at, updated_at)
+      VALUES
+        ('report-organize', 'active', 'organize', 0, 1,
+         '2026-08-22T09:02:00.000Z', '2026-08-22T09:02:00.000Z'),
+        ('report-refine', 'active', 'refine', 0, 1,
+         '2026-08-22T09:03:00.000Z', '2026-08-22T09:03:00.000Z');
+    `);
+    const newStages = await database.getAllAsync<{ stage: string }>(
+      `SELECT stage FROM extraction_operations
+       WHERE report_id IN ('report-organize', 'report-refine') ORDER BY report_id;`,
+    );
+    assert.deepEqual(
+      newStages.map((operation) => operation.stage),
+      ['organize', 'refine'],
+    );
+    await database.closeAsync();
+  });
+
+  test('v17 preserves deletion operations and accepts the app reset scope', async () => {
+    const database = new NodeSqliteDatabase(temporaryDatabase());
+    await createBoundary(
+      database,
+      LOCAL_MIGRATIONS.filter((migration) => migration.version <= 16),
+    ).initialize();
+    await database.runAsync(
+      `INSERT INTO local_deletion_operations
+        (id, scope, plan_hash, plan_json, state, requested_at, updated_at)
+       VALUES ('existing-delete', 'all-health', 'hash', '{}', 'failed',
+        '2026-08-22T09:00:00.000Z', '2026-08-22T09:01:00.000Z');`,
+    );
+
+    await createBoundary(database).initialize();
+
+    const preserved = await database.getAllAsync<{ id: string; scope: string; state: string }>(
+      'SELECT id, scope, state FROM local_deletion_operations WHERE id = ?;',
+      'existing-delete',
+    );
+    assert.deepEqual(
+      preserved.map((row) => ({ ...row })),
+      [{ id: 'existing-delete', scope: 'all-health', state: 'failed' }],
+    );
+    await database.runAsync(
+      `INSERT INTO local_deletion_operations
+        (id, scope, plan_hash, plan_json, state, requested_at, updated_at)
+       VALUES ('reset', 'reset-app', 'hash-reset', '{}', 'requested',
+        '2026-08-22T09:02:00.000Z', '2026-08-22T09:02:00.000Z');`,
+    );
+    assert.equal(
+      (
+        await database.getAllAsync<{ scope: string }>(
+          'SELECT scope FROM local_deletion_operations WHERE id = ?;',
+          'reset',
+        )
+      )[0]?.scope,
+      'reset-app',
+    );
+    await database.closeAsync();
+  });
+
   test('direct v11 to v12 invalidates legacy Sanitized drafts without reinterpreting them as Original', async () => {
     const database = new NodeSqliteDatabase(temporaryDatabase());
     await createFrozenLabsFixture(database, 8);

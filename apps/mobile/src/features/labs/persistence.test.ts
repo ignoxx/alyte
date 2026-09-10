@@ -19,6 +19,8 @@ import { createLabsService } from './service';
 
 class NodeSqliteDatabase implements SqliteDatabase {
   readonly databasePath: string;
+  preparedStatementCount = 0;
+  preparedStatementExecutionCount = 0;
   private readonly database: DatabaseSync;
 
   constructor(databasePath: string) {
@@ -35,6 +37,22 @@ class NodeSqliteDatabase implements SqliteDatabase {
     return {
       changes: Number(result.changes),
       lastInsertRowId: Number(result.lastInsertRowid),
+    };
+  }
+
+  async prepareAsync(source: string) {
+    this.preparedStatementCount += 1;
+    const statement = this.database.prepare(source);
+    return {
+      executeAsync: async (...params: readonly unknown[]) => {
+        this.preparedStatementExecutionCount += 1;
+        const result = statement.run(...(params as any[]));
+        return {
+          changes: Number(result.changes),
+          lastInsertRowId: Number(result.lastInsertRowid),
+        };
+      },
+      finalizeAsync: async () => undefined,
     };
   }
 
@@ -236,6 +254,112 @@ describe('protected manual Lab Record persistence', () => {
       'Synthetic lipid panel',
     );
     await relaunched.repository.close();
+  });
+
+  test('rolls back a draft whose persisted rows cannot be decoded', async () => {
+    const { repository, database } = createRepository();
+    await repository.createReport({
+      id: 'report-invalid-draft',
+      sourceType: 'image',
+      originalFilename: 'synthetic-invalid.png',
+      mimeType: 'image/png',
+      importState: 'imported',
+      originalPath: 'protected://original/synthetic-invalid.png',
+      sourceHash: 'synthetic-invalid-hash',
+      pageCount: 1,
+    });
+    const rows = groupObservationsIntoRows(
+      [
+        {
+          id: 'invalid-draft-source',
+          text: 'LDL-C 3.8 mmol/L',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+        },
+      ],
+      { collectionDate: { kind: 'missing' }, specimenType: 'blood' },
+    );
+    const invalidRows = rows.map((row) => ({
+      ...row,
+      source: {
+        ...row.source,
+        boundingBox: { ...row.source.boundingBox, width: 0 },
+      },
+    }));
+
+    await assert.rejects(
+      repository.createExtractionDraft({
+        id: 'draft-invalid-readback',
+        reportId: 'report-invalid-draft',
+        collectionDate: { kind: 'missing' },
+        rows: invalidRows,
+      }),
+      /bounding box/u,
+    );
+    assert.equal(
+      (
+        await database.getAllAsync<{ count: number }>(
+          'SELECT COUNT(*) AS count FROM extraction_drafts WHERE report_id = ?;',
+          'report-invalid-draft',
+        )
+      )[0]?.count,
+      0,
+    );
+    assert.deepEqual(await repository.listOpenExtractionDrafts(), []);
+    await repository.close();
+  });
+
+  test('quarantines an older unreadable open draft instead of advertising Review', async () => {
+    const { repository, database } = createRepository();
+    await repository.createReport({
+      id: 'report-stale-draft',
+      sourceType: 'image',
+      originalFilename: 'synthetic-stale.png',
+      mimeType: 'image/png',
+      importState: 'imported',
+      originalPath: 'protected://original/synthetic-stale.png',
+      sourceHash: 'synthetic-stale-hash',
+      pageCount: 1,
+    });
+    const rows = groupObservationsIntoRows(
+      [
+        {
+          id: 'stale-draft-source',
+          text: 'LDL-C 3.8 mmol/L',
+          alternatives: [],
+          boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+        },
+      ],
+      { collectionDate: { kind: 'missing' }, specimenType: 'blood' },
+    );
+    const draft = await repository.createExtractionDraft({
+      id: 'draft-stale-readback',
+      reportId: 'report-stale-draft',
+      collectionDate: { kind: 'missing' },
+      rows,
+    });
+    await database.runAsync(
+      'UPDATE extraction_draft_rows SET source_bbox_json = ? WHERE draft_id = ?;',
+      JSON.stringify({ x: 0, y: 0, width: 0, height: 0 }),
+      draft.id,
+    );
+
+    assert.equal(await repository.getExtractionDraftForReport('report-stale-draft'), null);
+    assert.deepEqual(await repository.listOpenExtractionDrafts(), []);
+    assert.equal(await repository.countOpenExtractionDrafts(), 0);
+    const stored = await database.getAllAsync<{ state: string; failure_reason: string }>(
+      'SELECT state, failure_reason FROM extraction_drafts WHERE id = ?;',
+      draft.id,
+    );
+    assert.equal(stored[0]?.state, 'failed');
+    assert.equal(stored[0]?.failure_reason, 'unreadable-draft');
+    await repository.close();
   });
 
   test('allocates distinct persisted row identities for drafts with repeated OCR observation IDs', async () => {
@@ -899,6 +1023,66 @@ describe('protected manual Lab Record persistence', () => {
     assert.deepEqual(reopened?.measurements[0]?.source?.observationIds, ['decision-source']);
   });
 
+  test('preserves Paddle recognition semantic provenance through user correction', async () => {
+    const { repository } = createRepository();
+    await repository.createReport({
+      id: 'report-paddle-semantic',
+      sourceType: 'image',
+      originalFilename: 'synthetic-paddle-semantic.png',
+      mimeType: 'image/png',
+      importState: 'imported',
+      originalPath: 'protected://original/synthetic-paddle-semantic.png',
+      sourceHash: 'paddle-semantic-hash',
+      pageCount: 1,
+    });
+    const aliases: readonly ExtractionAliasEntry[] = [
+      { id: 'biomarker.ldl_c', aliases: ['LDL-C'], specimens: ['blood'], units: ['mmol/L'] },
+    ];
+    const [parsed] = groupObservationsIntoRows(
+      [
+        {
+          id: 'paddle-source',
+          text: 'LDL-C 3.8 mmol/L',
+          alternatives: [],
+          boundingBox: { x: 0.2, y: 0.3, width: 0.4, height: 0.04 },
+          pageIndex: 0,
+          orientation: 0,
+          recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+        },
+      ],
+      {
+        aliases,
+        collectionDate: { kind: 'known', value: '2026-08-22' },
+        specimenType: 'blood',
+      },
+    );
+    assert.ok(parsed);
+    const semantic = {
+      adapterVersion: 'alyte.paddleocr-vl16.text-extractor.v1',
+      schemaVersion: 'alyte.paddleocr-vl.flat-rows.v1' as const,
+      sourceObservationIds: ['paddle-source'],
+      modelVersion: 'synthetic-model-revision',
+      runtimeVersion: 'synthetic-runtime-revision',
+      promptVersion: 'alyte.paddleocr-vl.prompt.v1',
+    };
+    const draft = await repository.createExtractionDraft({
+      id: 'draft-paddle-semantic',
+      reportId: 'report-paddle-semantic',
+      collectionDate: { kind: 'known', value: '2026-08-22' },
+      rows: [{ ...parsed, source: { ...parsed.source, semantic } }],
+    });
+    const corrected = await repository.updateExtractionDraftRow(
+      draft.rows[0]!.id,
+      { proposedValue: { kind: 'numeric', value: 4.1 } },
+      aliases,
+    );
+    assert.deepEqual(corrected.source.semantic, semantic);
+    assert.deepEqual(
+      (await repository.getExtractionDraft(draft.id))?.rows[0]?.source.semantic,
+      semantic,
+    );
+  });
+
   test('a decision-only update preserves the result of a full layout correction', async () => {
     const { repository } = createRepository();
     await repository.createReport({
@@ -977,7 +1161,7 @@ describe('protected manual Lab Record persistence', () => {
   });
 
   test('updates one date/specimen group atomically without changing other groups', async () => {
-    const { repository } = createRepository();
+    const { repository, database } = createRepository();
     await repository.createReport({
       id: 'report-group-date',
       sourceType: 'image',
@@ -1021,6 +1205,8 @@ describe('protected manual Lab Record persistence', () => {
       rows: [first, second, other].map((row, order) => ({ ...row, order })),
     });
 
+    const preparedBefore = database.preparedStatementCount;
+    const executionsBefore = database.preparedStatementExecutionCount;
     const updated = await repository.updateExtractionDraftGroupDate(
       draft.id,
       { kind: 'known', value: '2026-08-22' },
@@ -1028,6 +1214,8 @@ describe('protected manual Lab Record persistence', () => {
       { kind: 'known', value: '2026-08-24' },
       aliases,
     );
+    assert.equal(database.preparedStatementCount - preparedBefore, 1);
+    assert.equal(database.preparedStatementExecutionCount - executionsBefore, 2);
     assert.deepEqual(updated.collectionDate, { kind: 'missing' });
     assert.deepEqual(
       updated.rows.map((row) => row.collectionDate),

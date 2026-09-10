@@ -49,6 +49,58 @@ describe('pure OCR date-context extraction', () => {
     assert.deepEqual([...result.excludedObservationIds], ['same-cell']);
   });
 
+  it('uses the source-attributed English locale for a Labcorp-style numeric collection date', () => {
+    const result = extractOCRDateContexts([
+      observation('labcorp-date', 'Date Collected: 04/01/2025', 0.08, 0.1, {
+        locale: 'en-US',
+      }),
+    ]);
+
+    assert.deepEqual(result.collectionDate, { kind: 'known', value: '2025-04-01' });
+    assert.deepEqual(result.contexts[0]?.collectionDate, {
+      kind: 'known',
+      value: '2025-04-01',
+    });
+    assert.equal(result.contexts[0]?.ambiguous, false);
+  });
+
+  it('uses an explicitly associated label locale when a date-only cell has none', () => {
+    const result = extractOCRDateContexts([
+      observation('label', 'Date Collected', 0.08, 0.1, { locale: 'en-US' }),
+      observation('date', '04/01/2025', 0.32, 0.1, { locale: null }),
+    ]);
+
+    assert.deepEqual(result.collectionDate, { kind: 'known', value: '2025-04-01' });
+    assert.equal(result.contexts[0]?.locale, 'en-US');
+  });
+
+  it('keeps an order-ambiguous numeric date missing without source locale context', () => {
+    const result = extractOCRDateContexts([
+      observation('unknown-locale', 'Date Collected: 04/01/2025', 0.08, 0.1, {
+        locale: null,
+      }),
+    ]);
+
+    assert.deepEqual(result.collectionDate, { kind: 'missing' });
+    assert.equal(result.contexts[0]?.ambiguous, true);
+  });
+
+  it('recognizes explicitly labelled written English and German collection dates', () => {
+    const english = extractOCRDateContexts([
+      observation('english-written', 'Date Collected: April 18, 2025', 0.08, 0.1, {
+        locale: 'en-US',
+      }),
+    ]);
+    const german = extractOCRDateContexts([
+      observation('german-written', 'Entnahme: 18. März 2025', 0.08, 0.1, {
+        locale: 'de-DE',
+      }),
+    ]);
+
+    assert.deepEqual(english.collectionDate, { kind: 'known', value: '2025-04-18' });
+    assert.deepEqual(german.collectionDate, { kind: 'known', value: '2025-03-18' });
+  });
+
   it('pairs split cells in visual order, including reversed label/date order', () => {
     const result = extractOCRDateContexts([
       observation('date-one', '22.08.2026', 0.08),
@@ -138,5 +190,59 @@ describe('pure OCR date-context extraction', () => {
       assert.equal(result.contexts.length, testCase.contexts, testCase.name);
       assert.deepEqual(result.collectionDate, { kind: 'missing' }, testCase.name);
     }
+  });
+
+  it('isolates pages and bounds dense visual-row grouping to a fixed anchor', () => {
+    const observations = [
+      observation('page-zero-date', 'Collection date 22.08.2026', 0.08, 0.1, {
+        pageIndex: 0,
+      }),
+      ...Array.from({ length: 12 }, (_, index) =>
+        observation(
+          `page-zero-measurement-${index}`,
+          `LDL-C ${100 + index} mg/dL`,
+          0.08,
+          0.14 + index * 0.04,
+          {
+            pageIndex: 0,
+          },
+        ),
+      ),
+      observation('page-one-date', 'Collection date 23.08.2026', 0.08, 0.1, {
+        pageIndex: 1,
+      }),
+      ...Array.from({ length: 12 }, (_, index) =>
+        observation(
+          `page-one-measurement-${index}`,
+          `LDL-C ${120 + index} mg/dL`,
+          0.08,
+          0.14 + index * 0.04,
+          {
+            pageIndex: 1,
+          },
+        ),
+      ),
+    ];
+
+    const result = extractOCRDateContexts(observations);
+
+    assert.deepEqual(
+      result.contexts.map((context) => context.collectionDate),
+      [
+        { kind: 'known', value: '2026-08-22' },
+        { kind: 'known', value: '2026-08-23' },
+      ],
+    );
+    assert.deepEqual([...result.excludedObservationIds], ['page-zero-date', 'page-one-date']);
+  });
+
+  it('keeps mixed date and measurement parents available to source parsing', () => {
+    const result = extractOCRDateContexts([
+      observation('mixed-parent', 'Collection date 22.08.2026 LDL-C 3.8 mmol/L', 0.08),
+    ]);
+
+    assert.deepEqual(result.collectionDate, { kind: 'known', value: '2026-08-22' });
+    assert.equal(result.contexts[0]?.observationId, 'mixed-parent');
+    assert.equal(result.excludedObservationIds.has('mixed-parent'), false);
   });
 });

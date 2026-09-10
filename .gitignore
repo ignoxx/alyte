@@ -25,3 +25,10 @@ android/
 .env
 .env.*
 !.env.example
+
+# Local build, simulator, and inspection artifacts.
+/tmp/
+/output/
+
+# Expo configuration is owned by apps/mobile/app.config.js.
+/app.json

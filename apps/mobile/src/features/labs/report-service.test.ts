@@ -8,6 +8,7 @@ import type {
   ExtractionDraftRow,
   ExtractionSemanticMapper,
   GeometryCandidateWindowGroup,
+  LabReport,
   LabReportSourceIntegrity,
   LabRecord,
   Measurement,
@@ -31,7 +32,11 @@ import {
   revalidateExtractionRow,
 } from '@alyte/domain';
 import { CATALOGUE_VERSION } from '@alyte/catalogue';
-import type { DocumentVLMExtractor } from '../local-models/document-vlm';
+import {
+  DocumentVLMUnavailableError,
+  type DocumentVLMExtractor,
+  type DocumentVLMRow,
+} from '../local-models/document-vlm';
 import { createLabRepository, type LabRepository, type SqliteDatabase } from './persistence';
 import {
   type LabSourceSelection,
@@ -41,6 +46,7 @@ import {
 import {
   createLabReportsService,
   createDefaultExtractionAliases,
+  deduplicateDocumentVLMRowsAcrossBands,
   localCalendarDateFromInstant,
   LabReportExtractionError,
   LabReportImportError,
@@ -51,6 +57,25 @@ import {
   type LabReportsService,
   type LabReportExtractionProgress,
 } from './report-service';
+
+test('deduplicates exact document rows across retry bands while retaining same-band duplicates', () => {
+  const row: DocumentVLMRow = {
+    label: 'Synthetic marker',
+    value: '7.4',
+    unit: 'U/L',
+    referenceInterval: null,
+    flag: null,
+  };
+  const distinctRow: DocumentVLMRow = { ...row, value: '8.1' };
+
+  assert.deepEqual(
+    deduplicateDocumentVLMRowsAcrossBands([
+      [row, row],
+      [row, distinctRow],
+    ]),
+    [row, row, distinctRow],
+  );
+});
 
 test('fallback collection dates use the device local calendar rather than UTC slicing', () => {
   const instant = '2026-08-27T22:30:00.000Z';
@@ -318,6 +343,37 @@ class FailingStageFiles extends FakeFiles {
   override async stage(source: LabSourceSelection, importId: string): Promise<ProtectedCopy> {
     await super.stage(source, importId);
     throw new Error('storage exhausted after stage copy');
+  }
+}
+
+class CancelledStageFiles extends FakeFiles {
+  override async stage(source: LabSourceSelection, importId: string): Promise<ProtectedCopy> {
+    await super.stage(source, importId);
+    throw new LabReportImportError(
+      {
+        id: 'cancelled-before-source',
+        sourceType: source.sourceType,
+        originalFilename: source.name,
+        mimeType: source.mimeType,
+        byteSize: source.byteSize ?? null,
+        sourceHash: null,
+        originalPath: null,
+        importState: 'importing',
+        deletionState: 'none',
+        deletionRequestedAt: null,
+        deletionError: null,
+        failureReason: null,
+        encrypted: false,
+        pageCount: null,
+        createdAt: '2026-08-22T10:00:00.000Z',
+        updatedAt: '2026-08-22T10:00:00.000Z',
+        importedAt: null,
+        pages: [],
+        labRecordIds: [],
+      } satisfies LabReport,
+      'cancelled',
+      'Import cancelled before the protected source was retained',
+    );
   }
 }
 
@@ -852,13 +908,22 @@ type CreateServiceOverrides = {
   readonly documentVLM?: DocumentVLMExtractor;
   readonly imageInspector?: LabReportsServiceOptions['imageInspector'];
   readonly picker?: LabSourcePicker;
+  readonly documentRefinementBudgetMs?: number;
+  readonly elapsedTimeNow?: () => number;
 };
 
 function isCreateServiceOverrides(value: unknown): value is CreateServiceOverrides {
   if (value === null || typeof value !== 'object') return false;
-  return ['pdf', 'visionOCR', 'semanticMapper', 'documentVLM', 'imageInspector', 'picker'].some(
-    (key) => Object.prototype.hasOwnProperty.call(value, key),
-  );
+  return [
+    'pdf',
+    'visionOCR',
+    'semanticMapper',
+    'documentVLM',
+    'imageInspector',
+    'picker',
+    'documentRefinementBudgetMs',
+    'elapsedTimeNow',
+  ].some((key) => Object.prototype.hasOwnProperty.call(value, key));
 }
 
 function createService(
@@ -891,6 +956,10 @@ function createService(
     ...(overrides.documentVLM === undefined ? {} : { documentVLM: overrides.documentVLM }),
     ...(overrides.imageInspector === undefined ? {} : { imageInspector: overrides.imageInspector }),
     ...(overrides.picker === undefined ? {} : { picker: overrides.picker }),
+    ...(overrides.documentRefinementBudgetMs === undefined
+      ? {}
+      : { documentRefinementBudgetMs: overrides.documentRefinementBudgetMs }),
+    ...(overrides.elapsedTimeNow === undefined ? {} : { elapsedTimeNow: overrides.elapsedTimeNow }),
     idGenerator: (() => {
       let count = 0;
       return (prefix: string) => `${prefix}-fixed-${++count}`;
@@ -1010,6 +1079,75 @@ function syntheticTrustedTextLayerResult(pageIndex: number): VisionOCRResult {
   });
 }
 
+/** Mirrors PDFKit's trusted text projection: every table cell is a separate span-bearing line. */
+function syntheticTrustedTablePage(
+  pageIndex: number,
+  rows: readonly (readonly [string, string, string, string])[],
+  options: { readonly specimenHeading?: boolean; readonly collectionDate?: boolean } = {},
+): VisionOCRResult {
+  const observations: Array<Record<string, unknown>> = [];
+  const add = (text: string, x: number, y: number, suffix: string, withSpan = true) => {
+    const id = `trusted-grid-${pageIndex}-${suffix}`;
+    observations.push({
+      id,
+      text,
+      alternatives: [],
+      boundingBox: {
+        x,
+        y,
+        width: Math.max(0.02, Math.min(0.32, text.length * 0.012)),
+        height: 0.02,
+      },
+      pageIndex,
+      orientation: 0,
+      structure: { kind: 'text', tableId: null, rowIndex: null, columnIndex: null },
+      ...(withSpan
+        ? {
+            spans: [
+              {
+                id: `${id}-span`,
+                parentObservationId: id,
+                start: 0,
+                end: text.length,
+                text,
+                boundingBox: {
+                  x,
+                  y,
+                  width: Math.max(0.02, Math.min(0.32, text.length * 0.012)),
+                  height: 0.02,
+                },
+              },
+            ],
+          }
+        : {}),
+      recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+    });
+  };
+
+  if (options.collectionDate === true) add('Collection date 20.08.2026 08:15', 0.1, 0.08, 'date');
+  if (options.specimenHeading === true) {
+    add('Specimen', 0.1, 0.13, 'specimen-label');
+    add('Serum', 0.25, 0.13, 'specimen-value');
+  }
+  add('Marker', 0.1, 0.2, 'header-marker', false);
+  add('Result', 0.35, 0.2, 'header-result', false);
+  add('Unit', 0.46, 0.2, 'header-unit', false);
+  add('Laboratory interval', 0.58, 0.2, 'header-reference', false);
+  rows.forEach(([label, value, unit, reference], index) => {
+    const y = 0.25 + index * 0.04;
+    add(label, 0.1, y, `row-${index}-label`);
+    add(value, 0.35, y, `row-${index}-value`);
+    add(unit, 0.46, y, `row-${index}-unit`);
+    add(reference, 0.58, y, `row-${index}-reference`);
+  });
+  return decodeVisionOCRResult({
+    contractVersion: 'alyte.vision.document.v4',
+    pageIndex,
+    orientation: 0,
+    observations,
+  });
+}
+
 function syntheticResultColumnPage(
   pageIndex: number,
   includeUnrepresentedRow = false,
@@ -1097,6 +1235,47 @@ function syntheticDenseTrustedResultColumnPage(pageIndex: number): VisionOCRResu
       line('dense-column-header', ['Test', 'Result', 'Unit', 'Reference'], 0.1),
       line('dense-column-a', ['LDL-C', '3.8', 'mmol/L', '2.0'], 0.16),
       line('dense-column-b', ['HDL-C', '1.2', 'mmol/L', '0.9'], 0.193),
+    ],
+  });
+}
+
+function syntheticSingleTokenSpanTablePage(pageIndex: number): VisionOCRResult {
+  const cell = (id: string, text: string, columnIndex: number) => {
+    const sourceId = `${id}-${pageIndex}`;
+    return {
+      id: sourceId,
+      text,
+      alternatives: [],
+      boundingBox: { x: 0.08 + columnIndex * 0.2, y: 0.2, width: 0.16, height: 0.03 },
+      pageIndex,
+      orientation: 0,
+      structure: {
+        kind: 'table-cell' as const,
+        tableId: `results-${pageIndex}`,
+        rowIndex: 0,
+        columnIndex,
+      },
+      spans: [
+        {
+          id: `${sourceId}-span`,
+          parentObservationId: sourceId,
+          start: 0,
+          end: text.length,
+          text,
+          boundingBox: { x: 0.08 + columnIndex * 0.2, y: 0.2, width: 0.16, height: 0.03 },
+        },
+      ],
+      recognition: { level: 'accurate' as const, language: 'en', internalConfidence: null },
+    };
+  };
+  return decodeVisionOCRResult({
+    contractVersion: 'alyte.vision.document.v4',
+    pageIndex,
+    orientation: 0,
+    observations: [
+      cell('single-span-label', 'Ferritin', 0),
+      cell('single-span-result', '42', 1),
+      cell('single-span-reference', '150', 2),
     ],
   });
 }
@@ -1240,6 +1419,36 @@ describe('protected Lab Report import lifecycle', () => {
     assert.deepEqual(counts, { lt: 2, en: 1, de: 1 });
   });
 
+  test('presents the reviewed Lithuanian zinc alias in English while preserving source text', () => {
+    const observations = ['Cinkas', '13,2', 'µmol/L', '10,0 - 20,0'].map((text, index) => ({
+      id: `zinc-${index}`,
+      text,
+      alternatives: [],
+      pageIndex: 0,
+      orientation: 0,
+      boundingBox: { x: 0.05 + index * 0.22, y: 0.2, width: 0.18, height: 0.04 },
+      structure: {
+        kind: 'table-cell' as const,
+        tableId: 'synthetic-zinc',
+        rowIndex: 0,
+        columnIndex: index,
+      },
+      recognition: { level: 'accurate' as const, language: 'lt', internalConfidence: null },
+    }));
+
+    const row = groupObservationsIntoRows(observations, {
+      aliases: createDefaultExtractionAliases(),
+      locale: 'lt-LT',
+      specimenType: 'serum',
+      collectionDate: { kind: 'known', value: '2026-08-31' },
+    })[0];
+
+    assert.ok(row);
+    assert.equal(row.sourceLabel, 'Cinkas');
+    assert.equal(row.proposedLabel, 'Zinc');
+    assert.equal(row.proposedBiomarkerId, 'biomarker.zinc');
+  });
+
   test('extracts metabolic report fixtures through the production catalogue aliases', () => {
     const aliases = createDefaultExtractionAliases();
     const fixtures = [...metabolicLabReportFixtures, mixedSpecimenMetabolicLabReportFixture];
@@ -1366,6 +1575,7 @@ describe('protected Lab Report import lifecycle', () => {
         assert.equal(planned?.valueString, String(expected.value), fixture.id);
         assert.equal(planned?.unit, expected.unit, fixture.id);
         assert.equal(planned?.referenceInterval, expected.referenceInterval, fixture.id);
+        assert.equal(planned?.reviewState, 'confirmed', fixture.id);
       }
 
       for (const expected of fixture.expected.needsReview) {
@@ -1394,6 +1604,7 @@ describe('protected Lab Report import lifecycle', () => {
         } else {
           assert.ok(planned, `${fixture.id}: review confirmation plan ${expected.observationId}`);
           assert.equal(planned?.biomarkerId, expected.biomarkerId, fixture.id);
+          assert.equal(planned?.reviewState, 'confirmed', fixture.id);
         }
       }
 
@@ -1434,7 +1645,7 @@ describe('protected Lab Report import lifecycle', () => {
           .flatMap((record) => record.measurements)
           .find((measurement) => measurement.sourceRowId === 'de-vitamin-d3');
         assert.equal(correctedMeasurement?.biomarkerId, null);
-        assert.equal(correctedMeasurement?.reviewState, 'needs-review');
+        assert.equal(correctedMeasurement?.reviewState, 'confirmed');
         const unsafeTrend = buildMeasuredTrend(
           [
             recordFromMeasurements('unsafe-vitamin-d', 'serum', [
@@ -1539,7 +1750,7 @@ describe('protected Lab Report import lifecycle', () => {
       assert.equal(row?.proposedUnit, expectedUnit, unit);
       assert.equal(row?.reviewState, 'needs-review', unit);
       assert.ok(row?.reviewReasons.includes('unsupported-alias'), unit);
-      assert.equal(row?.decision, 'preserve', unit);
+      assert.equal(row?.decision, 'unresolved', unit);
     }
 
     const incompatible = rowByObservation.get(ldlObservation.id);
@@ -1547,7 +1758,7 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(incompatible?.source.raw?.unit, 'mg/L');
     assert.equal(incompatible?.proposedUnit, 'mg/L');
     assert.ok(incompatible?.reviewReasons.includes('incompatible-unit'));
-    assert.equal(incompatible?.decision, 'skip');
+    assert.equal(incompatible?.decision, 'unresolved');
     assert.equal(rowByObservation.has(footerObservation.id), false);
   });
 
@@ -1681,13 +1892,23 @@ describe('protected Lab Report import lifecycle', () => {
       assert.equal(rowByObservation.has(excludedObservationId), false, excludedObservationId);
     }
 
-    // Unsafe rows remain visible for review but are excluded before the person takes any action.
+    // Unsafe rows remain visible and unresolved until the person explicitly decides what to do.
     for (const observationId of [
       'safety-incompatible-unit',
       'safety-ambiguous-sibling',
       'safety-incompatible-ast-unit',
     ]) {
-      assert.equal(rowByObservation.get(observationId)?.decision, 'skip', observationId);
+      assert.equal(rowByObservation.get(observationId)?.decision, 'unresolved', observationId);
+    }
+
+    for (const observationId of [
+      'safety-incompatible-unit',
+      'safety-ambiguous-sibling',
+      'safety-incompatible-ast-unit',
+    ]) {
+      const row = rowByObservation.get(observationId);
+      assert.ok(row, observationId);
+      await service.updateExtractionRow(row.id, { decision: 'skip' });
     }
 
     const records = await service.confirmExtraction(draft.id);
@@ -1716,7 +1937,7 @@ describe('protected Lab Report import lifecycle', () => {
     );
     assert.equal(hemoglobinTrend.points.length, 0);
     assert.equal(
-      hemoglobinTrend.nonPoints.some((point) => point.reason === 'unconfirmed'),
+      hemoglobinTrend.nonPoints.some((point) => point.reason === 'incompatible-specimen'),
       true,
     );
     const ggtTrend = buildMeasuredTrend(
@@ -1896,6 +2117,44 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(records[0]?.measurements[0]?.original.valueString, '3,8');
   });
 
+  test('discarding an open extraction draft keeps the Original Report and removes review work', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const ocr: VisionOCR = {
+      async recognize(): Promise<VisionOCRResult> {
+        return {
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations: [
+            {
+              id: 'discard-draft-row',
+              text: 'LDL-C 3,8 mmol/L',
+              alternatives: [],
+              boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+              pageIndex: 0,
+              orientation: 0,
+              recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+            },
+          ],
+        };
+      },
+    };
+    const service = createService(repository, files, sanitizingPdf(files), ocr);
+    const report = (await service.importPdf(source('discard-open-draft')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+    const draft = await service.startExtraction(report.id);
+    await service.updateExtractionRow(draft.rows[0]!.id, { decision: 'skip' });
+
+    assert.equal((await service.listOpenExtractionDrafts()).length, 1);
+    await service.discardExtractionDraft(draft.id);
+
+    assert.equal(await service.getExtractionDraft(draft.id), null);
+    assert.deepEqual(await service.listOpenExtractionDrafts(), []);
+    assert.equal((await service.getReport(report.id))?.id, report.id);
+    assert.equal(await files.exists(report.originalPath!), true);
+  });
+
   test('does not confirm a numeric candidate from a malformed multi-row OCR observation', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
@@ -1928,15 +2187,15 @@ describe('protected Lab Report import lifecycle', () => {
     assert.deepEqual(draft.rows[0]?.proposedValue, { kind: 'numeric', value: 9.839 });
     assert.equal(draft.rows[0]?.proposedUnit, null);
     assert.ok(draft.rows[0]?.reviewReasons.includes('missing-unit'));
-    assert.equal(draft.rows[0]?.decision, 'skip');
+    assert.equal(draft.rows[0]?.decision, 'unresolved');
     await assert.rejects(
       service.confirmExtraction(draft.id),
-      /At least one extraction row must be included/,
+      /Extraction rows still have unresolved required fields/,
     );
     const corrected = await service.updateExtractionRow(draft.rows[0]!.id, {
       proposedUnit: 'mmol/L',
     });
-    assert.equal(corrected.decision, 'skip');
+    assert.equal(corrected.decision, 'resolve');
     assert.equal(corrected.reviewReasons.includes('missing-unit'), false);
     await service.updateExtractionRow(corrected.id, { decision: 'preserve' });
     const records = await service.confirmExtraction(draft.id);
@@ -1970,14 +2229,14 @@ describe('protected Lab Report import lifecycle', () => {
     const draft = await service.startExtraction(report.id);
     const before = draft.rows[0]!;
     assert.ok(before.reviewReasons.includes('unsupported-layout'));
-    assert.equal(before.decision, 'skip');
+    assert.equal(before.decision, 'unresolved');
 
     const unitOnly = await service.updateExtractionRow(before.id, {
       proposedUnit: 'mg/dL',
     });
     assert.ok(unitOnly.reviewReasons.includes('unsupported-layout'));
     assert.equal(unitOnly.reviewState, 'needs-review');
-    assert.equal(unitOnly.decision, 'skip');
+    assert.equal(unitOnly.decision, 'unresolved');
 
     const corrected = await service.updateExtractionRow(
       unitOnly.id,
@@ -2032,10 +2291,10 @@ describe('protected Lab Report import lifecycle', () => {
     await prepareSanitizedExtraction(service, report.id);
     const draft = await service.startExtraction(report.id);
     assert.ok(draft.rows[0]?.reviewReasons.includes('incompatible-unit'));
-    assert.equal(draft.rows[0]?.decision, 'skip');
+    assert.equal(draft.rows[0]?.decision, 'unresolved');
     await assert.rejects(
       service.confirmExtraction(draft.id),
-      /At least one extraction row must be included/,
+      /Extraction rows still have unresolved required fields/,
     );
   });
 
@@ -2068,6 +2327,48 @@ describe('protected Lab Report import lifecycle', () => {
     await assert.rejects(service.startExtraction(report.id), (error: unknown) => {
       assert.ok(error instanceof LabReportExtractionError);
       assert.equal(error.reason, 'no-reviewable-measurements');
+      return true;
+    });
+  });
+
+  test('reports an unavailable document model instead of masquerading as no results', async () => {
+    const documentVLM: DocumentVLMExtractor = {
+      adapterVersion: 'alyte.paddleocr-vl16.text-extractor.v1',
+      schemaVersion: 'alyte.paddleocr-vl.flat-rows.v1',
+      provenance: {
+        modelVersion: 'synthetic-paddle-model',
+        runtimeVersion: 'synthetic-runtime',
+        promptVersion: 'alyte.paddleocr-vl.prompt.v1',
+      },
+      checkAvailability: async () => {},
+      supports: () => true,
+      prepare: async () => {
+        throw new DocumentVLMUnavailableError('synthetic PaddleOCR pack unavailable');
+      },
+      extract: async () => {
+        throw new Error('extract must not run when PaddleOCR is unavailable');
+      },
+    };
+    const service = createService(createRepository(), new FakeFiles(), {
+      visionOCR: {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v4',
+            pageIndex: 0,
+            orientation: 0,
+            observations: [],
+          });
+        },
+      },
+      documentVLM,
+    });
+    const report = (await service.importImages(source('paddle-unavailable-no-results', 'image')))!
+      .report;
+
+    await assert.rejects(service.startExtraction(report.id), (error: unknown) => {
+      assert.ok(error instanceof LabReportExtractionError);
+      assert.equal(error.reason, 'model-unavailable');
+      assert.notEqual(error.reason, 'no-reviewable-measurements');
       return true;
     });
   });
@@ -3110,6 +3411,618 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(physicalRows[0]?.reviewState, 'needs-review');
   });
 
+  test('PaddleOCR preserves a page-level candidate for mandatory review when Vision has no row', async () => {
+    const lifecycle: string[] = [];
+    const paddleOCR: DocumentVLMExtractor = {
+      adapterVersion: 'alyte.paddleocr-vl16.text-extractor.v1',
+      schemaVersion: 'alyte.paddleocr-vl.flat-rows.v1',
+      provenance: {
+        modelVersion: 'synthetic-paddle-model',
+        runtimeVersion: 'synthetic-runtime',
+        promptVersion: 'alyte.paddleocr-vl.prompt.v1',
+      },
+      checkAvailability: async () => {},
+      supports: () => true,
+      prepare: async () => {
+        lifecycle.push('prepare');
+        return { release: async () => void lifecycle.push('release') };
+      },
+      extract: async () => {
+        lifecycle.push('extract');
+        return [
+          {
+            label: 'Novel Marker',
+            value: '7.4',
+            unit: 'U/L',
+            referenceInterval: '4.0-8.0',
+            flag: null,
+          },
+        ];
+      },
+    };
+    const service = createService(createRepository(), new FakeFiles(), {
+      visionOCR: {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v4',
+            pageIndex: 0,
+            orientation: 0,
+            observations: [],
+          });
+        },
+      },
+      documentVLM: paddleOCR,
+    });
+    const report = (await service.importImages(source('paddle-page-review', 'image')))!.report;
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.deepEqual(lifecycle, ['prepare', 'extract', 'release']);
+    assert.equal(draft.rows.length, 1);
+    assert.equal(draft.rows[0]?.sourceLabel, 'Novel Marker');
+    assert.equal(draft.rows[0]?.sourceValueString, '7.4');
+    assert.equal(draft.rows[0]?.reviewState, 'needs-review');
+    assert.ok(draft.rows[0]?.reviewReasons.includes('unsupported-layout'));
+    assert.equal(draft.rows[0]?.source.semantic?.schemaVersion, 'alyte.paddleocr-vl.flat-rows.v1');
+    assert.deepEqual(draft.rows[0]?.source.boundingBox, { x: 0, y: 0, width: 1, height: 1 });
+  });
+
+  test('does not duplicate a complete Vision row with an ungrounded Paddle transcription', async () => {
+    const observations = [
+      v3TableObservation('paddle-covered-label', 'LDL-C', 0, 0),
+      v3TableObservation('paddle-covered-value', '3.8', 0, 1),
+      v3TableObservation('paddle-covered-unit', 'mmol/L', 0, 2),
+    ];
+    const paddleOCR: DocumentVLMExtractor = {
+      adapterVersion: 'alyte.paddleocr-vl16.text-extractor.v1',
+      schemaVersion: 'alyte.paddleocr-vl.flat-rows.v1',
+      provenance: {
+        modelVersion: 'synthetic-paddle-model',
+        runtimeVersion: 'synthetic-runtime',
+        promptVersion: 'alyte.paddleocr-vl.prompt.v1',
+      },
+      checkAvailability: async () => {},
+      supports: () => true,
+      prepare: async () => ({ release: async () => {} }),
+      extract: async () => [
+        {
+          label: 'LDL-C',
+          value: '3.8',
+          unit: 'mmol/L',
+          referenceInterval: null,
+          flag: null,
+        },
+      ],
+    };
+    const service = createService(createRepository(), new FakeFiles(), {
+      visionOCR: {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v4',
+            pageIndex: 0,
+            orientation: 0,
+            observations,
+          });
+        },
+      },
+      documentVLM: paddleOCR,
+    });
+    const report = (await service.importImages(source('paddle-covered-row', 'image')))!.report;
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.equal(draft.rows.filter((row) => row.sourceValueString === '3.8').length, 1);
+    assert.equal(
+      draft.rows.some(
+        (row) => row.source.semantic?.schemaVersion === 'alyte.paddleocr-vl.flat-rows.v1',
+      ),
+      false,
+    );
+  });
+
+  test('does not prepare PaddleOCR for a complete trusted HeaderTable page', async () => {
+    const lifecycle: string[] = [];
+    const paddleOCR: DocumentVLMExtractor = {
+      adapterVersion: 'alyte.paddleocr-vl16.text-extractor.v1',
+      schemaVersion: 'alyte.paddleocr-vl.flat-rows.v1',
+      provenance: {
+        modelVersion: 'synthetic-paddle-model',
+        runtimeVersion: 'synthetic-runtime',
+        promptVersion: 'alyte.paddleocr-vl.prompt.v1',
+      },
+      checkAvailability: async () => {},
+      supports: () => true,
+      prepare: async () => {
+        lifecycle.push('prepare');
+        return { release: async () => void lifecycle.push('release') };
+      },
+      extract: async () => {
+        lifecycle.push('extract');
+        return [];
+      },
+    };
+    const pdf = new TextLayerPdf([{ pageIndex: 0, width: 612, height: 792, hasTextLayer: true }]);
+    pdf.textLayerResults.set(
+      0,
+      syntheticTrustedTablePage(0, [['LDL cholesterol', '118', 'mg/dL', '< 115']], {
+        specimenHeading: true,
+        collectionDate: true,
+      }),
+    );
+    const service = createService(createRepository(), new FakeFiles(), {
+      pdf,
+      documentVLM: paddleOCR,
+    });
+    const report = (await service.importPdf(source('paddle-complete-header')))!.report;
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.ok(draft.rows.some((row) => row.sourceLabel === 'LDL cholesterol'));
+    assert.deepEqual(lifecycle, []);
+  });
+
+  test('does not prepare PaddleOCR for a nonmeasurement trusted continuation page', async () => {
+    const lifecycle: string[] = [];
+    const paddleOCR: DocumentVLMExtractor = {
+      adapterVersion: 'alyte.paddleocr-vl16.text-extractor.v1',
+      schemaVersion: 'alyte.paddleocr-vl.flat-rows.v1',
+      provenance: {
+        modelVersion: 'synthetic-paddle-model',
+        runtimeVersion: 'synthetic-runtime',
+        promptVersion: 'alyte.paddleocr-vl.prompt.v1',
+      },
+      checkAvailability: async () => {},
+      supports: () => true,
+      prepare: async () => {
+        lifecycle.push('prepare');
+        return { release: async () => void lifecycle.push('release') };
+      },
+      extract: async () => {
+        lifecycle.push('extract');
+        return [];
+      },
+    };
+    const pdf = new TextLayerPdf([
+      { pageIndex: 0, width: 612, height: 792, hasTextLayer: true },
+      { pageIndex: 1, width: 612, height: 792, hasTextLayer: true },
+    ]);
+    pdf.textLayerResults.set(
+      0,
+      syntheticTrustedTablePage(0, [['LDL cholesterol', '118', 'mg/dL', '< 115']], {
+        specimenHeading: true,
+        collectionDate: true,
+      }),
+    );
+    pdf.textLayerResults.set(
+      1,
+      syntheticExtractionResult(
+        1,
+        'continuation-prose',
+        'Patient instructions and contact details',
+      ),
+    );
+    const service = createService(createRepository(), new FakeFiles(), {
+      pdf,
+      documentVLM: paddleOCR,
+    });
+    const report = (await service.importPdf(source('paddle-nonmeasurement-continuation')))!.report;
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.ok(draft.rows.some((row) => row.sourceLabel === 'LDL cholesterol'));
+    assert.deepEqual(lifecycle, []);
+  });
+
+  test('does not prepare PaddleOCR when a trusted row only has an unsupported alias', async () => {
+    const lifecycle: string[] = [];
+    const paddleOCR: DocumentVLMExtractor = {
+      adapterVersion: 'alyte.paddleocr-vl16.text-extractor.v1',
+      schemaVersion: 'alyte.paddleocr-vl.flat-rows.v1',
+      provenance: {
+        modelVersion: 'synthetic-paddle-model',
+        runtimeVersion: 'synthetic-runtime',
+        promptVersion: 'alyte.paddleocr-vl.prompt.v1',
+      },
+      checkAvailability: async () => {},
+      supports: () => true,
+      prepare: async () => {
+        lifecycle.push('prepare');
+        return { release: async () => void lifecycle.push('release') };
+      },
+      extract: async () => {
+        lifecycle.push('extract');
+        return [];
+      },
+    };
+    const pdf = new TextLayerPdf([{ pageIndex: 0, width: 612, height: 792, hasTextLayer: true }]);
+    pdf.textLayerResults.set(
+      0,
+      syntheticTrustedTablePage(0, [['Novel laboratory marker', '7.4', 'U/L', '4.0-8.0']]),
+    );
+    const service = createService(createRepository(), new FakeFiles(), {
+      pdf,
+      documentVLM: paddleOCR,
+    });
+    const report = (await service.importPdf(source('paddle-unsupported-alias')))!.report;
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.ok(draft.rows.some((row) => row.reviewReasons.includes('unsupported-alias')));
+    assert.deepEqual(lifecycle, []);
+  });
+
+  test('retries a truncated PaddleOCR PDF page with bounded overlapping bands', async () => {
+    const pdf = new BandTextLayerPdf([
+      { pageIndex: 0, width: 612, height: 792, hasTextLayer: false },
+    ]);
+    let extractCalls = 0;
+    const lifecycle: string[] = [];
+    const paddleOCR: DocumentVLMExtractor = {
+      adapterVersion: 'alyte.paddleocr-vl16.text-extractor.v1',
+      schemaVersion: 'alyte.paddleocr-vl.flat-rows.v1',
+      provenance: {
+        modelVersion: 'synthetic-paddle-model',
+        runtimeVersion: 'synthetic-runtime',
+        promptVersion: 'alyte.paddleocr-vl.prompt.v1',
+      },
+      checkAvailability: async () => {},
+      supports: () => true,
+      prepare: async () => {
+        lifecycle.push('prepare');
+        return { release: async () => void lifecycle.push('release') };
+      },
+      extract: async () => {
+        extractCalls += 1;
+        if (extractCalls === 1) throw new Error('RuntimeError.truncated');
+        return [
+          {
+            label: 'Novel Marker',
+            value: '7.4',
+            unit: 'U/L',
+            referenceInterval: null,
+            flag: null,
+          },
+        ];
+      },
+    };
+    const service = createService(createRepository(), new FakeFiles(), {
+      pdf,
+      documentVLM: paddleOCR,
+      visionOCR: {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v4',
+            pageIndex: 0,
+            orientation: 0,
+            observations: [],
+          });
+        },
+      },
+    });
+    const report = (await service.importPdf(source('paddle-truncated-pdf')))!.report;
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.equal(extractCalls, 6);
+    assert.deepEqual(pdf.renderedRects, [
+      { x: 0, y: 0, width: 1, height: 1 },
+      { x: 0, y: 0, width: 1, height: 1 / 3 },
+      { x: 0, y: 2 / 9, width: 1, height: 1 / 3 },
+      { x: 0, y: 4 / 9, width: 1, height: 1 / 3 },
+      { x: 0, y: 2 / 3, width: 1, height: 1 / 3 },
+      { x: 0, y: 8 / 9, width: 1, height: 1 / 9 },
+    ]);
+    assert.equal(pdf.deletedBandURIs.length, 6);
+    assert.ok(draft.rows.length > 0);
+    assert.deepEqual(lifecycle, ['prepare', 'release']);
+  });
+
+  test('does not run the document VLM for a source-grounded deterministic row', async () => {
+    const lifecycle: string[] = [];
+    const documentVLM: DocumentVLMExtractor = {
+      adapterVersion: 'alyte.qwen3-vl.document-extractor.v1',
+      schemaVersion: 'alyte.document-vlm.flat-rows.v1',
+      provenance: {
+        modelVersion: 'synthetic-model',
+        runtimeVersion: 'synthetic-runtime',
+        promptVersion: 'alyte.document-vlm.prompt.v1',
+      },
+      checkAvailability: async () => {},
+      supports: () => {
+        lifecycle.push('supports');
+        return true;
+      },
+      prepare: async () => {
+        lifecycle.push('prepare');
+        return { release: async () => void lifecycle.push('release') };
+      },
+      extract: async () => {
+        lifecycle.push('extract');
+        return [];
+      },
+    };
+    const service = createService(createRepository(), new FakeFiles(), {
+      visionOCR: {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v4',
+            pageIndex: 0,
+            orientation: 0,
+            observations: [
+              v3TableObservation('resolved-label', 'LDL-C', 0, 0),
+              v3TableObservation('resolved-value', '3.8', 0, 1),
+              v3TableObservation('resolved-unit', 'mmol/L', 0, 2),
+            ],
+          });
+        },
+      },
+      documentVLM,
+    });
+    const report = (await service.importImages(source('resolved-document-row', 'image')))!.report;
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.equal(draft.rows.length, 1);
+    assert.equal(draft.rows[0]?.sourceValueString, '3.8');
+    assert.deepEqual(lifecycle, []);
+  });
+
+  test('still refines an exact-value row whose unit association is missing', async () => {
+    let inferenceCalls = 0;
+    const documentVLM: DocumentVLMExtractor = {
+      adapterVersion: 'alyte.qwen3-vl.document-extractor.v1',
+      schemaVersion: 'alyte.document-vlm.flat-rows.v1',
+      provenance: {
+        modelVersion: 'synthetic-model',
+        runtimeVersion: 'synthetic-runtime',
+        promptVersion: 'alyte.document-vlm.prompt.v1',
+      },
+      checkAvailability: async () => {},
+      supports: () => true,
+      prepare: async () => ({ release: async () => {} }),
+      extract: async () => {
+        inferenceCalls += 1;
+        return [];
+      },
+    };
+    const service = createService(createRepository(), new FakeFiles(), {
+      visionOCR: {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v4',
+            pageIndex: 0,
+            orientation: 0,
+            observations: [
+              v3TableObservation('missing-unit-label', 'LDL-C', 0, 0),
+              v3TableObservation('missing-unit-value', '3.8', 0, 1),
+            ],
+          });
+        },
+      },
+      documentVLM,
+    });
+    const report = (await service.importImages(source('missing-unit-refinement', 'image')))!.report;
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.equal(inferenceCalls, 1);
+    assert.equal(draft.rows[0]?.reviewReasons.includes('missing-unit'), true);
+  });
+
+  test('keeps deterministic review rows when document-model preparation fails', async () => {
+    const documentVLM: DocumentVLMExtractor = {
+      adapterVersion: 'alyte.qwen3-vl.document-extractor.v1',
+      schemaVersion: 'alyte.document-vlm.flat-rows.v1',
+      provenance: {
+        modelVersion: 'synthetic-model',
+        runtimeVersion: 'synthetic-runtime',
+        promptVersion: 'alyte.document-vlm.prompt.v1',
+      },
+      checkAvailability: async () => {},
+      supports: () => true,
+      prepare: async () => {
+        throw new Error('synthetic model load failure');
+      },
+      extract: async () => {
+        throw new Error('extract must not run after preparation fails');
+      },
+    };
+    const service = createService(createRepository(), new FakeFiles(), {
+      visionOCR: {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v4',
+            pageIndex: 0,
+            orientation: 0,
+            observations: [
+              v3TableObservation('fallback-label', 'Unmapped marker', 0, 0),
+              v3TableObservation('fallback-value-a', '3.8', 0, 1),
+              v3TableObservation('fallback-unit', 'mmol/L', 0, 2),
+              v3TableObservation('fallback-value-b', '4.1', 0, 3),
+            ],
+          });
+        },
+      },
+      documentVLM,
+    });
+    const report = (await service.importImages(source('model-load-fallback', 'image')))!.report;
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.equal(draft.rows.length, 1);
+    assert.equal(draft.rows[0]?.reviewState, 'needs-review');
+    assert.equal((await service.loadExtractionProgress(report.id))?.status, 'complete');
+  });
+
+  test('bounds a document-model preparation that never settles', async () => {
+    const documentVLM: DocumentVLMExtractor = {
+      adapterVersion: 'alyte.qwen3-vl.document-extractor.v1',
+      schemaVersion: 'alyte.document-vlm.flat-rows.v1',
+      provenance: {
+        modelVersion: 'synthetic-model',
+        runtimeVersion: 'synthetic-runtime',
+        promptVersion: 'alyte.document-vlm.prompt.v1',
+      },
+      checkAvailability: async () => {},
+      supports: () => true,
+      prepare: () => new Promise<never>(() => {}),
+      extract: async () => {
+        throw new Error('extract must not run when preparation times out');
+      },
+    };
+    const service = createService(createRepository(), new FakeFiles(), {
+      visionOCR: {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v4',
+            pageIndex: 0,
+            orientation: 0,
+            observations: [
+              v3TableObservation('prepare-timeout-label', 'Unmapped marker', 0, 0),
+              v3TableObservation('prepare-timeout-value-a', '3.8', 0, 1),
+              v3TableObservation('prepare-timeout-unit', 'mmol/L', 0, 2),
+              v3TableObservation('prepare-timeout-value-b', '4.1', 0, 3),
+            ],
+          });
+        },
+      },
+      documentVLM,
+      documentRefinementBudgetMs: 10,
+    });
+    const report = (await service.importImages(source('model-prepare-timeout', 'image')))!.report;
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.equal(draft.rows.length, 1);
+    assert.equal(draft.rows[0]?.reviewState, 'needs-review');
+    assert.equal((await service.loadExtractionProgress(report.id))?.status, 'complete');
+  });
+
+  test('checkpoints deterministic rows before document-model refinement', async () => {
+    const repository = createRepository();
+    let signalInferenceStarted!: () => void;
+    let finishInference!: (rows: readonly DocumentVLMRow[]) => void;
+    const inferenceStarted = new Promise<void>((resolve) => {
+      signalInferenceStarted = resolve;
+    });
+    const pendingInference = new Promise<readonly DocumentVLMRow[]>((resolve) => {
+      finishInference = resolve;
+    });
+    const documentVLM: DocumentVLMExtractor = {
+      adapterVersion: 'alyte.qwen3-vl.document-extractor.v1',
+      schemaVersion: 'alyte.document-vlm.flat-rows.v1',
+      provenance: {
+        modelVersion: 'synthetic-model',
+        runtimeVersion: 'synthetic-runtime',
+        promptVersion: 'alyte.document-vlm.prompt.v1',
+      },
+      checkAvailability: async () => {},
+      supports: () => true,
+      prepare: async () => ({ release: async () => {} }),
+      extract: async () => {
+        signalInferenceStarted();
+        return pendingInference;
+      },
+    };
+    const service = createService(repository, new FakeFiles(), {
+      visionOCR: {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v4',
+            pageIndex: 0,
+            orientation: 0,
+            observations: [
+              v3TableObservation('checkpoint-label', 'Unmapped marker', 0, 0),
+              v3TableObservation('checkpoint-value-a', '3.8', 0, 1),
+              v3TableObservation('checkpoint-unit', 'mmol/L', 0, 2),
+              v3TableObservation('checkpoint-value-b', '4.1', 0, 3),
+            ],
+          });
+        },
+      },
+      documentVLM,
+    });
+    const report = (await service.importImages(source('durable-checkpoint', 'image')))!.report;
+    const extraction = service.startExtraction(report.id);
+    await inferenceStarted;
+
+    const checkpoint = await repository.getExtractionDraftForReport(report.id);
+    assert.equal(checkpoint?.rows.length, 1);
+    assert.equal(checkpoint?.rows[0]?.reviewState, 'needs-review');
+    assert.equal(await repository.countOpenExtractionDrafts(), 0);
+
+    finishInference([]);
+    const draft = await extraction;
+    assert.equal(draft.rows.length, 1);
+    assert.equal(await repository.countOpenExtractionDrafts(), 1);
+  });
+
+  test('bounds document refinement across a multi-page report and keeps deterministic rows', async () => {
+    const pages = Array.from({ length: 4 }, (_, pageIndex) => ({
+      pageIndex,
+      width: 612,
+      height: 792,
+      hasTextLayer: false,
+    }));
+    const pdf = new BandTextLayerPdf(pages);
+    let elapsed = 0;
+    let inferenceCalls = 0;
+    const documentVLM: DocumentVLMExtractor = {
+      adapterVersion: 'alyte.qwen3-vl.document-extractor.v1',
+      schemaVersion: 'alyte.document-vlm.flat-rows.v1',
+      provenance: {
+        modelVersion: 'synthetic-model',
+        runtimeVersion: 'synthetic-runtime',
+        promptVersion: 'alyte.document-vlm.prompt.v1',
+      },
+      checkAvailability: async () => {},
+      supports: () => true,
+      prepare: async () => ({ release: async () => {} }),
+      extract: async () => {
+        inferenceCalls += 1;
+        elapsed = 95_000;
+        return [];
+      },
+    };
+    const service = createService(createRepository(), new FakeFiles(), {
+      pdf,
+      visionOCR: {
+        async recognize(_path, pageIndex): Promise<VisionOCRResult> {
+          const onPage = (observation: ReturnType<typeof v3TableObservation>) => ({
+            ...observation,
+            pageIndex,
+            structure: {
+              ...observation.structure,
+              tableId: `budget-page-${pageIndex}`,
+            },
+          });
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v4',
+            pageIndex,
+            orientation: 0,
+            observations: [
+              onPage(v3TableObservation(`budget-label-${pageIndex}`, 'Unmapped marker', 0, 0)),
+              onPage(v3TableObservation(`budget-value-a-${pageIndex}`, '3.8', 0, 1)),
+              onPage(v3TableObservation(`budget-unit-${pageIndex}`, 'mmol/L', 0, 2)),
+              onPage(v3TableObservation(`budget-value-b-${pageIndex}`, '4.1', 0, 3)),
+            ],
+          });
+        },
+      },
+      documentVLM,
+      documentRefinementBudgetMs: 90_000,
+      elapsedTimeNow: () => elapsed,
+    });
+    const report = (await service.importPdf(source('bounded-document-refinement')))!.report;
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.equal(inferenceCalls, 1);
+    assert.equal(pdf.renderedRects.length, 1);
+    assert.equal(draft.rows.length, 4);
+    assert.equal((await service.loadExtractionProgress(report.id))?.status, 'complete');
+  });
+
   test('deletes a rendered private band when source integrity changes before VLM inference', async () => {
     const pdf = new BandTextLayerPdf([
       { pageIndex: 0, width: 612, height: 792, hasTextLayer: true },
@@ -3122,8 +4035,9 @@ describe('protected Lab Report import lifecycle', () => {
         orientation: 0,
         observations: [
           v3TableObservation('mutation-label', 'Unmapped marker', 0, 0),
-          v3TableObservation('mutation-value', '4.1', 0, 1),
+          v3TableObservation('mutation-value-a', '3.8', 0, 1),
           v3TableObservation('mutation-unit', 'mmol/L', 0, 2),
+          v3TableObservation('mutation-value-b', '4.1', 0, 3),
         ],
       }),
     );
@@ -3165,6 +4079,7 @@ describe('protected Lab Report import lifecycle', () => {
     assert.deepEqual(lifecycle, ['prepare', 'release']);
     assert.equal(pdf.renderedRects.length, 1);
     assert.deepEqual(pdf.deletedBandURIs, ['file:///synthetic-band-1.jpg']);
+    assert.equal(await repository.countOpenExtractionDrafts(), 0);
   });
 
   test('stops dense-page VLM work after a post-inference source mutation', async () => {
@@ -3298,6 +4213,37 @@ describe('protected Lab Report import lifecycle', () => {
     );
   });
 
+  test('does not turn administrative registration rows into reviewable measurements', async () => {
+    const observations = [
+      v3TableObservation('company-code-label', 'Įmonės kodas, licencijos Nr.', 0, 0),
+      v3TableObservation('company-code-value', '300887021', 0, 1),
+      v3TableObservation('ferritin-label', 'Ferritin', 1, 0),
+      v3TableObservation('ferritin-value', '42', 1, 1),
+      v3TableObservation('ferritin-unit', 'ng/mL', 1, 2),
+    ];
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const service = createService(repository, files, new FakePdf(), {
+      async recognize(): Promise<VisionOCRResult> {
+        return decodeVisionOCRResult({
+          contractVersion: 'alyte.vision.document.v4',
+          pageIndex: 0,
+          orientation: 0,
+          observations,
+        });
+      },
+    });
+    const report = (await service.importImages(source('administrative-row', 'image')))?.report;
+    assert.ok(report);
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.deepEqual(
+      draft.rows.map((row) => row.source.observationIds),
+      [['ferritin-label', 'ferritin-value', 'ferritin-unit']],
+    );
+  });
+
   test('keeps a supported alias on a multi-anchor fallback without claiming it is unsupported', async () => {
     const observations = [
       v3TableObservation('multi-supported-label', 'LDL-C', 0, 0),
@@ -3343,6 +4289,37 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(fallback.reviewReasons.includes('unsupported-alias'), false);
     assert.ok(fallback.reviewReasons.includes('unsupported-layout'));
     assert.ok(fallback.reviewReasons.includes('unparseable-value'));
+    assert.equal(fallback.sourceValueString, '');
+    assert.notEqual(fallback.proposedLabel, fallback.sourceText);
+  });
+
+  test('never seeds editable fields with a one-anchor flattened source row', async () => {
+    const flattened = 'Cinkas µmol/L 10,0 - 20,0 13,2';
+    const service = createService(createRepository(), new FakeFiles(), {
+      visionOCR: {
+        async recognize(): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v4',
+            pageIndex: 0,
+            orientation: 0,
+            observations: [v3TableObservation('flattened-row', flattened, 0, 0)],
+          });
+        },
+      },
+    });
+    const report = (await service.importImages(source('flattened-one-anchor', 'image')))!.report;
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.ok(draft.rows.length > 0);
+    for (const row of draft.rows) {
+      assert.notEqual(row.proposedLabel, row.sourceText);
+      assert.notEqual(
+        row.proposedValue.kind === 'free_text' ? row.proposedValue.value : null,
+        row.sourceText,
+      );
+      assert.notEqual(row.sourceValueString, row.sourceText);
+    }
   });
 
   test('preserves an edited multi-anchor fallback across a cached start', async () => {
@@ -4803,7 +5780,13 @@ describe('protected Lab Report import lifecycle', () => {
       const repository = createRepository();
       const files = new FakeFiles();
       const observations = [
-        syntheticDateObservation(`missing-${testCase.name}-header`, testCase.header, 0.08, 0.1),
+        syntheticDateObservation(
+          `missing-${testCase.name}-header`,
+          testCase.header,
+          0.08,
+          0.1,
+          testCase.name === 'ambiguous-collection' ? null : 'de',
+        ),
         syntheticDateObservation(
           `missing-${testCase.name}-measurement`,
           'LDL-C 3,8 mmol/L',
@@ -4851,6 +5834,32 @@ describe('protected Lab Report import lifecycle', () => {
       assert.deepEqual(row?.proposedValue, { kind: 'numeric', value: 3.8 }, testCase.name);
       assert.equal(row?.proposedUnit, 'mmol/L', testCase.name);
     }
+  });
+
+  test('uses source-attributed English numeric order for a Labcorp collection date', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const observations = [
+      syntheticDateObservation('labcorp-date', 'Date Collected: 04/01/2025', 0.08, 0.1, 'en'),
+      syntheticDateObservation('labcorp-measurement', 'LDL-C 110 mg/dL', 0.08, 0.22, 'en'),
+    ];
+    const service = createService(repository, files, sanitizingPdf(files), {
+      async recognize(): Promise<VisionOCRResult> {
+        return {
+          contractVersion: 'alyte.vision.document.v2',
+          pageIndex: 0,
+          orientation: 0,
+          observations,
+        };
+      },
+    });
+    const report = (await service.importPdf(source('labcorp-date-order')))!.report;
+    await prepareSanitizedExtraction(service, report.id);
+    const draft = await service.startExtraction(report.id);
+
+    assert.deepEqual(draft.collectionDate, { kind: 'known', value: '2025-04-01' });
+    assert.deepEqual(draft.rows[0]?.collectionDate, { kind: 'known', value: '2025-04-01' });
+    assert.equal(draft.rows[0]?.reviewReasons.includes('ambiguous-date'), false);
   });
 
   test('infers unambiguous collection date order when device and report locales differ', async () => {
@@ -5702,6 +6711,28 @@ describe('protected Lab Report import lifecycle', () => {
         return true;
       },
     );
+  });
+
+  test('cancellation before promotion removes the pathless import row', async () => {
+    const repository = createRepository();
+    const files = new CancelledStageFiles();
+    const service = createService(repository, files);
+
+    await assert.rejects(
+      service.importPdf(source('cancelled-before-promotion')),
+      (error: unknown) => {
+        assert.ok(error instanceof LabReportImportError);
+        assert.equal(error.reason, 'cancelled');
+        assert.equal(error.report.importState, 'deleted');
+        assert.equal(error.report.originalPath, null);
+        return true;
+      },
+    );
+    assert.equal(
+      (await service.listReports()).filter((report) => report.importState !== 'deleted').length,
+      0,
+    );
+    assert.equal(files.transient.size, 0);
   });
 
   test('source deletion is independent and reference-safe', async () => {
@@ -6657,7 +7688,7 @@ describe('protected Lab Report import lifecycle', () => {
     assert.ok(draft.rows.every((row) => !['2.0', '0.9'].includes(row.sourceValueString)));
   });
 
-  test('preserves an unrepresented trusted Result-column row as focused review work', async () => {
+  test('excludes an unrepresented trusted Result-column metadata row', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
     const pdf = new TextLayerPdf([{ pageIndex: 0, width: 612, height: 792, hasTextLayer: true }]);
@@ -6667,14 +7698,10 @@ describe('protected Lab Report import lifecycle', () => {
 
     const draft = await service.startExtraction(report.id);
 
-    const review = draft.rows.find((row) =>
-      row.source.observationIds.includes('column-unrepresented-result'),
+    assert.equal(
+      draft.rows.some((row) => row.source.observationIds.includes('column-unrepresented-result')),
+      false,
     );
-    assert.ok(review);
-    assert.equal(review.reviewState, 'needs-review');
-    assert.equal(review.decision, 'preserve');
-    assert.equal(review.sourceValue.kind, 'free_text');
-    assert.ok(review.reviewReasons.includes('unsupported-layout'));
   });
 
   test('keeps an admitted but label-ambiguous Result-column row review-only', async () => {
@@ -6873,6 +7900,67 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(await repository.getExtractionDraftForReport(report.id), null);
   });
 
+  test('keeps trusted two-page table cells together and carries one specimen heading forward', async () => {
+    const repository = createRepository();
+    const files = new FakeFiles();
+    const pdf = new TextLayerPdf([
+      { pageIndex: 0, width: 612, height: 792, hasTextLayer: true },
+      { pageIndex: 1, width: 612, height: 792, hasTextLayer: true },
+    ]);
+    pdf.textLayerResults.set(
+      0,
+      syntheticTrustedTablePage(
+        0,
+        [
+          ['LDL cholesterol', '118', 'mg/dL', '< 115'],
+          ['HDL cholesterol', '62', 'mg/dL', '> 40'],
+          ['Triglycerides', '92', 'mg/dL', '< 150'],
+          ['Glucose', '89', 'mg/dL', '70 - 99'],
+          ['HbA1c', '5.2', '%', '4.0 - 5.6'],
+          ['ALT', '24', 'U/L', '< 45'],
+        ],
+        { specimenHeading: true, collectionDate: true },
+      ),
+    );
+    pdf.textLayerResults.set(
+      1,
+      syntheticTrustedTablePage(1, [
+        ['AST', '21', 'U/L', '< 35'],
+        ['Creatinine', '0.92', 'mg/dL', '0.70 - 1.20'],
+        ['Ferritin', '74', 'ng/mL', '30 - 400'],
+        ['25-hydroxyvitamin D', '31', 'ng/mL', '30 - 100'],
+      ]),
+    );
+    const service = createService(repository, files, pdf);
+    const report = (await service.importPdf(source('trusted-two-page-grid')))!.report;
+    const draft = await service.startExtraction(report.id);
+
+    assert.equal(draft.rows.length, 10);
+    assert.ok(draft.rows.every((row) => row.proposedSpecimenType === 'serum'));
+    const alt = draft.rows.find((row) => row.sourceLabel === 'ALT');
+    assert.ok(alt);
+    assert.equal(alt?.sourceValueString, '24');
+    assert.equal(alt?.sourceUnit, 'U/L');
+    assert.equal(alt?.sourceReferenceInterval, '< 45');
+    assert.equal(alt?.proposedBiomarkerId, 'biomarker.alt');
+    const ast = draft.rows.find((row) => row.sourceLabel === 'AST');
+    assert.ok(ast);
+    assert.equal(ast?.sourceValueString, '21');
+    assert.equal(ast?.sourceUnit, 'U/L');
+    assert.equal(ast?.sourceReferenceInterval, '< 35');
+    assert.equal(ast?.proposedBiomarkerId, 'biomarker.ast');
+    assert.ok(alt?.source.observationIds.some((id) => id.includes('row-5-label')));
+    assert.ok(ast?.source.observationIds.some((id) => id.includes('row-0-label')));
+    const hba1c = draft.rows.find((row) => row.sourceLabel === 'HbA1c');
+    assert.ok(hba1c);
+    assert.equal(hba1c?.sourceValueString, '5.2');
+    assert.equal(hba1c?.sourceUnit, '%');
+    assert.equal(hba1c?.sourceReferenceInterval, '4.0 - 5.6');
+    assert.equal(hba1c?.proposedBiomarkerId, 'biomarker.hba1c');
+    assert.deepEqual(hba1c?.reviewReasons, ['incompatible-specimen']);
+    assert.equal(hba1c?.decision, 'unresolved');
+  });
+
   test('uses the PDF text-layer adapter in PDF fingerprints but not image fingerprints', async () => {
     const pdfRepository = createRepository();
     const pdfFiles = new FakeFiles();
@@ -6927,6 +8015,10 @@ describe('protected Lab Report import lifecycle', () => {
     const pdf = sanitizingPdf(files);
     let calls = 0;
     const lifecycle: string[] = [];
+    const events: LabReportExtractionProgress[] = [];
+    let organizePaintTurnCompleted = false;
+    let service: ReturnType<typeof createService>;
+    let activeReportId = '';
     const ocr: VisionOCR = {
       async recognize(_path, pageIndex): Promise<VisionOCRResult> {
         calls += 1;
@@ -6964,13 +8056,25 @@ describe('protected Lab Report import lifecycle', () => {
       supports: () => true,
       async map() {
         lifecycle.push('map');
+        const current = service.getExtractionProgress(activeReportId);
+        assert.equal(current?.stage, 'refine');
+        assert.equal(current?.status, 'active');
+        assert.equal(current?.completed, 0);
+        assert.equal(current?.total, 1);
         return [];
       },
     };
-    const service = createService(repository, files, pdf, ocr, mapper);
+    service = createService(repository, files, pdf, ocr, mapper);
     const report = (await service.importPdf(source('progress-order')))!.report;
-    const events: LabReportExtractionProgress[] = [];
-    const unsubscribe = service.subscribeExtractionProgress((event) => events.push(event));
+    activeReportId = report.id;
+    const unsubscribe = service.subscribeExtractionProgress((event) => {
+      events.push(event);
+      if (event.stage === 'organize' && event.status === 'active') {
+        setTimeout(() => {
+          organizePaintTurnCompleted = true;
+        }, 0);
+      }
+    });
     const draft = await service.startExtraction(report.id);
     unsubscribe();
 
@@ -6980,18 +8084,64 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(calls, 2);
     assert.deepEqual(lifecycle, ['ocr-0', 'ocr-1', 'prepare', 'map', 'map', 'release']);
     assert.equal(pdf.sanitizedPaths.length, 0);
+    assert.equal(organizePaintTurnCompleted, true);
     assert.deepEqual(
       events.map((event) => event.stage).filter((stage, index, all) => stage !== all[index - 1]),
-      ['import', 'ocr', 'review'],
+      ['import', 'ocr', 'organize', 'refine', 'review'],
     );
     assert.equal(
       events.some((event) => event.stage === 'ocr' && event.status === 'complete'),
       true,
     );
+    const ocrCompleteIndex = events.findIndex(
+      (event) => event.stage === 'ocr' && event.status === 'complete',
+    );
+    const refineActiveIndex = events.findIndex(
+      (event) => event.stage === 'refine' && event.status === 'active',
+    );
+    assert.equal(ocrCompleteIndex >= 0 && refineActiveIndex > ocrCompleteIndex, true);
+    assert.deepEqual(
+      events
+        .filter((event) => event.stage === 'ocr' && event.status === 'active')
+        .map((event) => event.completed),
+      [0, 1, 2],
+    );
     assert.equal(events.at(-1)?.status, 'complete');
   });
 
-  test('does not report completion when the final semantic lease release fails', async () => {
+  test('persists a multi-anchor Vision row whose token spans cover complete parent cells', async () => {
+    const repository = createRepository();
+    const service = createService(repository, new FakeFiles(), {
+      visionOCR: {
+        async recognize(_path, pageIndex): Promise<VisionOCRResult> {
+          return syntheticSingleTokenSpanTablePage(pageIndex);
+        },
+      },
+      semanticMapper: {
+        adapterVersion: 'single-token-span.mapper.v1',
+        schemaVersion: 'alyte.geometry-variant-selector.v2',
+        supports: () => false,
+        map: async () => [],
+      },
+    });
+    const report = (await service.importPdf(source('single-token-span')))!.report;
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.equal(draft.rows.length > 0, true);
+    assert.ok(
+      draft.rows.some((row) =>
+        row.source.observations?.some(
+          (observation) =>
+            observation.id !== observation.sourceSpan?.parentObservationId &&
+            observation.spans === undefined,
+        ),
+      ),
+    );
+    assert.equal((await repository.getExtractionOperation(report.id))?.state, 'complete');
+  });
+
+  test('opens the checkpoint when semantic release fails', async () => {
     const repository = createRepository();
     const files = new FakeFiles();
     const ocr: VisionOCR = {
@@ -7028,12 +8178,12 @@ describe('protected Lab Report import lifecycle', () => {
     const service = createService(repository, files, new FakePdf(), ocr, mapper);
     const report = (await service.importPdf(source('release-failure')))!.report;
 
-    await assert.rejects(
-      service.startExtraction(report.id),
-      (error: unknown) =>
-        error instanceof LabReportExtractionError && error.reason === 'recognition',
-    );
-    assert.equal(await repository.countOpenExtractionDrafts(), 0);
+    const draft = await service.startExtraction(report.id);
+
+    assert.equal(draft.rows.length, 2);
+    assert.equal(await repository.countOpenExtractionDrafts(), 1);
+    assert.equal((await repository.getExtractionDraftForReport(report.id))?.rows.length, 2);
+    assert.equal((await repository.getExtractionOperation(report.id))?.state, 'complete');
   });
 
   test('progress subscribers are isolated and completion is available after relaunch', async () => {
@@ -7149,12 +8299,12 @@ describe('protected Lab Report import lifecycle', () => {
       (error: unknown) =>
         error instanceof LabReportExtractionError &&
         error.reason === 'persistence' &&
-        error.message === 'The local extraction draft could not be saved',
+        error.message === 'The local extraction checkpoint could not be saved',
     );
     const failedOperation = await repository.getExtractionOperation(report.id);
     assert.equal(failedOperation?.reportId, report.id);
     assert.equal(failedOperation?.state, 'failed');
-    assert.equal(failedOperation?.stage, 'review');
+    assert.equal(failedOperation?.stage, 'organize');
     assert.equal(failedOperation?.completed, 0);
     assert.equal(failedOperation?.total, 1);
     assert.equal(failedOperation?.error, 'persistence');
@@ -7166,6 +8316,42 @@ describe('protected Lab Report import lifecycle', () => {
     assert.equal(await repository.countOpenExtractionDrafts(), 1);
     assert.equal((await repository.getExtractionDraftForReport(report.id))?.id, draft.id);
     assert.equal(calls, 2);
+  });
+
+  test('returns the validated checkpoint when final draft replacement fails', async () => {
+    const repository = createRepository();
+    repository.replaceExtractionDraft = async () => {
+      throw new Error('synthetic final replacement failure');
+    };
+    const service = createService(repository, new FakeFiles(), {
+      visionOCR: {
+        async recognize(_path, pageIndex): Promise<VisionOCRResult> {
+          return decodeVisionOCRResult({
+            contractVersion: 'alyte.vision.document.v2',
+            pageIndex,
+            orientation: 0,
+            observations: [
+              {
+                id: `replacement-fallback-${pageIndex}`,
+                text: 'LDL-C 3.8 mmol/L',
+                alternatives: [],
+                boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.04 },
+                pageIndex,
+                orientation: 0,
+                recognition: { level: 'accurate', language: 'en', internalConfidence: null },
+              },
+            ],
+          });
+        },
+      },
+    });
+    const report = (await service.importImages(source('replacement-fallback', 'image')))!.report;
+
+    const draft = await service.startExtraction(report.id);
+
+    assert.equal(draft.rows.length, 1);
+    assert.equal((await repository.getExtractionDraftForReport(report.id))?.id, draft.id);
+    assert.equal((await repository.getExtractionOperation(report.id))?.state, 'complete');
   });
 
   test('unlocks a protected Original only for Vision and never persists the password', async () => {

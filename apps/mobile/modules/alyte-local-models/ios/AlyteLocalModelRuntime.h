@@ -41,6 +41,14 @@ int alyte_local_model_runtime_generate_image(
     int max_output_tokens,
     char *output,
     size_t output_capacity);
+int alyte_local_model_runtime_generate_image_raw(
+    void *runtime,
+    const char *prompt,
+    const unsigned char *image_data,
+    size_t image_length,
+    int max_output_tokens,
+    char *output,
+    size_t output_capacity);
 void alyte_local_model_runtime_destroy(void *runtime);
 
 #endif

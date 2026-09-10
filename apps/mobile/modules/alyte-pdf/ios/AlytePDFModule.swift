@@ -238,6 +238,76 @@ private func loadTextLayerDocument(_ path: String, password: String?) throws -> 
   return document
 }
 
+private let alyteExtractionTargetHeight: CGFloat = 1_800
+private let alyteExtractionMaximumWidth: CGFloat = 4_096
+private let alyteExtractionMaximumPixels: CGFloat = 12_000_000
+private let alyteExtractionMaximumEncodedBytes = 16 * 1024 * 1024
+
+/**
+ * Render an extraction page at a bounded, predictable raster size. This is separate from the
+ * sanitization renderer: extraction receives a temporary source image, while sanitization keeps
+ * its existing page transform and recipe semantics. The normalized crop is top-left based at the
+ * API boundary and is converted once at the CGImage crop boundary.
+ */
+private func renderExtractionImage(page: PDFPage, crop: AlyteNormalizedRect?) throws -> UIImage {
+  let bounds = page.bounds(for: .mediaBox)
+  let width = bounds.width
+  let height = bounds.height
+  guard width.isFinite, height.isFinite, width > 0, height > 0,
+    width <= 1_000_000, height <= 1_000_000
+  else { throw AlytePDFError.renderFailed }
+
+  let pixelScale = min(
+    alyteExtractionTargetHeight / height,
+    min(
+      alyteExtractionMaximumWidth / width,
+      sqrt(alyteExtractionMaximumPixels / (width * height))
+    )
+  )
+  guard pixelScale.isFinite, pixelScale > 0 else { throw AlytePDFError.renderFailed }
+  let pixelWidth = max(1, Int((width * pixelScale).rounded(.up)))
+  let pixelHeight = max(1, Int((height * pixelScale).rounded(.up)))
+  guard pixelWidth <= Int(alyteExtractionMaximumWidth),
+    Double(pixelWidth) * Double(pixelHeight) <= Double(alyteExtractionMaximumPixels)
+  else { throw AlytePDFError.renderFailed }
+
+  let sourceSize = CGSize(width: pixelWidth, height: pixelHeight)
+  let format = UIGraphicsImageRendererFormat()
+  format.scale = 1
+  format.opaque = true
+  let renderer = UIGraphicsImageRenderer(size: sourceSize, format: format)
+  let full = renderer.image { context in
+    UIColor.white.setFill()
+    context.fill(CGRect(origin: .zero, size: sourceSize))
+    context.cgContext.saveGState()
+    context.cgContext.translateBy(x: 0, y: sourceSize.height)
+    context.cgContext.scaleBy(x: pixelScale, y: -pixelScale)
+    page.draw(with: .mediaBox, to: context.cgContext)
+    context.cgContext.restoreGState()
+  }
+  guard let fullCGImage = full.cgImage else { throw AlytePDFError.renderFailed }
+  guard let crop else { return full }
+
+  let fullWidth = CGFloat(fullCGImage.width)
+  let fullHeight = CGFloat(fullCGImage.height)
+  let requested = CGRect(
+    x: crop.x * fullWidth,
+    y: crop.y * fullHeight,
+    width: crop.width * fullWidth,
+    height: crop.height * fullHeight
+  )
+  // UIGraphicsImageRenderer gives the UIImage a top-left visual coordinate space, and
+  // CGImage.cropping(to:) addresses the resulting bitmap from its top-left pixel row. A small
+  // CoreGraphics probe with red in the visual top half and blue in the visual bottom half confirms
+  // that y=0 crops red; do not apply the PDF bottom-left transform a second time here.
+  let imageBounds = CGRect(x: 0, y: 0, width: fullWidth, height: fullHeight)
+  let cropRect = requested.intersection(imageBounds).integral
+  guard cropRect.width >= 1, cropRect.height >= 1,
+    let cropped = fullCGImage.cropping(to: cropRect)
+  else { throw AlytePDFError.renderFailed }
+  return UIImage(cgImage: cropped, scale: 1, orientation: .up)
+}
+
 private func renderExtractionBand(
   path: String,
   pageIndex: Int,
@@ -249,8 +319,13 @@ private func renderExtractionBand(
     let page = document.page(at: pageIndex)
   else { throw AlytePDFError.renderFailed }
   let crop = try normalizedRect(rect)
-  let image = try renderImage(page: page, crop: crop, rotation: 0, redactions: [])
-  guard let data = image.jpegData(compressionQuality: 0.92), !data.isEmpty else {
+  let image = try renderExtractionImage(page: page, crop: crop)
+  // OCR receives lossless pixels. JPEG quality reduction can erase decimal points, minus signs,
+  // and narrow unit glyphs before the recognizer sees them. The encoded guard protects the
+  // temporary file budget without changing the sanitization renderer below.
+  guard let data = image.pngData(), !data.isEmpty,
+    data.count <= alyteExtractionMaximumEncodedBytes
+  else {
     throw AlytePDFError.renderFailed
   }
   let directory = FileManager.default.temporaryDirectory
@@ -264,7 +339,7 @@ private func renderExtractionBand(
   directoryValues.isExcludedFromBackup = true
   var mutableDirectory = directory
   try mutableDirectory.setResourceValues(directoryValues)
-  let destination = directory.appendingPathComponent(UUID().uuidString).appendingPathExtension("jpg")
+  let destination = directory.appendingPathComponent(UUID().uuidString).appendingPathExtension("png")
   try data.write(to: destination, options: [.atomic, .completeFileProtection])
   var values = URLResourceValues()
   values.isExcludedFromBackup = true

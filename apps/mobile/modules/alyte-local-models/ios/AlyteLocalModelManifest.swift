@@ -3,33 +3,33 @@ import Foundation
 
 enum AlyteLocalModelManifest {
   static let version = "alyte.local-model.manifest.v2"
-  static let packID = "qwen3-vl-2b-instruct-q4-k-m"
-  static let sourceRepository = "Qwen/Qwen3-VL-2B-Instruct"
-  static let sourceRevision = "89644892e4d85e24eaac8bacfd4f463576704203"
-  static let artifactRepository = "Qwen/Qwen3-VL-2B-Instruct-GGUF"
-  static let artifactRevision = "52d6c8ffea26cc873ac5ad116f8631268d7eb503"
-  static let filename = "Qwen3VL-2B-Instruct-Q4_K_M.gguf"
-  static let artifactURL = "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/52d6c8ffea26cc873ac5ad116f8631268d7eb503/Qwen3VL-2B-Instruct-Q4_K_M.gguf?download=true"
-  static let artifactBytes: Int64 = 1_107_409_952
-  static let sha256 = "089d75c52f4b7ffc56ba998ffc50aae89fcafc755f9e7208aacca281dca6c2ae"
-  static let projectorRepository = "Qwen/Qwen3-VL-2B-Instruct-GGUF"
-  static let projectorRevision = "52d6c8ffea26cc873ac5ad116f8631268d7eb503"
-  static let projectorFilename = "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
-  static let projectorArtifactURL = "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/52d6c8ffea26cc873ac5ad116f8631268d7eb503/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf?download=true"
-  static let projectorBytes: Int64 = 445_053_216
-  static let projectorSha256 = "f9a68fabba69c3b81e153367b2c7521030b0fa8bb0de400c9599c8e6725f9c82"
-  static let bytes: Int64 = 1_552_463_168
-  static let publisher = "Qwen"
+  static let packID = "paddleocr-vl-1.6-q8"
+  static let sourceRepository = "SanjeevSOLANKI/PaddleOCR-VL-1.6-GGUF"
+  static let sourceRevision = "5621cad76de79b793ae45dbcb48153f12c72a7ac"
+  static let artifactRepository = "SanjeevSOLANKI/PaddleOCR-VL-1.6-GGUF"
+  static let artifactRevision = "5621cad76de79b793ae45dbcb48153f12c72a7ac"
+  static let filename = "PaddleOCR-VL-1.6-Q8_0.gguf"
+  static let artifactURL = "https://huggingface.co/SanjeevSOLANKI/PaddleOCR-VL-1.6-GGUF/resolve/5621cad76de79b793ae45dbcb48153f12c72a7ac/PaddleOCR-VL-1.6-Q8_0.gguf?download=true"
+  static let artifactBytes: Int64 = 498_316_256
+  static let sha256 = "2bda93a416339f2d9f06accae505600544a9e72cc159d0cd1af4c0f679866e1c"
+  static let projectorRepository = "SanjeevSOLANKI/PaddleOCR-VL-1.6-GGUF"
+  static let projectorRevision = "5621cad76de79b793ae45dbcb48153f12c72a7ac"
+  static let projectorFilename = "PaddleOCR-VL-1.6-mmproj.gguf"
+  static let projectorArtifactURL = "https://huggingface.co/SanjeevSOLANKI/PaddleOCR-VL-1.6-GGUF/resolve/5621cad76de79b793ae45dbcb48153f12c72a7ac/PaddleOCR-VL-1.6-mmproj.gguf?download=true"
+  static let projectorBytes: Int64 = 881_770_560
+  static let projectorSha256 = "204d757d7610d9b3faab10d506d69e5b244e32bf765e2bab2d0167e65e0a058a"
+  static let bytes: Int64 = 1_380_086_816
+  static let publisher = "PaddlePaddle / SanjeevSOLANKI"
   static let license = "Apache-2.0"
   static let format = "GGUF"
-  static let quantization = "Q4_K_M + Q8_0 projector"
+  static let quantization = "Q8_0 + F16 projector"
   static let runtimeID = "llama.cpp"
   static let runtimeRepository = "ggml-org/llama.cpp"
   static let runtimeRevision = "bb4caa7540188872173c44d161602d9271386413"
-  static let promptBundle = "alyte.document-vlm.prompt.v1"
+  static let promptBundle = "alyte.document-ocr.raw.v1"
   static let ocrChunk = "alyte.document-band.v1"
-  static let semanticSchema = "alyte.document-vlm.flat-rows.v1"
-  static let languages = ["en", "de"]
+  static let semanticSchema = "alyte.paddleocr-vl.flat-rows.v1"
+  static let languages = ["en", "de", "lt"]
   static let minimumIOS = "26.0"
   static let minimumFreeBytes: Int64 = 3_500_000_000
   static let minimumMemoryBytes: Int64 = 2_800_000_000

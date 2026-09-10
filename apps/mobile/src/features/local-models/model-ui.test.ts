@@ -234,10 +234,10 @@ test('resumable setup owns its failure presentation', () => {
 test('download size formatting follows the device locale and localized unit keys', () => {
   assert.equal(
     formatModelDownloadSize(productionLocalModelManifest.pack.bytes, 'en-US'),
-    '1,552,463,168 bytes (1.6 GB)',
+    '1,380,086,816 bytes (1.4 GB)',
   );
   assert.equal(
     formatModelDownloadSize(productionLocalModelManifest.pack.bytes, 'de-DE'),
-    '1.552.463.168 bytes (1,6 GB)',
+    '1.380.086.816 bytes (1,4 GB)',
   );
 });

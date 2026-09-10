@@ -24,6 +24,48 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
   private var lastDownloadCancelled = false
   var stateObserver: StateObserver?
 
+  // Runtime errors cross the queue as Swift values. Preserve cancellation and the typed runtime
+  // stage instead of collapsing them into an unrelated generic storage failure.
+  static func localModelError(from error: Error) -> AlyteLocalModelError {
+    if let localError = error as? AlyteLocalModelError { return localError }
+    guard let runtimeError = error as? AlyteLocalModelRuntimeError else {
+      return .failed(.runtimeFailed)
+    }
+    switch runtimeError {
+    case .unavailable:
+      return .unavailable(.unavailable)
+    case .loadFailed(let stage):
+      return .runtimeFailed(stage)
+    case .cancelled:
+      return .failed(.cancelled)
+    case .invalidInput:
+      return .failed(.incompatible)
+    case .truncated:
+      return .failed(.runtimeFailed)
+    }
+  }
+
+  private static func rawInferenceError(from error: Error) -> Error {
+    guard let runtimeError = error as? AlyteLocalModelRuntimeError else {
+      return localModelError(from: error)
+    }
+    switch runtimeError {
+    case .truncated:
+      // Raw Paddle output is parsed by JavaScript. Preserve this recoverable condition across
+      // the native bridge instead of turning it into the generic runtime-failed health state.
+      return NSError(
+        domain: "com.alyte.local-models.raw-inference",
+        code: 1,
+        userInfo: [
+          NSLocalizedDescriptionKey: "PaddleOCR output truncated",
+          "failureCategory": "truncated",
+        ]
+      )
+    default:
+      return localModelError(from: error)
+    }
+  }
+
   private final class DownloadOperation {
     let identity: AlyteLocalModelDownloadOperationIdentity
     let session: URLSession
@@ -155,7 +197,7 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
           self.lastDownloadCancelled = false
           self.continueDownload { result in continuation.resume(with: result) }
         } catch {
-          let localError = (error as? AlyteLocalModelError) ?? AlyteLocalModelError.failed(.runtimeFailed)
+          let localError = Self.localModelError(from: error)
           self.fail(localError)
           continuation.resume(throwing: localError)
         }
@@ -186,7 +228,7 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
         beginDownload(core: target.core, url: target.url, offset: offset, completion: completion)
       }
     } catch {
-      let localError = (error as? AlyteLocalModelError) ?? AlyteLocalModelError.failed(.runtimeFailed)
+      let localError = Self.localModelError(from: error)
       packDownloadActive = false
       (targetCore ?? downloadOperation?.core ?? modelCore).markFailed(localError)
       handleStateChange()
@@ -242,7 +284,7 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
           _ = try self.modelCore.activateVerifiedPack()
           continuation.resume(returning: self.packState())
         } catch {
-          let localError = (error as? AlyteLocalModelError) ?? AlyteLocalModelError.failed(.runtimeFailed)
+          let localError = Self.localModelError(from: error)
           continuation.resume(throwing: localError)
         }
       }
@@ -261,7 +303,7 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
             )
           )
         } catch {
-          let localError = (error as? AlyteLocalModelError) ?? AlyteLocalModelError.failed(.runtimeFailed)
+          let localError = Self.localModelError(from: error)
           continuation.resume(throwing: localError)
         }
       }
@@ -295,8 +337,43 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
             )
           )
         } catch {
-          let localError = (error as? AlyteLocalModelError) ?? AlyteLocalModelError.failed(.runtimeFailed)
+          let localError = Self.localModelError(from: error)
           continuation.resume(throwing: localError)
+        }
+      }
+    }
+  }
+
+  /// Runs the free-form OCR entry point. The native runtime uses a greedy-only sampler here;
+  /// no JSON grammar is applied before the source-grounding parser receives the text.
+  func inferImageRaw(
+    prompt: String,
+    imageURL: URL,
+    maxOutputTokens: Int,
+    outputCapacity: Int
+  ) async throws -> String {
+    try await withCheckedThrowingContinuation { continuation in
+      queue.async {
+        do {
+          let standardizedURL = imageURL.standardizedFileURL
+          let sandboxURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).standardizedFileURL
+          guard standardizedURL.isFileURL,
+            standardizedURL.path.hasPrefix(sandboxURL.path + "/"),
+            let fileSize = try standardizedURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+            fileSize > 0,
+            fileSize <= 16 * 1024 * 1024
+          else { throw AlyteLocalModelError.failed(.runtimeFailed) }
+          let imageData = try Data(contentsOf: standardizedURL, options: [.mappedIfSafe])
+          continuation.resume(
+            returning: try self.modelCore.inferImageRaw(
+              prompt: prompt,
+              imageData: imageData,
+              maxOutputTokens: maxOutputTokens,
+              outputCapacity: outputCapacity
+            )
+          )
+        } catch {
+          continuation.resume(throwing: Self.rawInferenceError(from: error))
         }
       }
     }
@@ -344,7 +421,7 @@ final class AlyteLocalModelStore: NSObject, @unchecked Sendable, URLSessionDataD
           operationSession?.invalidateAndCancel()
           continuation.resume(returning: state)
         } catch {
-          let localError = (error as? AlyteLocalModelError) ?? AlyteLocalModelError.failed(.runtimeFailed)
+          let localError = Self.localModelError(from: error)
           self.fail(localError)
           self.resolve(
             operation,

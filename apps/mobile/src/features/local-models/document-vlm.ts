@@ -1,4 +1,8 @@
-import type { ExtractionSemanticCancellation, ExtractionSemanticLease } from '@alyte/domain';
+import type {
+  ExtractionSemanticCancellation,
+  ExtractionSemanticLease,
+  ExtractionSemanticSchemaVersion,
+} from '@alyte/domain';
 import { canStartAutomatedExtraction } from './model';
 import type { LocalModelService } from './native';
 import { productionLocalModelManifest } from './production-manifest.generated';
@@ -8,6 +12,7 @@ export const DOCUMENT_VLM_PROMPT_VERSION = 'alyte.document-vlm.prompt.v1' as con
 
 const INFERENCE_TIMEOUT_MS = 60_000;
 const INFERENCE_DRAIN_TIMEOUT_MS = 1_000;
+const INFERENCE_RECOVERY_TIMEOUT_MS = 5_000;
 const MAX_ROWS = 80;
 const MAX_FIELD_LENGTH = 512;
 
@@ -20,12 +25,12 @@ export type DocumentVLMRow = {
 };
 
 export type DocumentVLMExtractor = {
-  readonly adapterVersion: 'alyte.qwen3-vl.document-extractor.v1';
-  readonly schemaVersion: typeof DOCUMENT_VLM_SCHEMA_VERSION;
+  readonly adapterVersion: string;
+  readonly schemaVersion: ExtractionSemanticSchemaVersion;
   readonly provenance: {
     readonly modelVersion: string;
     readonly runtimeVersion: string;
-    readonly promptVersion: typeof DOCUMENT_VLM_PROMPT_VERSION;
+    readonly promptVersion: string;
   };
   checkAvailability(): Promise<void>;
   prepare(): Promise<ExtractionSemanticLease>;
@@ -34,6 +39,10 @@ export type DocumentVLMExtractor = {
     readonly pageIndex: number;
     readonly imageURI: string;
     readonly locale: string;
+    /** A request-local deadline used by the report-level refinement budget. */
+    readonly timeoutMs?: number;
+    /** Bounded to the native document grammar limit. */
+    readonly maxOutputTokens?: number;
     readonly cancellation?: ExtractionSemanticCancellation;
   }): Promise<readonly DocumentVLMRow[]>;
 };
@@ -177,8 +186,10 @@ Keep label, observed result, unit, and reference interval associated with their 
 export function createLocalDocumentVLM(options: {
   readonly models: LocalModelService;
   readonly timeoutMs?: number;
+  readonly recoveryTimeoutMs?: number;
 }): DocumentVLMExtractor {
   const timeoutMs = options.timeoutMs ?? INFERENCE_TIMEOUT_MS;
+  const recoveryTimeoutMs = options.recoveryTimeoutMs ?? INFERENCE_RECOVERY_TIMEOUT_MS;
   let activeLeases = 0;
   let lifecycleQueue: Promise<void> = Promise.resolve();
   let inferenceQueue: Promise<void> = Promise.resolve();
@@ -247,6 +258,22 @@ export function createLocalDocumentVLM(options: {
     }
   }
 
+  async function recoverQuarantinedRuntime(): Promise<void> {
+    const inference = activeInference;
+    if (!runtimeQuarantined && inference === null) return;
+    inference?.cancel();
+    if (
+      inference === null ||
+      !(await waitForSettlement(inference.settled, recoveryTimeoutMs)) ||
+      activeInference !== null ||
+      runtimeQuarantined
+    ) {
+      throw new DocumentVLMUnavailableError(
+        'The previous document-model request has not released its runtime',
+      );
+    }
+  }
+
   return {
     adapterVersion: 'alyte.qwen3-vl.document-extractor.v1',
     schemaVersion: DOCUMENT_VLM_SCHEMA_VERSION,
@@ -262,9 +289,7 @@ export function createLocalDocumentVLM(options: {
     prepare: () =>
       enqueueLifecycle(async (): Promise<ExtractionSemanticLease> => {
         await requireReady();
-        if (runtimeQuarantined || activeInference !== null) {
-          throw new Error('document-vlm-runtime-quarantined');
-        }
+        await recoverQuarantinedRuntime();
         const state = await options.models.getState();
         if (!state.loaded) await options.models.load();
         activeLeases += 1;
@@ -286,10 +311,22 @@ export function createLocalDocumentVLM(options: {
         if (activeLeases === 0) {
           throw new DocumentVLMUnavailableError('The document model is not loaded');
         }
+        const requestTimeoutMs = Math.min(timeoutMs, input.timeoutMs ?? timeoutMs);
+        const maxOutputTokens = input.maxOutputTokens ?? 2_048;
+        if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) {
+          throw new Error('document-vlm-invalid-timeout');
+        }
+        if (
+          !Number.isSafeInteger(maxOutputTokens) ||
+          maxOutputTokens < 1 ||
+          maxOutputTokens > 2_048
+        ) {
+          throw new Error('document-vlm-invalid-output-limit');
+        }
         const generation = ++nextInferenceGeneration;
         const nativeWork = Promise.resolve().then(() =>
           options.models.inferImage(createDocumentVLMPrompt(), input.imageURI, {
-            maxOutputTokens: 2_048,
+            maxOutputTokens,
             outputCapacity: 131_072,
           }),
         );
@@ -319,7 +356,7 @@ export function createLocalDocumentVLM(options: {
         try {
           const raw = await withTimeout(
             nativeWork,
-            timeoutMs,
+            requestTimeoutMs,
             inference.cancel,
             input.cancellation,
             (settled) => {

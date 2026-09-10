@@ -110,8 +110,13 @@ function sumDeletedCounts(snapshot: DeletionSnapshot, scope: LocalDeletionScope)
         captureRecoveries: all.captureRecoveries,
       };
     case 'all-health':
+    case 'reset-app':
       return { ...all, exportJobs: all.exportJobs };
   }
+}
+
+function deletesAllHealth(scope: LocalDeletionScope): boolean {
+  return scope === 'all-health' || scope === 'reset-app';
 }
 
 function countRows(rows: Readonly<Record<keyof LocalDataCounts, number>>): LocalDataCounts {
@@ -288,11 +293,11 @@ function uniquePathReferences(references: readonly PathReference[]): readonly Pa
 
 export function createPlan(snapshot: DeletionSnapshot, scope: LocalDeletionScope): DeletionPlan {
   const deleted = sumDeletedCounts(snapshot, scope);
-  const includeReports = scope === 'reports' || scope === 'media' || scope === 'all-health';
-  const includeRecords = scope === 'records' || scope === 'all-health';
-  const includeEvents = scope === 'events' || scope === 'all-health';
-  const reportIds =
-    scope === 'all-health' || scope === 'media' ? snapshot.allReportIds : snapshot.reportIds;
+  const allHealth = deletesAllHealth(scope);
+  const includeReports = scope === 'reports' || scope === 'media' || allHealth;
+  const includeRecords = scope === 'records' || allHealth;
+  const includeEvents = scope === 'events' || allHealth;
+  const reportIds = allHealth || scope === 'media' ? snapshot.allReportIds : snapshot.reportIds;
   const targetIds = {
     reportIds: includeReports ? reportIds : [],
     recordIds: includeRecords ? snapshot.recordIds : [],
@@ -307,28 +312,28 @@ export function createPlan(snapshot: DeletionSnapshot, scope: LocalDeletionScope
       case 'report-page':
       case 'sanitized-report':
         return (
-          (scope === 'reports' || scope === 'media' || scope === 'all-health') &&
+          (scope === 'reports' || scope === 'media' || allHealth) &&
           reference.ownerId !== null &&
           selectedReports.has(reference.ownerId)
         );
       case 'intake-image':
         return (
-          (scope === 'media' || scope === 'all-health' || scope === 'events') &&
+          (scope === 'media' || allHealth || scope === 'events') &&
           reference.ownerId !== null &&
-          (scope === 'media' || scope === 'all-health' || selectedEvents.has(reference.ownerId))
+          (scope === 'media' || allHealth || selectedEvents.has(reference.ownerId))
         );
       case 'cloud-job-media':
         return (
           scope === 'media' ||
-          scope === 'all-health' ||
+          allHealth ||
           (scope === 'events' &&
             reference.ownerId !== null &&
             selectedEvents.has(reference.ownerId))
         );
       case 'capture-recovery-media':
-        return scope === 'media' || scope === 'all-health' || scope === 'events';
+        return scope === 'media' || allHealth || scope === 'events';
       case 'export':
-        return scope === 'all-health';
+        return allHealth;
     }
   });
   const planInput = {
@@ -353,6 +358,7 @@ export function createPlan(snapshot: DeletionSnapshot, scope: LocalDeletionScope
 export function referenceSelectedByPlan(reference: PathReference, plan: DeletionPlan): boolean {
   const selectedReports = new Set(plan.targetIds.reportIds);
   const selectedEvents = new Set(plan.targetIds.eventIds);
+  const allHealth = deletesAllHealth(plan.scope);
   switch (reference.category) {
     case 'original-report':
     case 'report-page':
@@ -360,22 +366,22 @@ export function referenceSelectedByPlan(reference: PathReference, plan: Deletion
       return reference.ownerId !== null && selectedReports.has(reference.ownerId);
     case 'intake-image':
       return (
-        (plan.scope === 'media' || plan.scope === 'all-health' || plan.scope === 'events') &&
+        (plan.scope === 'media' || allHealth || plan.scope === 'events') &&
         reference.ownerId !== null &&
         (plan.scope !== 'events' || selectedEvents.has(reference.ownerId))
       );
     case 'cloud-job-media':
       return (
         plan.scope === 'media' ||
-        plan.scope === 'all-health' ||
+        allHealth ||
         (plan.scope === 'events' &&
           reference.ownerId !== null &&
           selectedEvents.has(reference.ownerId))
       );
     case 'capture-recovery-media':
-      return plan.scope === 'media' || plan.scope === 'all-health' || plan.scope === 'events';
+      return plan.scope === 'media' || allHealth || plan.scope === 'events';
     case 'export':
-      return plan.scope === 'all-health';
+      return allHealth;
   }
 }
 

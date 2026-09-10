@@ -42,6 +42,7 @@ import type { ExtractionAliasEntry } from '@alyte/domain';
 import {
   createProtectedDatabaseBoundary,
   type SqliteDatabase,
+  type SqliteRunResult,
 } from '../local-database/persistence';
 import { nativeDatabaseProtection, type DatabaseProtection } from './protection';
 import { createLabReportRepository, type LabReportRepository } from './report-persistence';
@@ -58,6 +59,45 @@ export type ExtractionDraftRowUpdateOptions = {
   /** The editor submitted its complete primary-field form, even if a diff omitted unchanged fields. */
   readonly submission?: 'correction-form';
 };
+
+// Paddle semantic provenance describes the original model recognition and must survive a user
+// correction. Other semantic schemas retain the existing edit behavior until their contracts opt in.
+const PADDLEOCR_SEMANTIC_SCHEMA = 'alyte.paddleocr-vl.flat-rows.v1';
+
+function preservesPaddleRecognitionSemantic(row: ExtractionDraftRow): boolean {
+  return row.source.semantic?.schemaVersion === PADDLEOCR_SEMANTIC_SCHEMA;
+}
+
+type PreparedSqliteStatement = {
+  executeAsync(...params: readonly unknown[]): Promise<SqliteRunResult>;
+  finalizeAsync(): Promise<void>;
+};
+
+type SqliteDatabaseWithPrepare = SqliteDatabase & {
+  readonly prepareAsync?: (source: string) => Promise<PreparedSqliteStatement>;
+};
+
+function databaseWithPrepare(database: SqliteDatabase): SqliteDatabaseWithPrepare {
+  return database as SqliteDatabaseWithPrepare;
+}
+
+async function executePreparedBatch(
+  database: SqliteDatabase,
+  source: string,
+  parameterSets: readonly (readonly unknown[])[],
+): Promise<void> {
+  const preparedDatabase = databaseWithPrepare(database);
+  if (preparedDatabase.prepareAsync === undefined) {
+    for (const params of parameterSets) await database.runAsync(source, ...params);
+    return;
+  }
+  const statement = await preparedDatabase.prepareAsync(source);
+  try {
+    for (const params of parameterSets) await statement.executeAsync(...params);
+  } finally {
+    await statement.finalizeAsync();
+  }
+}
 
 type LabRecordRow = {
   id: unknown;
@@ -165,7 +205,7 @@ export type LabReportExtractionOperation = {
   readonly reportId: string;
   readonly state: 'active' | 'interrupted' | 'failed' | 'cancelled' | 'complete';
   readonly mode?: 'start' | 'reprocess' | 'improve';
-  readonly stage: 'import' | 'ocr' | 'review';
+  readonly stage: 'import' | 'ocr' | 'organize' | 'refine' | 'review';
   readonly completed: number;
   readonly total: number;
   readonly error: string | null;
@@ -243,7 +283,11 @@ function extractionOperationFromDb(row: ExtractionOperationDb): LabReportExtract
       ['start', 'reprocess', 'improve'] as const,
       'extraction operation mode',
     ),
-    stage: enumValue(row.stage, ['import', 'ocr', 'review'] as const, 'extraction operation stage'),
+    stage: enumValue(
+      row.stage,
+      ['import', 'ocr', 'organize', 'refine', 'review'] as const,
+      'extraction operation stage',
+    ),
     completed: nonNegativeInteger(row.completed, 'extraction operation completed count'),
     total: nonNegativeInteger(row.total, 'extraction operation total count'),
     error: nullableString(row.error, 'extraction operation error'),
@@ -258,7 +302,7 @@ function extractionOperationFromDb(row: ExtractionOperationDb): LabReportExtract
   };
 }
 
-function storedValue(value: unknown): MeasurementValue {
+function storedValue(value: unknown, allowEmptyText = false): MeasurementValue {
   if (typeof value !== 'object' || value === null || !('kind' in value)) {
     throw new Error('Invalid measurement value in local database');
   }
@@ -284,7 +328,7 @@ function storedValue(value: unknown): MeasurementValue {
     }
     return { kind, comparator: candidate.comparator, value: candidate.value };
   }
-  if (typeof candidate.value !== 'string' || candidate.value.length === 0) {
+  if (typeof candidate.value !== 'string' || (!allowEmptyText && candidate.value.length === 0)) {
     throw new Error('Invalid text measurement value in local database');
   }
   return { kind, value: candidate.value };
@@ -442,7 +486,8 @@ function decodeStoredSemantic(
       schemaVersion !== 'alyte.semantic-mapper.v2' &&
       schemaVersion !== 'alyte.geometry-variant-selector.v1' &&
       schemaVersion !== 'alyte.geometry-variant-selector.v2' &&
-      schemaVersion !== 'alyte.document-vlm.flat-rows.v1') ||
+      schemaVersion !== 'alyte.document-vlm.flat-rows.v1' &&
+      schemaVersion !== 'alyte.paddleocr-vl.flat-rows.v1') ||
     !Array.isArray(item.sourceObservationIds) ||
     item.sourceObservationIds.length === 0 ||
     item.sourceObservationIds.length > 24 ||
@@ -458,7 +503,8 @@ function decodeStoredSemantic(
     (schemaVersion === 'alyte.semantic-mapper.v2' ||
       schemaVersion === 'alyte.geometry-variant-selector.v1' ||
       schemaVersion === 'alyte.geometry-variant-selector.v2' ||
-      schemaVersion === 'alyte.document-vlm.flat-rows.v1') &&
+      schemaVersion === 'alyte.document-vlm.flat-rows.v1' ||
+      schemaVersion === 'alyte.paddleocr-vl.flat-rows.v1') &&
     (observations.length === 0 ||
       item.sourceObservationIds.some(
         (id) => !storedIds.has(id as string) || !observedIds.has(id as string),
@@ -613,6 +659,7 @@ function decodePipelineFingerprint(
       | 'alyte.geometry-variant-selector.v1'
       | 'alyte.geometry-variant-selector.v2'
       | 'alyte.document-vlm.flat-rows.v1'
+      | 'alyte.paddleocr-vl.flat-rows.v1'
       | null,
     semanticChunkVersion: nullable('semanticChunkVersion'),
     semanticPromptVersion: nullable('semanticPromptVersion'),
@@ -627,7 +674,8 @@ function decodePipelineFingerprint(
     input.semanticSchemaVersion !== 'alyte.semantic-mapper.v2' &&
     input.semanticSchemaVersion !== 'alyte.geometry-variant-selector.v1' &&
     input.semanticSchemaVersion !== 'alyte.geometry-variant-selector.v2' &&
-    input.semanticSchemaVersion !== 'alyte.document-vlm.flat-rows.v1'
+    input.semanticSchemaVersion !== 'alyte.document-vlm.flat-rows.v1' &&
+    input.semanticSchemaVersion !== 'alyte.paddleocr-vl.flat-rows.v1'
   ) {
     throw new Error('Invalid extraction pipeline semantic schema');
   }
@@ -671,11 +719,13 @@ function extractionRowFromDb(row: ExtractionDraftRowDb): ExtractionDraftRow {
     boundingBox.y + boundingBox.height > 1.000001
   )
     throw new Error('Invalid extraction source bounding box');
-  const value = storedValue(parseJson(row.proposed_value_json, 'extraction proposed value'));
+  // An unresolved draft may deliberately keep an empty editable value while the complete OCR
+  // line remains in source provenance. Confirmed Measurement snapshots still reject empty text.
+  const value = storedValue(parseJson(row.proposed_value_json, 'extraction proposed value'), true);
   const sourceValue =
     row.source_value_json === null || row.source_value_json === undefined
       ? value
-      : storedValue(parseJson(row.source_value_json, 'extraction source value'));
+      : storedValue(parseJson(row.source_value_json, 'extraction source value'), true);
   const reasons = parseJson(row.review_reasons_json, 'extraction review reasons');
   if (!Array.isArray(reasons) || reasons.some((reason) => typeof reason !== 'string'))
     throw new Error('Invalid extraction review reasons');
@@ -703,7 +753,10 @@ function extractionRowFromDb(row: ExtractionDraftRowDb): ExtractionDraftRow {
     sourceText: requiredString(row.source_text, 'extraction source text'),
     sourceLabel: requiredString(row.source_label, 'extraction source label'),
     sourceValue,
-    sourceValueString: requiredString(row.source_value_string, 'extraction source value'),
+    sourceValueString:
+      typeof row.source_value_string === 'string'
+        ? row.source_value_string
+        : requiredString(row.source_value_string, 'extraction source value'),
     sourceUnit: nullableString(row.source_unit, 'extraction source unit'),
     sourceReferenceInterval: nullableString(
       row.source_reference_interval,
@@ -1775,31 +1828,53 @@ export function createLabRepository(
   }
 
   async function countOpenExtractionDrafts(): Promise<number> {
-    await initialize();
-    const rows = await database.getAllAsync<{ count: unknown }>(
-      `SELECT COUNT(*) AS count
-       FROM extraction_drafts AS draft
-       INNER JOIN lab_reports AS report ON report.id = draft.report_id
-       WHERE draft.state = 'draft' AND report.import_state <> 'deleted';`,
-    );
-    const count = rows[0]?.count;
-    if (typeof count !== 'number')
-      throw new Error('Invalid Extraction Draft count in local database');
-    return count;
+    return (await listOpenExtractionDrafts()).length;
   }
 
   async function listOpenExtractionDrafts(): Promise<
     readonly { readonly reportId: string; readonly draftId: string }[]
   > {
     await initialize();
-    const rows = await database.getAllAsync<{ report_id: string; draft_id: string }>(
-      `SELECT draft.report_id, draft.id AS draft_id
+    const rows = await database.getAllAsync<ExtractionDraftDb>(
+      `SELECT ${extractionDraftColumns}
        FROM extraction_drafts AS draft
-       INNER JOIN lab_reports AS report ON report.id = draft.report_id
-       WHERE draft.state = 'draft' AND report.import_state <> 'deleted'
+       WHERE draft.state = 'draft'
+         AND EXISTS (
+           SELECT 1 FROM lab_reports AS report
+           WHERE report.id = draft.report_id AND report.import_state <> 'deleted'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM extraction_operations AS operation
+           WHERE operation.report_id = draft.report_id AND operation.state = 'active'
+         )
        ORDER BY draft.updated_at DESC, draft.id DESC;`,
     );
-    return rows.map(({ report_id: reportId, draft_id: draftId }) => ({ reportId, draftId }));
+    const valid: { reportId: string; draftId: string }[] = [];
+    const invalidDraftIds: string[] = [];
+    for (const row of rows) {
+      try {
+        const draft = await readExtractionDraft(row);
+        valid.push({ reportId: draft.reportId, draftId: draft.id });
+      } catch {
+        if (typeof row.id === 'string' && row.id.length > 0) invalidDraftIds.push(row.id);
+      }
+    }
+    if (invalidDraftIds.length > 0) {
+      await withWrite(async () => {
+        for (const draftId of invalidDraftIds) {
+          // Preserve the unreadable derived rows for deletion/export diagnostics, but remove the
+          // impossible Review action. The immutable Original Report remains available for retry.
+          await database.runAsync(
+            `UPDATE extraction_drafts SET state = 'failed', failure_reason = ?, updated_at = ?
+             WHERE id = ? AND state = 'draft';`,
+            'unreadable-draft',
+            now(),
+            draftId,
+          );
+        }
+      });
+    }
+    return valid;
   }
 
   async function getExtractionDraftForReport(
@@ -1811,6 +1886,7 @@ export function createLabRepository(
     const rows = await database.getAllAsync<ExtractionDraftDb>(
       `SELECT ${extractionDraftColumns} FROM extraction_drafts
        WHERE report_id = ?
+         AND NOT (state = 'failed' AND failure_reason = 'unreadable-draft')
        ORDER BY CASE state
          WHEN 'draft' THEN 0
          WHEN 'confirmed' THEN 1
@@ -1821,7 +1897,22 @@ export function createLabRepository(
       reportId,
     );
     const row = rows[0];
-    return row === undefined ? null : readExtractionDraft(row, aliases, currentFingerprint);
+    if (row === undefined) return null;
+    try {
+      return await readExtractionDraft(row, aliases, currentFingerprint);
+    } catch (error) {
+      if (row.state !== 'draft') throw error;
+      await withWrite(async () => {
+        await database.runAsync(
+          `UPDATE extraction_drafts SET state = 'failed', failure_reason = ?, updated_at = ?
+           WHERE id = ? AND state = 'draft';`,
+          'unreadable-draft',
+          now(),
+          row.id,
+        );
+      });
+      return null;
+    }
   }
 
   async function createExtractionDraft(input: {
@@ -1851,6 +1942,7 @@ export function createLabRepository(
     const canonical = canonicalExtractionArtifacts(input.sourceArtifact ?? null, input.rows);
     const draftId = input.id ?? makeId('extraction-draft');
     const createdAt = input.now ?? now();
+    let created: ExtractionDraft | null = null;
     await withWrite(async () => {
       await insertExtractionDraftInTransaction({
         id: draftId,
@@ -1864,8 +1956,11 @@ export function createLabRepository(
         parserVersion: EXTRACTION_PARSER_VERSION,
         createdAt,
       });
+      // Validate the persisted representation before COMMIT. A malformed derived row must roll
+      // back with its root instead of leaving an open draft that Home can list but Review cannot.
+      created = await getExtractionDraft(draftId);
+      if (created === null) throw new Error('Extraction Draft could not be read back');
     });
-    const created = await getExtractionDraft(draftId);
     if (created === null) throw new Error('Extraction Draft could not be read back');
     return created;
   }
@@ -1987,6 +2082,7 @@ export function createLabRepository(
     const canonical = canonicalExtractionArtifacts(input.sourceArtifact ?? null, input.rows);
     const draftId = input.id ?? makeId('extraction-draft');
     const createdAt = input.now ?? now();
+    let created: ExtractionDraft | null = null;
     await withWrite(async () => {
       const previous = await database.getAllAsync<{ report_id: unknown; state: unknown }>(
         'SELECT report_id, state FROM extraction_drafts WHERE id = ?;',
@@ -2013,8 +2109,9 @@ export function createLabRepository(
         ...(input.preserveRowIds === undefined ? {} : { preserveRowIds: input.preserveRowIds }),
         createdAt,
       });
+      created = await getExtractionDraft(draftId);
+      if (created === null) throw new Error('Replacement Extraction Draft could not be read back');
     });
-    const created = await getExtractionDraft(draftId);
     if (created === null) throw new Error('Replacement Extraction Draft could not be read back');
     return created;
   }
@@ -2146,6 +2243,9 @@ export function createLabRepository(
         resolvedPatch.proposedBiomarkerId,
         resolvedPatch.proposedSpecimenType,
       ].some((value) => value !== undefined);
+      const semanticAfterUserEdit = preservesPaddleRecognitionSemantic(current)
+        ? (current.source.semantic ?? null)
+        : null;
       const userEditedDecision = resolvedPatch.decision !== undefined;
       if (userEditedDecision && !userEditedSemanticFields) {
         // Inclusion is independent from parsing. Re-running automatic validation here can
@@ -2165,7 +2265,7 @@ export function createLabRepository(
                 ...revalidated,
                 editState: 'user-edited',
                 ...(userEditedSemanticFields
-                  ? { source: { ...revalidated.source, semantic: null } }
+                  ? { source: { ...revalidated.source, semantic: semanticAfterUserEdit } }
                   : {}),
               }
             : revalidated;
@@ -2200,7 +2300,7 @@ export function createLabRepository(
             observations: next.source.observations ?? [],
             raw: next.source.raw ?? null,
             artifact: next.source.artifact ?? null,
-            semantic: null,
+            semantic: semanticAfterUserEdit,
           }),
           row.id,
         );
@@ -2248,22 +2348,25 @@ export function createLabRepository(
       if (matchingRows.length === 0) {
         throw new Error('Extraction Draft group was not found');
       }
-      for (const current of matchingRows) {
-        const next = revalidateExtractionRow(current, {}, aliases, {
+      const nextRows = matchingRows.map((current) =>
+        revalidateExtractionRow(current, {}, aliases, {
           collectionDate,
           collectionDateDefaulted: false,
-        });
-        await database.runAsync(
-          `UPDATE extraction_draft_rows SET collection_date = ?, date_state = ?, review_reasons_json = ?,
-            review_state = ?, decision = ?, edit_state = 'user-edited' WHERE id = ?;`,
+        }),
+      );
+      await executePreparedBatch(
+        database,
+        `UPDATE extraction_draft_rows SET collection_date = ?, date_state = ?, review_reasons_json = ?,
+          review_state = ?, decision = ?, edit_state = 'user-edited' WHERE id = ?;`,
+        nextRows.map((next) => [
           next.collectionDate.kind === 'known' ? next.collectionDate.value : null,
           next.collectionDate.kind,
           JSON.stringify(next.reviewReasons),
           next.reviewState,
           next.decision,
           next.id,
-        );
-      }
+        ]),
+      );
       const rootDate = draftDate(draft.collection_date, draft.date_state);
       const allRowsShareCurrentDate = decodedRows.every(
         (row) => dateKey(row.collectionDate) === currentKey,

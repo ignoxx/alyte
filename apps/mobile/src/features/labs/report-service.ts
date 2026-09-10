@@ -19,9 +19,10 @@ import {
   buildGeometryCandidateWindows,
   groupGeometryCandidateWindows,
   admitGeometryCandidateGroupsByResultColumn,
+  isNonMeasurementMetadataText,
   parseGeometryCandidateVariantAsProvisional,
-  enumerateGeometryFieldCandidates,
   proposeBiomarkerId,
+  enumerateGeometryFieldCandidates,
   reconstructGeometryLattice,
   reparseExtractionRowFromSemanticFields,
   revalidateExtractionRow,
@@ -48,6 +49,7 @@ import {
   type GeometrySourceObservation,
   type NormalizedBoundingBox,
   type VisionSourceSpan,
+  extractHeaderTablePages,
   createExtractionPipelineFingerprint,
   PDF_TEXT_LAYER_ADAPTER_VERSION,
   EXTRACTION_ROW_SEGMENTATION_VERSION,
@@ -104,6 +106,12 @@ import {
   type DocumentVLMRow,
 } from '../local-models/document-vlm';
 import { groundDocumentVLMRows } from '../local-models/document-vlm-grounding';
+import { createHeaderTableDraftRows } from './header-table-draft';
+import {
+  createPaddleOCRReviewRows,
+  groundPaddleOCRRows,
+  PADDLEOCR_SCHEMA_VERSION,
+} from '../local-models/paddleocr';
 
 export type PasswordRequest = (context: {
   readonly report: LabReport;
@@ -200,7 +208,7 @@ export type LabReportExtractionReadiness = {
 export type LabReportExtractionProgress = {
   readonly reportId: string;
   readonly mode: LabReportExtractionMode;
-  readonly stage: 'import' | 'ocr' | 'review';
+  readonly stage: 'import' | 'ocr' | 'organize' | 'refine' | 'review';
   readonly status: 'active' | 'complete' | 'failed' | 'cancelled' | 'interrupted';
   readonly completed: number;
   readonly total: number;
@@ -320,6 +328,8 @@ export type LabReportsService = {
   listOpenExtractionDrafts(): Promise<readonly LabReportExtractionDraftReference[]>;
   countOpenExtractionDrafts(): Promise<number>;
   getExtractionDraft(id: string): Promise<ExtractionDraft | null>;
+  /** Discards only an open extraction draft; the immutable Original Report remains available. */
+  discardExtractionDraft(id: string): Promise<void>;
   updateExtractionRow(
     id: string,
     patch: ExtractionDraftRowPatch,
@@ -347,6 +357,10 @@ export type LabReportsServiceOptions = {
   readonly extractionAliases?: readonly ExtractionAliasEntry[];
   readonly semanticMapper?: ExtractionSemanticMapper;
   readonly documentVLM?: DocumentVLMExtractor;
+  /** Test seam for the bounded document-model stage. */
+  readonly documentRefinementBudgetMs?: number;
+  /** Elapsed-time clock; unlike `now`, this value is never persisted. */
+  readonly elapsedTimeNow?: () => number;
 };
 
 /**
@@ -355,7 +369,7 @@ export type LabReportsServiceOptions = {
  * fixture coverage behind.
  */
 export function createDefaultExtractionAliases(): readonly ExtractionAliasEntry[] {
-  return comparableBiomarkers.map((entry) => ({
+  const comparableAliases = comparableBiomarkers.map((entry) => ({
     id: entry.id,
     ...(entry.canonicalLabel === undefined ? {} : { canonicalLabel: entry.canonicalLabel }),
     aliases: entry.aliases,
@@ -376,6 +390,19 @@ export function createDefaultExtractionAliases(): readonly ExtractionAliasEntry[
           },
         }),
   }));
+  // This reviewed identity provides an English display name while the exact Lithuanian source
+  // label remains in provenance. Zinc is deliberately absent from the comparable catalogue, so
+  // importing it does not make it eligible for trends before that separate review is complete.
+  const extractionOnlyAliases: readonly ExtractionAliasEntry[] = [
+    {
+      id: 'biomarker.zinc',
+      canonicalLabel: 'Zinc',
+      aliases: ['cinkas', 'cinkas (zn)', 'zinc', 'zinc (zn)'],
+      specimens: ['serum', 'plasma', 'unknown'],
+      units: ['µmol/L', 'μmol/L', 'umol/L', 'µg/dL', 'ug/dL'],
+    },
+  ];
+  return [...comparableAliases, ...extractionOnlyAliases];
 }
 
 type ImportOutcome = LabReportImportResult;
@@ -386,6 +413,102 @@ type ExtractionPageResult = {
   readonly result: VisionOCRResult;
   readonly origin: ExtractionPageResultOrigin;
 };
+
+function emptyVisionResult(pageIndex: number, orientation: number): VisionOCRResult {
+  return {
+    contractVersion: 'alyte.vision.document.v2',
+    pageIndex,
+    orientation,
+    observations: [],
+  };
+}
+
+const DOCUMENT_REFINEMENT_BUDGET_MS = 150_000;
+const DOCUMENT_REFINEMENT_MIN_REQUEST_MS = 2_000;
+const DOCUMENT_REFINEMENT_MIN_OUTPUT_TOKENS = 384;
+const DOCUMENT_REFINEMENT_TOKENS_PER_ANCHOR = 80;
+const PADDLEOCR_PAGE_TIMEOUT_MS = 30_000;
+const PADDLEOCR_MAX_OUTPUT_TOKENS = 4_096;
+
+function paddleFailureCategory(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const candidate = error as {
+    readonly failure?: unknown;
+    readonly failureCategory?: unknown;
+    readonly code?: unknown;
+    readonly userInfo?: { readonly failureCategory?: unknown };
+  };
+  const category =
+    candidate.failure ??
+    candidate.failureCategory ??
+    candidate.userInfo?.failureCategory ??
+    candidate.code;
+  return typeof category === 'string' ? category.toLocaleLowerCase('en-US') : null;
+}
+
+function isModelUnavailableFailure(error: unknown): boolean {
+  if (error instanceof DocumentVLMUnavailableError) return true;
+  const category = paddleFailureCategory(error);
+  const message = error instanceof Error ? error.message.toLocaleLowerCase('en-US') : '';
+  return (
+    (category !== null &&
+      /(?:unavailable|quarantin|timeout|not[-_ ]?(?:loaded|installed|ready))/u.test(category)) ||
+    /(?:model|runtime).*(?:unavailable|not loaded|not installed|not ready|timeout)/u.test(
+      message,
+    ) ||
+    message === 'document-vlm-timeout' ||
+    message === 'document-vlm-runtime-quarantined'
+  );
+}
+
+/** A failed full-page transcription may be recoverable from bounded PDF bands. */
+function isRecoverablePaddleFullPageFailure(error: unknown): boolean {
+  const category = paddleFailureCategory(error);
+  const message = error instanceof Error ? error.message.toLocaleLowerCase('en-US') : '';
+  if (
+    category !== null &&
+    /(cancel|unavailable|quarantin|timeout|hung|incompatible|runtime[-_]?failed)/u.test(category)
+  )
+    return false;
+  if (/(cancel|unavailable|quarantin|timeout|hung)/u.test(message)) return false;
+  return /(truncat|malformed-json|output-too-large|too-many-(?:lines|rows)|line-too-long|pathological-repetition)/u.test(
+    `${category ?? ''} ${message}`,
+  );
+}
+
+/**
+ * Collapse exact model rows repeated by overlapping retry bands while keeping rows that appeared
+ * more than once in one band. A report can contain two current/previous rows with identical text;
+ * without source geometry the safest bound is the largest per-band multiplicity.
+ */
+export function deduplicateDocumentVLMRowsAcrossBands(
+  bands: ReadonlyArray<ReadonlyArray<DocumentVLMRow>>,
+): DocumentVLMRow[] {
+  const keyFor = (row: DocumentVLMRow): string =>
+    JSON.stringify([row.label, row.value, row.unit, row.referenceInterval, row.flag]);
+  const maximumMultiplicity = new Map<string, number>();
+  for (const band of bands) {
+    const counts = new Map<string, number>();
+    for (const row of band) {
+      const key = keyFor(row);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    for (const [key, count] of counts)
+      maximumMultiplicity.set(key, Math.max(maximumMultiplicity.get(key) ?? 0, count));
+  }
+  const emitted = new Map<string, number>();
+  const result: DocumentVLMRow[] = [];
+  for (const band of bands) {
+    for (const row of band) {
+      const key = keyFor(row);
+      const count = emitted.get(key) ?? 0;
+      if (count >= (maximumMultiplicity.get(key) ?? 0)) continue;
+      emitted.set(key, count + 1);
+      result.push(row);
+    }
+  }
+  return result;
+}
 
 function extractionObservationKey(
   observation: Pick<VisionTextObservation, 'pageIndex' | 'id'>,
@@ -641,6 +764,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   const extractionAliases = options.extractionAliases ?? createDefaultExtractionAliases();
   const semanticMapper = options.semanticMapper;
   const documentVLM = options.documentVLM;
+  const documentRefinementBudgetMs =
+    options.documentRefinementBudgetMs ?? DOCUMENT_REFINEMENT_BUDGET_MS;
+  const elapsedTimeNow =
+    options.elapsedTimeNow ?? (() => globalThis.performance?.now?.() ?? Date.now());
+  if (!Number.isFinite(documentRefinementBudgetMs) || documentRefinementBudgetMs <= 0) {
+    throw new Error('The document refinement budget must be positive');
+  }
   const extractionProgress = new Map<string, LabReportExtractionProgress>();
   const extractionProgressListeners = new Set<(progress: LabReportExtractionProgress) => void>();
   let nextExtractionOperation = 0;
@@ -1199,12 +1329,34 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           : persistedPath(promoted.path);
       const preservedHash =
         promoted?.sourceHash ?? retained?.sourceHash ?? staged?.sourceHash ?? null;
-      report = await repo.updateReport(reportId, {
-        sourceHash: preservedHash,
-        originalPath: preservedPath,
-        importState: reason === 'cancelled' ? 'interrupted' : 'failed',
-        failureReason: reason,
-      });
+
+      // A user cancellation before promotion must not leave a pathless Lab Report in the
+      // library. There is no protected source to retry or delete in that state, so finish the
+      // just-created row as deleted. If a protected copy was retained, keep the interrupted row
+      // instead: it is a real, recoverable import that the user can retry or remove later.
+      if (reason === 'cancelled' && preservedPath === null) {
+        try {
+          await processDeletion(reportId, repo);
+        } catch {
+          // The row remains actionable if database cleanup itself fails. Do not claim that a
+          // missing source is retryable when cleanup could not complete.
+          report = await repo.updateReport(reportId, {
+            sourceHash: preservedHash,
+            originalPath: null,
+            importState: 'failed',
+            failureReason: 'source-cleanup-failed',
+          });
+        }
+        const deleted = await repo.getReport(reportId);
+        if (deleted !== null) report = deleted;
+      } else {
+        report = await repo.updateReport(reportId, {
+          sourceHash: preservedHash,
+          originalPath: preservedPath,
+          importState: reason === 'cancelled' ? 'interrupted' : 'failed',
+          failureReason: reason,
+        });
+      }
       if (error instanceof LabReportImportError) {
         throw new LabReportImportError(report, reason, error.message, { cause: error });
       }
@@ -2002,12 +2154,15 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
   }[] {
     const tableGroups = new Map<string, VisionTextObservation[]>();
     const rowGroups = new Map<string, VisionTextObservation[]>();
+    const deriveLoosePageContext = options.deriveTableContextFromHeadings === true;
     for (const observation of observations) {
       const structure = observation.structure;
       const tableKey =
         structure?.kind === 'table-cell' && structure.tableId !== null
           ? `${observation.pageIndex}:${structure.tableId}`
-          : `${observation.pageIndex}:loose:${observation.id}`;
+          : deriveLoosePageContext
+            ? `${observation.pageIndex}:loose`
+            : `${observation.pageIndex}:loose:${observation.id}`;
       const rowKey =
         structure?.kind === 'table-cell' &&
         structure.tableId !== null &&
@@ -2044,7 +2199,9 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         const rowTableKey =
           structure?.kind === 'table-cell' && structure.tableId !== null
             ? `${first.pageIndex}:${structure.tableId}`
-            : null;
+            : deriveLoosePageContext
+              ? `${first.pageIndex}:loose`
+              : null;
         if (rowTableKey !== tableKey) continue;
         const rowSpecimens = specimenTypesFromText(row.map((item) => item.text).join(' '));
         if (rowSpecimens.size !== 1) continue;
@@ -2057,13 +2214,26 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       tableSpecimens.set(tableKey, headingSpecimens.size === 1 ? [...headingSpecimens][0]! : null);
     }
 
+    // Trusted PDF text commonly has no table identity. If one specimen heading is found, carry
+    // it across continuation pages that omit the repeated label. Multiple headings disable this
+    // document fallback so mixed-specimen reports remain visibly ambiguous.
+    const documentSpecimens = new Set(
+      [...tableSpecimens.entries()]
+        .filter(([tableKey]) => tableKey.endsWith(':loose'))
+        .flatMap(([, specimen]) => (specimen === null ? [] : [specimen])),
+    );
+    const documentSpecimen =
+      deriveLoosePageContext && documentSpecimens.size === 1 ? [...documentSpecimens][0]! : null;
+
     const grouped = new Map<SpecimenType, VisionTextObservation[]>();
     for (const observation of observations) {
       const structure = observation.structure;
       const tableKey =
         structure?.kind === 'table-cell' && structure.tableId !== null
           ? `${observation.pageIndex}:${structure.tableId}`
-          : `${observation.pageIndex}:loose:${observation.id}`;
+          : deriveLoosePageContext
+            ? `${observation.pageIndex}:loose`
+            : `${observation.pageIndex}:loose:${observation.id}`;
       const rowKey =
         structure?.kind === 'table-cell' &&
         structure.tableId !== null &&
@@ -2073,7 +2243,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       const rowSpecimen = specimenTypeFromText(
         (rowGroups.get(rowKey) ?? [observation]).map((item) => item.text).join(' '),
       );
-      const specimenType = rowSpecimen ?? tableSpecimens.get(tableKey) ?? 'unknown';
+      const specimenType =
+        rowSpecimen ?? tableSpecimens.get(tableKey) ?? documentSpecimen ?? 'unknown';
       const context = grouped.get(specimenType) ?? [];
       context.push(observation);
       grouped.set(specimenType, context);
@@ -2301,7 +2472,8 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     }
     for (const group of resultColumnAdmission.reviewGroups) {
       for (const row of rowsByGroupId.get(group.physicalRowId) ?? []) rowsToReplace.add(row);
-      fallbackRows.push(physicalGroupReviewFallback(group, options));
+      const fallback = physicalGroupReviewFallback(group, options);
+      if (fallback !== null) fallbackRows.push(fallback);
     }
     for (const reviewRow of resultColumnAdmission.unrepresentedRows) {
       const sourceCellIds = new Set(reviewRow.physicalRow.cells.map((cell) => cell.id));
@@ -2316,11 +2488,23 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
       // parsing, even if that parser happened to produce one survivor from the concatenated text.
       // Keep the complete source group as one review exception until semantic mapping selects an
       // exact anchor.
-      if (group.anchorCellIds.length === 1 && relatedRows.length === 1) {
+      const soleRelatedRow = relatedRows.length === 1 ? relatedRows[0] : undefined;
+      const soleRowHasSeparatedFields =
+        soleRelatedRow !== undefined &&
+        !soleRelatedRow.reviewReasons.includes('unparseable-value') &&
+        soleRelatedRow.sourceValue.kind !== 'free_text' &&
+        soleRelatedRow.sourceValueString.trim().length > 0 &&
+        soleRelatedRow.sourceValueString.trim() !== soleRelatedRow.sourceText.trim();
+      if (
+        group.anchorCellIds.length === 1 &&
+        relatedRows.length === 1 &&
+        soleRowHasSeparatedFields
+      ) {
         continue;
       }
       for (const row of relatedRows) rowsToReplace.add(row);
-      fallbackRows.push(physicalGroupReviewFallback(group, options));
+      const fallback = physicalGroupReviewFallback(group, options);
+      if (fallback !== null) fallbackRows.push(fallback);
     }
     rows.splice(0, rows.length, ...rows.filter((row) => !rowsToReplace.has(row)), ...fallbackRows);
     rows.sort((left, right) => {
@@ -2341,12 +2525,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     function physicalGroupReviewFallback(
       group: GeometryCandidateWindowGroup,
       extraction: {
+        readonly locale: string;
         readonly collectionDate: LabDateState;
         readonly collectionDateDefaulted: boolean;
         readonly collectionDateContexts: readonly ExtractionDateContext[];
         readonly artifact: LabSourceArtifact;
       },
-    ): ExtractionDraftRow {
+    ): ExtractionDraftRow | null {
       return sourceReviewFallback(
         {
           id: group.physicalRowId,
@@ -2361,6 +2546,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     function physicalRowReviewFallback(
       physicalRow: GeometryRow,
       extraction: {
+        readonly locale: string;
         readonly collectionDate: LabDateState;
         readonly collectionDateDefaulted: boolean;
         readonly collectionDateContexts: readonly ExtractionDateContext[];
@@ -2397,16 +2583,35 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         readonly sourceCells: readonly GeometryRow['cells'][number][];
       },
       extraction: {
+        readonly locale: string;
         readonly collectionDate: LabDateState;
         readonly collectionDateDefaulted: boolean;
         readonly collectionDateContexts: readonly ExtractionDateContext[];
         readonly artifact: LabSourceArtifact;
       },
-    ): ExtractionDraftRow {
+    ): ExtractionDraftRow | null {
       const sourceObservations = [...reviewSource.sourceObservations];
       const sourceText = sourceObservations
         .map((observation) => observation.text.trim())
         .join('  ');
+      if (isNonMeasurementMetadataText(sourceText)) return null;
+      // A flattened OCR line is provenance, not a value. Admit this fallback only when the
+      // ordinary parser can isolate one real scalar or categorical result from the source cells.
+      const parsedRows = groupObservationsIntoRows(sourceObservations, {
+        locale: extraction.locale,
+        collectionDate: extraction.collectionDate,
+        collectionDateDefaulted: extraction.collectionDateDefaulted,
+        collectionDateContexts: extraction.collectionDateContexts,
+        specimenType: specimenTypeFromGeometryContext(reviewSource.context.specimenKey),
+        aliases: options.aliases,
+        artifact: extraction.artifact,
+      });
+      const parsed = parsedRows.length === 1 ? parsedRows[0] : undefined;
+      const hasIsolatedValue =
+        parsed !== undefined &&
+        parsed.sourceValue.kind !== 'free_text' &&
+        parsed.sourceValueString.trim().length > 0 &&
+        parsed.sourceValueString.trim() !== sourceText.trim();
       const sourceBox = sourceObservations[0]?.boundingBox ?? {
         x: 0,
         y: 0,
@@ -2434,66 +2639,115 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             context.pageIndex === reviewSource.context.pageIndex &&
             reviewSource.context.collectionDateKey === geometryCollectionDateKey(context),
         ) ?? null;
-      const value: ExtractionDraftRow['sourceValue'] = { kind: 'free_text', value: sourceText };
-      const aliasCandidates = reviewSource.sourceCells.flatMap((cell) => {
-        const id = proposeBiomarkerId(cell.text, options.aliases);
-        return id === null ? [] : [{ id, text: cell.text }];
-      });
-      const aliasIds = [...new Set(aliasCandidates.map((candidate) => candidate.id))];
-      const supportedAlias =
-        aliasIds.length === 1
-          ? (aliasCandidates.find((candidate) => candidate.id === aliasIds[0]) ?? null)
-          : null;
-      const aliasReviewReasons =
-        aliasIds.length === 0
-          ? (['unsupported-alias'] as const)
-          : aliasIds.length > 1
-            ? (['ambiguous-assay'] as const)
-            : ([] as const);
-      const label = supportedAlias?.text ?? sourceText;
-      const specimenType = specimenTypeFromGeometryContext(reviewSource.context.specimenKey);
+      if (!hasIsolatedValue) {
+        const aliasCandidates = reviewSource.sourceCells.flatMap((cell) => {
+          const id = proposeBiomarkerId(cell.text, options.aliases);
+          return id === null ? [] : [{ id, text: cell.text.trim() }];
+        });
+        const aliasIds = [...new Set(aliasCandidates.map((candidate) => candidate.id))];
+        const supportedAlias =
+          aliasIds.length === 1
+            ? (aliasCandidates.find((candidate) => candidate.id === aliasIds[0]) ?? null)
+            : null;
+        const sourceLabel =
+          supportedAlias?.text ??
+          reviewSource.sourceCells
+            .map((cell) => cell.text.trim())
+            .find((text) => text.length >= 2 && !/^[<>≤≥+-]?\s*[\d.,]/u.test(text)) ??
+          sourceObservations[0]?.text.trim() ??
+          '';
+        if (sourceLabel.length === 0) return null;
+        const canonicalLabel =
+          supportedAlias === null
+            ? sourceLabel
+            : (options.aliases.find((entry) => entry.id === supportedAlias.id)?.canonicalLabel ??
+              sourceLabel);
+        const emptyValue = { kind: 'free_text' as const, value: '' };
+        return {
+          id: reviewSource.id,
+          order: Number.MAX_SAFE_INTEGER,
+          panelLabel: null,
+          sourceText,
+          sourceLabel,
+          sourceValue: emptyValue,
+          sourceValueString: '',
+          sourceUnit: null,
+          sourceReferenceInterval: null,
+          sourceFlag: null,
+          source: {
+            pageIndex: reviewSource.context.pageIndex,
+            orientation: sourceObservations[0]?.orientation ?? 0,
+            artifact: extraction.artifact,
+            observationIds: sourceObservations.map((observation) => observation.id),
+            observations: sourceObservations,
+            semantic: null,
+            boundingBox,
+            raw: {
+              label: sourceLabel,
+              value: null,
+              unit: null,
+              referenceInterval: null,
+              flag: null,
+              collectionDate: collectionDateContext?.sourceText ?? null,
+            },
+          },
+          collectionDateContext,
+          proposedLabel: canonicalLabel,
+          proposedValue: emptyValue,
+          proposedUnit: null,
+          proposedReferenceInterval: null,
+          proposedFlag: null,
+          proposedBiomarkerId: supportedAlias?.id ?? null,
+          proposedSpecimenType: specimenTypeFromGeometryContext(reviewSource.context.specimenKey),
+          collectionDate: collectionDateContext?.collectionDate ?? extraction.collectionDate,
+          reviewReasons: [
+            'unsupported-layout',
+            'missing-value',
+            'unparseable-value',
+            ...(aliasIds.length === 0
+              ? (['unsupported-alias'] as const)
+              : aliasIds.length > 1
+                ? (['ambiguous-assay'] as const)
+                : []),
+            ...(extraction.collectionDateDefaulted ? (['defaulted-collection-date'] as const) : []),
+          ],
+          reviewState: 'needs-review',
+          decision: 'preserve',
+          editState: 'automatic',
+        };
+      }
       return {
+        ...parsed!,
         id: reviewSource.id,
         order: Number.MAX_SAFE_INTEGER,
-        panelLabel: null,
         sourceText,
-        sourceLabel: label,
-        sourceValue: value,
-        sourceValueString: sourceText,
-        sourceUnit: null,
-        sourceReferenceInterval: null,
-        sourceFlag: null,
         source: {
+          ...parsed.source,
           pageIndex: reviewSource.context.pageIndex,
-          orientation: sourceObservations[0]?.orientation ?? 0,
+          orientation: sourceObservations[0]?.orientation ?? parsed.source.orientation,
           artifact: extraction.artifact,
           observationIds: sourceObservations.map((observation) => observation.id),
           observations: sourceObservations,
           semantic: null,
           boundingBox,
           raw: {
-            label,
-            value: null,
-            unit: null,
-            referenceInterval: null,
-            flag: null,
-            collectionDate: null,
+            ...parsed.source.raw,
+            label: parsed.sourceLabel,
+            value: parsed.sourceValueString || null,
+            unit: parsed.sourceUnit,
+            referenceInterval: parsed.sourceReferenceInterval,
+            flag: parsed.sourceFlag,
+            collectionDate: parsed.source.raw?.collectionDate ?? null,
           },
         },
         collectionDateContext,
-        proposedLabel: label,
-        proposedValue: value,
-        proposedUnit: null,
-        proposedReferenceInterval: null,
-        proposedFlag: null,
-        proposedBiomarkerId: supportedAlias?.id ?? null,
-        proposedSpecimenType: specimenType,
-        collectionDate: collectionDateContext?.collectionDate ?? extraction.collectionDate,
+        collectionDate: collectionDateContext?.collectionDate ?? parsed.collectionDate,
         reviewReasons: [
-          'unsupported-layout',
-          'unparseable-value',
-          ...aliasReviewReasons,
-          ...(extraction.collectionDateDefaulted ? ['defaulted-collection-date' as const] : []),
+          ...new Set([
+            ...parsed.reviewReasons,
+            'unsupported-layout' as const,
+            ...(extraction.collectionDateDefaulted ? ['defaulted-collection-date' as const] : []),
+          ]),
         ],
         reviewState: 'needs-review',
         decision: 'preserve',
@@ -2542,33 +2796,115 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     readonly requireVerifiedOriginal: () => Promise<void>;
   };
 
+  type DocumentRefinementResult = {
+    readonly rows: ReadonlyMap<number, readonly DocumentVLMRow[]>;
+    readonly failureReason: 'recognition' | 'model-unavailable' | null;
+  };
+
+  function documentRefinementWindows(
+    deterministicRows: readonly ExtractionDraftRow[],
+    candidateWindows: readonly GeometryCandidateWindowGroup[],
+  ): readonly GeometryCandidateWindowGroup[] {
+    const exactDeterministicAnchors = new Set(
+      deterministicRows.flatMap((row) => {
+        if (
+          row.reviewReasons.includes('missing-label') ||
+          row.reviewReasons.includes('missing-value') ||
+          row.reviewReasons.includes('unparseable-value') ||
+          row.reviewReasons.includes('missing-unit') ||
+          row.reviewReasons.includes('incompatible-unit') ||
+          row.reviewReasons.includes('ambiguous-assay') ||
+          row.reviewReasons.includes('incompatible-method') ||
+          row.reviewReasons.includes('unparseable-reference-interval') ||
+          row.reviewReasons.includes('unsupported-layout') ||
+          // An unsupported alias by itself is a mapping gap, not unresolved visual evidence.
+          // Keep the deterministic source row available for review without allocating the
+          // document model solely to guess a biomarker identity.
+          row.reviewReasons.includes('unsupported-alias')
+        ) {
+          return [];
+        }
+        const exactValueObservations =
+          row.source.observations?.filter(
+            (observation) => observation.text.trim() === row.sourceValueString.trim(),
+          ) ?? [];
+        return exactValueObservations.length === 1 ? [exactValueObservations[0]!.id] : [];
+      }),
+    );
+    return candidateWindows.filter(
+      (window) =>
+        window.withinInputBounds &&
+        window.anchorCellIds.length > 0 &&
+        !(
+          window.anchorCellIds.length === 1 &&
+          exactDeterministicAnchors.has(window.anchorCellIds[0]!)
+        ),
+    );
+  }
+
   async function extractDocumentVLMRows(
     input: DocumentRefinementInput,
-  ): Promise<ReadonlyMap<number, readonly DocumentVLMRow[]>> {
-    if (documentVLM === undefined || !documentVLM.supports(input.locale)) return new Map();
-    const pages = input.pageIndices.filter((pageIndex) =>
-      input.candidateWindows.some(
-        (window) =>
-          window.context.pageIndex === pageIndex &&
-          window.withinInputBounds &&
-          window.anchorCellIds.length > 0,
-      ),
-    );
-    if (pages.length === 0) return new Map();
+  ): Promise<DocumentRefinementResult> {
+    if (documentVLM === undefined || !documentVLM.supports(input.locale))
+      return { rows: new Map(), failureReason: null };
+    const pages =
+      documentVLM.schemaVersion === PADDLEOCR_SCHEMA_VERSION
+        ? input.pageIndices
+        : input.pageIndices.filter((pageIndex) =>
+            input.candidateWindows.some(
+              (window) =>
+                window.context.pageIndex === pageIndex &&
+                window.withinInputBounds &&
+                window.anchorCellIds.length > 0,
+            ),
+          );
+    if (pages.length === 0) return { rows: new Map(), failureReason: null };
 
-    let lease: ExtractionSemanticLease;
-    try {
-      lease = await documentVLM.prepare();
-    } catch (error) {
-      throw new LabReportExtractionError(
-        'model-unavailable',
-        'The required on-device import model is unavailable',
-        { cause: error },
-      );
+    const refinementStartedAt = elapsedTimeNow();
+    const preparation = documentVLM.prepare();
+    let preparationTimeout: ReturnType<typeof setTimeout> | undefined;
+    let unsubscribeCancellation: () => void = () => undefined;
+    const preparationOutcome = await Promise.race([
+      preparation.then(
+        (lease) => ({ kind: 'ready' as const, lease }),
+        (error: unknown) => ({ kind: 'failed' as const, error }),
+      ),
+      new Promise<{ readonly kind: 'timeout' }>((resolve) => {
+        preparationTimeout = setTimeout(
+          () => resolve({ kind: 'timeout' }),
+          documentRefinementBudgetMs,
+        );
+      }),
+      new Promise<{ readonly kind: 'cancelled' }>((resolve) => {
+        unsubscribeCancellation = input.cancellation.subscribe(() =>
+          resolve({ kind: 'cancelled' }),
+        );
+      }),
+    ]).finally(() => {
+      if (preparationTimeout !== undefined) clearTimeout(preparationTimeout);
+      unsubscribeCancellation();
+    });
+    if (preparationOutcome.kind !== 'ready') {
+      // If native loading eventually finishes after our deadline/cancellation, release the late
+      // lease instead of silently retaining a multi-gigabyte runtime.
+      if (preparationOutcome.kind === 'timeout' || preparationOutcome.kind === 'cancelled') {
+        void preparation.then((lateLease) => lateLease.release()).catch(() => undefined);
+      }
+      if (preparationOutcome.kind === 'cancelled' || input.cancellation.isCancelled()) {
+        throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
+      }
+      // The model improves ambiguous associations; it does not own the source observations. A
+      // load failure must leave deterministic OCR rows available for honest manual review, while
+      // the caller still reports that the optional model path was unavailable when no rows exist.
+      return { rows: new Map(), failureReason: 'model-unavailable' };
     }
+    const lease = preparationOutcome.lease;
     const output = new Map<number, DocumentVLMRow[]>();
+    let failureReason: DocumentRefinementResult['failureReason'] = null;
+    let stopRefinement = false;
     try {
       for (const pageIndex of pages) {
+        if (stopRefinement) break;
         if (input.cancellation.isCancelled())
           throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         const anchorCount = input.candidateWindows
@@ -2582,14 +2918,22 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         // Dense pages benefit from two overlapping horizontal bands; sparse English/German pages
         // retain the whole-page context that scored better in the accepted benchmark.
         const rects =
-          anchorCount >= 14
-            ? [
-                { x: 0, y: 0, width: 1, height: 0.54 },
-                { x: 0, y: 0.46, width: 1, height: 0.54 },
-              ]
-            : [{ x: 0, y: 0, width: 1, height: 1 }];
-        const pageRows: DocumentVLMRow[] = [];
+          documentVLM.schemaVersion === PADDLEOCR_SCHEMA_VERSION
+            ? [{ x: 0, y: 0, width: 1, height: 1 }]
+            : anchorCount >= 14
+              ? [
+                  { x: 0, y: 0, width: 1, height: 0.54 },
+                  { x: 0, y: 0.46, width: 1, height: 0.54 },
+                ]
+              : [{ x: 0, y: 0, width: 1, height: 1 }];
+        const bandRows: Array<readonly DocumentVLMRow[]> = [];
         for (const rect of rects) {
+          const remainingBudget =
+            documentRefinementBudgetMs - (elapsedTimeNow() - refinementStartedAt);
+          if (remainingBudget < DOCUMENT_REFINEMENT_MIN_REQUEST_MS) {
+            stopRefinement = true;
+            break;
+          }
           if (input.cancellation.isCancelled())
             throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
           await input.requireVerifiedOriginal();
@@ -2600,17 +2944,26 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
               pdfInspector.renderExtractionBand === undefined ||
               pdfInspector.deleteExtractionBand === undefined
             ) {
-              throw new LabReportExtractionError(
-                'recognition',
-                'Native document-band rendering is unavailable',
-              );
+              stopRefinement = true;
+              break;
             }
-            const rendered = await pdfInspector.renderExtractionBand(
-              input.sourcePath,
-              pageIndex,
-              rect,
-              input.password,
-            );
+            let rendered: Awaited<
+              ReturnType<NonNullable<typeof pdfInspector.renderExtractionBand>>
+            >;
+            try {
+              rendered = await pdfInspector.renderExtractionBand(
+                input.sourcePath,
+                pageIndex,
+                rect,
+                input.password,
+              );
+            } catch {
+              if (input.cancellation.isCancelled())
+                throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
+              await input.requireVerifiedOriginal();
+              stopRefinement = true;
+              break;
+            }
             imageURI = rendered.uri;
             cleanup = () => pdfInspector.deleteExtractionBand!(rendered.uri);
           } else {
@@ -2622,14 +2975,39 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             // Rendering and both integrity checks share one cleanup scope. A source mutation after
             // the temporary band is created must never strand that private image on disk.
             await input.requireVerifiedOriginal();
+            const remainingBudget =
+              documentRefinementBudgetMs - (elapsedTimeNow() - refinementStartedAt);
+            if (remainingBudget < DOCUMENT_REFINEMENT_MIN_REQUEST_MS) {
+              stopRefinement = true;
+              continue;
+            }
+            const inferenceBudget =
+              documentVLM.schemaVersion === PADDLEOCR_SCHEMA_VERSION
+                ? Math.min(PADDLEOCR_PAGE_TIMEOUT_MS, remainingBudget)
+                : remainingBudget;
             const rows = await documentVLM.extract({
               pageIndex,
               imageURI,
               locale: input.locale,
+              timeoutMs: inferenceBudget,
+              // Paddle receives a stable page budget and the largest raw-output allowance
+              // supported by the current native image runtime. Its output is flat transcription,
+              // so tying the limit to geometry anchor count would truncate valid rows.
+              maxOutputTokens:
+                documentVLM.schemaVersion === PADDLEOCR_SCHEMA_VERSION
+                  ? PADDLEOCR_MAX_OUTPUT_TOKENS
+                  : Math.min(
+                      2_048,
+                      Math.max(
+                        DOCUMENT_REFINEMENT_MIN_OUTPUT_TOKENS,
+                        DOCUMENT_REFINEMENT_MIN_OUTPUT_TOKENS +
+                          anchorCount * DOCUMENT_REFINEMENT_TOKENS_PER_ANCHOR,
+                      ),
+                    ),
               cancellation: input.cancellation,
             });
             await input.requireVerifiedOriginal();
-            pageRows.push(...rows);
+            bandRows.push(rows);
           } catch (error) {
             if (
               error instanceof LabReportExtractionError &&
@@ -2637,42 +3015,48 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             ) {
               throw error;
             }
-            if (error instanceof DocumentVLMUnavailableError) {
-              throw new LabReportExtractionError(
-                'model-unavailable',
-                'The required on-device import model became unavailable',
-                { cause: error },
-              );
-            }
             if (input.cancellation.isCancelled())
               throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
             // One malformed/failed band must not discard already source-linked OCR rows. Its
             // unresolved source windows remain visible as ordinary review work.
+            if (isModelUnavailableFailure(error)) {
+              failureReason = 'model-unavailable';
+              stopRefinement = true;
+            } else {
+              failureReason = 'recognition';
+            }
+            if (
+              input.report.sourceType === 'pdf' &&
+              documentVLM.schemaVersion === PADDLEOCR_SCHEMA_VERSION &&
+              isRecoverablePaddleFullPageFailure(error) &&
+              rects.length === 1
+            ) {
+              // Retry only a recoverable full-page response. Five 600 px bands with 200 px overlap
+              // cover the benchmarked 1,800 px raster without paying that cost on healthy pages.
+              rects.push(
+                { x: 0, y: 0, width: 1, height: 1 / 3 },
+                { x: 0, y: 2 / 9, width: 1, height: 1 / 3 },
+                { x: 0, y: 4 / 9, width: 1, height: 1 / 3 },
+                { x: 0, y: 2 / 3, width: 1, height: 1 / 3 },
+                { x: 0, y: 8 / 9, width: 1, height: 1 / 9 },
+              );
+            }
           } finally {
             if (cleanup !== null) await cleanup();
           }
         }
-        const seen = new Set<string>();
-        output.set(
-          pageIndex,
-          pageRows.filter((row) => {
-            const key = JSON.stringify(row);
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          }),
-        );
+        // Retry bands overlap by design. Collapse only rows repeated across bands, retaining the
+        // largest multiplicity observed within one band so two same-text current/previous events
+        // remain separate when the model reported both in that band.
+        output.set(pageIndex, deduplicateDocumentVLMRowsAcrossBands(bandRows));
       }
-      return output;
+      return { rows: output, failureReason };
     } finally {
       try {
         await lease.release();
-      } catch (error) {
-        throw new LabReportExtractionError(
-          'model-unavailable',
-          'The on-device import model could not be released',
-          { cause: error },
-        );
+      } catch {
+        // A runtime cleanup failure must not discard source-linked rows. The local-model adapter
+        // quarantines unsafe in-flight work and the next import rechecks runtime availability.
       }
     }
   }
@@ -3597,6 +3981,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     return serialized(async () => {
       let password = '';
       let createdDraft: ExtractionDraft | null = null;
+      let deterministicCheckpoint: ExtractionDraft | null = null;
       let activeRepo: LabRepository | null = null;
       let operationPipelineFingerprint: ExtractionPipelineFingerprint | null = null;
       let extractionRevision = 1;
@@ -3682,7 +4067,6 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           extractionRevision,
         );
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
-        extractionProgressEvent(id, mode, 'import', 'complete', 1, 1);
         if ((await verifySource(id)) !== 'verified') {
           throw new LabReportExtractionError(
             'original-source',
@@ -3764,6 +4148,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         if (pages.length === 0) {
           throw new LabReportExtractionError('recognition', 'The report has no readable pages');
         }
+        extractionProgressEvent(id, mode, 'import', 'complete', 1, 1);
         await persistExtractionOperation(
           repo,
           id,
@@ -3778,6 +4163,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         );
         extractionProgressEvent(id, mode, 'ocr', 'active', 0, pages.length);
         const pageResults: ExtractionPageResult[] = [];
+        const canUsePaddleFallback = documentVLM?.schemaVersion === PADDLEOCR_SCHEMA_VERSION;
         try {
           for (const [pageNumber, page] of pages.entries()) {
             requireNotCancelled();
@@ -3838,7 +4224,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
                 requireNotCancelled();
                 pageResults.push({ result: visionResult, origin: 'vision' });
               } catch (error) {
-                if (error instanceof LabReportExtractionError) throw error;
+                // A Vision adapter may use the service error type for a page-local recognition
+                // failure. Paddle can still transcribe a readable page, so only terminal source,
+                // cancellation, or password errors bypass that fallback.
+                if (
+                  error instanceof LabReportExtractionError &&
+                  (error.reason !== 'recognition' || !canUsePaddleFallback)
+                )
+                  throw error;
                 if (isPdfPasswordFailure(error) && report.sourceType === 'pdf') {
                   throw new LabReportExtractionError(
                     'wrong-password',
@@ -3846,11 +4239,21 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
                     { cause: error },
                   );
                 }
-                throw new LabReportExtractionError(
-                  'recognition',
-                  'Local document recognition failed',
-                  { cause: error },
-                );
+                // Paddle can read a verified image directly and is the fallback for a readable
+                // page when Vision fails. Keep the page absent from deterministic observations;
+                // the page-level Paddle review stage will still receive its source page below.
+                if (canUsePaddleFallback) {
+                  pageResults.push({
+                    result: emptyVisionResult(page.pageIndex, page.rotation),
+                    origin: 'vision',
+                  });
+                } else {
+                  throw new LabReportExtractionError(
+                    'recognition',
+                    'Local document recognition failed',
+                    { cause: error },
+                  );
+                }
               }
             } else {
               pageResults.push({ result: trustedTextLayer, origin: 'trusted-pdf-text-layer' });
@@ -3862,7 +4265,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
               mode,
               'active',
               'ocr',
-              pageNumber,
+              pageNumber + 1,
               pages.length,
               null,
               pipelineFingerprint,
@@ -3889,6 +4292,25 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           extractionRevision,
         );
         extractionProgressEvent(id, mode, 'ocr', 'complete', pages.length, pages.length);
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'organize',
+          0,
+          1,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'organize', 'active', 0, 1);
+
+        // Parsing below is synchronous and can occupy the JavaScript thread long enough for this
+        // stage to appear skipped. Yield one event-loop turn so React Native can paint the real
+        // active stage before the CPU work starts; this adds no artificial progress delay.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        requireNotCancelled();
 
         const dateContext = dateContextFromOCR(results);
         // A report with no collection-date context gets one captured local-day fallback. The
@@ -3898,14 +4320,19 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         const collectionDate = collectionDateDefaulted
           ? localCalendarDateFromInstant(now())
           : dateContext.collectionDate;
-        const observations = [
+        // Keep the complete OCR source set for HeaderTable projection. Date-context association
+        // is a candidate filter for ordinary geometry parsing; it must not remove a parent line
+        // or a selected span from the immutable evidence attached to a header measurement.
+        const sourceObservations = [
           ...new Map(
             results
               .flatMap((result) => result.observations)
-              .filter((observation) => !dateContext.excludedObservationIds.has(observation.id))
               .map((observation) => [observation.id, observation] as const),
           ).values(),
         ];
+        const observations = sourceObservations.filter(
+          (observation) => !dateContext.excludedObservationIds.has(observation.id),
+        );
         const trustedPdfTextLayerObservationKeys = new Set(
           pageResults.flatMap(({ result, origin }) =>
             origin === 'trusted-pdf-text-layer'
@@ -3919,6 +4346,33 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           hash: report.sourceHash,
         };
         const locale = extractionLocaleFromOCR(results);
+        const headerDateLocale = locale.toLocaleLowerCase().startsWith('lt')
+          ? ('lt-LT' as const)
+          : locale.toLocaleLowerCase().startsWith('de')
+            ? ('de-DE' as const)
+            : ('en-US' as const);
+        const headerExtraction = extractHeaderTablePages(
+          pageResults.flatMap(({ result, origin }) =>
+            origin === 'trusted-pdf-text-layer'
+              ? [
+                  {
+                    pageIndex: result.pageIndex,
+                    width: 1,
+                    height: 1,
+                    observations: result.observations,
+                  },
+                ]
+              : [],
+          ),
+          { dateLocale: headerDateLocale },
+        );
+        const headerRows = createHeaderTableDraftRows(headerExtraction.measurements, {
+          locale,
+          collectionDateContexts: dateContext.contexts,
+          observations: sourceObservations,
+          aliases: extractionAliases,
+          artifact: sourceArtifact,
+        });
         const geometryExtraction = results.some(
           (result) => result.contractVersion === VISION_OCR_CONTRACT_VERSION,
         )
@@ -3932,7 +4386,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
               trustedPdfTextLayerObservationKeys,
             })
           : null;
-        const deterministicRows =
+        const ordinaryDeterministicRows =
           geometryExtraction?.rows ??
           specimenContextGroups(observations)
             .flatMap(({ observations: contextObservations, specimenType }) =>
@@ -3956,19 +4410,223 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
               );
             })
             .map((row, order) => ({ ...row, order }));
-        const documentRows =
-          geometryExtraction === null
-            ? new Map<number, readonly DocumentVLMRow[]>()
+        type SourceSpanIdentity = { readonly key: string; readonly text: string };
+        const sourceSpanIdentities = (
+          observation: VisionTextObservation,
+        ): readonly SourceSpanIdentity[] => {
+          const sourceSpan = observation.sourceSpan;
+          if (sourceSpan !== undefined) {
+            return [
+              {
+                key: JSON.stringify([
+                  observation.pageIndex,
+                  sourceSpan.parentObservationId,
+                  sourceSpan.start,
+                  sourceSpan.end,
+                  sourceSpan.text.trim(),
+                ]),
+                text: sourceSpan.text.trim(),
+              },
+            ];
+          }
+          // Geometry rows can retain a PDFKit parent observation while HeaderTable projects its
+          // exact child spans. Resolve those children here so a parent ID can suppress only the
+          // same physical value span; a neighboring value or collection date stays reviewable.
+          return (observation.spans ?? []).map((span) => {
+            const text = span.text.trim();
+            const start = span.start ?? 0;
+            const end = span.end ?? start + span.text.length;
+            return {
+              key: JSON.stringify([
+                observation.pageIndex,
+                span.parentObservationId ?? observation.id,
+                start,
+                end,
+                text,
+              ]),
+              text,
+            };
+          });
+        };
+        const headerSourceMetadata = headerRows.map((row, index) => {
+          const measurement = headerExtraction.measurements[index];
+          return {
+            pageIndex: row.source.pageIndex,
+            sourceIds: new Set(row.source.observationIds),
+            labelSourceIds: new Set(measurement?.labelSourceIds ?? []),
+            valueSourceIds: new Set(measurement?.valueSourceIds ?? []),
+            spans: new Set(
+              (row.source.observations ?? []).flatMap(sourceSpanIdentities).map(({ key }) => key),
+            ),
+          };
+        });
+        const overlapsHeaderSource = (row: ExtractionDraftRow): boolean => {
+          // Geometry rows and HeaderTable rows can both reference one parent OCR line. The
+          // parent ID is too coarse: a single line may contain current and previous fields.
+          // Compare the exact selected span (including its bounds and text) instead, and only
+          // suppress an ordinary row when its value span is the same physical source span as a
+          // HeaderTable measurement. For PDFKit parents, sourceSpanIdentities expands children
+          // before comparing so the two projections converge without collapsing siblings.
+          const value = row.sourceValueString.trim();
+          if (value.length === 0) return false;
+          const sourceIds = new Set(row.source.observationIds);
+          const valueSpans = (row.source.observations ?? [])
+            .flatMap(sourceSpanIdentities)
+            .filter((span) => span.text === value);
+          const matches = headerSourceMetadata.filter(
+            (header) =>
+              header.pageIndex === row.source.pageIndex &&
+              [...sourceIds].every((sourceId) => header.sourceIds.has(sourceId)) &&
+              [...sourceIds].some((sourceId) => header.labelSourceIds.has(sourceId)) &&
+              [...sourceIds].some((sourceId) => header.valueSourceIds.has(sourceId)),
+          );
+          if (matches.length !== 1) return false;
+          // Parent IDs are the primary identity on PDFKit pages. Keep the exact span check as a
+          // stronger guard when the ordinary projection happens to retain child spans too.
+          return (
+            valueSpans.length === 0 || valueSpans.some((span) => matches[0]!.spans.has(span.key))
+          );
+        };
+        const deterministicRows = [
+          ...headerRows,
+          ...ordinaryDeterministicRows.filter((row) => {
+            return !overlapsHeaderSource(row);
+          }),
+        ]
+          .sort((left, right) => {
+            const leftSource = left.source.observations?.[0];
+            const rightSource = right.source.observations?.[0];
+            return (
+              (leftSource?.pageIndex ?? 0) - (rightSource?.pageIndex ?? 0) ||
+              (leftSource?.boundingBox.y ?? 0) - (rightSource?.boundingBox.y ?? 0) ||
+              (leftSource?.boundingBox.x ?? 0) - (rightSource?.boundingBox.x ?? 0)
+            );
+          })
+          .map((row, order) => ({ ...row, order }));
+        // Persist the source-grounded baseline before allocating the large model runtime. If iOS
+        // suspends or terminates the process during refinement, relaunch can still offer these
+        // rows for review instead of making the completed OCR pass disappear.
+        if (mode === 'start' && !replacingExistingDraft && deterministicRows.length > 0) {
+          requireNotCancelled();
+          await requireVerifiedOriginal();
+          try {
+            deterministicCheckpoint = await repo.createExtractionDraft({
+              reportId: id,
+              collectionDate,
+              rows: deterministicRows,
+              sourceArtifact,
+              pipelineFingerprint,
+              revision: extractionRevision,
+            });
+          } catch (error) {
+            throw new LabReportExtractionError(
+              'persistence',
+              'The local extraction checkpoint could not be saved',
+              { cause: error },
+            );
+          }
+          createdDraft = deterministicCheckpoint;
+          if ((await verifySource(id)) !== 'verified') {
+            await repo.deleteExtractionDraft(deterministicCheckpoint.id);
+            deterministicCheckpoint = null;
+            createdDraft = null;
+            throw new LabReportExtractionError(
+              'original-source',
+              'The Original Report changed and must be imported again',
+            );
+          }
+        }
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'organize',
+          1,
+          1,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'organize', 'complete', 1, 1);
+        const refinementWindows = documentRefinementWindows(
+          deterministicRows,
+          geometryExtraction?.candidateWindows ?? [],
+        );
+        // Paddle is a page transcription fallback. Vision/empty pages always remain eligible;
+        // trusted PDF text pages are sent only when that page has no HeaderTable or deterministic
+        // coverage, or a trusted candidate window remains unresolved after that coverage. A
+        // complete HeaderTable/legacy page therefore stays on the fast local path.
+        const trustedPageIndices = pageResults
+          .filter(({ origin }) => origin === 'trusted-pdf-text-layer')
+          .map(({ result }) => result.pageIndex);
+        const unresolvedTrustedMeasurementPageIndices = new Set(
+          refinementWindows
+            .filter((window) => {
+              if (
+                !window.observations.some((observation) =>
+                  trustedPdfTextLayerObservationKeys.has(extractionObservationKey(observation)),
+                )
+              )
+                return false;
+              const text = window.observations.map((observation) => observation.text).join(' ');
+              // A trusted page can contain administrative numbers and prose without any
+              // unresolved Measurement. Those pages stay on the deterministic path and do not
+              // cause a model load just because HeaderTable/geometry found no row.
+              return (
+                !isNonMeasurementMetadataText(text) &&
+                window.anchorCellIds.length > 0 &&
+                window.observations.some((observation) =>
+                  /^[<>≤≥+-]?\s*(?:\d|[.,]\d)/u.test(observation.text.trim()),
+                )
+              );
+            })
+            .map((window) => window.context.pageIndex),
+        );
+        const trustedNeedsPaddlePageIndices = trustedPageIndices.filter((pageIndex) =>
+          unresolvedTrustedMeasurementPageIndices.has(pageIndex),
+        );
+        const paddlePageIndices = [
+          ...new Set([
+            ...pageResults
+              .filter(({ origin }) => origin !== 'trusted-pdf-text-layer')
+              .map(({ result }) => result.pageIndex),
+            ...trustedNeedsPaddlePageIndices,
+          ]),
+        ];
+        const documentPageIndices =
+          documentVLM?.schemaVersion === PADDLEOCR_SCHEMA_VERSION
+            ? paddlePageIndices
+            : pages.map((page) => page.pageIndex);
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'refine',
+          0,
+          1,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'refine', 'active', 0, 1);
+        const documentRefinement =
+          (!canUsePaddleFallback &&
+            (geometryExtraction === null || refinementWindows.length === 0)) ||
+          documentPageIndices.length === 0
+            ? { rows: new Map<number, readonly DocumentVLMRow[]>(), failureReason: null }
             : await extractDocumentVLMRows({
                 report,
                 sourcePath,
                 password: password || null,
-                pageIndices: pages.map((page) => page.pageIndex),
-                candidateWindows: geometryExtraction.candidateWindows,
+                pageIndices: documentPageIndices,
+                candidateWindows: refinementWindows,
                 locale,
                 cancellation,
                 requireVerifiedOriginal,
               });
+        const documentRows = documentRefinement.rows;
         const deterministicValueSourceIDs = new Set(
           deterministicRows.flatMap((row) =>
             (row.source.observations ?? []).flatMap((observation) =>
@@ -3976,10 +4634,27 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             ),
           ),
         );
+        const groundingOptions = {
+          locale,
+          collectionDate,
+          collectionDateDefaulted,
+          collectionDateContexts: dateContext.contexts,
+          aliases: extractionAliases,
+          artifact: sourceArtifact,
+          existingSourceObservationIds: deterministicValueSourceIDs,
+        };
+        const isPaddleDocumentModel = documentVLM?.schemaVersion === PADDLEOCR_SCHEMA_VERSION;
+        // Paddle transcribes source-shaped rows and requires its exact geometry field grounder.
+        // The generic document-model grounder uses a different source-selection contract.
+        const paddleGrounding =
+          geometryExtraction !== null && isPaddleDocumentModel
+            ? groundPaddleOCRRows(documentRows, refinementWindows, groundingOptions)
+            : null;
         const grounding =
           geometryExtraction === null
             ? null
-            : groundDocumentVLMRows(documentRows, geometryExtraction.candidateWindows, {
+            : (paddleGrounding ??
+              groundDocumentVLMRows(documentRows, refinementWindows, {
                 locale,
                 collectionDate,
                 collectionDateDefaulted,
@@ -3987,9 +4662,23 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
                 aliases: extractionAliases,
                 artifact: sourceArtifact,
                 existingSourceObservationIds: deterministicValueSourceIDs,
-              });
+              }));
+        const paddleReviewRows = isPaddleDocumentModel
+          ? createPaddleOCRReviewRows(
+              new Map(
+                [...documentRows].map(([pageIndex, rows]) => [
+                  pageIndex,
+                  rows.filter(
+                    (_row, proposalIndex) =>
+                      !paddleGrounding?.matchedProposalKeys.has(`${pageIndex}:${proposalIndex}`),
+                  ),
+                ]),
+              ),
+              groundingOptions,
+            )
+          : [];
         const matchedGroups = new Map(
-          (geometryExtraction?.candidateWindows ?? [])
+          refinementWindows
             .filter((group) => grounding?.matchedPhysicalRowIds.has(group.physicalRowId))
             .map((group) => [group.physicalRowId, group] as const),
         );
@@ -4005,9 +4694,30 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
             );
           });
         });
-        const sourceRows = [
+        const sourceRowsBeforePaddleReview = [
           ...deterministicRowsWithoutPromotedFallbacks,
           ...(grounding?.rows ?? []),
+        ];
+        const coveredPaddleRowCounts = new Map<string, number>();
+        const paddleRowKey = (row: ExtractionDraftRow) =>
+          `${row.source.pageIndex}:${row.sourceLabel.trim().toLocaleLowerCase()}:${row.sourceValueString.trim().toLocaleLowerCase()}`;
+        for (const row of sourceRowsBeforePaddleReview) {
+          const key = paddleRowKey(row);
+          coveredPaddleRowCounts.set(key, (coveredPaddleRowCounts.get(key) ?? 0) + 1);
+        }
+        const uncoveredPaddleReviewRows = paddleReviewRows.filter((row) => {
+          const key = paddleRowKey(row);
+          const coveredCount = coveredPaddleRowCounts.get(key) ?? 0;
+          if (coveredCount === 0) return true;
+          coveredPaddleRowCounts.set(key, coveredCount - 1);
+          return false;
+        });
+        const sourceRows = [
+          ...sourceRowsBeforePaddleReview,
+          // Page-level Paddle rows have no geometry. Consume only the same-page multiplicity
+          // already covered by source-linked rows, while retaining repeated events beyond that
+          // count as explicit review work.
+          ...uncoveredPaddleReviewRows,
         ]
           .sort((left, right) => {
             const leftSource = left.source.observations?.[0];
@@ -4045,11 +4755,33 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         );
         if (isCancelled()) throw new LabReportExtractionError('cancelled', 'Extraction cancelled');
         if (rows.length === 0) {
+          const failureReason =
+            semanticFailure === 'model-unavailable' ||
+            documentRefinement.failureReason === 'model-unavailable'
+              ? 'model-unavailable'
+              : (semanticFailure ??
+                documentRefinement.failureReason ??
+                'no-reviewable-measurements');
           throw new LabReportExtractionError(
-            'no-reviewable-measurements',
-            'Local OCR found no reviewable Measurements',
+            failureReason,
+            failureReason === 'model-unavailable'
+              ? 'The on-device import model is unavailable'
+              : 'Local document recognition found no reviewable Measurements',
           );
         }
+        await persistExtractionOperation(
+          repo,
+          id,
+          mode,
+          'active',
+          'refine',
+          1,
+          1,
+          null,
+          pipelineFingerprint,
+          extractionRevision,
+        );
+        extractionProgressEvent(id, mode, 'refine', 'complete', 1, 1);
         // Reprocessing must not replace an edited current draft when optional research-only
         // refinement fails. The deterministic MVP path still completes successfully and the
         // existing draft remains the user's current work.
@@ -4101,13 +4833,14 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
           pipelineFingerprint,
           revision: extractionRevision,
         } as const;
-        const replacementDraft =
+        const existingReplacementDraft =
           replacingExistingDraft && existingDraft?.state === 'draft' ? existingDraft : null;
-        if (replacingExistingDraft && replacementDraft === null)
+        if (replacingExistingDraft && existingReplacementDraft === null)
           throw new LabReportExtractionError(
             'persistence',
             'Only an open Extraction Draft can be reprocessed',
           );
+        const replacementDraft = existingReplacementDraft ?? deterministicCheckpoint;
         const draft =
           replacementDraft !== null
             ? await repo.replaceExtractionDraft({
@@ -4118,22 +4851,23 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
               })
             : await repo.createExtractionDraft(draftInput);
         createdDraft = draft;
+        deterministicCheckpoint = null;
         // The source can change while SQLite is writing a large draft. Reverify immediately
         // after the atomic commit as well as immediately before it. A replaced open draft is
         // restored from the exact in-memory snapshot if this post-write check fails.
         if ((await verifySource(id)) !== 'verified') {
-          if (replacementDraft !== null) {
+          if (existingReplacementDraft !== null) {
             await repo.replaceExtractionDraft({
               previousDraftId: draft.id,
-              id: replacementDraft.id,
-              reportId: replacementDraft.reportId,
-              collectionDate: replacementDraft.collectionDate,
-              rows: replacementDraft.rows,
-              sourceArtifact: replacementDraft.sourceArtifact ?? null,
-              pipelineFingerprint: replacementDraft.pipelineFingerprint,
-              revision: replacementDraft.revision,
-              ocrContractVersion: replacementDraft.ocrContractVersion,
-              parserVersion: replacementDraft.parserVersion,
+              id: existingReplacementDraft.id,
+              reportId: existingReplacementDraft.reportId,
+              collectionDate: existingReplacementDraft.collectionDate,
+              rows: existingReplacementDraft.rows,
+              sourceArtifact: existingReplacementDraft.sourceArtifact ?? null,
+              pipelineFingerprint: existingReplacementDraft.pipelineFingerprint,
+              revision: existingReplacementDraft.revision,
+              ocrContractVersion: existingReplacementDraft.ocrContractVersion,
+              parserVersion: existingReplacementDraft.parserVersion,
               preserveRowIds: true,
             });
           } else {
@@ -4185,7 +4919,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
         return draft;
       } catch (error) {
         const stage = extractionProgress.get(id)?.stage ?? 'import';
-        const extractionError =
+        let extractionError =
           error instanceof LabReportExtractionError
             ? error
             : new LabReportExtractionError(
@@ -4196,6 +4930,68 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
                 { cause: error },
               );
         const cancelled = isCancelled() || extractionError.reason === 'cancelled';
+        const recoverableDraft =
+          mode === 'start' && !replacingExistingDraft
+            ? (deterministicCheckpoint ?? createdDraft)
+            : null;
+        if (
+          !cancelled &&
+          extractionError.reason !== 'original-source' &&
+          recoverableDraft !== null
+        ) {
+          let sourceStillVerified = false;
+          try {
+            sourceStillVerified = (await verifySource(id)) === 'verified';
+          } catch {
+            sourceStillVerified = false;
+          }
+          if (sourceStillVerified) {
+            // Deterministic, source-linked OCR is the durable product baseline. Refinement,
+            // grounding, final replacement, or progress metadata may fail without turning that
+            // already-valid review work into a failed import.
+            try {
+              if (activeRepo !== null)
+                await persistExtractionOperation(
+                  activeRepo,
+                  id,
+                  mode,
+                  'complete',
+                  'review',
+                  1,
+                  1,
+                  null,
+                  operationPipelineFingerprint,
+                  extractionRevision,
+                );
+            } catch {
+              // The controller can still navigate directly to the validated checkpoint. Relaunch
+              // reconciles a remaining active operation marker as interrupted.
+            }
+            extractionProgressEvent(id, mode, 'review', 'complete', 1, 1);
+            return recoverableDraft;
+          }
+          extractionError = new LabReportExtractionError(
+            'original-source',
+            'The Original Report changed and must be imported again',
+            { cause: error },
+          );
+        }
+        if (
+          extractionError.reason === 'original-source' &&
+          (deterministicCheckpoint !== null || createdDraft !== null) &&
+          mode === 'start' &&
+          !replacingExistingDraft
+        ) {
+          const invalidDraft = deterministicCheckpoint ?? createdDraft!;
+          try {
+            await activeRepo?.deleteExtractionDraft(invalidDraft.id);
+          } catch {
+            // The unreadable source remains terminal. A later retry/list reconciliation keeps the
+            // invalid derived work from becoming authoritative.
+          }
+          if (createdDraft?.id === invalidDraft.id) createdDraft = null;
+          deterministicCheckpoint = null;
+        }
         if (cancelled && createdDraft !== null && mode !== 'reprocess' && !replacingExistingDraft) {
           try {
             await activeRepo?.deleteExtractionDraft(createdDraft.id);
@@ -4416,6 +5212,13 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     return (await repository()).listOpenExtractionDrafts();
   }
 
+  async function discardExtractionDraft(id: string): Promise<void> {
+    return serialized(async () => {
+      await ensureInitialized();
+      await (await repository()).deleteExtractionDraft(id);
+    });
+  }
+
   async function updateExtractionRow(
     id: string,
     patch: ExtractionDraftRowPatch,
@@ -4511,6 +5314,7 @@ export function createLabReportsService(options: LabReportsServiceOptions = {}):
     listOpenExtractionDrafts,
     countOpenExtractionDrafts,
     getExtractionDraft,
+    discardExtractionDraft,
     updateExtractionRow,
     updateExtractionGroupDate,
     confirmExtraction,

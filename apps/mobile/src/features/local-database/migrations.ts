@@ -19,7 +19,7 @@ type CallbackMigration = {
 
 export type Migration = SqlMigration | CallbackMigration;
 
-export const CURRENT_SCHEMA_VERSION = 15;
+export const CURRENT_SCHEMA_VERSION = 17;
 
 const INTAKE_CAPTURE_RECOVERY_DDL = `
   CREATE TABLE IF NOT EXISTS intake_capture_recovery (
@@ -729,5 +729,74 @@ export const LOCAL_MIGRATIONS: readonly Migration[] = [
           ON extraction_operations(state, updated_at ASC);
       `);
     },
+  },
+  {
+    version: 16,
+    apply: async (database) => {
+      const operationTables = await database.getAllAsync<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'extraction_operations';",
+      );
+      if (operationTables.length === 0) return;
+
+      // Preserve existing operation state while making the post-OCR work observable. These
+      // stages describe user-visible outcomes rather than exposing a particular model pipeline.
+      await database.execAsync(`
+        ALTER TABLE extraction_operations RENAME TO extraction_operations_v15;
+        CREATE TABLE extraction_operations (
+          report_id TEXT PRIMARY KEY NOT NULL REFERENCES lab_reports(id) ON DELETE CASCADE,
+          state TEXT NOT NULL CHECK (state IN ('active', 'interrupted', 'failed', 'cancelled', 'complete')),
+          stage TEXT NOT NULL CHECK (stage IN ('import', 'ocr', 'organize', 'refine', 'review')),
+          completed INTEGER NOT NULL DEFAULT 0,
+          total INTEGER NOT NULL DEFAULT 0,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          mode TEXT NOT NULL DEFAULT 'start' CHECK (mode IN ('start', 'reprocess', 'improve')),
+          pipeline_fingerprint_json TEXT,
+          pipeline_fingerprint_hash TEXT,
+          revision INTEGER NOT NULL DEFAULT 1
+        );
+        INSERT INTO extraction_operations
+          (report_id, state, stage, completed, total, error, created_at, updated_at, mode,
+           pipeline_fingerprint_json, pipeline_fingerprint_hash, revision)
+        SELECT report_id, state, stage, completed, total, error, created_at, updated_at, mode,
+          pipeline_fingerprint_json, pipeline_fingerprint_hash, revision
+        FROM extraction_operations_v15;
+        DROP TABLE extraction_operations_v15;
+        CREATE INDEX extraction_operations_state_idx
+          ON extraction_operations(state, updated_at ASC);
+      `);
+    },
+  },
+  {
+    version: 17,
+    sql: `
+      ALTER TABLE local_deletion_operations RENAME TO local_deletion_operations_v16;
+      CREATE TABLE local_deletion_operations (
+        id TEXT PRIMARY KEY NOT NULL,
+        scope TEXT NOT NULL CHECK (scope IN (
+          'reports', 'records', 'events', 'media', 'all-health', 'reset-app'
+        )),
+        plan_hash TEXT NOT NULL,
+        plan_json TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('requested', 'running', 'completed', 'failed')),
+        failure_categories_json TEXT NOT NULL DEFAULT '[]',
+        requested_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO local_deletion_operations
+        (id, scope, plan_hash, plan_json, state, failure_categories_json, requested_at,
+         started_at, completed_at, updated_at)
+      SELECT id, scope, plan_hash, plan_json, state, failure_categories_json, requested_at,
+        started_at, completed_at, updated_at
+      FROM local_deletion_operations_v16;
+      DROP TABLE local_deletion_operations_v16;
+      CREATE INDEX local_deletion_operations_state_idx
+        ON local_deletion_operations(state, updated_at ASC);
+      CREATE INDEX local_deletion_operations_scope_idx
+        ON local_deletion_operations(scope, updated_at DESC);
+    `,
   },
 ];

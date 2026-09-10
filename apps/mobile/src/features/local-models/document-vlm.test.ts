@@ -92,6 +92,7 @@ test('document extraction uses one source-verbatim pipeline for every report loc
 
 test('document runtime is cold until prepare and unloads when its lease ends', async () => {
   const calls: string[] = [];
+  let receivedOutputTokens: number | null = null;
   let loaded = false;
   let models: LocalModelService;
   models = {
@@ -119,8 +120,9 @@ test('document runtime is cold until prepare and unloads when its lease ends', a
       return models.getState();
     },
     infer: async () => '{}',
-    inferImage: async () => {
+    inferImage: async (_prompt, _imageURI, limits) => {
       calls.push('infer-image');
+      receivedOutputTokens = limits.maxOutputTokens;
       return '{"rows":[]}';
     },
     cancelInference: () => calls.push('cancel'),
@@ -141,9 +143,15 @@ test('document runtime is cold until prepare and unloads when its lease ends', a
   const lease = await extractor.prepare();
   assert.deepEqual(calls, ['load']);
   assert.deepEqual(
-    await extractor.extract({ pageIndex: 0, imageURI: 'file:///tmp/synthetic.jpg', locale: 'en' }),
+    await extractor.extract({
+      pageIndex: 0,
+      imageURI: 'file:///tmp/synthetic.jpg',
+      locale: 'en',
+      maxOutputTokens: 512,
+    }),
     [],
   );
+  assert.equal(receivedOutputTokens, 512);
   await lease.release();
   assert.deepEqual(calls, ['load', 'infer-image', 'unload']);
 });
@@ -273,4 +281,74 @@ test('quarantines a non-settling image inference and defers unload until it sett
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(unloadCalls, 1);
+});
+
+test('a retry waits briefly for a timed-out image inference to release the runtime', async () => {
+  let loaded = false;
+  let inferenceCalls = 0;
+  let resolveFirstInference!: (value: string) => void;
+  let firstInferenceStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    firstInferenceStarted = resolve;
+  });
+  const firstInference = new Promise<string>((resolve) => {
+    resolveFirstInference = resolve;
+  });
+  let models: LocalModelService;
+  models = {
+    manifest: productionLocalModelManifest,
+    getState: async () => ({
+      packId: productionLocalModelManifest.pack.id,
+      state: loaded ? ('loaded' as const) : ('ready' as const),
+      bytesReceived: productionLocalModelManifest.pack.bytes,
+      expectedBytes: productionLocalModelManifest.pack.bytes,
+      progress: 1,
+      failure: null,
+      storageBytes: productionLocalModelManifest.pack.bytes,
+      loaded,
+    }),
+    subscribe: () => () => undefined,
+    startDownload: async () => models.getState(),
+    cancelDownload: async () => models.getState(),
+    load: async () => {
+      loaded = true;
+      return models.getState();
+    },
+    infer: async () => '{}',
+    inferImage: async () => {
+      inferenceCalls += 1;
+      if (inferenceCalls === 1) {
+        firstInferenceStarted();
+        return firstInference;
+      }
+      return '{"rows":[]}';
+    },
+    cancelInference: () => undefined,
+    unload: async () => {
+      loaded = false;
+      return models.getState();
+    },
+    deletePack: async () => models.getState(),
+  };
+
+  const extractor = createLocalDocumentVLM({ models, timeoutMs: 10, recoveryTimeoutMs: 500 });
+  const firstLease = await extractor.prepare();
+  const extraction = extractor.extract({
+    pageIndex: 0,
+    imageURI: 'file:///tmp/first.jpg',
+    locale: 'en',
+  });
+  await started;
+  await assert.rejects(extraction, /document-vlm-timeout/u);
+  await firstLease.release();
+
+  const retryLeasePromise = extractor.prepare();
+  resolveFirstInference('{"rows":[]}');
+  const retryLease = await retryLeasePromise;
+  assert.deepEqual(
+    await extractor.extract({ pageIndex: 0, imageURI: 'file:///tmp/retry.jpg', locale: 'en' }),
+    [],
+  );
+  await retryLease.release();
+  assert.equal(inferenceCalls, 2);
 });

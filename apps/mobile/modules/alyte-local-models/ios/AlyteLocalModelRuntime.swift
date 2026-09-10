@@ -99,6 +99,43 @@ final class AlytePinnedLlamaRuntimeSession: AlyteLocalModelRuntimeSession, @unch
     return String(decoding: output.prefix(Int(count)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
   }
 
+  func generateImageRaw(
+    prompt: String,
+    imageData: Data,
+    maxOutputTokens: Int,
+    outputCapacity: Int
+  ) throws -> String {
+    guard let runtime else { throw AlyteLocalModelRuntimeError.unavailable }
+    guard prompt == AlyteLocalModelPromptContract.paddleOCRTask else {
+      throw AlyteLocalModelRuntimeError.invalidInput
+    }
+    var output = [CChar](repeating: 0, count: outputCapacity)
+    let count = prompt.withCString { promptText in
+      imageData.withUnsafeBytes { imageBuffer in
+        output.withUnsafeMutableBufferPointer { outputBuffer in
+          alyte_local_model_runtime_generate_image_raw(
+            runtime,
+            promptText,
+            imageBuffer.bindMemory(to: UInt8.self).baseAddress,
+            imageData.count,
+            Int32(maxOutputTokens),
+            outputBuffer.baseAddress,
+            outputCapacity
+          )
+        }
+      }
+    }
+    guard count >= 0 else {
+      switch count {
+      case -1: throw AlyteLocalModelRuntimeError.invalidInput
+      case -7: throw AlyteLocalModelRuntimeError.cancelled
+      case -8: throw AlyteLocalModelRuntimeError.truncated
+      default: throw AlyteLocalModelRuntimeError.loadFailed(.unknown)
+      }
+    }
+    return String(decoding: output.prefix(Int(count)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+  }
+
   deinit {
     close()
   }

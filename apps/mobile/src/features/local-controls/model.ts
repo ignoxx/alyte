@@ -6,6 +6,7 @@ export const LOCAL_DELETION_SCOPES = [
   'events',
   'media',
   'all-health',
+  'reset-app',
 ] as const;
 export type LocalDeletionScope = (typeof LOCAL_DELETION_SCOPES)[number];
 

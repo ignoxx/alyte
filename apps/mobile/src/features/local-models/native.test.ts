@@ -71,6 +71,55 @@ test('passes only bounded contract-specific inference limits to native', async (
   );
 });
 
+test('raw OCR inference uses the native entrypoint and the same hard bounds', async () => {
+  const base = createFakeLocalModelNativeModule();
+  let received: readonly [number, number] | null = null;
+  const native = {
+    ...base,
+    inferImageRaw: (
+      prompt: string,
+      imageURI: string,
+      maxOutputTokens: number,
+      outputCapacity: number,
+    ) => {
+      received = [maxOutputTokens, outputCapacity];
+      return (
+        base.inferImageRaw?.(prompt, imageURI, maxOutputTokens, outputCapacity) ??
+        Promise.resolve('')
+      );
+    },
+  };
+  const service = createLocalModelService({ native });
+  await service.startDownload();
+  await service.load();
+  const inferImageRaw = service.inferImageRaw;
+  if (!inferImageRaw) throw new Error('raw OCR inference is unavailable');
+  assert.equal(
+    await inferImageRaw('OCR:', 'file:///private/ocr-page.png', {
+      maxOutputTokens: 1_024,
+      outputCapacity: 65_536,
+    }),
+    '',
+  );
+  assert.deepEqual(received, [1_024, 65_536]);
+  await assert.rejects(
+    () =>
+      inferImageRaw('OCR:', 'file:///private/ocr-page.png', {
+        maxOutputTokens: 4_097,
+        outputCapacity: 65_536,
+      }),
+    /OCR inference input is invalid/u,
+  );
+  await assert.rejects(
+    () =>
+      inferImageRaw('OCR prompt', 'file:///private/ocr-page.png', {
+        maxOutputTokens: 1_024,
+        outputCapacity: 65_536,
+      }),
+    /OCR inference input is invalid/u,
+  );
+});
+
 test('late native registration can recover without relaxing the manifest gate', async () => {
   const native = createFakeLocalModelNativeModule();
   let available = false;

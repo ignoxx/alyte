@@ -85,17 +85,60 @@ export function getHistoryChartLayout(fontScale: number): HistoryChartLayout {
 }
 
 /**
- * The chart joins adjacent plotted Measurements, not intervening Lab Records that did not contain
- * this Biomarker. Every input point has already passed the domain compatibility, confirmation,
- * numeric-value, and known-date gates; non-points remain explicit in the timeline below.
+ * The chart follows the domain's measured segments. A missing, bounded, incompatible, or
+ * unsupported result ends a line; the renderer never bridges that gap just because compatible
+ * points exist on both sides of it.
  */
 export function getHistoryChartConnections(
-  points: readonly MeasuredTrendPoint[],
+  segments: readonly (readonly MeasuredTrendPoint[])[],
 ): readonly HistoryChartConnection[] {
-  return points.slice(1).flatMap((point, index) => {
-    const previous = points[index];
-    return previous === undefined ? [] : [[previous, point] as const];
-  });
+  return segments.flatMap((points) =>
+    points.slice(1).flatMap((point, index) => {
+      const previous = points[index];
+      return previous === undefined ? [] : [[previous, point] as const];
+    }),
+  );
+}
+
+/**
+ * Converted trend values are derived presentation data. Limit them to four significant digits so
+ * floating-point conversion noise never looks like precision reported by the laboratory. The
+ * untouched source value string remains available beside every point.
+ */
+export function formatNormalizedTrendValue(value: number, locale?: string): string {
+  return new Intl.NumberFormat(locale, { maximumSignificantDigits: 4 }).format(value);
+}
+
+export type HistoryPointValuePresentation = {
+  /** The current saved result, in the unit the person reviewed. */
+  readonly result: string;
+  /** A derived value used only when the chart has to compare a different compatible unit. */
+  readonly chartValue: string | null;
+};
+
+function comparableUnitKey(unit: string | null): string {
+  return (unit ?? '').replace(/\s+/g, '').toLocaleLowerCase();
+}
+
+/**
+ * Lead with the saved result and disclose conversion only when comparison uses another unit.
+ * This keeps deterministic chart normalization from looking like a value printed by the lab.
+ */
+export function historyPointValuePresentation(
+  point: MeasuredTrendPoint,
+  current: MeasurementSnapshot,
+  locale?: string,
+): HistoryPointValuePresentation {
+  const value = current.valueString.trim() || snapshotResultValue(current, locale ?? 'en');
+  const result = `${value}${current.unit ? ` ${current.unit}` : ''}`;
+  const normalized = `${formatNormalizedTrendValue(point.normalized.value, locale)} ${point.normalized.unit}`;
+  return {
+    result,
+    chartValue:
+      comparableUnitKey(current.unit) === comparableUnitKey(point.normalized.unit)
+        ? null
+        : normalized,
+  };
 }
 
 export type BiomarkerHistoryViewModel = {
@@ -122,9 +165,11 @@ export type HistoryAccessibilityCopy = {
   readonly chart: string;
   readonly measuredPoint: string;
   readonly current: string;
+  readonly chartValue: string;
   readonly nonPoint: Record<MeasuredTrendNonPoint['kind'], string>;
   readonly date: string;
   readonly source: string;
+  readonly sourceEntry: string;
   readonly unit: string;
   readonly laboratoryInterval: string;
   readonly laboratoryFlag: string;
@@ -326,19 +371,38 @@ export function buildBiomarkerHistoryViewModel(
   };
 }
 
-function snapshotValue(snapshot: MeasurementSnapshot, locale: string): string {
+function snapshotResultValue(snapshot: MeasurementSnapshot, locale: string): string {
   const value =
     snapshot.value.kind === 'numeric'
       ? formatLocaleDecimal(snapshot.value.value, locale)
       : snapshot.value.kind === 'bounded'
         ? `${snapshot.value.comparator}${formatLocaleDecimal(snapshot.value.value, locale)}`
         : snapshot.value.value;
-  return `${snapshot.label}: ${value}${snapshot.unit ? ` ${snapshot.unit}` : ''}`;
+  return value;
+}
+
+function snapshotValue(snapshot: MeasurementSnapshot, locale: string): string {
+  return `${snapshot.label}: ${snapshotResultValue(snapshot, locale)}${snapshot.unit ? ` ${snapshot.unit}` : ''}`;
 }
 
 function originalSourceValue(snapshot: MeasurementSnapshot | null): string {
   if (snapshot === null) return '';
   return `${snapshot.label}: ${snapshot.valueString}${snapshot.unit ? ` ${snapshot.unit}` : ''}`;
+}
+
+function sourceAccessibilityValue(
+  item: HistoryTimelineItem,
+  copy: HistoryAccessibilityCopy,
+): string | null {
+  const source = originalSourceValue(item.original);
+  if (source.length === 0 || item.provenance === null || item.provenance === 'user-entered') {
+    return null;
+  }
+  const label =
+    item.provenance === 'extracted' || item.sourceLocation !== null
+      ? copy.source
+      : copy.sourceEntry;
+  return `${label} ${source}`;
 }
 
 function dateValue(date: LabDateState, copy: HistoryAccessibilityCopy, locale: string): string {
@@ -359,22 +423,27 @@ export function buildHistoryAccessibilityLabel(
   const items = model.timeline.map((item) => {
     if (item.kind === 'point') {
       const point = item.point;
-      const source = originalSourceValue(item.original);
+      const source = sourceAccessibilityValue(item, copy);
       const reference = point.laboratoryReference.interval ?? copy.noValue;
       const flag = point.laboratoryReference.flag ?? copy.noValue;
       const provenance = item.provenance === null ? copy.noValue : copy.provenance[item.provenance];
+      const values = historyPointValuePresentation(point, item.current, locale);
       return [
         copy.measuredPoint,
         dateValue(pointDate(point), copy, locale),
-        `${copy.current} ${formatLocaleDecimal(point.normalized.value, locale)} ${point.normalized.unit}; ${snapshotValue(item.current, locale)}`,
-        `${copy.source} ${source || copy.noValue}`,
+        `${copy.current} ${values.result}${
+          values.chartValue === null ? '' : `; ${copy.chartValue} ${values.chartValue}`
+        }`,
+        source,
         `${copy.laboratoryInterval} ${reference}`,
         `${copy.laboratoryFlag} ${flag}`,
         provenance,
-      ].join(', ');
+      ]
+        .filter((part): part is string => part !== null)
+        .join(', ');
     }
     const nonPoint = item.nonPoint;
-    const source = originalSourceValue(item.original);
+    const source = sourceAccessibilityValue(item, copy);
     const current = item.current === null ? copy.noValue : snapshotValue(item.current, locale);
     const reference = item.laboratoryReference.interval ?? copy.noValue;
     const flag = item.laboratoryReference.flag ?? copy.noValue;
@@ -383,11 +452,13 @@ export function buildHistoryAccessibilityLabel(
       copy.nonPoint[nonPoint.kind],
       dateValue(nonPoint.collectionDate, copy, locale),
       `${copy.current} ${current}`,
-      `${copy.source} ${source || copy.noValue}`,
+      source,
       `${copy.laboratoryInterval} ${reference}`,
       `${copy.laboratoryFlag} ${flag}`,
       provenance,
-    ].join(', ');
+    ]
+      .filter((part): part is string => part !== null)
+      .join(', ');
   });
   return [copy.chart, model.canonicalLabel, ...items].join('. ');
 }

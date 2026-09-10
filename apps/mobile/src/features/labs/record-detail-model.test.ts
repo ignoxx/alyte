@@ -104,6 +104,6 @@ test('every Lab Record preserved-only support reason has localized detail copy',
   }
 
   const methodCopy = t(labRecordSupportReasonLocalizationKeys['incompatible-method']);
-  assert.match(methodCopy, /Preserved only/);
-  assert.match(methodCopy, /not compared/);
+  assert.match(methodCopy, /test method/);
+  assert.match(methodCopy, /can't be compared/);
 });

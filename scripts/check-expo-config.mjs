@@ -24,15 +24,20 @@ function readExpoIntrospection(variant) {
 }
 
 const expected = {
-  development: { bundleIdentifier: 'com.alyte.app.dev' },
-  preview: { bundleIdentifier: 'com.alyte.app.preview' },
-  production: { bundleIdentifier: 'com.alyte.app' },
+  development: { bundleIdentifier: 'com.alyte.app.dev', usesAppleSignIn: false },
+  preview: { bundleIdentifier: 'com.alyte.app.preview', usesAppleSignIn: true },
+  production: { bundleIdentifier: 'com.alyte.app', usesAppleSignIn: true },
 };
 
 for (const [variant, policy] of Object.entries(expected)) {
   const config = readExpoIntrospection(variant);
   assert.equal(config.ios.bundleIdentifier, policy.bundleIdentifier);
   assert.equal(config.ios.deploymentTarget, '26.0');
+  assert.equal(config.ios.usesAppleSignIn, policy.usesAppleSignIn);
+  assert.equal(
+    Object.hasOwn(config.ios.entitlements, 'com.apple.developer.applesignin'),
+    policy.usesAppleSignIn,
+  );
   assert.equal(
     Object.hasOwn(config.ios.entitlements, 'com.apple.developer.kernel.increased-memory-limit'),
     false,

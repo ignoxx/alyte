@@ -80,6 +80,31 @@ public final class AlyteLocalModelsModule: Module {
       }
     }
 
+    AsyncFunction("inferImageRaw") {
+      (prompt: String, imageURI: String, maxOutputTokens: Int, outputCapacity: Int) async throws -> String in
+      do {
+        guard let imageURL = URL(string: imageURI), imageURL.isFileURL else {
+          throw AlyteLocalModelError.failed(.runtimeFailed)
+        }
+        return try await self.store.inferImageRaw(
+          prompt: prompt,
+          imageURL: imageURL,
+          maxOutputTokens: maxOutputTokens,
+          outputCapacity: outputCapacity
+        )
+      } catch {
+        // The raw OCR adapter owns parsing and needs to distinguish a recoverable truncation from
+        // an unavailable runtime. Preserve only this typed, health-free bridge error; all other
+        // native failures retain the ordinary user-facing wrapper below.
+        if let rawError = error as NSError?,
+          rawError.domain == "com.alyte.local-models.raw-inference"
+        {
+          throw rawError
+        }
+        throw Self.nativeError(error, message: "The local OCR extraction could not finish", code: 7)
+      }
+    }
+
     // This is deliberately synchronous/non-queueing: JS timeouts and OS pressure must reach the
     // native generation loop while the serialized infer task is still running.
     Function("cancelInference") {

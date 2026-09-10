@@ -71,7 +71,8 @@ export type MeasurementSourceLocation = {
       | 'alyte.semantic-mapper.v2'
       | 'alyte.geometry-variant-selector.v1'
       | 'alyte.geometry-variant-selector.v2'
-      | 'alyte.document-vlm.flat-rows.v1';
+      | 'alyte.document-vlm.flat-rows.v1'
+      | 'alyte.paddleocr-vl.flat-rows.v1';
     readonly sourceObservationIds: readonly string[];
     readonly sourceFieldObservationIds?: {
       readonly label: string;

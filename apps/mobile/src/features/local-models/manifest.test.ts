@@ -22,34 +22,39 @@ test('generated TypeScript manifest decodes exactly from the authoritative produ
   assert.deepEqual(productionLocalModelManifest, source);
 });
 
-test('production model manifest pins the complete public Qwen VLM pack and runtime', () => {
+test('production model manifest pins the complete public PaddleOCR-VL pack and runtime', () => {
   assert.doesNotThrow(() => assertLocalModelManifest());
   assert.equal(productionLocalModelManifest.pack.id, LOCAL_MODEL_PACK_ID);
-  assert.equal(productionLocalModelManifest.pack.artifact.bytes, 1_107_409_952);
-  assert.equal(productionLocalModelManifest.pack.projector.bytes, 445_053_216);
-  assert.equal(productionLocalModelManifest.pack.bytes, 1_552_463_168);
-  assert.deepEqual(productionLocalModelManifest.compatibility.languages, ['en', 'de']);
+  assert.equal(productionLocalModelManifest.pack.artifact.bytes, 498_316_256);
+  assert.equal(productionLocalModelManifest.pack.projector.bytes, 881_770_560);
+  assert.equal(productionLocalModelManifest.pack.bytes, 1_380_086_816);
+  assert.equal(
+    productionLocalModelManifest.pack.source.repository,
+    'SanjeevSOLANKI/PaddleOCR-VL-1.6-GGUF',
+  );
+  assert.equal(productionLocalModelManifest.pack.quantization, 'Q8_0 + F16 projector');
+  assert.deepEqual(productionLocalModelManifest.compatibility.languages, ['en', 'de', 'lt']);
   assert.equal(
     productionLocalModelManifest.compatibility.promptBundle,
-    'alyte.document-vlm.prompt.v1',
+    'alyte.document-ocr.raw.v1',
   );
   assert.equal(productionLocalModelManifest.compatibility.ocrChunk, 'alyte.document-band.v1');
   assert.equal(
     productionLocalModelManifest.compatibility.semanticSchema,
-    'alyte.document-vlm.flat-rows.v1',
+    'alyte.paddleocr-vl.flat-rows.v1',
   );
   assert.equal(
     productionLocalModelManifest.pack.artifact.sha256,
-    '089d75c52f4b7ffc56ba998ffc50aae89fcafc755f9e7208aacca281dca6c2ae',
+    '2bda93a416339f2d9f06accae505600544a9e72cc159d0cd1af4c0f679866e1c',
   );
   assert.equal(productionLocalModelManifest.pack.artifact.url.includes('/main/'), false);
   assert.equal(
     productionLocalModelManifest.pack.projector.sha256,
-    'f9a68fabba69c3b81e153367b2c7521030b0fa8bb0de400c9599c8e6725f9c82',
+    '204d757d7610d9b3faab10d506d69e5b244e32bf765e2bab2d0167e65e0a058a',
   );
   assert.deepEqual(productionLocalModelManifest.allowlist.files, [
-    'Qwen3VL-2B-Instruct-Q4_K_M.gguf',
-    'mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf',
+    'PaddleOCR-VL-1.6-Q8_0.gguf',
+    'PaddleOCR-VL-1.6-mmproj.gguf',
   ]);
 });
 

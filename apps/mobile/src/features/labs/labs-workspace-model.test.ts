@@ -54,6 +54,8 @@ test('open drafts lead the attention queue and do not duplicate their source rep
       ['continue-report', 'interrupted'],
     ],
   );
+  assert.deepEqual(model.reports, []);
+  assert.equal(model.reportCount, 2);
 });
 
 test('completed reports stay out of attention and records use newest known date first', () => {
@@ -66,7 +68,27 @@ test('completed reports stay out of attention and records use newest known date 
 
   assert.equal(model.attention.length, 0);
   assert.deepEqual(
+    model.reports.map((item) => item.id),
+    ['complete'],
+  );
+  assert.deepEqual(
     model.records.map((item) => item.id),
     ['new', 'old', 'missing'],
   );
+  assert.deepEqual(
+    model.standaloneRecords.map((item) => item.id),
+    ['new', 'old', 'missing'],
+  );
+});
+
+test('records linked to an active report live inside that report instead of duplicating at root', () => {
+  const linked = { ...record('linked', '2026-06-15'), labReportId: 'complete' };
+  const complete = report({ id: 'complete', labRecordIds: [linked.id] });
+  const model = buildLabsWorkspaceModel([complete], [linked], []);
+
+  assert.deepEqual(
+    model.reports.map((item) => item.id),
+    ['complete'],
+  );
+  assert.deepEqual(model.standaloneRecords, []);
 });

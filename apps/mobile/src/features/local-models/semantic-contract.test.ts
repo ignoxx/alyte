@@ -7,7 +7,7 @@ import type {
   VisionTextObservation,
 } from '@alyte/domain';
 import { productionLocalModelManifest } from './manifest';
-import { DOCUMENT_VLM_PROMPT_VERSION, DOCUMENT_VLM_SCHEMA_VERSION } from './document-vlm';
+import { PADDLEOCR_PROMPT_VERSION, PADDLEOCR_SCHEMA_VERSION } from './paddleocr';
 import {
   SEMANTIC_MAPPER_LIMITS,
   SEMANTIC_MAPPER_CONTEXT,
@@ -528,17 +528,18 @@ test('bounds candidate rows, cells, headings, and the complete UTF-8 input', () 
   );
 });
 
-test('keeps the legacy semantic contract versioned while production uses the document VLM', () => {
+test('keeps the legacy semantic contract versioned while production uses PaddleOCR', () => {
   assert.equal(SEMANTIC_MAPPER_SCHEMA_VERSION, 'alyte.semantic-mapper.v2');
   assert.equal(SEMANTIC_MAPPER_PROMPT_VERSION, 'alyte.semantic-mapper.prompt.v6');
   assert.equal(SEMANTIC_OCR_CHUNK_VERSION, 'alyte.semantic-ocr-chunk.v5');
   assert.equal(
-    DOCUMENT_VLM_PROMPT_VERSION,
     productionLocalModelManifest.compatibility.promptBundle,
+    'alyte.document-ocr.raw.v1',
   );
   assert.equal(productionLocalModelManifest.compatibility.ocrChunk, 'alyte.document-band.v1');
   assert.equal(
-    DOCUMENT_VLM_SCHEMA_VERSION,
+    PADDLEOCR_SCHEMA_VERSION,
     productionLocalModelManifest.compatibility.semanticSchema,
   );
+  assert.equal(PADDLEOCR_PROMPT_VERSION, 'alyte.paddleocr-vl.prompt.v1');
 });

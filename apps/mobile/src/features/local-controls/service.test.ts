@@ -174,6 +174,7 @@ function serviceFor(
   database: NodeDatabase,
   files: ReturnType<typeof filesFixture>,
   protect: (requireSidecars?: boolean) => Promise<void> = async () => {},
+  resetPreservedPreferenceKeys: readonly string[] = [],
 ) {
   return createLocalControlsService({
     databaseFactory: async () => ({ database, close: async () => {}, protect }),
@@ -183,6 +184,7 @@ function serviceFor(
       let index = 0;
       return () => `deletion-${++index}`;
     })(),
+    resetPreservedPreferenceKeys,
   });
 }
 
@@ -236,6 +238,7 @@ test('builds a count-only snapshot, binds execution to a plan hash, and preserve
   assert.equal((await database.getAllAsync('SELECT id FROM lab_combined_deletions')).length, 0);
   assert.ok(fileFixture.removed.includes('protected://original-reports/report.pdf'));
   assert.ok(fileFixture.removed.includes('protected://intake-media/event.jpg'));
+  assert.ok(fileFixture.removed.includes('protected://exports/orphan.zip'));
   assertNoSqliteStorageTokens(database, [
     'report-1',
     'record-1',
@@ -244,6 +247,109 @@ test('builds a count-only snapshot, binds execution to a plan hash, and preserve
     'protected://original-reports/report.pdf',
     'protected://intake-media/event.jpg',
   ]);
+  await database.closeAsync();
+});
+
+test('reset-app removes local health data and settings while retaining only a redacted operation marker', async () => {
+  const database = await databaseFixture();
+  await seedHealth(database);
+  const fileFixture = filesFixture();
+  const service = serviceFor(database, fileFixture);
+
+  const plan = await service.preview('reset-app');
+  assert.equal(plan.scope, 'reset-app');
+  assert.equal(plan.counts.reports, 1);
+  assert.equal(plan.counts.records, 1);
+  assert.equal(plan.counts.intakeEvents, 1);
+
+  const result = await service.execute(plan);
+  assert.equal(result.state, 'completed');
+  for (const table of [
+    'lab_reports',
+    'lab_records',
+    'measurements',
+    'intake_events',
+    'app_preferences',
+  ]) {
+    assert.equal((await database.getAllAsync(`SELECT * FROM ${table};`)).length, 0, table);
+  }
+  assert.ok(fileFixture.removed.includes('protected://original-reports/report.pdf'));
+  assert.ok(fileFixture.removed.includes('protected://intake-media/event.jpg'));
+  assert.ok(fileFixture.removed.includes('protected://exports/orphan.zip'));
+  const markers = await database.getAllAsync<{
+    scope: string;
+    state: string;
+    plan_hash: string;
+    plan_json: string;
+  }>('SELECT scope, state, plan_hash, plan_json FROM local_deletion_operations;');
+  assert.deepEqual(
+    markers.map((row) => ({ ...row })),
+    [
+      {
+        scope: 'reset-app',
+        state: 'completed',
+        plan_hash: 'plan-redacted',
+        plan_json: '{"redacted":true,"scope":"reset-app"}',
+      },
+    ],
+  );
+  await database.closeAsync();
+});
+
+test('reset-app remains retryable when an owned orphan cannot be removed after the data commit', async () => {
+  const database = await databaseFixture();
+  await seedHealth(database);
+  const fileFixture = filesFixture({ failPath: 'protected://exports/orphan.zip' });
+  const service = serviceFor(database, fileFixture);
+
+  const failed = await service.execute(await service.preview('reset-app'));
+  assert.equal(failed.state, 'failed');
+  assert.deepEqual(failed.failureCategories, ['orphan-cleanup-failed']);
+  assert.equal((await database.getAllAsync('SELECT id FROM lab_reports')).length, 0);
+  assert.equal((await database.getAllAsync('SELECT id FROM intake_events')).length, 0);
+  assert.equal(
+    (
+      await database.getAllAsync<{
+        state: string;
+        plan_json: string;
+        failure_categories_json: string;
+      }>(
+        'SELECT state, plan_json, failure_categories_json FROM local_deletion_operations WHERE id = ?;',
+        failed.operationId,
+      )
+    )[0]?.state,
+    'completed',
+  );
+
+  fileFixture.files.setFailPath(undefined);
+  const retried = await service.retry(failed.operationId);
+  assert.equal(retried.state, 'completed');
+  assert.deepEqual(retried.failureCategories, []);
+  assert.ok(fileFixture.removed.includes('protected://exports/orphan.zip'));
+  await database.closeAsync();
+});
+
+test('development reset can retain only its invisible showcase guard', async () => {
+  const database = await databaseFixture();
+  await seedHealth(database);
+  const service = serviceFor(database, filesFixture(), async () => {}, [
+    SHOWCASE_BOOTSTRAP_PREFERENCE,
+  ]);
+
+  assert.equal((await service.execute(await service.preview('reset-app'))).state, 'completed');
+  assert.deepEqual(
+    (
+      await database.getAllAsync<{ key: string; value: string }>(
+        'SELECT key, value FROM app_preferences ORDER BY key;',
+      )
+    ).map((row) => ({ ...row })),
+    [
+      {
+        key: SHOWCASE_BOOTSTRAP_PREFERENCE,
+        value: SHOWCASE_BOOTSTRAP_COMPLETE,
+      },
+    ],
+  );
   await database.closeAsync();
 });
 

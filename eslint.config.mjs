@@ -6,6 +6,7 @@ export default [
     ignores: [
       'node_modules/**',
       '.expo/**',
+      'tmp/**',
       'ios/**',
       'android/**',
       '**/dist/**',

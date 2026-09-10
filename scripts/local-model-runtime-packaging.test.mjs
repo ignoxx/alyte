@@ -9,7 +9,6 @@ import test from 'node:test';
 const root = process.cwd();
 const podspec = join(root, 'apps/mobile/modules/alyte-local-models/ios/AlyteLocalModels.podspec');
 const stagingHelper = join(root, 'apps/mobile/modules/alyte-local-models/ios/stage-runtime.rb');
-const stagedRuntime = join(root, 'apps/mobile/modules/alyte-local-models/ios/Vendor');
 const revision = 'bb4caa7540188872173c44d161602d9271386413';
 
 function makeRuntime(binaryContents = 'synthetic pinned llama runtime') {
@@ -104,10 +103,16 @@ test('runtime staging atomically refreshes and rejects a tampered external artif
 
 test('podspec exposes a relative staged framework and keeps external provenance in the build phase', () => {
   const runtime = makeRuntime();
+  const stagingWorkspace = mkdtempSync(join(tmpdir(), 'alyte-pod-test-stage-'));
+  const stagedRuntime = join(stagingWorkspace, 'Vendor');
   try {
     const result = spawnSync('pod', ['ipc', 'spec', podspec], {
       cwd: root,
-      env: { ...process.env, ALYTE_LOCAL_MODEL_RUNTIME_XCFRAMEWORK: runtime },
+      env: {
+        ...process.env,
+        ALYTE_LOCAL_MODEL_RUNTIME_XCFRAMEWORK: runtime,
+        ALYTE_LOCAL_MODEL_RUNTIME_STAGING_ROOT: stagedRuntime,
+      },
       encoding: 'utf8',
     });
     assert.equal(result.status, 0, result.stderr);
@@ -142,6 +147,6 @@ test('podspec exposes a relative staged framework and keeps external provenance 
   } finally {
     rmSync(runtime, { recursive: true, force: true });
     rmSync(`${runtime}.alyte-eval.json`, { force: true });
-    rmSync(stagedRuntime, { recursive: true, force: true });
+    rmSync(stagingWorkspace, { recursive: true, force: true });
   }
 });

@@ -1,9 +1,23 @@
 import Foundation
 
+/// The PaddleOCR-VL pack has one trained image task. Keeping its short task separate from the
+/// native chat framing prevents callers from accidentally sending a prompt for another model.
+enum AlyteLocalModelPromptContract {
+  static let paddleOCRTask = "OCR:"
+}
+
 /// Narrow runtime seam used by the production lifecycle core and by injected native tests.
 protocol AlyteLocalModelRuntimeSession: AnyObject {
   func generate(prompt: String, maxOutputTokens: Int, outputCapacity: Int) throws -> String
   func generateImage(
+    prompt: String,
+    imageData: Data,
+    maxOutputTokens: Int,
+    outputCapacity: Int
+  ) throws -> String
+  /// Free-form image generation for OCR models. This path intentionally bypasses the JSON
+  /// grammar so layout/text observations reach the parser without lossy coercion.
+  func generateImageRaw(
     prompt: String,
     imageData: Data,
     maxOutputTokens: Int,
@@ -23,12 +37,23 @@ extension AlyteLocalModelRuntimeSession {
   ) throws -> String {
     throw AlyteLocalModelRuntimeError.unavailable
   }
+
+  func generateImageRaw(
+    prompt: String,
+    imageData: Data,
+    maxOutputTokens: Int,
+    outputCapacity: Int
+  ) throws -> String {
+    throw AlyteLocalModelRuntimeError.unavailable
+  }
 }
 
 enum AlyteLocalModelRuntimeError: Error {
   case unavailable
   case loadFailed(AlyteLocalModelRuntimeFailureStage)
   case cancelled
+  case invalidInput
+  case truncated
 }
 
 enum AlyteLocalModelCoreCompletion {
@@ -412,6 +437,8 @@ final class AlyteLocalModelCore: @unchecked Sendable {
       case .unavailable: throw AlyteLocalModelError.unavailable(.unavailable)
       case .loadFailed(let stage): throw AlyteLocalModelError.runtimeFailed(stage)
       case .cancelled: throw AlyteLocalModelError.failed(.cancelled)
+      case .invalidInput: throw AlyteLocalModelError.failed(.incompatible)
+      case .truncated: throw AlyteLocalModelError.failed(.runtimeFailed)
       }
     } catch {
       throw AlyteLocalModelError.failed(.runtimeFailed)
@@ -474,6 +501,30 @@ final class AlyteLocalModelCore: @unchecked Sendable {
       outputCapacity > 0, outputCapacity <= 131_072
     else { throw AlyteLocalModelError.failed(.runtimeFailed) }
     return try loadedRuntime.generateImage(
+      prompt: prompt,
+      imageData: imageData,
+      maxOutputTokens: maxOutputTokens,
+      outputCapacity: outputCapacity
+    )
+  }
+
+  func inferImageRaw(
+    prompt: String,
+    imageData: Data,
+    maxOutputTokens: Int,
+    outputCapacity: Int
+  ) throws -> String {
+    guard stateValue == .loaded, let loadedRuntime else {
+      throw AlyteLocalModelError.unavailable(.unavailable)
+    }
+    guard prompt == AlyteLocalModelPromptContract.paddleOCRTask else {
+      throw AlyteLocalModelError.failed(.incompatible)
+    }
+    guard !imageData.isEmpty, imageData.count <= 16 * 1024 * 1024,
+      maxOutputTokens > 0, maxOutputTokens <= 4_096,
+      outputCapacity > 0, outputCapacity <= 131_072
+    else { throw AlyteLocalModelError.failed(.runtimeFailed) }
+    return try loadedRuntime.generateImageRaw(
       prompt: prompt,
       imageData: imageData,
       maxOutputTokens: maxOutputTokens,

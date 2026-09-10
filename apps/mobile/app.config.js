@@ -1,3 +1,5 @@
+const { withEntitlementsPlist } = require('@expo/config-plugins');
+
 const variants = {
   development: {
     name: 'Alyte Development',
@@ -14,6 +16,13 @@ const variants = {
 };
 const localization = require('./src/localization/en.json');
 const faceIDPermission = localization.settings.appLock.faceIDPermission;
+
+function withoutAppleSignInEntitlement(config) {
+  return withEntitlementsPlist(config, (entitlementsConfig) => {
+    delete entitlementsConfig.modResults['com.apple.developer.applesignin'];
+    return entitlementsConfig;
+  });
+}
 
 module.exports = ({ config }) => {
   const requestedVariant = process.env.APP_VARIANT;
@@ -36,7 +45,10 @@ module.exports = ({ config }) => {
       bundleIdentifier: selected.bundleIdentifier,
       deploymentTarget: '26.0',
       supportsTablet: false,
-      usesAppleSignIn: true,
+      // Personal-team development builds cannot provision Sign in with Apple. Cloud/account
+      // surfaces are not part of the local development journey, so retain the entitlement only
+      // for distribution variants that can exercise those flows.
+      usesAppleSignIn: variant !== 'development',
       entitlements: {
         ...config.ios?.entitlements,
       },
@@ -65,6 +77,7 @@ module.exports = ({ config }) => {
         },
       ],
       ...(variant === 'development' ? ['expo-dev-client'] : []),
+      ...(variant === 'development' ? [withoutAppleSignInEntitlement] : []),
     ],
   };
 };

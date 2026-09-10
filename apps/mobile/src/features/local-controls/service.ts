@@ -32,6 +32,8 @@ type ControlServiceOptions = {
   readonly idGenerator?: (prefix: string) => string;
   readonly appVersion?: string;
   readonly variant?: 'development' | 'preview' | 'production';
+  /** Invisible development markers that prevent synthetic showcase data from returning after reset. */
+  readonly resetPreservedPreferenceKeys?: readonly string[];
 };
 
 function arrayPlaceholders(values: readonly string[]): string {
@@ -70,16 +72,18 @@ async function applyDatabaseDeletion(
   plan: DeletionPlan,
   operationId: string,
   now: string,
+  resetPreservedPreferenceKeys: readonly string[],
 ): Promise<void> {
   const reportIds = plan.targetIds.reportIds;
   const recordIds = plan.targetIds.recordIds;
   const measurementIds = plan.targetIds.measurementIds;
   const eventIds = plan.targetIds.eventIds;
   const bind = (idsToDelete: readonly string[]) => [...idsToDelete];
+  const deletesAllHealth = plan.scope === 'all-health' || plan.scope === 'reset-app';
 
   // This control row references both sides of a combined deletion. Remove it before deleting
   // either parent so every scope remains valid with foreign keys enabled.
-  if (plan.scope === 'all-health') {
+  if (deletesAllHealth) {
     await database.runAsync('DELETE FROM lab_combined_deletions;');
   } else if (plan.scope === 'reports' && reportIds.length > 0) {
     await database.runAsync(
@@ -93,7 +97,7 @@ async function applyDatabaseDeletion(
     );
   }
 
-  if (plan.scope === 'reports' || plan.scope === 'all-health') {
+  if (plan.scope === 'reports' || deletesAllHealth) {
     if (reportIds.length > 0) {
       await database.runAsync(
         `DELETE FROM extraction_draft_rows WHERE draft_id IN (SELECT id FROM extraction_drafts WHERE report_id IN (${arrayPlaceholders(reportIds)}));`,
@@ -124,7 +128,7 @@ async function applyDatabaseDeletion(
     }
   }
 
-  if (plan.scope === 'records' || plan.scope === 'all-health') {
+  if (plan.scope === 'records' || deletesAllHealth) {
     if (measurementIds.length > 0) {
       await database.runAsync(
         `DELETE FROM measurement_corrections WHERE measurement_id IN (${arrayPlaceholders(measurementIds)});`,
@@ -143,7 +147,7 @@ async function applyDatabaseDeletion(
     }
   }
 
-  if (plan.scope === 'events' || plan.scope === 'all-health') {
+  if (plan.scope === 'events' || deletesAllHealth) {
     if (eventIds.length > 0) {
       await database.runAsync(
         `DELETE FROM intake_capture_recovery WHERE event_id IN (${arrayPlaceholders(eventIds)});`,
@@ -189,7 +193,7 @@ async function applyDatabaseDeletion(
     await database.runAsync('DELETE FROM intake_capture_recovery;');
   }
 
-  if (plan.scope === 'all-health') {
+  if (deletesAllHealth) {
     // The current operation remains durable so a relaunch can show a terminal state. Other
     // control rows, export staging references, and sanitization drafts are local-health state.
     await database.runAsync('DELETE FROM extraction_draft_rows;');
@@ -205,12 +209,24 @@ async function applyDatabaseDeletion(
     await database.runAsync('DELETE FROM cloud_jobs;');
     await database.runAsync('DELETE FROM intake_capture_recovery;');
     await database.runAsync('DELETE FROM local_export_jobs;');
-    // Keep non-health app preferences (including the one-time development showcase bootstrap
-    // marker). Only sanitization drafts are health-linked and are removed here.
-    await database.runAsync(
-      'DELETE FROM app_preferences WHERE key LIKE ?;',
-      'labs.sanitization-draft.%',
-    );
+    if (plan.scope === 'reset-app') {
+      // Reset returns Alyte to first launch. The model pack lives outside SQLite and is
+      // intentionally preserved, so onboarding can reuse it without another large download.
+      if (resetPreservedPreferenceKeys.length === 0) {
+        await database.runAsync('DELETE FROM app_preferences;');
+      } else {
+        await database.runAsync(
+          `DELETE FROM app_preferences WHERE key NOT IN (${arrayPlaceholders(resetPreservedPreferenceKeys)});`,
+          ...resetPreservedPreferenceKeys,
+        );
+      }
+    } else {
+      // Ordinary health-data deletion keeps app preferences and removes only health-linked drafts.
+      await database.runAsync(
+        'DELETE FROM app_preferences WHERE key LIKE ?;',
+        'labs.sanitization-draft.%',
+      );
+    }
     await database.runAsync('DELETE FROM local_deletion_operations WHERE id <> ?;', operationId);
   }
 
@@ -265,6 +281,10 @@ function isRedactedDeletionPlan(
   );
 }
 
+function needsOwnedOrphanSweep(scope: LocalDeletionScope): boolean {
+  return scope === 'all-health' || scope === 'reset-app';
+}
+
 export type LocalControlsService = {
   summary(): Promise<LocalDataSummary>;
   preview(scope: LocalDeletionScope): Promise<DeletionPlan>;
@@ -285,6 +305,7 @@ export function createLocalControlsService(
   const makeId = options.idGenerator ?? ((prefix: string) => createSortableOpaqueId(prefix));
   const files = options.files ?? (createProtectedReportFileService() as LocalControlFiles);
   const databaseFactory = options.databaseFactory ?? (() => openProtectedExportDatabase());
+  const resetPreservedPreferenceKeys = [...new Set(options.resetPreservedPreferenceKeys ?? [])];
   let reconcilePromise: Promise<void> | null = null;
 
   async function open(): Promise<ControlDatabaseSession> {
@@ -395,7 +416,13 @@ export function createLocalControlsService(
 
     try {
       await session.database.withTransactionAsync(async () => {
-        await applyDatabaseDeletion(session.database, plan, operationId, now());
+        await applyDatabaseDeletion(
+          session.database,
+          plan,
+          operationId,
+          now(),
+          resetPreservedPreferenceKeys,
+        );
         await updateOperation(session.database, {
           id: operationId,
           state: 'completed',
@@ -406,29 +433,40 @@ export function createLocalControlsService(
           failureCategories: ['database-hygiene-pending'],
         });
       });
-      let hygienePending = false;
+      const hygieneFailures = new Set<LocalDeletionFailureCategory>();
+      if (needsOwnedOrphanSweep(plan.scope)) {
+        for (const failure of await reconcileOwnedOrphans(session.database, files, {
+          failOnError: true,
+        })) {
+          hygieneFailures.add(failure);
+        }
+      }
       try {
         await compactLocalDatabaseStorage(session);
+      } catch {
+        // The data/file delete has already committed. Keep the terminal state truthful and make
+        // only the storage hygiene retryable; the original plan is already safely redacted.
+        hygieneFailures.add('database-hygiene-pending');
+      }
+      try {
         await session.database.withTransactionAsync(async () => {
           await updateOperation(session.database, {
             id: operationId,
             state: 'completed',
             now: now(),
-            failureCategories: [],
+            failureCategories: [...hygieneFailures],
           });
         });
       } catch {
-        // The data/file delete has already committed. Keep the terminal state truthful and make
-        // only the storage hygiene retryable; the original plan is already safely redacted.
-        hygienePending = true;
         // The committed marker already has the pending category. A later startup can retry the
         // hygiene phase even if SQLite is unavailable for this best-effort category update.
+        hygieneFailures.add('database-hygiene-pending');
       }
       await session.close();
       return {
-        state: hygienePending ? 'failed' : 'completed',
+        state: hygieneFailures.size > 0 ? 'failed' : 'completed',
         operationId,
-        failureCategories: hygienePending ? ['database-hygiene-pending'] : [],
+        failureCategories: [...hygieneFailures],
       };
     } catch {
       try {
@@ -471,24 +509,36 @@ export function createLocalControlsService(
         if (row.scope !== completedPlan.scope) {
           return { state: 'failed', operationId, failureCategories: ['stale-preview'] };
         }
+        const hygieneFailures = new Set<LocalDeletionFailureCategory>();
+        if (needsOwnedOrphanSweep(completedPlan.scope)) {
+          for (const failure of await reconcileOwnedOrphans(session.database, files, {
+            failOnError: true,
+          })) {
+            hygieneFailures.add(failure);
+          }
+        }
         try {
           await compactLocalDatabaseStorage(session);
+        } catch {
+          hygieneFailures.add('database-hygiene-pending');
+        }
+        try {
           await session.database.withTransactionAsync(async () => {
             await updateOperation(session.database, {
               id: operationId,
               state: 'completed',
               now: now(),
-              failureCategories: [],
+              failureCategories: [...hygieneFailures],
             });
           });
-          return { state: 'completed', operationId, failureCategories: [] };
         } catch {
-          return {
-            state: 'failed',
-            operationId,
-            failureCategories: ['database-hygiene-pending'],
-          };
+          hygieneFailures.add('database-hygiene-pending');
         }
+        return {
+          state: hygieneFailures.size > 0 ? 'failed' : 'completed',
+          operationId,
+          failureCategories: [...hygieneFailures],
+        };
       }
       parsed = completedPlan as DeletionPlan;
     } catch {
@@ -572,7 +622,10 @@ export function createLocalControlsService(
           `SELECT id, state, plan_json, failure_categories_json
            FROM local_deletion_operations
            WHERE state IN ('requested', 'running', 'failed')
-              OR (state = 'completed' AND failure_categories_json LIKE '%database-hygiene-pending%')
+              OR (state = 'completed' AND (
+                failure_categories_json LIKE '%database-hygiene-pending%'
+                OR failure_categories_json LIKE '%orphan-cleanup-failed%'
+              ))
            ORDER BY requested_at ASC;`,
         );
         for (const row of rows) {
@@ -592,16 +645,36 @@ export function createLocalControlsService(
           }
           if (typeof row.plan_json !== 'string') continue;
           if (row.state === 'completed') {
+            let redactedScope: LocalDeletionScope | null = null;
+            try {
+              const parsed = JSON.parse(row.plan_json) as unknown;
+              if (isRedactedDeletionPlan(parsed)) redactedScope = parsed.scope;
+            } catch {
+              // Keep the existing hygiene retry behavior for an unreadable legacy marker.
+            }
+            const hygieneFailures = new Set<LocalDeletionFailureCategory>();
+            if (redactedScope !== null && needsOwnedOrphanSweep(redactedScope)) {
+              for (const failure of await reconcileOwnedOrphans(session.database, files, {
+                failOnError: true,
+              })) {
+                hygieneFailures.add(failure);
+              }
+            }
             try {
               await compactLocalDatabaseStorage(session);
+            } catch {
+              // Keep the completed marker and pending hygiene category for the next launch.
+              hygieneFailures.add('database-hygiene-pending');
+            }
+            try {
               await updateOperation(session.database, {
                 id: operationId,
                 state: 'completed',
                 now: now(),
-                failureCategories: [],
+                failureCategories: [...hygieneFailures],
               });
             } catch {
-              // Keep the completed marker and pending hygiene category for the next launch.
+              // Keep the existing marker for a later startup retry.
             }
             continue;
           }
@@ -631,7 +704,13 @@ export function createLocalControlsService(
           }
           try {
             await session.database.withTransactionAsync(async () => {
-              await applyDatabaseDeletion(session.database, plan, operationId, now());
+              await applyDatabaseDeletion(
+                session.database,
+                plan,
+                operationId,
+                now(),
+                resetPreservedPreferenceKeys,
+              );
               await updateOperation(session.database, {
                 id: operationId,
                 state: 'completed',

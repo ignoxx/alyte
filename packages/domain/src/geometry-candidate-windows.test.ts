@@ -481,8 +481,10 @@ describe('geometry source-selector candidate windows', () => {
       tableCell('german-metadata-value', '3.8', 0.45, 1, 1),
       tableCell('lithuanian-prose-label', 'Tyrimo rezultatai', 0.05, 2, 0),
       tableCell('lithuanian-prose-value', '3,8', 0.45, 2, 1),
-      tableCell('valid-label', 'C reaktyvusis baltymas', 0.05, 3, 0),
-      tableCell('valid-value', '3,8', 0.45, 3, 1),
+      tableCell('company-code-label', 'Įmonės kodas, licencijos Nr.', 0.05, 3, 0),
+      tableCell('company-code-value', '300887021', 0.45, 3, 1),
+      tableCell('valid-label', 'C reaktyvusis baltymas', 0.05, 4, 0),
+      tableCell('valid-value', '3,8', 0.45, 4, 1),
     ];
     const lattice = reconstructGeometryLattice(geometryObservations(source));
 
@@ -582,6 +584,40 @@ describe('geometry source-selector candidate windows', () => {
         pageIndex: 0,
         orientation: 0,
         observations: first[0]!.observations,
+      }),
+    );
+  });
+
+  it('drops parent token spans when a full-text span receives a derived cell identity', () => {
+    const source = [
+      tableCell('label', 'Ferritin', 0.05, 0, 0),
+      tableCell('single-token-value', '42', 0.4, 0, 1, {
+        spans: [
+          {
+            id: 'single-token-value-span',
+            parentObservationId: 'single-token-value',
+            start: 0,
+            end: 2,
+            text: '42',
+            boundingBox: { x: 0.4, y: 0.2, width: 0.08, height: 0.03 },
+          },
+        ],
+      }),
+    ];
+    const lattice = reconstructGeometryLattice(geometryObservations(source));
+    const candidate = buildGeometryCandidateWindows(lattice, source)[0];
+    assert.ok(candidate);
+    const value = candidate.observations.find((item) => item.text === '42');
+    assert.ok(value);
+    assert.equal(value.id, 'single-token-value:0:2');
+    assert.equal(value.spans, undefined);
+    assert.equal(value.sourceSpan?.parentObservationId, 'single-token-value');
+    assert.doesNotThrow(() =>
+      decodeVisionOCRResult({
+        contractVersion: 'alyte.vision.document.v4',
+        pageIndex: 0,
+        orientation: 0,
+        observations: candidate.observations,
       }),
     );
   });

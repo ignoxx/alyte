@@ -19,6 +19,12 @@ export type NativeLocalModelsModule = {
     maxOutputTokens: number,
     outputCapacity: number,
   ) => Promise<unknown>;
+  readonly inferImageRaw?: (
+    prompt: string,
+    imageURI: string,
+    maxOutputTokens: number,
+    outputCapacity: number,
+  ) => Promise<unknown>;
   readonly cancelInference: () => unknown;
   readonly unload: () => unknown;
   readonly deletePack: (packId: string) => Promise<unknown>;
@@ -45,6 +51,12 @@ export type LocalModelService = {
   ) => Promise<string>;
   /** Runs one bounded VLM request against an app-sandboxed page/band image URI. */
   readonly inferImage: (
+    prompt: string,
+    imageURI: string,
+    limits: { readonly maxOutputTokens: number; readonly outputCapacity: number },
+  ) => Promise<string>;
+  /** Runs one bounded free-form OCR request without the structured JSON grammar. */
+  readonly inferImageRaw?: (
     prompt: string,
     imageURI: string,
     limits: { readonly maxOutputTokens: number; readonly outputCapacity: number },
@@ -217,6 +229,43 @@ export function createLocalModelService(options: LocalModelServiceOptions = {}):
       }
       return output;
     },
+    inferImageRaw: async (prompt, imageURI, limits) => {
+      const resolved = requireNative();
+      if (snapshot.state !== 'loaded' || !snapshot.loaded) {
+        throw Object.assign(new Error('The local model is not loaded'), { failure: 'unavailable' });
+      }
+      if (
+        prompt !== 'OCR:' ||
+        !imageURI.startsWith('file://') ||
+        !Number.isSafeInteger(limits.maxOutputTokens) ||
+        limits.maxOutputTokens < 1 ||
+        limits.maxOutputTokens > 4_096 ||
+        !Number.isSafeInteger(limits.outputCapacity) ||
+        limits.outputCapacity < 1 ||
+        limits.outputCapacity > 131_072
+      ) {
+        throw Object.assign(new Error('The local OCR inference input is invalid'), {
+          failure: 'incompatible',
+        });
+      }
+      if (resolved.inferImageRaw === undefined) {
+        throw Object.assign(new Error('The local OCR runtime is unavailable'), {
+          failure: 'unavailable',
+        });
+      }
+      const output = await resolved.inferImageRaw(
+        prompt,
+        imageURI,
+        limits.maxOutputTokens,
+        limits.outputCapacity,
+      );
+      if (typeof output !== 'string') {
+        throw Object.assign(new Error('The local OCR runtime returned malformed output'), {
+          failure: 'runtime-failed',
+        });
+      }
+      return output;
+    },
     cancelInference: () => {
       resolveNative()?.cancelInference();
     },
@@ -315,6 +364,7 @@ export function createFakeLocalModelNativeModule(): NativeLocalModelsModule {
       }),
     inferImage: async (_prompt, _imageURI, _maxOutputTokens, _outputCapacity) =>
       JSON.stringify({ rows: [] }),
+    inferImageRaw: async (_prompt, _imageURI, _maxOutputTokens, _outputCapacity) => '',
     cancelInference: () => undefined,
     unload: () =>
       emit({ ...state, state: state.state === 'loaded' ? 'ready' : state.state, loaded: false }),

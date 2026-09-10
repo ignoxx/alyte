@@ -29,8 +29,8 @@ test('pathless import failures are deletion-only and do not claim a retained sou
     { action: 'retry', message: 'retained-source' },
   );
   const copy = t('labs.reportNoSourceRetryBody');
-  assert.match(copy, /no protected source to retry/i);
-  assert.doesNotMatch(copy, /source remains/i);
+  assert.match(copy, /no saved file/i);
+  assert.doesNotMatch(copy, /file remains/i);
 });
 
 test('report page count interpolation produces one localized label', () => {

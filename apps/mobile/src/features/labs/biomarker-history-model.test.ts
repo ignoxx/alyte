@@ -9,14 +9,16 @@ import {
 import {
   buildBiomarkerHistoryViewModel,
   buildHistoryAccessibilityLabel,
+  formatNormalizedTrendValue,
   getHistoryChartConnections,
   getHistoryChartLayout,
   getHistoryTimelineLayout,
+  historyPointValuePresentation,
   listHistoryEntries,
   type HistoryAccessibilityCopy,
 } from './biomarker-history-model';
 
-test('history chart connects adjacent compatible measured points across explicit context rows', () => {
+test('history chart does not bridge an explicit missing result', () => {
   const model = buildBiomarkerHistoryViewModel(
     [
       record('r1', { kind: 'known', value: '2026-01-01' }, [
@@ -33,11 +35,34 @@ test('history chart connects adjacent compatible measured points across explicit
   assert.ok(model);
   assert.equal(model.trend.segments.length, 2);
   assert.deepEqual(
-    getHistoryChartConnections(model.trend.points).map(([start, end]) => [
+    getHistoryChartConnections(model.trend.segments).map(([start, end]) => [
       start.measurementId,
       end.measurementId,
     ]),
-    [['m1', 'm3']],
+    [],
+  );
+});
+
+test('history chart connects points inside the same measured segment', () => {
+  const model = buildBiomarkerHistoryViewModel(
+    [
+      record('r1', { kind: 'known', value: '2026-01-01' }, [
+        measurement('m1', 'r1', { kind: 'numeric', value: 110 }),
+      ]),
+      record('r2', { kind: 'known', value: '2026-02-01' }, [
+        measurement('m2', 'r2', { kind: 'numeric', value: 100 }),
+      ]),
+    ],
+    'biomarker.ldl_c',
+  );
+
+  assert.ok(model);
+  assert.deepEqual(
+    getHistoryChartConnections(model.trend.segments).map(([start, end]) => [
+      start.measurementId,
+      end.measurementId,
+    ]),
+    [['m1', 'm2']],
   );
 });
 
@@ -67,10 +92,55 @@ test('history chart keeps compact geometry and grows room for scaled annotations
   assert.deepEqual(getHistoryChartLayout(Number.NaN), getHistoryChartLayout(1));
 });
 
+test('converted trend values hide floating-point noise without changing source values', () => {
+  assert.equal(formatNormalizedTrendValue(99.099099099099, 'en-US'), '99.1');
+  assert.equal(formatNormalizedTrendValue(146.946, 'de-DE'), '146,9');
+});
+
+test('history leads with the saved result and labels a derived chart conversion', () => {
+  const model = buildBiomarkerHistoryViewModel(
+    [
+      record('r-converted', { kind: 'known', value: '2026-01-01' }, [
+        measurement(
+          'm-converted',
+          'r-converted',
+          { kind: 'numeric', value: 3.8 },
+          { unit: 'mmol/L', valueString: '3,8' },
+        ),
+      ]),
+    ],
+    'biomarker.ldl_c',
+  );
+  assert.ok(model);
+  const item = model.timeline[0];
+  assert.ok(item?.kind === 'point');
+  assert.deepEqual(historyPointValuePresentation(item.point, item.current, 'de-DE'), {
+    result: '3,8 mmol/L',
+    chartValue: '146,9 mg/dL',
+  });
+
+  const sameUnitModel = buildBiomarkerHistoryViewModel(
+    [
+      record('r-same-unit', { kind: 'known', value: '2026-01-01' }, [
+        measurement('m-same-unit', 'r-same-unit', { kind: 'numeric', value: 110 }),
+      ]),
+    ],
+    'biomarker.ldl_c',
+  );
+  assert.ok(sameUnitModel);
+  const sameUnit = sameUnitModel.timeline[0];
+  assert.ok(sameUnit?.kind === 'point');
+  assert.deepEqual(historyPointValuePresentation(sameUnit.point, sameUnit.current, 'en-US'), {
+    result: '110 mg/dL',
+    chartValue: null,
+  });
+});
+
 const copy: HistoryAccessibilityCopy = {
   chart: 'Measured trend',
   measuredPoint: 'Measured point',
   current: 'Current result',
+  chartValue: 'Chart value',
   nonPoint: {
     'not-measured': 'Not measured',
     'date-missing': 'Collection date missing',
@@ -80,6 +150,7 @@ const copy: HistoryAccessibilityCopy = {
   },
   date: 'Collection date',
   source: 'Original source',
+  sourceEntry: 'Original entry',
   unit: 'Unit',
   laboratoryInterval: 'Laboratory interval',
   laboratoryFlag: 'Laboratory flag',
@@ -298,7 +369,47 @@ test('VoiceOver uses localized dates and decimals for a converted comma-decimal 
   assert.ok(model);
   const label = buildHistoryAccessibilityLabel(model, copy, 'de-DE');
   assert.match(label, /01\.01\.2026/);
-  assert.match(label, /146,946 mg\/dL/);
+  assert.match(label, /Current result 3,8 mmol\/L; Chart value 146,9 mg\/dL/);
+});
+
+test('VoiceOver does not describe a manual result as an Original Report', () => {
+  const entered = measurement(
+    'm-manual',
+    'r-manual',
+    { kind: 'numeric', value: 92 },
+    { provenance: 'user-entered' },
+  );
+  const manual = {
+    ...entered,
+    source: null,
+    originalState: { ...entered.originalState, source: null },
+  };
+  const enteredModel = buildBiomarkerHistoryViewModel(
+    [record('r-manual', { kind: 'known', value: '2026-01-01' }, [manual])],
+    'biomarker.ldl_c',
+  );
+  assert.ok(enteredModel);
+  const enteredLabel = buildHistoryAccessibilityLabel(enteredModel, copy, 'en-US');
+  assert.doesNotMatch(enteredLabel, /Original source|Original entry/);
+
+  const corrected = {
+    ...manual,
+    provenance: 'user-corrected' as const,
+    current: {
+      ...manual.current,
+      value: { kind: 'numeric' as const, value: 93 },
+      valueString: '93',
+    },
+  };
+  const correctedModel = buildBiomarkerHistoryViewModel(
+    [record('r-corrected', { kind: 'known', value: '2026-02-01' }, [corrected])],
+    'biomarker.ldl_c',
+  );
+  assert.ok(correctedModel);
+  assert.match(
+    buildHistoryAccessibilityLabel(correctedModel, copy, 'en-US'),
+    /Original entry LDL-C: 92 mg\/dL/,
+  );
 });
 
 test('production history keeps guidance ambiguity explicit when context is absent', () => {

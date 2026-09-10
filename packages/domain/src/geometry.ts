@@ -759,14 +759,30 @@ function samePhysicalBand(
     trustedIndependent &&
     sharesTrustedVisualLine &&
     strictlyAlignedPhysicalBand(stable.boundingBox, candidate.boundingBox);
+  // PDFKit can expose every visible table cell as a separate source line. Those trusted lines
+  // still share one exact baseline, but cannot satisfy `sharesTrustedVisualLine` because each
+  // cell has a different parent observation. Allow only the strongly-overlapping case here;
+  // nearby source lines with a small baseline offset remain separate unless they share a parent.
+  const trustedCellsShareBaseline =
+    trustedIndependent &&
+    strictlyOverlappingPhysicalBand(stable.boundingBox, candidate.boundingBox);
   if (!vertical && !strictlyAligned) return false;
-  if (strictlyAligned) return true;
+  if (strictlyAligned || trustedCellsShareBaseline) return true;
   return parts.some((part) => {
     const left = part.boundingBox;
     const right = candidate.boundingBox;
     const gap = horizontalGap(left, right);
     return gap <= xContinuityGap(adaptiveHeight) || horizontalOverlap(left, right) > 0;
   });
+}
+
+function strictlyOverlappingPhysicalBand(
+  left: GeometryBoundingBox,
+  right: GeometryBoundingBox,
+): boolean {
+  const minimumHeight = Math.max(0.000001, Math.min(left.height, right.height));
+  const overlap = verticalOverlap(left, right) / minimumHeight;
+  return overlap >= 0.55;
 }
 
 /**

@@ -24,7 +24,7 @@ assert.equal(
   'the required on-device model module must not be excluded from native autolinking',
 );
 assert.equal(typeof mobileStrings.onboarding?.modelDownload, 'string');
-assert.equal(typeof mobileStrings.onboarding?.modelReadyBody, 'string');
+assert.equal(typeof mobileStrings.onboarding?.modelPrepareBody, 'string');
 
 const autolinkingCli = path.join(
   root,
@@ -38,7 +38,7 @@ const autolinkedModules = execFileSync(
 assert.match(autolinkedModules, /"packageName":"@alyte\/local-models"/);
 
 const services = read('apps/mobile/src/services/index.ts');
-assert.match(services, /createLocalDocumentVLM\(\{ models: localModels \}\)/);
+assert.match(services, /createLocalPaddleOCR\(\{ models: localModels \}\)/);
 assert.match(services, /models: localModels/);
 assert.match(read('apps/mobile/App.tsx'), /model=\{services\.models\}/);
 
@@ -50,15 +50,26 @@ assert.doesNotMatch(
   'onboarding may install and verify the required pack, but must not load it into memory',
 );
 
-const documentVLM = read('apps/mobile/src/features/local-models/document-vlm.ts');
-assert.match(documentVLM, /options\.models\.load\(\)/);
-assert.match(documentVLM, /options\.models\.inferImage\(/);
-assert.match(documentVLM, /options\.models\.unload\(\)/);
+const paddleOCR = read('apps/mobile/src/features/local-models/paddleocr.ts');
+assert.match(paddleOCR, /options\.models\.load\(\)/);
+assert.match(paddleOCR, /inferImageRaw\(createPaddleOCRPrompt\(\)/);
+assert.match(paddleOCR, /options\.models\.unload\(\)/);
+assert.match(paddleOCR, /return 'OCR:'/);
 
 const podspec = read('apps/mobile/modules/alyte-local-models/ios/AlyteLocalModels.podspec');
 assert.match(podspec, /ALYTE_LOCAL_MODEL_RUNTIME_XCFRAMEWORK/);
 assert.match(podspec, /ENV\['APP_VARIANT'\] != 'production'/);
 assert.match(podspec, /requires the exact pinned llama\.cpp runtime/);
+assert.match(
+  podspec,
+  /ENV\['ALYTE_LOCAL_MODEL_CPU_ONLY'\] == '1'/,
+  'CPU-only inference must remain an explicit diagnostic override',
+);
+assert.doesNotMatch(
+  podspec,
+  /unless \['preview', 'production'\]\.include\?\(ENV\['APP_VARIANT'\]\)/,
+  'development device builds must use the bounded Metal-first runtime',
+);
 
 assert.doesNotMatch(
   read('apps/mobile/app.config.js'),
