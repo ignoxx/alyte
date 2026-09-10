@@ -7,24 +7,31 @@ test('local-deletion preview distinguishes extraction drafts from extracted revi
   const extractionDrafts = t(deletionCountLabelKeys.extractionDrafts);
   const extractionRows = t(deletionCountLabelKeys.extractionRows);
 
-  assert.equal(extractionDrafts, 'extraction drafts');
-  assert.equal(extractionRows, 'extracted review rows');
+  assert.equal(extractionDrafts, 'report drafts');
+  assert.equal(extractionRows, 'results to check');
   assert.notEqual(deletionCountLabelKeys.extractionDrafts, deletionCountLabelKeys.extractionRows);
 });
 
 test('local-deletion preview keeps sanitization drafts distinct from extraction drafts', () => {
-  assert.equal(t(deletionCountLabelKeys.sanitizationDrafts), 'sanitization drafts');
+  assert.equal(t(deletionCountLabelKeys.sanitizationDrafts), 'redaction drafts');
   assert.notEqual(
     deletionCountLabelKeys.sanitizationDrafts,
     deletionCountLabelKeys.extractionDrafts,
   );
 });
 
-test('hygiene-only failure hides committed deletion counts while keeping retry state', () => {
+test('post-commit cleanup failures hide committed deletion counts while keeping retry state', () => {
   assert.equal(
     shouldHideDeletionPreview({
       state: 'failed',
       failureCategories: ['database-hygiene-pending'],
+    }),
+    true,
+  );
+  assert.equal(
+    shouldHideDeletionPreview({
+      state: 'failed',
+      failureCategories: ['orphan-cleanup-failed'],
     }),
     true,
   );

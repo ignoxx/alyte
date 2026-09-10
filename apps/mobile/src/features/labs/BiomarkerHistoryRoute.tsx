@@ -13,6 +13,7 @@ import {
   formatLocaleDecimal,
   type MeasuredTrendNonPoint,
   type MeasurementSnapshot,
+  type SpecimenType,
 } from '@alyte/domain';
 import type { LabsStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
@@ -25,14 +26,15 @@ import {
   ScreenScrollView,
   ScreenStatusView,
   StatusPill,
-  TidalHero,
 } from '../../ui/primitives';
 import {
   buildBiomarkerHistoryViewModel,
   buildHistoryAccessibilityLabel,
+  formatNormalizedTrendValue,
   getHistoryChartConnections,
   getHistoryChartLayout,
   getHistoryTimelineLayout,
+  historyPointValuePresentation,
   type BiomarkerHistoryViewModel,
   type HistoryAccessibilityCopy,
   type HistoryChartLayout,
@@ -59,12 +61,6 @@ const nonPointKey: Record<MeasuredTrendNonPoint['kind'], string> = {
   unsupported: 'labs.historyNonPointUnsupported',
 };
 
-const guidanceReasonKey = {
-  'context-unavailable': 'labs.historyGuidanceContextUnavailable',
-  'no-match': 'labs.historyGuidanceNoMatch',
-  'pending-review': 'labs.historyGuidancePendingReview',
-} as const;
-
 const provenanceKey = {
   extracted: 'labs.provenance.extracted',
   'user-entered': 'labs.provenance.user_entered',
@@ -76,6 +72,7 @@ function accessibilityCopy(): HistoryAccessibilityCopy {
     chart: t('labs.historyChartTitle'),
     measuredPoint: t('labs.historyMeasuredPoint'),
     current: t('labs.historyCurrentResult'),
+    chartValue: t('labs.historyChartValue'),
     nonPoint: {
       'not-measured': t('labs.historyNonPointNotMeasured'),
       'date-missing': t('labs.historyNonPointDateMissing'),
@@ -85,6 +82,7 @@ function accessibilityCopy(): HistoryAccessibilityCopy {
     },
     date: t('labs.historyCollectionDate'),
     source: t('labs.historyOriginalSource'),
+    sourceEntry: t('labs.historyOriginalEntry'),
     unit: t('labs.measurementUnit'),
     laboratoryInterval: t('labs.historyLaboratoryInterval'),
     laboratoryFlag: t('labs.historyLaboratoryFlag'),
@@ -132,14 +130,22 @@ export function BiomarkerHistoryRoute() {
 
   if (loading) {
     return (
-      <ScreenStatusView contentContainerStyle={styles.fixedStatus} style={screenStyles.scroll}>
+      <ScreenStatusView
+        contentContainerStyle={styles.fixedStatus}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         <AppText selectable>{t('labs.historyLoading')}</AppText>
       </ScreenStatusView>
     );
   }
   if (error) {
     return (
-      <ScreenStatusView contentContainerStyle={styles.fixedStatus} style={screenStyles.scroll}>
+      <ScreenStatusView
+        contentContainerStyle={styles.fixedStatus}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         <AppSurface tone="soft" style={styles.errorSurface}>
           <AppText variant="heading" selectable>
             {t('labs.historyErrorTitle')}
@@ -154,7 +160,11 @@ export function BiomarkerHistoryRoute() {
   }
   if (model === null) {
     return (
-      <ScreenStatusView contentContainerStyle={styles.fixedStatus} style={screenStyles.scroll}>
+      <ScreenStatusView
+        contentContainerStyle={styles.fixedStatus}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         <AppText selectable>{t('labs.historyNotFound')}</AppText>
         <AppButton
           label={t('accessibility.back')}
@@ -170,7 +180,9 @@ export function BiomarkerHistoryRoute() {
 
 function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryViewModel }) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [explanationOpen, setExplanationOpen] = useState(model.explanation !== null);
+  // Keep the useful explanation in the first read. Catalogue and source metadata remains
+  // available, but should not compete with the measured history by default.
+  const [explanationDetailsOpen, setExplanationDetailsOpen] = useState(false);
   const [generalGuidanceOpen, setGeneralGuidanceOpen] = useState(false);
   const { fontScale } = useWindowDimensions();
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
@@ -178,6 +190,18 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
   const timelineLayout = getHistoryTimelineLayout(fontScale);
   const chartLayout = getHistoryChartLayout(fontScale);
   const latestMeasured = [...model.timeline].reverse().find((item) => item.kind === 'point');
+  const latestMeasuredValues =
+    latestMeasured?.kind === 'point'
+      ? historyPointValuePresentation(latestMeasured.point, latestMeasured.current, locale)
+      : null;
+  const latestOriginalSource =
+    latestMeasured?.kind === 'point' ? originalSourceFact(latestMeasured) : null;
+  // A report that did not contain this biomarker still breaks the chart segment in the domain
+  // model, but repeating one empty row per report makes the visible history harder to understand.
+  // Keep actual values and genuine exceptions in the timeline; the chart remains gap-aware.
+  const visibleTimeline = model.timeline.filter(
+    (item) => item.kind === 'point' || item.nonPoint.kind !== 'not-measured',
+  );
   const toggle = (key: string) => {
     setExpanded((current) => {
       const next = new Set(current);
@@ -195,7 +219,7 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
     >
       {latestMeasured?.kind === 'point' && (
         <View style={styles.latestMeasuredGroup}>
-          <TidalHero style={styles.latestMeasuredSurface}>
+          <AppSurface style={styles.latestMeasuredSurface}>
             <View style={styles.latestMeasuredHeader}>
               <StatusPill tone="measured">{t('labs.historyMeasuredPoint')}</StatusPill>
               <AppText style={styles.latestMeasuredDate} variant="caption">
@@ -203,9 +227,17 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
               </AppText>
             </View>
             <AppText selectable style={styles.latestMeasuredValue} variant="display">
-              {`${formatLocaleDecimal(latestMeasured.point.normalized.value, locale)} ${latestMeasured.point.normalized.unit}`}
+              {latestMeasuredValues?.result}
             </AppText>
-          </TidalHero>
+            {latestMeasuredValues !== null && latestMeasuredValues.chartValue !== null && (
+              <AppText selectable style={styles.latestMeasuredConversion} variant="caption">
+                {t('labs.historyChartUsesValue').replace(
+                  '{value}',
+                  latestMeasuredValues.chartValue,
+                )}
+              </AppText>
+            )}
+          </AppSurface>
           <AppSurface style={styles.latestFacts}>
             <Fact
               label={t('labs.historyLaboratoryInterval')}
@@ -219,10 +251,9 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
                   : t(provenanceKey[latestMeasured.provenance])
               }
             />
-            <Fact
-              label={t('labs.historyOriginalSource')}
-              value={originalSourceText(latestMeasured.original) || t('labs.historyNotProvided')}
-            />
+            {latestOriginalSource !== null && (
+              <Fact label={latestOriginalSource.label} value={latestOriginalSource.value} />
+            )}
           </AppSurface>
         </View>
       )}
@@ -230,7 +261,9 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
         <AppText variant="label" selectable style={styles.secondary}>
           {t('labs.historyDirection')}
         </AppText>
-        <StatusPill tone="measured">{t(directionKey[model.trend.direction])}</StatusPill>
+        <StatusPill tone={model.trend.direction === 'not-comparable' ? 'neutral' : 'measured'}>
+          {t(directionKey[model.trend.direction])}
+        </StatusPill>
       </View>
 
       <View style={styles.section}>
@@ -253,7 +286,7 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
           {t('labs.historyTimelineTitle')}
         </AppText>
         <View style={styles.timeline}>
-          {model.timeline.map((item, index) => {
+          {visibleTimeline.map((item, index) => {
             const key = timelineKey(item, index);
             return (
               <HistoryTimelineRow
@@ -267,7 +300,7 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
             );
           })}
         </View>
-        {model.timeline.length === 0 && (
+        {visibleTimeline.length === 0 && (
           <AppSurface tone="soft">
             <AppText selectable>{t('labs.historyEmptyTitle')}</AppText>
             <AppText selectable style={styles.secondary}>
@@ -277,76 +310,72 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
         )}
       </View>
 
-      {model.explanation !== null || model.explanationReviewPending ? (
+      {model.explanation !== null ? (
         <View style={styles.section}>
-          <Pressable
-            accessibilityLabel={t(
-              explanationOpen ? 'labs.historyHideExplanation' : 'labs.historyShowExplanation',
-            )}
-            accessibilityRole="button"
-            accessibilityState={{ expanded: explanationOpen }}
-            onPress={() => setExplanationOpen((current) => !current)}
-            style={({ pressed }) => [styles.disclosureButton, pressed && styles.pressed]}
-          >
-            <View style={styles.educationHeading}>
-              <AppText variant="heading" selectable>
-                {t('labs.historyExplanation')}
-              </AppText>
-              {model.explanation !== null && (
-                <StatusPill tone="evidenceBacked">{t('labs.historyReviewedContent')}</StatusPill>
-              )}
-            </View>
-            <AppText style={styles.secondary}>
-              {t(explanationOpen ? 'labs.historyHideExplanation' : 'labs.historyShowExplanation')}
+          <View style={styles.educationHeading}>
+            <AppText variant="heading" selectable>
+              {t('labs.historyExplanation')}
             </AppText>
-          </Pressable>
-          {explanationOpen && (
-            <AppSurface style={styles.factsSurface}>
-              {model.explanation !== null ? (
-                <AppText selectable>{model.explanation}</AppText>
-              ) : (
-                <AppText selectable style={styles.secondary}>
-                  {t('labs.historyExplanationPending')}
-                </AppText>
+            {model.explanation !== null && (
+              <StatusPill tone="evidenceBacked">{t('labs.historyReviewedContent')}</StatusPill>
+            )}
+          </View>
+          <AppSurface style={styles.factsSurface}>
+            <AppText selectable>{model.explanation}</AppText>
+            <Pressable
+              accessibilityLabel={t(
+                explanationDetailsOpen ? 'labs.historyHideDetails' : 'labs.historyShowDetails',
               )}
-              <AppText variant="label" selectable>
-                {t('labs.historySources')}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: explanationDetailsOpen }}
+              onPress={() => setExplanationDetailsOpen((current) => !current)}
+              style={({ pressed }) => [styles.disclosureButton, pressed && styles.pressed]}
+            >
+              <AppText variant="label" style={styles.linkLabel}>
+                {t(explanationDetailsOpen ? 'labs.historyHideDetails' : 'labs.historyShowDetails')}
               </AppText>
-              <Fact
-                label={t('labs.historyCatalogueVersion')}
-                value={model.catalogueVersion ?? t('labs.historyNotProvided')}
-              />
-              <Fact
-                label={t('labs.historyContentVersion')}
-                value={model.contentVersion ?? t('labs.historyNotProvided')}
-              />
-              {model.sources.length > 0 ? (
-                model.sources.map((source) => (
-                  <View key={source.id} style={styles.factGroup}>
-                    <AppText selectable>{source.title}</AppText>
-                    <AppText selectable style={styles.secondary}>
-                      {source.publisher}
-                    </AppText>
-                    <AppText selectable style={styles.linkLabel}>
-                      {source.url}
-                    </AppText>
-                  </View>
-                ))
-              ) : (
-                <AppText selectable style={styles.secondary}>
-                  {t('labs.historyNotProvided')}
+            </Pressable>
+            {explanationDetailsOpen && (
+              <View style={styles.details}>
+                <AppText variant="label" selectable>
+                  {t('labs.historySources')}
                 </AppText>
-              )}
-            </AppSurface>
-          )}
+                <Fact
+                  label={t('labs.historyCatalogueVersion')}
+                  value={model.catalogueVersion ?? t('labs.historyNotProvided')}
+                />
+                <Fact
+                  label={t('labs.historyContentVersion')}
+                  value={model.contentVersion ?? t('labs.historyNotProvided')}
+                />
+                {model.sources.length > 0 ? (
+                  model.sources.map((source) => (
+                    <View key={source.id} style={styles.factGroup}>
+                      <AppText selectable>{source.title}</AppText>
+                      <AppText selectable style={styles.secondary}>
+                        {source.publisher}
+                      </AppText>
+                      <AppText selectable style={styles.linkLabel}>
+                        {source.url}
+                      </AppText>
+                    </View>
+                  ))
+                ) : (
+                  <AppText selectable style={styles.secondary}>
+                    {t('labs.historyNotProvided')}
+                  </AppText>
+                )}
+              </View>
+            )}
+          </AppSurface>
         </View>
       ) : null}
 
-      <View style={styles.section}>
-        <AppText variant="heading" selectable>
-          {t('labs.historyGeneralGuidance')}
-        </AppText>
-        {model.guidance.kind === 'applicable' ? (
+      {model.guidance.kind === 'applicable' && (
+        <View style={styles.section}>
+          <AppText variant="heading" selectable>
+            {t('labs.historyGeneralGuidance')}
+          </AppText>
           <>
             <AppSurface tone="soft" style={styles.factsSurface}>
               <AppText selectable style={styles.secondary}>
@@ -381,14 +410,8 @@ function BiomarkerHistoryScreen({ model }: { readonly model: BiomarkerHistoryVie
               </AppSurface>
             )}
           </>
-        ) : (
-          <AppSurface tone="soft" style={styles.factsSurface}>
-            <AppText selectable style={styles.secondary}>
-              {t(guidanceReasonKey[model.guidance.reason])}
-            </AppText>
-          </AppSurface>
-        )}
-      </View>
+        </View>
+      )}
     </ScreenScrollView>
   );
 }
@@ -412,10 +435,29 @@ function originalSourceText(snapshot: MeasurementSnapshot | null): string {
   return `${snapshot.label}: ${snapshot.valueString}${snapshot.unit ? ` ${snapshot.unit}` : ''}`;
 }
 
+function originalSourceFact(item: HistoryTimelineItem): { label: string; value: string } | null {
+  const value = originalSourceText(item.original);
+  if (value.length === 0 || item.provenance === null || item.provenance === 'user-entered') {
+    return null;
+  }
+  return {
+    label: t(
+      item.provenance === 'extracted' || item.sourceLocation !== null
+        ? 'labs.historyOriginalSource'
+        : 'labs.historyOriginalEntry',
+    ),
+    value,
+  };
+}
+
 function reviewedDate(value: string | null, locale: string): string {
   return value !== null && /^\d{4}-\d{2}-\d{2}$/.test(value)
     ? formatLocaleDate(value, locale)
     : (value ?? t('labs.historyNotProvided'));
+}
+
+function specimenLabel(value: SpecimenType): string {
+  return t(`labs.specimen.${value}`);
 }
 
 function capitalize(value: string): string {
@@ -429,13 +471,10 @@ function GuidanceDetails({
   readonly guidance: HistoryGuidanceItem;
   readonly locale: string;
 }) {
-  const applicability = [
-    t('labs.historyGuidancePopulationAdults'),
-    `${t('labs.historyGuidanceJurisdiction')}: ${guidance.applicability.jurisdiction}`,
-    `${t('labs.historyGuidancePurpose')}: ${t('labs.historyGuidanceScreening')}`,
-    `${t('labs.historyGuidanceSex')}: ${t(`labs.historyGuidanceSex${capitalize(guidance.applicability.sex)}`)}`,
-    `${t('labs.historyGuidanceFasting')}: ${t(`labs.historyGuidanceFasting${capitalize(guidance.applicability.fasting.replace('-', ''))}`)}`,
-  ].join(' · ');
+  const sexLabel = t(`labs.historyGuidanceSex${capitalize(guidance.applicability.sex)}`);
+  const fastingLabel = t(
+    `labs.historyGuidanceFasting${capitalize(guidance.applicability.fasting.replace('-', ''))}`,
+  );
   return (
     <View style={styles.factGroup}>
       <AppText variant="label" selectable>
@@ -452,11 +491,33 @@ function GuidanceDetails({
           .join(' · ')}
       />
       <Fact label={t('labs.historyGuidanceAuthority')} value={guidance.authority} />
-      <Fact label={t('labs.historyGuidanceApplicability')} value={applicability} />
-      <Fact
-        label={t('labs.historyGuidanceLimitations')}
-        value={guidance.applicability.limitations.join(' · ') || t('labs.historyNotProvided')}
-      />
+      <View style={styles.applicabilityFacts}>
+        <AppText variant="label" selectable style={styles.secondary}>
+          {t('labs.historyGuidanceApplicability')}
+        </AppText>
+        <AppText selectable>{t('labs.historyGuidancePopulationAdults')}</AppText>
+        <Fact
+          label={t('labs.historyGuidanceJurisdiction')}
+          value={guidance.applicability.jurisdiction}
+        />
+        <Fact label={t('labs.historyGuidancePurpose')} value={t('labs.historyGuidanceScreening')} />
+        <Fact label={t('labs.historyGuidanceSex')} value={sexLabel} />
+        <Fact label={t('labs.historyGuidanceFasting')} value={fastingLabel} />
+      </View>
+      <View style={styles.applicabilityFacts}>
+        <AppText variant="label" selectable style={styles.secondary}>
+          {t('labs.historyGuidanceLimitations')}
+        </AppText>
+        {guidance.applicability.limitations.length > 0 ? (
+          guidance.applicability.limitations.map((limitation) => (
+            <AppText key={limitation} selectable>
+              {limitation}
+            </AppText>
+          ))
+        ) : (
+          <AppText selectable>{t('labs.historyNotProvided')}</AppText>
+        )}
+      </View>
       {guidance.disagreement !== null && (
         <Fact label={t('labs.historyGuidanceDisagreement')} value={guidance.disagreement} />
       )}
@@ -512,22 +573,27 @@ function HistoryTimelineRow({
   readonly onToggle: () => void;
 }) {
   if (item.kind === 'point') {
-    const value = `${formatLocaleDecimal(item.point.normalized.value, locale)} ${item.point.normalized.unit}`;
+    const values = historyPointValuePresentation(item.point, item.current, locale);
     const current = snapshotText(item.current, locale);
-    const source = originalSourceText(item.original);
+    const source = originalSourceFact(item);
     return (
       <View style={styles.timelineRow}>
         <View style={styles.timelineMarker} />
         <View style={styles.timelineCopy}>
           <View style={[styles.rowHeader, layout === 'stacked' && styles.rowHeaderStacked]}>
             <AppText variant="heading" selectable style={styles.rowHeaderTitle}>
-              {value}
+              {values.result}
             </AppText>
             <StatusPill tone="measured">{t('labs.historyMeasuredPoint')}</StatusPill>
           </View>
           <AppText selectable style={styles.secondary}>
             {formatLocaleDate(item.point.collectionDate, locale)}
           </AppText>
+          {values.chartValue !== null && (
+            <AppText selectable style={styles.secondary} variant="caption">
+              {t('labs.historyChartUsesValue').replace('{value}', values.chartValue)}
+            </AppText>
+          )}
           <Pressable
             accessibilityLabel={t(expanded ? 'labs.historyHideDetails' : 'labs.historyShowDetails')}
             accessibilityRole="button"
@@ -542,7 +608,7 @@ function HistoryTimelineRow({
           {expanded && (
             <View style={styles.details}>
               <Fact label={t('labs.historyCurrentResult')} value={current} />
-              <Fact label={t('labs.historyOriginalSource')} value={source} />
+              {source !== null && <Fact label={source.label} value={source.value} />}
               <Fact
                 label={t('labs.historyLaboratoryInterval')}
                 value={item.point.laboratoryReference.interval ?? t('labs.historyNotProvided')}
@@ -551,7 +617,10 @@ function HistoryTimelineRow({
                 label={t('labs.historyLaboratoryFlag')}
                 value={item.point.laboratoryReference.flag ?? t('labs.historyNotProvided')}
               />
-              <Fact label={t('labs.historySpecimen')} value={item.point.specimenType} />
+              <Fact
+                label={t('labs.historySpecimen')}
+                value={specimenLabel(item.point.specimenType)}
+              />
               <Fact
                 label={t('labs.historyProvenance')}
                 value={
@@ -583,7 +652,7 @@ function HistoryTimelineRow({
       ? formatLocaleDate(item.nonPoint.collectionDate.value, locale)
       : t('labs.historyNonPointDateMissing');
   const current = item.current === null ? null : snapshotText(item.current, locale);
-  const source = originalSourceText(item.original);
+  const source = originalSourceFact(item);
   const interval = item.laboratoryReference.interval ?? t('labs.historyNotProvided');
   const flag = item.laboratoryReference.flag ?? t('labs.historyNotProvided');
   return (
@@ -616,10 +685,7 @@ function HistoryTimelineRow({
               label={t('labs.historyCurrentResult')}
               value={current ?? t('labs.historyNotProvided')}
             />
-            <Fact
-              label={t('labs.historyOriginalSource')}
-              value={source || t('labs.historyNotProvided')}
-            />
+            {source !== null && <Fact label={source.label} value={source.value} />}
             <Fact label={t('labs.historyLaboratoryInterval')} value={interval} />
             <Fact label={t('labs.historyLaboratoryFlag')} value={flag} />
             <Fact
@@ -711,7 +777,7 @@ function MeasuredTrendChart({
                 { left: axisLabelInset, right: axisLabelInset },
               ]}
             >
-              {`${formatLocaleDecimal(maximum, locale)} ${points[0]?.normalized.unit ?? ''}`}
+              {`${formatNormalizedTrendValue(maximum, locale)} ${points[0]?.normalized.unit ?? ''}`}
             </AppText>
             <AppText
               accessibilityElementsHidden
@@ -723,11 +789,11 @@ function MeasuredTrendChart({
                 { left: axisLabelInset, right: axisLabelInset },
               ]}
             >
-              {`${formatLocaleDecimal(minimum, locale)} ${points[0]?.normalized.unit ?? ''}`}
+              {`${formatNormalizedTrendValue(minimum, locale)} ${points[0]?.normalized.unit ?? ''}`}
             </AppText>
           </>
         )}
-        {getHistoryChartConnections(points).flatMap(([startPoint, endPoint]) => {
+        {getHistoryChartConnections(model.trend.segments).flatMap(([startPoint, endPoint]) => {
           const start = coordinates.get(startPoint.measurementId);
           const end = coordinates.get(endPoint.measurementId);
           if (start === undefined || end === undefined) return [];
@@ -772,7 +838,12 @@ function MeasuredTrendChart({
 }
 
 const styles = StyleSheet.create({
-  content: { gap: spacing.lg, paddingHorizontal: spacing.lg, paddingBottom: 140 },
+  content: {
+    gap: spacing.lg,
+    paddingBottom: 140,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+  },
   fixedStatus: {
     alignItems: 'center',
     gap: spacing.md,
@@ -789,8 +860,9 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     justifyContent: 'space-between',
   },
-  latestMeasuredDate: { color: colors.onBrandMuted },
-  latestMeasuredValue: { color: colors.onBrand, fontVariant: ['tabular-nums'] },
+  latestMeasuredDate: { color: colors.mutedInk },
+  latestMeasuredValue: { color: colors.ink, fontVariant: ['tabular-nums'] },
+  latestMeasuredConversion: { color: colors.mutedInk },
   latestFacts: {
     gap: spacing.md,
   },
@@ -885,6 +957,12 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
   },
   factsSurface: { gap: spacing.md },
+  applicabilityFacts: {
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: spacing.sm,
+    paddingTop: spacing.sm,
+  },
   sourceRow: { gap: spacing.xs },
   factGroup: {
     borderTopColor: colors.border,

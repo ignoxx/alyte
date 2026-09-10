@@ -98,6 +98,8 @@ export function LabRecordDetailRoute() {
   return (
     <LabRecordDetail
       detail={record}
+      loadError={error}
+      onRetryLoad={() => void load()}
       onCorrect={(measurementId) =>
         root?.navigate('MeasurementCorrection', { recordId: record.id, measurementId })
       }

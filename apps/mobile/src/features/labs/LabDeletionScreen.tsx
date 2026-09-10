@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 import {
   useNavigation,
+  usePreventRemove,
   useRoute,
   type NavigationProp,
   type RouteProp,
@@ -9,9 +10,10 @@ import {
 import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { spacing } from '../../theme';
+import { colors, spacing } from '../../theme';
 import { AppButton, AppSurface, AppText } from '../../ui/primitives';
 import { deletionFacts } from './record-detail-model';
+import { LabDeletionScopePicker } from './LabDeletionScopePicker';
 import type { LabDeletionScope } from './service';
 
 type Route = RouteProp<RootStackParamList, 'LabDeletion'>;
@@ -36,20 +38,28 @@ export function LabDeletionScreen() {
   const [plan, setPlan] = useState<Awaited<ReturnType<typeof labs.planDeletion>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [planAttempt, setPlanAttempt] = useState(0);
   const request = useRef(0);
   useLayoutEffect(
     () =>
       navigation.setOptions({
         headerLeft: () => (
           <AppButton
+            disabled={busy}
             label={t('labs.recordCancel')}
+            labelMaxFontSizeMultiplier={1.5}
             onPress={() => navigation.goBack()}
             tone="quiet"
           />
         ),
       }),
-    [navigation],
+    [busy, navigation],
   );
+  usePreventRemove(busy, () => {
+    Alert.alert(t('labs.detailDeleting'), t('settings.operationInProgress'), [
+      { text: t('settings.ok') },
+    ]);
+  });
   useEffect(() => {
     const token = ++request.current;
     setPlan(null);
@@ -65,7 +75,7 @@ export function LabDeletionScreen() {
     return () => {
       request.current += 1;
     };
-  }, [labs, scope]);
+  }, [labs, planAttempt, scope]);
   const choices: readonly LabDeletionScope[] = route.params.measurementId
     ? [scope]
     : [
@@ -74,11 +84,12 @@ export function LabDeletionScreen() {
         { kind: 'record-plus-source', recordId: route.params.recordId },
       ];
   async function execute() {
+    if (plan === null || busy) return;
     setBusy(true);
     setError(null);
     try {
-      await labs.executeDeletion(scope, plan!);
-      if (plan!.recordRemains) navigation.goBack();
+      await labs.executeDeletion(scope, plan);
+      if (plan.recordRemains) navigation.goBack();
       else
         navigation.reset({
           index: 0,
@@ -103,22 +114,46 @@ export function LabDeletionScreen() {
       setBusy(false);
     }
   }
+
+  function confirm() {
+    if (plan === null || busy) return;
+    const scopeLabel = t(`labs.deletionScope.${scope.kind.replaceAll('-', '_')}`);
+    Alert.alert(
+      t('labs.detailConfirmDeletionTitle'),
+      t('labs.detailConfirmDeletionBody').replace('{scope}', scopeLabel),
+      [
+        { text: t('labs.recordCancel'), style: 'cancel' },
+        {
+          text: t('labs.detailConfirmDeletion'),
+          style: 'destructive',
+          onPress: () => void execute(),
+        },
+      ],
+    );
+  }
+  const scopeOptions = choices.map((choice) => ({
+    label: t(`labs.deletionScope.${choice.kind.replaceAll('-', '_')}`),
+    value: choice.kind,
+  }));
   return (
     <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content}>
       {!route.params.measurementId && (
-        <View style={styles.choices}>
-          {choices.map((choice) => (
-            <AppButton
-              key={choice.kind}
-              label={t(`labs.deletionScope.${choice.kind.replaceAll('-', '_')}`)}
-              onPress={() => setScope(choice)}
-              tone={scope.kind === choice.kind ? 'primary' : 'secondary'}
-            />
-          ))}
-        </View>
+        <AppSurface style={styles.scopeSurface}>
+          <AppText variant="label">{t('labs.deletionScopeTitle')}</AppText>
+          <LabDeletionScopePicker
+            accessibilityLabel={t('labs.deletionScopeTitle')}
+            disabled={busy}
+            options={scopeOptions}
+            selectedValue={scope.kind}
+            onValueChange={(value) => {
+              const next = choices.find((choice) => choice.kind === value);
+              if (next !== undefined) setScope(next);
+            }}
+          />
+        </AppSurface>
       )}
       <AppSurface style={styles.plan}>
-        <AppText variant="heading">{t('labs.detailDeletionPreview')}</AppText>
+        <AppText variant="heading">{t('labs.detailDeletionSummary')}</AppText>
         {plan ? (
           deletionFacts(plan).map((fact) => (
             <AppText key={fact.kind} selectable>
@@ -129,22 +164,42 @@ export function LabDeletionScreen() {
                   : t(`labs.deletionFact.${fact.kind.replaceAll('-', '_')}`)}
             </AppText>
           ))
+        ) : error ? (
+          <View style={styles.retryGroup}>
+            <AppText selectable style={styles.error}>
+              {error}
+            </AppText>
+            <AppButton
+              label={t('labs.retry')}
+              onPress={() => setPlanAttempt((current) => current + 1)}
+              tone="secondary"
+            />
+          </View>
         ) : (
-          <AppText>{error ?? t('labs.loading')}</AppText>
+          <AppText>{t('labs.loading')}</AppText>
         )}
       </AppSurface>
-      {error && <AppText selectable>{error}</AppText>}
+      {error && plan !== null && (
+        <AppText accessibilityLiveRegion="polite" selectable style={styles.error}>
+          {error}
+        </AppText>
+      )}
       <AppButton
         disabled={!plan || busy}
         label={busy ? t('labs.detailDeleting') : t('labs.detailConfirmDeletion')}
-        onPress={() => void execute()}
-        tone="secondary"
+        onPress={confirm}
+        tone="destructive"
       />
     </ScrollView>
   );
 }
 const styles = StyleSheet.create({
   content: { gap: spacing.lg, padding: spacing.lg },
-  choices: { gap: spacing.sm },
+  scopeSurface: {
+    alignItems: 'stretch',
+    gap: spacing.sm,
+  },
   plan: { gap: spacing.md },
+  retryGroup: { gap: spacing.md },
+  error: { color: colors.danger },
 });

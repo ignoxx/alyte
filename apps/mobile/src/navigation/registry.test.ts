@@ -6,6 +6,7 @@ import {
   extractionEditorDestination,
   biomarkerHistoryDestination,
   featureStackRootName,
+  importPackSetupDestination,
   localNavigationGate,
   preGateTabNames,
   reportImportDestination,
@@ -74,6 +75,13 @@ test('pre-gate shell exposes three tabs and report import is a root full-screen 
   assert.deepEqual(preGateTabNames, ['Home', 'Labs', 'Settings']);
   assert.deepEqual(reportImportDestination, {
     route: 'ReportImport',
+    presentation: 'fullScreenModal',
+  });
+});
+
+test('existing users can open import-pack repair as a dismissible root task', () => {
+  assert.deepEqual(importPackSetupDestination, {
+    route: 'ImportPackSetup',
     presentation: 'fullScreenModal',
   });
 });
@@ -200,6 +208,7 @@ test('Home quick actions dispatch to sibling tabs and preserve the Log edit push
   } as unknown as ParentTabNavigation;
 
   dispatchHomeQuickAction(navigation, { kind: 'import-report' });
+  dispatchHomeQuickAction(navigation, { kind: 'open-labs' });
   dispatchHomeQuickAction(navigation, { kind: 'continue-report', reportId: 'report-42' });
   dispatchHomeQuickAction(navigation, { kind: 'open-report', reportId: 'report-43' });
   dispatchHomeQuickAction(navigation, { kind: 'open-record', recordId: 'record-42' });
@@ -213,6 +222,7 @@ test('Home quick actions dispatch to sibling tabs and preserve the Log edit push
 
   assert.deepEqual(calls, [
     ['ReportImport'],
+    ['Labs', { screen: 'LabsRoot', pop: true }],
     ['Labs', { screen: 'LabReportDetail', params: { reportId: 'report-42' }, pop: true }],
     ['Labs', { screen: 'LabReportDetail', params: { reportId: 'report-43' }, pop: true }],
     ['Labs', { screen: 'LabRecordDetail', params: { recordId: 'record-42' }, pop: true }],

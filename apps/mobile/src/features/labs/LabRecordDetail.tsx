@@ -1,9 +1,18 @@
-import { useState } from 'react';
+import { useContext, useState } from 'react';
+import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import { Pressable, SectionList, StyleSheet, View, useWindowDimensions } from 'react-native';
-import { formatLocaleDate, type LabRecordDetail as Detail, type Measurement } from '@alyte/domain';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  formatLocaleDate,
+  type LabRecordDetail as Detail,
+  type Measurement,
+  type MeasurementValue,
+  type SpecimenType,
+} from '@alyte/domain';
 import { t } from '../../localization';
 import { colors, radii, spacing } from '../../theme';
 import { AppButton, AppIcon, AppSurface, AppText, StatusPill } from '../../ui/primitives';
+import { getScreenPlatformPolicy, getScreenScrollBottomInset } from '../../ui/screen-scroll-model';
 import {
   correctionChangedFields,
   formatLabRecordMeasurementAccessibilityLabel,
@@ -15,6 +24,8 @@ import {
 
 type Props = {
   readonly detail: Detail;
+  readonly loadError?: boolean;
+  readonly onRetryLoad?: () => void;
   readonly onCorrect: (id: string) => void;
   readonly onDelete: (id?: string) => void;
   readonly onEditRecord: () => void;
@@ -29,13 +40,48 @@ const supportReason = (item: Detail['measurements'][number]) =>
     : t(labRecordSupportReasonLocalizationKeys[item.support.reason]);
 const sourceLabel = (detail: Detail) =>
   t(`labs.sourceState.${detail.source.kind.replaceAll('-', '_')}`);
+const screenPlatformPolicy = getScreenPlatformPolicy(process.env.EXPO_OS);
 
-function countCopy(count: number, singularKey: string, pluralKey: string): string {
-  return t(count === 1 ? singularKey : pluralKey).replace('{count}', String(count));
+function specimenLabel(value: SpecimenType): string {
+  return t(`labs.specimen.${value}`);
+}
+
+function valueTypeLabel(value: MeasurementValue['kind']): string {
+  return t(
+    value === 'numeric'
+      ? 'labs.measurementNumeric'
+      : value === 'bounded'
+        ? 'labs.measurementBounded'
+        : value === 'categorical'
+          ? 'labs.measurementCategorical'
+          : 'labs.measurementFreeText',
+  );
+}
+
+function changedFieldLabel(value: string): string {
+  const key =
+    value === 'label'
+      ? 'labs.detailFieldLabel'
+      : value === 'value'
+        ? 'labs.detailFieldValue'
+        : value === 'unit'
+          ? 'labs.detailFieldUnit'
+          : value === 'referenceInterval'
+            ? 'labs.detailFieldReference'
+            : value === 'flag'
+              ? 'labs.detailFieldFlag'
+              : value === 'specimen'
+                ? 'labs.detailFieldSpecimen'
+                : value === 'reviewState'
+                  ? 'labs.detailFieldReview'
+                  : 'labs.detailFieldBiomarker';
+  return t(key);
 }
 
 export function LabRecordDetail({
   detail,
+  loadError = false,
+  onRetryLoad,
   onCorrect,
   onDelete,
   onEditRecord,
@@ -45,7 +91,15 @@ export function LabRecordDetail({
 }: Props) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const { fontScale } = useWindowDimensions();
+  const tabBarHeight = useContext(BottomTabBarHeightContext);
+  const safeAreaInsets = useSafeAreaInsets();
   const rowLayout = getLabRecordDetailRowLayout(fontScale);
+  const bottomInset = getScreenScrollBottomInset(
+    tabBarHeight,
+    safeAreaInsets.bottom,
+    screenPlatformPolicy === 'ios-native-tabs' ? spacing.xxl : 0,
+    screenPlatformPolicy === 'ios-native-tabs' ? 'automatic' : 'legacy',
+  );
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
   const date =
     detail.collectionDate.kind === 'known'
@@ -55,36 +109,43 @@ export function LabRecordDetail({
     <SectionList
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={styles.content}
+      contentInset={{ bottom: bottomInset }}
+      scrollIndicatorInsets={{ bottom: bottomInset }}
       sections={recordSections(detail)}
       keyExtractor={(item) => item.id}
       stickySectionHeadersEnabled={false}
       ListHeaderComponent={
         <View style={styles.header}>
+          {loadError && onRetryLoad !== undefined && (
+            <AppSurface tone="soft" style={styles.inlineError}>
+              <AppText variant="label">{t('labs.recordRefreshError')}</AppText>
+              <AppButton label={t('labs.retry')} onPress={onRetryLoad} tone="secondary" />
+            </AppSurface>
+          )}
           <AppText selectable style={styles.secondary}>
             {date}
           </AppText>
           {detail.laboratoryName && <AppText selectable>{detail.laboratoryName}</AppText>}
           <AppSurface style={styles.summary}>
-            <AppText variant="heading">{t('labs.detailSummaryTitle')}</AppText>
-            <AppText selectable>
-              {countCopy(
-                detail.summary.measurementCount,
-                'labs.detailSummaryMeasurement',
-                'labs.detailSummaryMeasurements',
-              )}
-            </AppText>
-            <AppText selectable>
-              {countCopy(
-                detail.summary.flaggedCount,
-                'labs.detailSummaryFlag',
-                'labs.detailSummaryFlags',
-              )}
-            </AppText>
-            <AppText selectable>
-              {t('labs.detailSummarySupport')
-                .replace('{supported}', String(detail.summary.comparableCount))
-                .replace('{preserved}', String(detail.summary.preservedOnlyCount))}
-            </AppText>
+            <View
+              style={[
+                styles.summaryMetrics,
+                rowLayout === 'stacked' && styles.summaryMetricsStacked,
+              ]}
+            >
+              <SummaryMetric
+                label={t('labs.detailResultsLabel')}
+                value={detail.summary.measurementCount}
+              />
+              <SummaryMetric
+                label={t('labs.detailFlaggedLabel')}
+                value={detail.summary.flaggedCount}
+              />
+              <SummaryMetric
+                label={t('labs.detailComparableLabel')}
+                value={detail.summary.comparableCount}
+              />
+            </View>
             <AppText selectable style={styles.secondary}>
               {sourceLabel(detail)}
             </AppText>
@@ -152,9 +213,6 @@ export function LabRecordDetail({
                   <AppText selectable variant="heading">
                     {displayLabel}
                   </AppText>
-                  <AppText selectable style={styles.secondary}>
-                    {supportReason(item)}
-                  </AppText>
                 </View>
                 <View style={[styles.value, rowLayout === 'stacked' && styles.valueStacked]}>
                   <AppText
@@ -214,6 +272,11 @@ function MeasurementDetails({
   onViewSource: (item: Measurement) => void;
 }) {
   const sourceAvailable = detail.source.kind === 'retained' && measurement.source !== null;
+  const [showMoreDetails, setShowMoreDetails] = useState(false);
+  const locale = Intl.DateTimeFormat().resolvedOptions().locale;
+  const sourceLocation = measurement.source
+    ? t('labs.detailPageRegion').replace('{page}', String(measurement.source.pageIndex + 1))
+    : t('labs.detailNoSourceLocation');
   return (
     <View style={styles.details}>
       <StatusPill
@@ -227,84 +290,105 @@ function MeasurementDetails({
       >
         {t(`labs.provenance.${measurement.provenance.replaceAll('-', '_')}`)}
       </StatusPill>
-      <Fact label={t('labs.detailCurrentLabel')} value={measurement.current.label} />
-      <Fact
-        label={t('labs.detailCurrentValue')}
-        value={`${measurementValue(measurement, Intl.DateTimeFormat().resolvedOptions().locale)}${measurement.current.unit ? ` ${measurement.current.unit}` : ''}`}
-      />
-      <Fact label={t('labs.detailOriginalLabel')} value={measurement.original.label} />
-      <Fact
-        label={t('labs.detailOriginalValue')}
-        value={`${measurement.original.valueString}${measurement.original.unit ? ` ${measurement.original.unit}` : ''}`}
-      />
-      <Fact label={t('labs.measurementType')} value={measurement.current.value.kind} />
-      <Fact
-        label={t('labs.measurementReference')}
-        value={measurement.current.referenceInterval ?? t('labs.detailNotProvided')}
-      />
-      <Fact
-        label={t('labs.measurementFlag')}
-        value={measurement.current.flag ?? t('labs.detailNotProvided')}
-      />
-      <Fact label={t('labs.measurementSpecimen')} value={measurement.specimenType} />
-      <Fact
-        label={t('labs.recordDateLabel')}
-        value={
-          detail.collectionDate.kind === 'known'
-            ? detail.collectionDate.value
-            : t('labs.recordDateMissing')
-        }
-      />
-      <Fact
-        label={t('labs.detailPanel')}
-        value={measurement.panelLabel ?? t('labs.detailNotProvided')}
-      />
-      <Fact label={t('labs.detailSupport')} value={supportReason(measurement)} />
-      <Fact
-        label={t('labs.detailSourceLocation')}
-        value={
-          measurement.source
-            ? t('labs.detailPageRegion').replace('{page}', String(measurement.source.pageIndex + 1))
-            : t('labs.detailNoSourceLocation')
-        }
-      />
-      {[...measurement.corrections].reverse().map((correction) => (
-        <View key={correction.id} style={styles.fact}>
-          <AppText variant="label">{t('labs.detailCorrection')}</AppText>
-          <Fact
-            label={t('labs.detailCorrectionDate')}
-            value={new Intl.DateTimeFormat(undefined, {
-              dateStyle: 'medium',
-              timeStyle: 'short',
-            }).format(new Date(correction.correctedAt))}
-          />
-          <Fact
-            label={t('labs.detailCorrectionReason')}
-            value={correction.reason ?? t('labs.detailNotProvided')}
-          />
-          <Fact
-            label={t('labs.detailChangedFields')}
-            value={correctionChangedFields(correction).join(', ') || t('labs.detailNoFieldChanges')}
-          />
-          <Fact
-            label={t('labs.detailBefore')}
-            value={`${correction.previous.snapshot.label} · ${correction.previous.snapshot.valueString}${correction.previous.snapshot.unit ? ` ${correction.previous.snapshot.unit}` : ''} · ${correction.previous.snapshot.referenceInterval ?? '—'} · ${correction.previous.snapshot.flag ?? '—'} · ${correction.previous.specimenType}`}
-          />
-          <Fact
-            label={t('labs.detailAfter')}
-            value={`${correction.next.snapshot.label} · ${correction.next.snapshot.valueString}${correction.next.snapshot.unit ? ` ${correction.next.snapshot.unit}` : ''} · ${correction.next.snapshot.referenceInterval ?? '—'} · ${correction.next.snapshot.flag ?? '—'} · ${correction.next.specimenType}`}
-          />
-        </View>
-      ))}
-      <View style={styles.actions}>
-        <AppButton
-          disabled={!sourceAvailable}
-          label={
-            sourceAvailable ? t('labs.extractionViewInReport') : t('labs.detailSourceUnavailable')
-          }
-          onPress={() => onViewSource(measurement)}
-          tone="secondary"
+      {measurement.current.referenceInterval !== null && (
+        <Fact
+          label={t('labs.detailReferenceRange')}
+          value={measurement.current.referenceInterval}
         />
+      )}
+      {measurement.current.flag !== null && (
+        <Fact label={t('labs.measurementFlag')} value={measurement.current.flag} />
+      )}
+      {measurement.support.kind !== 'comparable-supported' && (
+        <Fact label={t('labs.detailSupport')} value={supportReason(measurement)} />
+      )}
+      {measurement.source !== null && (
+        <Fact label={t('labs.detailSourceLocation')} value={sourceLocation} />
+      )}
+      <Pressable
+        accessibilityLabel={
+          showMoreDetails ? t('labs.measurementLessDetails') : t('labs.measurementMoreDetails')
+        }
+        accessibilityRole="button"
+        accessibilityState={{ expanded: showMoreDetails }}
+        onPress={() => setShowMoreDetails((current) => !current)}
+        style={({ pressed }) => [styles.disclosure, pressed && styles.disclosurePressed]}
+      >
+        <AppText style={styles.disclosureLabel}>
+          {showMoreDetails ? t('labs.measurementLessDetails') : t('labs.measurementMoreDetails')}
+        </AppText>
+        <AppIcon
+          color={colors.accent}
+          name="chevronRight"
+          size={16}
+          style={showMoreDetails ? styles.disclosureExpanded : undefined}
+        />
+      </Pressable>
+      {showMoreDetails && (
+        <View style={styles.secondaryDetails}>
+          <Fact label={t('labs.detailOriginalLabel')} value={measurement.original.label} />
+          <Fact
+            label={t('labs.detailOriginalValue')}
+            value={`${measurement.original.valueString}${measurement.original.unit ? ` ${measurement.original.unit}` : ''}`}
+          />
+          <Fact
+            label={t('labs.measurementType')}
+            value={valueTypeLabel(measurement.current.value.kind)}
+          />
+          <Fact
+            label={t('labs.measurementSpecimen')}
+            value={specimenLabel(measurement.specimenType)}
+          />
+          <Fact
+            label={t('labs.recordDateLabel')}
+            value={
+              detail.collectionDate.kind === 'known'
+                ? formatLocaleDate(detail.collectionDate.value, locale)
+                : t('labs.recordDateMissing')
+            }
+          />
+          <Fact
+            label={t('labs.detailPanel')}
+            value={measurement.panelLabel ?? t('labs.detailNotProvided')}
+          />
+          {[...measurement.corrections].reverse().map((correction) => (
+            <View key={correction.id} style={styles.fact}>
+              <AppText variant="label">{t('labs.detailCorrection')}</AppText>
+              <Fact
+                label={t('labs.detailCorrectionDate')}
+                value={new Intl.DateTimeFormat(undefined, {
+                  dateStyle: 'medium',
+                  timeStyle: 'short',
+                }).format(new Date(correction.correctedAt))}
+              />
+              <Fact
+                label={t('labs.detailCorrectionReason')}
+                value={correction.reason ?? t('labs.detailNotProvided')}
+              />
+              <Fact
+                label={t('labs.detailChangedFields')}
+                value={
+                  correctionChangedFields(correction).map(changedFieldLabel).join(', ') ||
+                  t('labs.detailNoFieldChanges')
+                }
+              />
+              <Fact
+                label={t('labs.detailBefore')}
+                value={correctionSnapshotText(correction.previous)}
+              />
+              <Fact label={t('labs.detailAfter')} value={correctionSnapshotText(correction.next)} />
+            </View>
+          ))}
+        </View>
+      )}
+      <View style={styles.actions}>
+        {sourceAvailable && (
+          <AppButton
+            label={t('labs.extractionViewInReport')}
+            onPress={() => onViewSource(measurement)}
+            tone="secondary"
+          />
+        )}
         {measurement.reviewState === 'confirmed' && measurement.biomarkerId !== null && (
           <AppButton
             label={t('labs.historyView')}
@@ -328,6 +412,35 @@ function MeasurementDetails({
     </View>
   );
 }
+
+function correctionSnapshotText(value: Measurement['corrections'][number]['previous']): string {
+  const snapshot = value.snapshot;
+  return [
+    `${t('labs.detailFieldLabel')}: ${snapshot.label}`,
+    `${t('labs.detailFieldValue')}: ${snapshot.valueString}${snapshot.unit ? ` ${snapshot.unit}` : ''}`,
+    snapshot.referenceInterval
+      ? `${t('labs.detailFieldReference')}: ${snapshot.referenceInterval}`
+      : null,
+    snapshot.flag ? `${t('labs.detailFieldFlag')}: ${snapshot.flag}` : null,
+    `${t('labs.detailFieldSpecimen')}: ${specimenLabel(value.specimenType)}`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function SummaryMetric({ label, value }: { readonly label: string; readonly value: number }) {
+  return (
+    <View style={styles.summaryMetric}>
+      <AppText selectable style={styles.summaryNumber} variant="heading">
+        {value}
+      </AppText>
+      <AppText style={styles.secondary} variant="caption">
+        {label}
+      </AppText>
+    </View>
+  );
+}
+
 function Fact({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.fact}>
@@ -338,9 +451,14 @@ function Fact({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: spacing.lg, paddingBottom: 120 },
+  content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
   header: { gap: spacing.md, paddingVertical: spacing.lg },
-  summary: { gap: spacing.sm },
+  summary: { gap: spacing.md },
+  summaryMetrics: { flexDirection: 'row', gap: spacing.md },
+  summaryMetricsStacked: { flexDirection: 'column' },
+  summaryMetric: { flex: 1, gap: spacing.xs, minWidth: 0 },
+  summaryNumber: { fontVariant: ['tabular-nums'] },
+  inlineError: { gap: spacing.sm },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   secondary: { color: colors.mutedInk },
   section: { color: colors.mutedInk, paddingBottom: spacing.sm, paddingTop: spacing.lg },
@@ -349,7 +467,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     minHeight: 64,
     alignItems: 'center',
-    gap: spacing.md,
+    gap: spacing.sm,
     paddingVertical: spacing.sm,
   },
   rowButtonStacked: { alignItems: 'flex-start', paddingVertical: spacing.md },
@@ -373,9 +491,25 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderCurve: 'continuous',
     borderRadius: radii.md,
-    gap: spacing.md,
+    gap: spacing.sm,
     padding: spacing.md,
     marginBottom: spacing.md,
   },
+  secondaryDetails: {
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: spacing.sm,
+    paddingTop: spacing.sm,
+  },
+  disclosure: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+    minHeight: 44,
+    paddingVertical: spacing.xs,
+  },
+  disclosureLabel: { color: colors.accent, flex: 1 },
+  disclosureExpanded: { transform: [{ rotate: '90deg' }] },
+  disclosurePressed: { opacity: 0.7 },
   fact: { gap: spacing.xs },
 });

@@ -10,6 +10,7 @@ import {
   onboardingCanNavigateTo,
   onboardingPagerLocked,
   onboardingResumePage,
+  onboardingVisiblePageCount,
 } from './onboarding-state';
 
 test('the required setup gate advances only after the complete pack is verified', () => {
@@ -25,6 +26,8 @@ test('the required setup gate advances only after the complete pack is verified'
     false,
   );
   assert.equal(onboardingCanNavigateTo(ONBOARDING_MODEL_PAGE, ONBOARDING_READY_PAGE, ready), true);
+  assert.equal(onboardingVisiblePageCount(initial), ONBOARDING_READY_PAGE);
+  assert.equal(onboardingVisiblePageCount(ready), ONBOARDING_PAGE_COUNT);
 });
 
 test('relaunch resumes model work and locks the pager during transfer', () => {

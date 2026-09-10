@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
-import { AppIcon, AppText, ScreenScrollView, TidalHero, TidalIconStage } from '../../ui/primitives';
+import { AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, radii, screenStyles, spacing, typography } from '../../theme';
 import { type AppLockGrace } from './policy';
 import { useAppLock } from './AppLockProvider';
@@ -49,14 +49,9 @@ export function AppLockScreen() {
         style={screenStyles.scroll}
         tabBarClearance="native"
       >
-        <TidalHero style={styles.lockHero}>
-          <View style={styles.lockHeroHeading}>
-            <TidalIconStage name="lockShield" size="compact" />
-            <AppText variant="caption" style={styles.intro} selectable>
-              {t('settings.appLock.intro')}
-            </AppText>
-          </View>
-        </TidalHero>
+        <AppText style={styles.intro} selectable>
+          {t('settings.appLock.intro')}
+        </AppText>
         <View style={styles.group}>
           <View
             accessible
@@ -77,9 +72,6 @@ export function AppLockScreen() {
               <View style={styles.copy} importantForAccessibility="no-hide-descendants">
                 <AppText variant="heading" style={styles.rowTitle}>
                   {t('settings.appLock.enable')}
-                </AppText>
-                <AppText variant="caption" style={styles.supporting}>
-                  {t('settings.appLock.enableSupporting')}
                 </AppText>
               </View>
             </View>
@@ -105,9 +97,6 @@ export function AppLockScreen() {
               <View style={styles.copy}>
                 <AppText variant="heading" style={styles.rowTitle}>
                   {t('settings.appLock.grace')}
-                </AppText>
-                <AppText variant="caption" style={styles.supporting}>
-                  {t('settings.appLock.graceSupporting')}
                 </AppText>
               </View>
             </View>
@@ -137,14 +126,7 @@ export function AppLockScreen() {
 }
 
 const styles = StyleSheet.create({
-  lockHero: { marginBottom: spacing.lg, padding: spacing.lg },
-  lockHeroHeading: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.md,
-  },
-  intro: { color: colors.onBrandMuted, flex: 1, minWidth: 210 },
+  intro: { ...typography.body, color: colors.mutedInk, marginBottom: spacing.lg },
   error: { color: colors.danger, marginTop: spacing.md },
   group: {
     backgroundColor: colors.surface,
@@ -160,7 +142,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: spacing.md,
-    minHeight: 84,
+    minHeight: 68,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
@@ -178,19 +160,19 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   rowContentStacked: { alignItems: 'flex-start', flex: 0 },
-  copy: { flex: 1, gap: spacing.xs, minWidth: 0 },
+  copy: { flex: 1, minWidth: 0 },
   rowTitle: { ...typography.row },
-  supporting: { color: colors.mutedInk },
   controlSlot: {
     alignItems: 'flex-end',
     flexShrink: 0,
     justifyContent: 'center',
+    marginLeft: 'auto',
     minHeight: 44,
   },
   controlSlotStacked: {
-    alignItems: 'flex-start',
+    alignItems: 'flex-end',
     alignSelf: 'stretch',
-    paddingLeft: 22 + spacing.md,
+    paddingLeft: 0,
   },
   note: { color: colors.mutedInk, marginTop: spacing.lg },
 });

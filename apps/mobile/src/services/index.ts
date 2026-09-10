@@ -42,7 +42,7 @@ import {
   createLocalModelService,
   type LocalModelService,
 } from '../features/local-models/native';
-import { createLocalDocumentVLM } from '../features/local-models/document-vlm';
+import { createLocalPaddleOCR } from '../features/local-models/paddleocr';
 
 export interface AlyteServices {
   readonly runtime: AlyteRuntime;
@@ -101,15 +101,16 @@ export function createServices(
   const controls = createLocalControlsService({
     variant,
     appVersion: '0.1.0',
+    resetPreservedPreferenceKeys: showcase === null ? [] : [SHOWCASE_BOOTSTRAP_PREFERENCE],
   });
-  // Service creation reads only the tiny native manifest/state. The 1.55 GB Qwen pack remains
-  // cold until the document extractor acquires a lease inside an active report import.
+  // Service creation reads only the tiny native manifest/state. The 1.38 GB PaddleOCR pack stays
+  // cold until a report needs image transcription and unloads when that extraction lease ends.
   const fakeModelState = process.env.EXPO_PUBLIC_LOCAL_MODEL_FAKE === 'true';
   const localModels =
     fakeModelState && variant !== 'production'
       ? createLocalModelService({ native: createFakeLocalModelNativeModule() })
       : createLocalModelService();
-  const documentVLM = createLocalDocumentVLM({ models: localModels });
+  const documentVLM = createLocalPaddleOCR({ models: localModels });
   // Development and preview intentionally advertise no hosted API. A production URL cannot be
   // reached accidentally from those builds; tests can inject a fake account service or a directly
   // configured client at this boundary.

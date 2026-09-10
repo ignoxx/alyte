@@ -15,6 +15,7 @@ export function ExtractionConfirmation({
   remainingBlockers,
   blockedReason,
   onConfirm,
+  onLeaveWithoutSaving,
   onReviewRemaining,
 }: ExtractionConfirmationProps) {
   const presentation = extractionConfirmationPresentation(
@@ -34,7 +35,7 @@ export function ExtractionConfirmation({
   return (
     <View style={[styles.footer, failure && styles.failureFooter]}>
       {failure && (
-        <AppText numberOfLines={1} selectable style={styles.failure}>
+        <AppText selectable style={styles.failure}>
           {t('labs.extractionConfirmationFailure')}
         </AppText>
       )}
@@ -45,6 +46,7 @@ export function ExtractionConfirmation({
         label={action.label}
         onPress={() => {
           if (action.kind === 'review') onReviewRemaining();
+          else if (action.kind === 'leave') onLeaveWithoutSaving();
           else onConfirm();
         }}
         style={styles.action}
@@ -62,7 +64,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },
-  failureFooter: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
-  failure: { color: colors.danger, flex: 1, minWidth: 0 },
+  failureFooter: { alignItems: 'stretch', flexDirection: 'column', gap: spacing.sm },
+  failure: { color: colors.danger, textAlign: 'center' },
   action: { alignSelf: 'stretch' },
 });

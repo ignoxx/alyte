@@ -6,6 +6,7 @@ import {
   type NavigationProp,
   type RouteProp,
 } from '@react-navigation/native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import type { RedactionRegion } from '@alyte/domain';
 import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
@@ -29,7 +30,12 @@ export function SanitizedSourcePreviewScreen() {
   useLayoutEffect(() => {
     navigation.setOptions({
       headerLeft: () => (
-        <AppButton label={t('labs.done')} onPress={() => navigation.goBack()} tone="quiet" />
+        <AppButton
+          label={t('labs.done')}
+          labelMaxFontSizeMultiplier={1.5}
+          onPress={() => navigation.goBack()}
+          tone="quiet"
+        />
       ),
     });
   }, [navigation]);
@@ -54,24 +60,40 @@ export function SanitizedSourcePreviewScreen() {
     };
   }, [attempt, reports, route.params.pageIndex, route.params.reportId]);
 
+  function handleNativeViewerFailure() {
+    // Do not leave an unusable artifact mounted while the retry message is shown. The next
+    // attempt will obtain a fresh protected preview from the report service.
+    setArtifactPath(null);
+    setSourceType(null);
+    setFailed(true);
+  }
+
   if (failed) {
     return (
-      <View style={styles.center}>
-        <AppText selectable>{t('labs.extractionSanitizedPreviewError')}</AppText>
-        <AppButton
-          label={t('labs.retry')}
-          onPress={() => {
-            setFailed(false);
-            setAttempt((current) => current + 1);
-          }}
-          tone="secondary"
-        />
-      </View>
+      <SafeAreaView edges={['left', 'right', 'bottom']} style={styles.root}>
+        <View style={styles.center}>
+          <AppText selectable>{t('labs.extractionSanitizedPreviewError')}</AppText>
+          <AppButton
+            label={t('labs.retry')}
+            onPress={() => {
+              setFailed(false);
+              setAttempt((current) => current + 1);
+            }}
+            tone="secondary"
+          />
+        </View>
+      </SafeAreaView>
     );
   }
 
   if (artifactPath === null || sourceType === null)
-    return <AppText style={styles.loading}>{t('labs.loading')}</AppText>;
+    return (
+      <SafeAreaView edges={['left', 'right', 'bottom']} style={styles.root}>
+        <View style={styles.center}>
+          <AppText selectable>{t('labs.loading')}</AppText>
+        </View>
+      </SafeAreaView>
+    );
 
   const box = route.params.boundingBox;
   const sourceRegion: RedactionRegion = {
@@ -81,13 +103,14 @@ export function SanitizedSourcePreviewScreen() {
     rect: box,
   };
   return (
-    <View style={styles.root}>
+    <SafeAreaView edges={['left', 'right', 'bottom']} style={styles.root}>
       {sourceType === 'image' ? (
         <AlyteImageWorkspace
           accessibilityLabel={`${t('labs.sanitizedExactCanvas')} ${route.params.pageIndex + 1}`}
           accessibilityLabels={{ redaction: t('labs.extractionSourceRegionLabel') }}
           focusRegion={box}
           inspectionMode
+          onFailure={handleNativeViewerFailure}
           redactMode={false}
           redactions={[sourceRegion]}
           sourcePath={artifactPath}
@@ -100,6 +123,7 @@ export function SanitizedSourcePreviewScreen() {
           crop={null}
           focusRegion={box}
           inspectionMode
+          onFailure={handleNativeViewerFailure}
           pageIndex={route.params.pageIndex}
           redactMode={false}
           redactions={[sourceRegion]}
@@ -109,19 +133,18 @@ export function SanitizedSourcePreviewScreen() {
         />
       )}
       <AppText selectable style={styles.caption}>
-        {t('labs.extractionSanitizedRegion')
-          .replace('{page}', String(route.params.pageIndex + 1))
-          .replace('{x}', box.x.toFixed(3))
-          .replace('{y}', box.y.toFixed(3))}
+        {t('labs.extractionSanitizedPageRegion').replace(
+          '{page}',
+          String(route.params.pageIndex + 1),
+        )}
       </AppText>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   root: { backgroundColor: colors.canvas, flex: 1 },
   workspace: { flex: 1 },
-  loading: { padding: spacing.lg },
   center: {
     flex: 1,
     alignItems: 'center',

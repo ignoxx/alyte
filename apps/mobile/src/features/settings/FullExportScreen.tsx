@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { useServices } from '../../services';
 import { AppButton, AppIcon, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
-import { colors, radii, screenStyles, spacing } from '../../theme';
+import { colors, radii, screenStyles, spacing, typography } from '../../theme';
 import type { ExportSelection } from '../export/export-contract';
 import type { LocalExportOperation, LocalExportProgress } from '../export/service';
 import type { ExportMediaSummary } from '../local-controls/model';
@@ -122,6 +122,7 @@ export function FullExportScreen() {
   const [operation, setOperation] = useState<LocalExportOperation | null>(null);
   const cancelRequestedRef = useRef(false);
   const cancelInFlightRef = useRef(false);
+  const pendingRemoveRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -151,6 +152,7 @@ export function FullExportScreen() {
       headerLeft: () => (
         <AppButton
           label={t('cancel')}
+          labelMaxFontSizeMultiplier={1.5}
           tone="quiet"
           onPress={() => (stage === 'working' ? void cancelWorkingExport() : navigation.goBack())}
         />
@@ -160,6 +162,7 @@ export function FullExportScreen() {
           ? () => (
               <AppButton
                 label={t('settings.exportDone')}
+                labelMaxFontSizeMultiplier={1.5}
                 tone="quiet"
                 onPress={() => navigation.goBack()}
               />
@@ -246,12 +249,27 @@ export function FullExportScreen() {
     }
   }
 
+  function retryExport() {
+    setResult(null);
+    setProgress(null);
+    setOperation(null);
+    setStage('selection');
+  }
+
   // The native stack can receive a swipe-back/remove action while the archive is being built.
   // Route that action through the same explicit cancellation lifecycle as the visible Cancel
   // button; never leave a ready archive behind because a route disappeared mid-operation.
-  usePreventRemove(stage === 'working', () => {
+  usePreventRemove(stage === 'working', ({ data }) => {
+    pendingRemoveRef.current = () => navigation.dispatch(data.action);
     void cancelWorkingExport();
   });
+
+  useEffect(() => {
+    if (stage === 'working' || pendingRemoveRef.current === null) return;
+    const completeRemove = pendingRemoveRef.current;
+    pendingRemoveRef.current = null;
+    requestAnimationFrame(completeRemove);
+  }, [stage]);
 
   useEffect(() => {
     if (mediaStatus !== 'ready' || media === null) return;
@@ -409,6 +427,9 @@ export function FullExportScreen() {
                     ? t('settings.exportUnavailableBody')
                     : t('settings.exportFailedBody')}
             </AppText>
+            {(result === 'failed' || result === 'unavailable') && (
+              <AppButton label={t('settings.exportRetry')} onPress={retryExport} />
+            )}
           </>
         )}
       </ScreenScrollView>
@@ -418,7 +439,7 @@ export function FullExportScreen() {
 
 const styles = StyleSheet.create({
   title: { marginBottom: spacing.md },
-  intro: { color: colors.mutedInk, lineHeight: 22, marginBottom: spacing.lg },
+  intro: { ...typography.body, color: colors.mutedInk, marginBottom: spacing.lg },
   muted: { color: colors.mutedInk },
   group: {
     backgroundColor: colors.surface,

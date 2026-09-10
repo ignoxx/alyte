@@ -81,6 +81,10 @@ function fakeAccount(
       snapshot = { ...snapshot, signedIn: false, accountId: null, status: 'signed-out' };
       notify();
     },
+    clearDeviceState: async () => {
+      snapshot = { ...snapshot, signedIn: false, accountId: null, status: 'signed-out' };
+      notify();
+    },
     setAccount: (accountId: string | null) => {
       snapshot =
         accountId === null

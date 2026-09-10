@@ -10,10 +10,10 @@ import {
   type ReactNode,
 } from 'react';
 import { Host, Picker } from '@expo/ui';
+import DateTimePicker from '@expo/ui/community/datetime-picker';
 import { Alert, Pressable, StyleSheet, TextInput, View, type ScrollView } from 'react-native';
 import {
   parseLocaleDecimal,
-  parseLocalDateInput,
   type CreateMeasurementInput,
   type LabRecord,
   type MeasurementValue,
@@ -32,6 +32,7 @@ import {
 } from '../../ui/primitives';
 import type { RootStackParamList } from '../../navigation/types';
 import type { LabsService } from './service';
+import { labDateFromPickerValue, pickerValueFromLabDate } from './extraction-ui-model';
 
 type MeasurementDraft = {
   label: string;
@@ -136,10 +137,17 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
     const navigation = useNavigation<NavigationProp<RootStackParamList>>();
     const editing = initialRecord !== undefined && initialRecord !== null;
     const initialMeasurements = useMemo(() => (editing ? [] : [emptyMeasurement()]), [editing]);
-    const [date, setDate] = useState(
-      initialRecord?.collectionDate.kind === 'known' ? initialRecord.collectionDate.value : '',
-    );
-    const [dateMissing, setDateMissing] = useState(initialRecord?.collectionDate.kind !== 'known');
+    const initialDate = useMemo(() => {
+      if (initialRecord?.collectionDate.kind === 'known') return initialRecord.collectionDate.value;
+      const today = labDateFromPickerValue(new Date());
+      return today.kind === 'known' ? today.value : '';
+    }, [initialRecord]);
+    const initialDateMissing =
+      initialRecord !== null &&
+      initialRecord !== undefined &&
+      initialRecord.collectionDate.kind !== 'known';
+    const [date, setDate] = useState(initialDate);
+    const [dateMissing, setDateMissing] = useState(initialDateMissing);
     const [specimenType, setSpecimenType] = useState<SpecimenType>(
       initialRecord?.specimenType ?? 'unknown',
     );
@@ -155,21 +163,17 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
     const allowRemovalRef = useRef(false);
     const saveInFlightRef = useRef<Promise<void> | null>(null);
     const scrollRef = useRef<ScrollView | null>(null);
-    const locale = Intl.DateTimeFormat().resolvedOptions().locale;
     const initialSnapshot = useMemo(
       () =>
         JSON.stringify({
-          date:
-            initialRecord?.collectionDate.kind === 'known'
-              ? initialRecord.collectionDate.value
-              : '',
-          dateMissing: initialRecord?.collectionDate.kind !== 'known',
+          date: initialDate,
+          dateMissing: initialDateMissing,
           specimenType: initialRecord?.specimenType ?? 'unknown',
           laboratoryName: initialRecord?.laboratoryName ?? '',
           notes: initialRecord?.notes ?? '',
           measurements: initialMeasurements,
         }),
-      [initialMeasurements, initialRecord],
+      [initialDate, initialDateMissing, initialMeasurements, initialRecord],
     );
     const dirty =
       JSON.stringify({ date, dateMissing, specimenType, laboratoryName, notes, measurements }) !==
@@ -221,11 +225,6 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
       if (saveInFlightRef.current !== null) return saveInFlightRef.current;
       const operation = (async () => {
         setError(null);
-        const parsedDate = dateMissing ? null : parseLocalDateInput(date, locale);
-        if (!dateMissing && parsedDate === null) {
-          showError(t('labs.invalidDate'));
-          return;
-        }
         if (!editing && measurements.length === 0) {
           showError(t('labs.requiredMeasurement'));
           return;
@@ -247,10 +246,9 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
 
         setSaving(true);
         try {
-          const collectionDate =
-            parsedDate === null
-              ? { kind: 'missing' as const }
-              : { kind: 'known' as const, value: parsedDate };
+          const collectionDate = dateMissing
+            ? { kind: 'missing' as const }
+            : { kind: 'known' as const, value: date };
           if (editing && initialRecord !== null && initialRecord !== undefined) {
             await service.updateRecord(initialRecord.id, {
               collectionDate,
@@ -293,7 +291,6 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
       editing,
       initialRecord,
       laboratoryName,
-      locale,
       measurements,
       notes,
       onSaved,
@@ -312,30 +309,44 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
           </AppText>
         )}
         <AppSurface style={styles.section}>
-          <AppText variant="label">{t('labs.recordDateLabel')}</AppText>
-          <TextInput
-            accessibilityLabel={t('labs.recordDateLabel')}
-            editable={!dateMissing && !saving}
-            onChangeText={(value) => {
-              setError(null);
-              setDate(value);
-            }}
-            placeholder={t('labs.recordDatePlaceholder')}
-            style={[styles.input, dateMissing && styles.disabledInput]}
-            value={date}
-          />
-          <AppButton
-            accessibilityRole="checkbox"
-            accessibilityState={{ selected: dateMissing }}
-            disabled={saving}
-            label={t('labs.recordDateMissingLabel')}
-            onPress={() => {
-              setError(null);
-              setDateMissing((current) => !current);
-            }}
-            tone="quiet"
-          />
-          {dateMissing && <StatusPill>{t('labs.dateMissing')}</StatusPill>}
+          <View style={styles.dateHeading}>
+            <AppText variant="label">{t('labs.recordDateLabel')}</AppText>
+            <AppButton
+              disabled={saving}
+              label={t(dateMissing ? 'labs.extractionChooseDate' : 'labs.extractionDateUnknown')}
+              onPress={() => {
+                setError(null);
+                if (dateMissing) {
+                  const today = labDateFromPickerValue(new Date());
+                  if (today.kind === 'known') {
+                    setDate(today.value);
+                    setDateMissing(false);
+                  }
+                } else {
+                  setDateMissing(true);
+                }
+              }}
+              tone="quiet"
+            />
+          </View>
+          {dateMissing ? (
+            <StatusPill>{t('labs.dateMissing')}</StatusPill>
+          ) : (
+            <View style={styles.compactDatePicker}>
+              <DateTimePicker
+                disabled={saving}
+                display="compact"
+                mode="date"
+                onValueChange={(_, value) => {
+                  setError(null);
+                  const next = labDateFromPickerValue(value);
+                  if (next.kind === 'known') setDate(next.value);
+                }}
+                style={styles.compactDatePickerControl}
+                value={pickerValueFromLabDate({ kind: 'known', value: date })}
+              />
+            </View>
+          )}
           <NativePickerField
             disabled={saving}
             label={t('labs.recordSpecimenLabel')}
@@ -392,6 +403,7 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
                     editable={!saving}
                     label={t('labs.measurementLabel')}
                     onChangeText={(label) => updateMeasurement(index, { label })}
+                    placeholder={t('labs.measurementLabelPlaceholder')}
                     value={measurement.label}
                   />
                   <NativePickerField
@@ -422,6 +434,7 @@ export const LabRecordForm = forwardRef<LabRecordFormHandle, LabRecordFormProps>
                     }
                     label={t('labs.measurementValue')}
                     onChangeText={(value) => updateMeasurement(index, { value })}
+                    placeholder={t('labs.measurementValuePlaceholder')}
                     value={measurement.value}
                   />
                   <Field
@@ -501,6 +514,7 @@ function Field({
   label,
   multiline = false,
   onChangeText,
+  placeholder = t('labs.optionalPlaceholder'),
   value,
 }: {
   readonly editable?: boolean;
@@ -508,6 +522,7 @@ function Field({
   readonly label: string;
   readonly multiline?: boolean;
   readonly onChangeText: (value: string) => void;
+  readonly placeholder?: string;
   readonly value: string;
 }) {
   return (
@@ -519,7 +534,9 @@ function Field({
         keyboardType={keyboardType}
         multiline={multiline}
         onChangeText={onChangeText}
-        placeholder={t('labs.optionalPlaceholder')}
+        blurOnSubmit={!multiline}
+        placeholder={placeholder}
+        returnKeyType={multiline ? 'default' : 'done'}
         style={[styles.input, multiline && styles.multiline, !editable && styles.disabledInput]}
         value={value}
       />
@@ -603,6 +620,14 @@ function DisclosureButton({
 const styles = StyleSheet.create({
   formContent: { gap: spacing.md },
   section: { gap: spacing.sm },
+  dateHeading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 44,
+  },
+  compactDatePicker: { alignItems: 'flex-start', justifyContent: 'center', minHeight: 44 },
+  compactDatePickerControl: { width: '100%' },
   details: { gap: spacing.sm },
   field: { gap: spacing.xs },
   input: {

@@ -42,13 +42,11 @@ export function AppText({
   maxFontSizeMultiplier,
   ...props
 }: AppTextProps) {
-  const baseStyle = typography[variant];
-
   return (
     <Text
       allowFontScaling={allowFontScaling}
       maxFontSizeMultiplier={maxFontSizeMultiplier}
-      style={[baseStyle, styles.text, style]}
+      style={[typography[variant], styles.text, style]}
       {...props}
     />
   );
@@ -153,19 +151,30 @@ export function ScreenStatusView({
   const { height: windowHeight, fontScale } = useWindowDimensions();
   const [viewportHeight, setViewportHeight] = useState(windowHeight);
   const [contentHeight, setContentHeight] = useState(0);
-  const bottomInset = getScreenScrollBottomInset(
-    tabBarHeight,
-    safeAreaInsets.bottom,
-    tabBarClearance === 'native' && screenPlatformPolicy === 'ios-native-tabs' ? spacing.xxl : 0,
-    screenPlatformPolicy === 'ios-native-tabs' ? 'automatic' : 'legacy',
-  );
-  const statusBottomClearance = getScreenStatusBottomInset(
-    tabBarHeight,
-    safeAreaInsets.bottom,
-    tabBarClearance === 'native' && screenPlatformPolicy === 'ios-native-tabs' ? spacing.xxl : 0,
-  );
-  const topLayoutClearance =
-    screenPlatformPolicy === 'ios-native-tabs' ? safeAreaInsets.top + spacing.xxl * 2 : 0;
+  const usesNativeTabClearance =
+    tabBarClearance === 'native' && screenPlatformPolicy === 'ios-native-tabs';
+  const usesLegacySafeAreaClearance = screenPlatformPolicy === 'legacy';
+  const bottomInset =
+    usesNativeTabClearance || usesLegacySafeAreaClearance
+      ? getScreenScrollBottomInset(
+          tabBarHeight,
+          safeAreaInsets.bottom,
+          usesNativeTabClearance ? spacing.xxl : 0,
+          usesNativeTabClearance ? 'automatic' : 'legacy',
+        )
+      : 0;
+  // Full-screen stack routes do not sit beneath the native tab bar. On iOS, only callers that
+  // explicitly opt in reserve the tab/header clearance; legacy platforms retain their safe-area
+  // fallback for existing tab and stack layouts.
+  const statusBottomClearance =
+    usesNativeTabClearance || usesLegacySafeAreaClearance
+      ? getScreenStatusBottomInset(
+          tabBarHeight,
+          safeAreaInsets.bottom,
+          usesNativeTabClearance ? spacing.xxl : 0,
+        )
+      : 0;
+  const topLayoutClearance = usesNativeTabClearance ? safeAreaInsets.top + spacing.xxl * 2 : 0;
   const availableHeight = getScreenStatusAvailableHeight(
     viewportHeight,
     topLayoutClearance,
@@ -218,7 +227,8 @@ type AppButtonProps = Omit<PressableProps, 'children'> & {
   children?: ReactNode;
   accessibilityLabel?: string;
   labelMaxFontSizeMultiplier?: number;
-  tone?: 'primary' | 'secondary' | 'quiet';
+  labelNumberOfLines?: number;
+  tone?: 'primary' | 'secondary' | 'quiet' | 'destructive';
 };
 
 export function AppButton({
@@ -226,6 +236,7 @@ export function AppButton({
   children,
   accessibilityLabel = label,
   labelMaxFontSizeMultiplier,
+  labelNumberOfLines,
   tone = 'primary',
   style,
   ...props
@@ -240,6 +251,7 @@ export function AppButton({
         tone === 'primary' && styles.primaryButton,
         tone === 'secondary' && styles.secondaryButton,
         tone === 'quiet' && styles.quietButton,
+        tone === 'destructive' && styles.destructiveButton,
         props.disabled === true && styles.disabledButton,
         pressed && props.disabled !== true && styles.pressedButton,
         typeof style === 'function' ? style({ pressed }) : style,
@@ -249,10 +261,12 @@ export function AppButton({
       {children}
       <AppText
         maxFontSizeMultiplier={labelMaxFontSizeMultiplier}
-        numberOfLines={labelMaxFontSizeMultiplier === undefined ? undefined : 1}
+        numberOfLines={labelNumberOfLines}
         variant="label"
         style={[
-          tone === 'primary' ? styles.primaryLabel : styles.secondaryLabel,
+          tone === 'primary' || tone === 'destructive'
+            ? styles.primaryLabel
+            : styles.secondaryLabel,
           props.disabled === true && styles.disabledLabel,
         ]}
       >
@@ -313,6 +327,7 @@ export type AppIconName =
   | 'library'
   | 'chart'
   | 'phone'
+  | 'mail'
   | 'folder'
   | 'photos'
   | 'addDocument'
@@ -324,7 +339,9 @@ export type AppIconName =
   | 'checkmarkCircle'
   | 'trendUp'
   | 'trendDown'
-  | 'trendStable';
+  | 'trendStable'
+  | 'share'
+  | 'reset';
 
 const iconSymbols: Record<AppIconName, string> = {
   home: 'house',
@@ -341,6 +358,7 @@ const iconSymbols: Record<AppIconName, string> = {
   library: 'books.vertical',
   chart: 'chart.xyaxis.line',
   phone: 'iphone',
+  mail: 'envelope',
   folder: 'folder',
   photos: 'photo.on.rectangle',
   addDocument: 'doc.badge.plus',
@@ -353,6 +371,8 @@ const iconSymbols: Record<AppIconName, string> = {
   trendUp: 'arrow.up.right',
   trendDown: 'arrow.down.right',
   trendStable: 'arrow.right',
+  share: 'square.and.arrow.up',
+  reset: 'arrow.counterclockwise',
 };
 
 /** Small SF Symbol seam for inline controls; navigation uses native SF Symbols directly. */
@@ -444,16 +464,35 @@ export function LabEmptyState({
   readonly actionLabel: string;
   readonly onAction: () => void;
 }) {
+  const { fontScale } = useWindowDimensions();
+  const usesAccessibleLayout = fontScale >= 1.4;
+  const titleScale = Math.min(fontScale, 1.8);
+  const copyScale = Math.min(fontScale, 2);
   return (
     <View style={styles.labEmptyState}>
-      <TidalIconStage name={icon} />
+      {!usesAccessibleLayout && <TidalIconStage name={icon} />}
       <View style={styles.labEmptyCopy}>
-        <AppText style={styles.labEmptyTitle} variant="title">
+        <AppText
+          allowFontScaling={false}
+          style={[styles.labEmptyTitle, { fontSize: 26 * titleScale, lineHeight: 32 * titleScale }]}
+          variant="title"
+        >
           {title}
         </AppText>
-        <AppText style={styles.labEmptyBody}>{body}</AppText>
+        <AppText
+          allowFontScaling={false}
+          style={[styles.labEmptyBody, { fontSize: 16 * copyScale, lineHeight: 23 * copyScale }]}
+        >
+          {body}
+        </AppText>
       </View>
-      <AppButton label={actionLabel} onPress={onAction} style={styles.labEmptyImportButton}>
+      <AppButton
+        label={actionLabel}
+        labelMaxFontSizeMultiplier={1.8}
+        labelNumberOfLines={2}
+        onPress={onAction}
+        style={styles.labEmptyImportButton}
+      >
         <AppIcon color={colors.onAccent} name="plus" size={17} />
       </AppButton>
     </View>
@@ -518,15 +557,17 @@ const styles = StyleSheet.create({
   primaryButton: { backgroundColor: colors.accent },
   secondaryButton: { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1 },
   quietButton: { minHeight: 44, paddingHorizontal: spacing.sm },
+  destructiveButton: { backgroundColor: colors.danger },
   disabledButton: { backgroundColor: colors.disabledFill, borderColor: colors.disabledFill },
   disabledLabel: { color: colors.disabledInk },
-  pressedButton: { opacity: 0.86, transform: [{ scale: 0.98 }] },
+  pressedButton: { opacity: 0.72 },
   primaryLabel: { color: colors.onAccent },
   secondaryLabel: { color: colors.accent },
   emptyState: { gap: spacing.sm },
   emptyBody: { color: colors.mutedInk },
   pill: {
     alignSelf: 'flex-start',
+    borderCurve: 'continuous',
     borderRadius: radii.pill,
     flexDirection: 'row',
     maxWidth: '100%',

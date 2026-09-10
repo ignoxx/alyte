@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import {
   ActionSheetIOS,
   Alert,
@@ -17,7 +17,7 @@ import {
   type RouteProp,
 } from '@react-navigation/native';
 import type { RootStackParamList } from '../../navigation/types';
-import type { Measurement } from '@alyte/domain';
+import type { Measurement, MeasurementValue, SpecimenType } from '@alyte/domain';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import { colors, radii, spacing, typography } from '../../theme';
@@ -33,6 +33,22 @@ type Route = RouteProp<RootStackParamList, 'MeasurementCorrection'>;
 const kinds = ['numeric', 'bounded', 'categorical', 'free_text'] as const;
 const specimens = ['unknown', 'blood', 'serum', 'plasma', 'urine', 'stool', 'saliva'] as const;
 
+function valueTypeLabel(value: MeasurementValue['kind']): string {
+  return t(
+    value === 'numeric'
+      ? 'labs.measurementNumeric'
+      : value === 'bounded'
+        ? 'labs.measurementBounded'
+        : value === 'categorical'
+          ? 'labs.measurementCategorical'
+          : 'labs.measurementFreeText',
+  );
+}
+
+function specimenLabel(value: SpecimenType): string {
+  return t(`labs.specimen.${value}`);
+}
+
 export function MeasurementCorrectionScreen() {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const route = useRoute<Route>();
@@ -44,6 +60,7 @@ export function MeasurementCorrectionScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const dirty =
     draft !== null && initialDraft !== null && correctionDraftIsDirty(initialDraft, draft);
   usePreventRemove((dirty || busy) && !saved, ({ data }) => {
@@ -57,20 +74,8 @@ export function MeasurementCorrectionScreen() {
       },
     ]);
   });
-  useLayoutEffect(
-    () =>
-      navigation.setOptions({
-        headerLeft: () => (
-          <AppButton
-            label={t('labs.recordCancel')}
-            onPress={() => navigation.goBack()}
-            tone="quiet"
-          />
-        ),
-      }),
-    [navigation],
-  );
   useEffect(() => {
+    setError(null);
     void labs
       .getRecordDetail(route.params.recordId)
       .then((detail) => {
@@ -86,7 +91,7 @@ export function MeasurementCorrectionScreen() {
         } else setError(t('labs.recordNotFound'));
       })
       .catch(() => setError(t('labs.recordLoadError')));
-  }, [labs, route.params]);
+  }, [labs, loadAttempt, route.params.measurementId, route.params.recordId]);
   function updateDraft(patch: Partial<MeasurementDraft>) {
     setDraft((current) => {
       if (current === null) return current;
@@ -94,7 +99,7 @@ export function MeasurementCorrectionScreen() {
     });
   }
   const reviewChoiceRequired = measurement?.reviewState === 'needs-review' && reviewChoice === null;
-  async function save() {
+  const save = useCallback(async () => {
     if (!draft || !measurement || !dirty || reviewChoiceRequired) return;
     const input = correctionInput(draft, measurement, t('labs.correctionReason'));
     if (!input) {
@@ -112,21 +117,55 @@ export function MeasurementCorrectionScreen() {
     } finally {
       setBusy(false);
     }
-  }
+  }, [dirty, draft, labs, measurement, navigation, reviewChoiceRequired]);
+  useLayoutEffect(
+    () =>
+      navigation.setOptions({
+        headerLeft: () => (
+          <AppButton
+            label={t('labs.recordCancel')}
+            labelMaxFontSizeMultiplier={1.5}
+            onPress={() => navigation.goBack()}
+            tone="quiet"
+          />
+        ),
+        headerRight: () => (
+          <AppButton
+            disabled={busy || !dirty || reviewChoiceRequired}
+            label={t('labs.recordSaveShort')}
+            labelMaxFontSizeMultiplier={1.5}
+            onPress={() => void save()}
+            tone="quiet"
+          />
+        ),
+      }),
+    [busy, dirty, navigation, reviewChoiceRequired, save],
+  );
   if (!draft || !measurement)
     return (
       <View style={styles.center}>
         <AppText selectable>{error ?? t('labs.loading')}</AppText>
+        {error ? (
+          <AppButton
+            label={t('labs.retry')}
+            onPress={() => setLoadAttempt((current) => current + 1)}
+            tone="secondary"
+          />
+        ) : null}
       </View>
     );
   const choose = <T extends string>(
     title: string,
     values: readonly T[],
-    current: T,
+    labelFor: (value: T) => string,
     apply: (value: T) => void,
   ) =>
     ActionSheetIOS.showActionSheetWithOptions(
-      { title, options: [...values, t('labs.recordCancel')], cancelButtonIndex: values.length },
+      {
+        title,
+        options: [...values.map(labelFor), t('labs.recordCancel')],
+        cancelButtonIndex: values.length,
+      },
       (index) => {
         const value = values[index];
         if (value) apply(value);
@@ -165,9 +204,11 @@ export function MeasurementCorrectionScreen() {
           </Host>
         </View>
         <AppButton
-          label={`${t('labs.measurementType')}: ${draft.kind}`}
+          label={`${t('labs.measurementType')}: ${valueTypeLabel(draft.kind)}`}
           onPress={() =>
-            choose(t('labs.measurementType'), kinds, draft.kind, (kind) => updateDraft({ kind }))
+            choose(t('labs.measurementType'), kinds, valueTypeLabel, (kind) =>
+              updateDraft({ kind }),
+            )
           }
           tone="secondary"
         />
@@ -200,9 +241,9 @@ export function MeasurementCorrectionScreen() {
           onChange={(flag) => updateDraft({ flag })}
         />
         <AppButton
-          label={`${t('labs.measurementSpecimen')}: ${draft.specimenType}`}
+          label={`${t('labs.measurementSpecimen')}: ${specimenLabel(draft.specimenType)}`}
           onPress={() =>
-            choose(t('labs.measurementSpecimen'), specimens, draft.specimenType, (specimenType) =>
+            choose(t('labs.measurementSpecimen'), specimens, specimenLabel, (specimenType) =>
               updateDraft({ specimenType }),
             )
           }
@@ -213,11 +254,6 @@ export function MeasurementCorrectionScreen() {
             {error}
           </AppText>
         )}
-        <AppButton
-          disabled={busy || !dirty || reviewChoiceRequired}
-          label={busy ? t('labs.detailSaving') : t('labs.measurementSaveCorrection')}
-          onPress={() => void save()}
-        />
       </ScrollView>
     </KeyboardAvoidingView>
   );

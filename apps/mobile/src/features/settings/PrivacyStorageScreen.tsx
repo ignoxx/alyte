@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigation } from '@react-navigation/native';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { useServices } from '../../services';
-import { AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
+import { AppButton, AppIcon, AppText, ScreenScrollView } from '../../ui/primitives';
 import { colors, radii, screenStyles, spacing, typography } from '../../theme';
 import type { LocalDataCounts } from '../local-controls/model';
 
@@ -23,11 +23,15 @@ function ActionRow({
   icon,
   title,
   subtitle,
+  last = false,
+  destructive = false,
   onPress,
 }: {
-  readonly icon: 'square.and.arrow.up' | 'trash';
+  readonly icon: 'share' | 'trash' | 'reset' | 'folder';
   readonly title: string;
   readonly subtitle: string;
+  readonly last?: boolean;
+  readonly destructive?: boolean;
   readonly onPress: () => void;
 }) {
   return (
@@ -35,11 +39,19 @@ function ActionRow({
       accessibilityRole="button"
       accessibilityLabel={`${title}. ${subtitle}`}
       onPress={onPress}
-      style={({ pressed }) => [styles.actionRow, pressed && styles.rowPressed]}
+      style={({ pressed }) => [
+        styles.actionRow,
+        last && styles.lastActionRow,
+        destructive && styles.destructiveRow,
+        pressed && styles.rowPressed,
+      ]}
     >
-      <AppIcon name={icon === 'trash' ? 'trash' : 'doc'} size={21} color={colors.accent} />
+      <AppIcon name={icon} size={21} color={destructive ? colors.danger : colors.accent} />
       <View style={styles.actionCopy}>
-        <AppText variant="heading" style={styles.actionTitle}>
+        <AppText
+          variant="heading"
+          style={[styles.actionTitle, destructive && styles.destructiveText]}
+        >
           {title}
         </AppText>
         <AppText variant="caption" style={styles.subtitle}>
@@ -56,21 +68,26 @@ export function PrivacyStorageScreen() {
   const navigation = useNavigation<any>();
   const [counts, setCounts] = useState<LocalDataCounts | null>(null);
   const [failed, setFailed] = useState(false);
+  const loadRequest = useRef(0);
+
+  const loadCounts = useCallback(async () => {
+    const request = ++loadRequest.current;
+    setCounts(null);
+    setFailed(false);
+    try {
+      const summary = await services.controls.summary();
+      if (request === loadRequest.current) setCounts(summary.counts);
+    } catch {
+      if (request === loadRequest.current) setFailed(true);
+    }
+  }, [services.controls]);
 
   useEffect(() => {
-    let active = true;
-    void services.controls
-      .summary()
-      .then((summary) => {
-        if (active) setCounts(summary.counts);
-      })
-      .catch(() => {
-        if (active) setFailed(true);
-      });
+    void loadCounts();
     return () => {
-      active = false;
+      loadRequest.current += 1;
     };
-  }, [services.controls]);
+  }, [loadCounts]);
 
   const rootNavigation = navigation.getParent()?.getParent();
   return (
@@ -87,33 +104,55 @@ export function PrivacyStorageScreen() {
         {counts === null && !failed ? (
           <AppText style={styles.subtitle}>{t('settings.privacyLoading')}</AppText>
         ) : failed ? (
-          <AppText style={styles.subtitle}>{t('settings.privacyUnavailable')}</AppText>
+          <View style={styles.failureState}>
+            <AppText style={styles.subtitle}>{t('settings.privacyUnavailable')}</AppText>
+            <AppButton
+              label={t('settings.retry')}
+              onPress={() => void loadCounts()}
+              tone="secondary"
+            />
+          </View>
         ) : (
           <View style={styles.group}>
             <CountRow label={t('settings.privacyReports')} count={counts?.reports ?? 0} />
-            <CountRow label={t('settings.privacyReportPages')} count={counts?.reportPages ?? 0} />
-            <CountRow
-              label={t('settings.privacySanitizedReports')}
-              count={counts?.sanitizedReports ?? 0}
-            />
-            <CountRow label={t('settings.privacyRecords')} count={counts?.records ?? 0} />
+            <View style={styles.rowDivider} />
             <CountRow label={t('settings.privacyMeasurements')} count={counts?.measurements ?? 0} />
+            <View style={styles.rowDivider} />
             <CountRow label={t('settings.privacyIntakeEvents')} count={counts?.intakeEvents ?? 0} />
-            <CountRow label={t('settings.privacyIntakeImages')} count={counts?.intakeImages ?? 0} />
           </View>
         )}
         <View style={styles.group}>
           <ActionRow
-            icon="square.and.arrow.up"
+            icon="folder"
+            title={t('settings.importPackTitle')}
+            subtitle={t('settings.importPackSubtitle')}
+            onPress={() => rootNavigation?.navigate('ImportPackSetup')}
+          />
+          <ActionRow
+            icon="share"
             title={t('settings.privacyExport')}
             subtitle={t('settings.privacyExportSubtitle')}
             onPress={() => rootNavigation?.navigate('FullExport')}
           />
+        </View>
+        <View style={styles.destructiveGroup}>
           <ActionRow
+            destructive
             icon="trash"
+            last
             title={t('settings.privacyDelete')}
             subtitle={t('settings.privacyDeleteSubtitle')}
-            onPress={() => navigation.navigate('DeleteLocalData')}
+            onPress={() => navigation.navigate('DeleteLocalData', { mode: 'health-data' })}
+          />
+        </View>
+        <View style={styles.destructiveGroup}>
+          <ActionRow
+            destructive
+            icon="reset"
+            last
+            title={t('settings.privacyReset')}
+            subtitle={t('settings.privacyResetSubtitle')}
+            onPress={() => navigation.navigate('DeleteLocalData', { mode: 'app-reset' })}
           />
         </View>
       </ScreenScrollView>
@@ -122,9 +161,10 @@ export function PrivacyStorageScreen() {
 }
 
 const styles = StyleSheet.create({
-  intro: { color: colors.mutedInk, lineHeight: 22 },
+  intro: { ...typography.body, color: colors.mutedInk },
   sectionTitle: { marginBottom: spacing.sm, marginTop: spacing.lg },
   subtitle: { color: colors.mutedInk, flexShrink: 1 },
+  failureState: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   group: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
@@ -133,6 +173,20 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     marginBottom: spacing.lg,
     overflow: 'hidden',
+  },
+  destructiveGroup: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderCurve: 'continuous',
+    borderRadius: radii.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginBottom: spacing.lg,
+    overflow: 'hidden',
+  },
+  rowDivider: {
+    backgroundColor: colors.border,
+    height: StyleSheet.hairlineWidth,
+    marginLeft: spacing.lg,
   },
   countRow: {
     alignItems: 'center',
@@ -147,6 +201,8 @@ const styles = StyleSheet.create({
   count: { color: colors.mutedInk, flexShrink: 0, fontVariant: ['tabular-nums'] },
   actionRow: {
     alignItems: 'center',
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: spacing.md,
     minHeight: 70,
@@ -154,6 +210,9 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   rowPressed: { backgroundColor: colors.accentSoft },
+  lastActionRow: { borderBottomWidth: 0 },
+  destructiveRow: { minHeight: 68 },
   actionCopy: { flex: 1, flexShrink: 1, gap: spacing.xs, minWidth: 0 },
   actionTitle: { ...typography.row, flexShrink: 1 },
+  destructiveText: { color: colors.danger },
 });

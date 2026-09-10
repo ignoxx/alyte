@@ -1,5 +1,5 @@
 import { useLayoutEffect, type ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { AppButton, AppText, TidalHero, TidalIconStage } from '../../ui/primitives';
@@ -63,6 +63,7 @@ export function LockGate({ children }: { readonly children: ReactNode }) {
                 <AppText style={styles.body} selectable>
                   {messageForReason(state.reason)}
                 </AppText>
+                {loading ? <ActivityIndicator color={colors.onBrand as string} /> : null}
               </View>
             </TidalHero>
             {!loading ? (

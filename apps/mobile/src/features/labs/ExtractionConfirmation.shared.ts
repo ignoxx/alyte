@@ -1,16 +1,12 @@
 import { t } from '../../localization';
-import {
-  extractionReviewBlocksConfirmation,
-  extractionReviewRequiresAttention,
-  type ExtractionDraftRow,
-} from '@alyte/domain';
+import { extractionReviewRequiresAttention, type ExtractionDraftRow } from '@alyte/domain';
 
 export type ExtractionConfirmationBlockReason = 'no-included-rows' | 'rows-need-resolution';
 
 export type ExtractionConfirmationSummary = {
   /** Rows that will become Lab Records when confirmation succeeds. */
   readonly included: number;
-  /** Rows that need attention, including rows the person has chosen to skip. */
+  /** Rows in the active review queue. Explicitly skipped rows are not queued again. */
   readonly needsReview: number;
   /** Included rows that still block confirmation under the domain review rules. */
   readonly remainingBlockers: number;
@@ -27,8 +23,8 @@ export function extractionConfirmationSummary(
   rows: readonly Pick<ExtractionDraftRow, 'decision' | 'reviewReasons'>[],
 ): ExtractionConfirmationSummary {
   const included = rows.filter((row) => row.decision !== 'skip').length;
-  const needsReview = rows.filter(extractionReviewRequiresAttention).length;
-  const remainingBlockers = rows.filter(extractionReviewBlocksConfirmation).length;
+  const needsReview = rows.filter(extractionReviewQueueIncludes).length;
+  const remainingBlockers = needsReview;
   const canConfirm = included > 0 && remainingBlockers === 0;
 
   return {
@@ -51,7 +47,7 @@ export type ExtractionConfirmationPresentation = ExtractionConfirmationSummary &
 
 export type ExtractionConfirmationState = 'blocked' | 'ready' | 'busy' | 'failure';
 
-export type ExtractionConfirmationActionKind = 'review' | 'save' | 'retry';
+export type ExtractionConfirmationActionKind = 'review' | 'save' | 'retry' | 'leave';
 
 export type ExtractionConfirmationAction = {
   readonly kind: ExtractionConfirmationActionKind;
@@ -61,6 +57,16 @@ export type ExtractionConfirmationAction = {
   readonly accessibilityLabel: string;
   readonly disabled: boolean;
 };
+
+/**
+ * One queue definition shared by the draft filter, continuous review, and confirmation footer.
+ * Skipped rows remain visible in the All filter, but are no longer presented as work to do.
+ */
+export function extractionReviewQueueIncludes(
+  row: Pick<ExtractionDraftRow, 'decision' | 'reviewReasons'>,
+): boolean {
+  return row.decision !== 'skip' && extractionReviewRequiresAttention(row);
+}
 
 function measurementCountLabel(count: number): string {
   return t(
@@ -72,6 +78,10 @@ function measurementCountLabel(count: number): string {
 
 function reviewCountLabel(count: number): string {
   return t('labs.extractionConfirmationReviewRemaining').replace('{count}', String(count));
+}
+
+function leaveWithoutSavingLabel(): string {
+  return t('labs.extractionConfirmationFinishWithoutSaving');
 }
 
 function stateSummaryLabel(summary: ExtractionConfirmationSummary): string {
@@ -87,16 +97,24 @@ export function extractionConfirmationPresentation(
 ): ExtractionConfirmationPresentation {
   const state = input.busy
     ? 'busy'
-    : summary.included === 0
-      ? 'blocked'
-      : input.failure
-        ? 'failure'
+    : input.failure
+      ? 'failure'
+      : summary.included === 0
+        ? 'blocked'
         : summary.canConfirm
           ? 'ready'
           : 'blocked';
 
   let action: ExtractionConfirmationAction | null = null;
-  if (summary.included > 0) {
+  if (summary.included === 0) {
+    const label = leaveWithoutSavingLabel();
+    action = {
+      kind: 'leave',
+      label,
+      accessibilityLabel: `${label}. ${t('labs.extractionConfirmationNoMeasurements')}`,
+      disabled: input.busy,
+    };
+  } else {
     const summaryLabel = stateSummaryLabel(summary);
     if (state === 'busy') {
       action = {
@@ -150,4 +168,5 @@ export type ExtractionConfirmationProps = {
   readonly blockedReason: ExtractionConfirmationBlockReason | null;
   readonly onConfirm: () => void;
   readonly onReviewRemaining: () => void;
+  readonly onLeaveWithoutSaving: () => void;
 };

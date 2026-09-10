@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Platform, Share, StyleSheet } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Platform, Share, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../../localization';
 import { useServices, runtimeVariant } from '../../services';
@@ -10,37 +10,45 @@ import { createDiagnosticsPayload, type DiagnosticsPayload } from '../local-cont
 export function DiagnosticsScreen() {
   const services = useServices();
   const [payload, setPayload] = useState<DiagnosticsPayload | null>(null);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [shareFailed, setShareFailed] = useState(false);
+
+  const load = useCallback(async () => {
+    setStatus('loading');
+    setShareFailed(false);
+    try {
+      const state = await services.controls.diagnosticsState();
+      setPayload(
+        createDiagnosticsPayload({
+          appVersion: '0.1.0',
+          variant: runtimeVariant(),
+          osMajor: osMajorVersion(),
+          localStorage: state.localStorage,
+          protectedFiles: state.protectedFiles,
+        }),
+      );
+      setStatus('ready');
+    } catch {
+      setPayload(null);
+      setStatus('failed');
+    }
+  }, [services.controls]);
 
   useEffect(() => {
-    let active = true;
-    void services.controls
-      .diagnosticsState()
-      .then((state) => {
-        if (!active) return;
-        setPayload(
-          createDiagnosticsPayload({
-            appVersion: '0.1.0',
-            variant: runtimeVariant(),
-            osMajor: osMajorVersion(),
-            localStorage: state.localStorage,
-            protectedFiles: state.protectedFiles,
-          }),
-        );
-      })
-      .catch(() => {
-        if (active) setPayload(null);
-      });
-    return () => {
-      active = false;
-    };
-  }, [services.controls]);
+    void load();
+  }, [load]);
 
   async function shareDiagnostics() {
     if (payload === null) return;
-    await Share.share({
-      message: JSON.stringify(payload, null, 2),
-      title: t('settings.diagnosticsTitle'),
-    });
+    setShareFailed(false);
+    try {
+      await Share.share({
+        message: JSON.stringify(payload, null, 2),
+        title: t('settings.diagnosticsTitle'),
+      });
+    } catch {
+      setShareFailed(true);
+    }
   }
 
   return (
@@ -52,8 +60,20 @@ export function DiagnosticsScreen() {
         tabBarClearance="native"
       >
         <AppText style={styles.intro}>{t('settings.diagnosticsIntro')}</AppText>
-        {payload === null ? (
-          <AppText style={styles.muted}>{t('settings.diagnosticsUnavailable')}</AppText>
+        {status === 'loading' ? (
+          <View accessibilityRole="progressbar" style={styles.status}>
+            <ActivityIndicator color={colors.accent as string} />
+            <AppText style={styles.muted}>{t('settings.diagnosticsLoading')}</AppText>
+          </View>
+        ) : status === 'failed' ? (
+          <AppSurface tone="soft" style={styles.status}>
+            <AppText variant="heading">{t('settings.diagnosticsUnavailable')}</AppText>
+            <AppButton
+              label={t('settings.diagnosticsRetry')}
+              onPress={() => void load()}
+              tone="secondary"
+            />
+          </AppSurface>
         ) : (
           <>
             <AppSurface style={styles.preview}>
@@ -65,6 +85,11 @@ export function DiagnosticsScreen() {
               label={t('settings.diagnosticsShare')}
               onPress={() => void shareDiagnostics()}
             />
+            {shareFailed && (
+              <AppText accessibilityLiveRegion="polite" style={styles.failure}>
+                {t('settings.diagnosticsShareError')}
+              </AppText>
+            )}
           </>
         )}
       </ScreenScrollView>
@@ -78,8 +103,10 @@ function osMajorVersion(): number | null {
 }
 
 const styles = StyleSheet.create({
-  intro: { color: colors.mutedInk, lineHeight: 22, marginBottom: spacing.lg },
+  intro: { ...typography.body, color: colors.mutedInk, marginBottom: spacing.lg },
   muted: { color: colors.mutedInk },
+  status: { alignItems: 'center', gap: spacing.md },
+  failure: { color: colors.danger, marginTop: spacing.md },
   preview: { marginBottom: spacing.lg },
   code: { ...typography.code },
 });

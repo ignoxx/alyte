@@ -5,6 +5,7 @@ import {
   Image,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   View,
   type ColorValue,
@@ -88,6 +89,8 @@ export function SanitizedReportEditorScreen() {
   const [pagesOpen, setPagesOpen] = useState(false);
   const [preview, setPreview] = useState<SanitizedReportPreview | null>(null);
   const [busy, setBusy] = useState(false);
+  const [draftSaveCount, setDraftSaveCount] = useState(0);
+  const draftSaveQueue = useRef(Promise.resolve());
   const [error, setError] = useState<SanitizedEditorError | null>(null);
 
   const load = useCallback(async () => {
@@ -110,8 +113,16 @@ export function SanitizedReportEditorScreen() {
   }, [load]);
   useEffect(() => {
     if (recipe === null || JSON.stringify(recipe) === baseline) return;
+    const recipeToSave = recipe;
     const timer = setTimeout(() => {
-      void reports.saveSanitizationDraft(route.params.reportId, recipe);
+      setDraftSaveCount((count) => count + 1);
+      const save = draftSaveQueue.current.then(() =>
+        reports.saveSanitizationDraft(route.params.reportId, recipeToSave),
+      );
+      draftSaveQueue.current = save.catch(() => undefined);
+      void save
+        .catch(() => undefined)
+        .finally(() => setDraftSaveCount((count) => Math.max(0, count - 1)));
     }, 250);
     return () => clearTimeout(timer);
   }, [baseline, recipe, reports, route.params.reportId]);
@@ -121,8 +132,15 @@ export function SanitizedReportEditorScreen() {
     },
     [reports, route.params.reportId],
   );
+  const editorBusy = busy || draftSaveCount > 0;
   const dirty = recipe !== null && JSON.stringify(recipe) !== baseline;
-  usePreventRemove(dirty, ({ data }) =>
+  usePreventRemove(dirty || editorBusy, ({ data }) => {
+    if (editorBusy) {
+      Alert.alert(t('labs.sanitizedEditorBusyTitle'), t('settings.operationInProgress'), [
+        { text: t('settings.ok') },
+      ]);
+      return;
+    }
     Alert.alert(t('labs.sanitizedDiscardTitle'), t('labs.sanitizedDiscardBody'), [
       { text: t('labs.sanitizedKeepEditing'), style: 'cancel' },
       {
@@ -134,8 +152,8 @@ export function SanitizedReportEditorScreen() {
             .then(() => navigation.dispatch(data.action));
         },
       },
-    ]),
-  );
+    ]);
+  });
   useEffect(() => {
     navigation.setOptions({
       headerShown: true,
@@ -143,28 +161,31 @@ export function SanitizedReportEditorScreen() {
         preview === null ? t('labs.sanitizedEditorTitle') : t('labs.sanitizedEditorPreviewTitle'),
       headerLeft: () => (
         <AppButton
+          disabled={editorBusy}
           label={t('labs.recordCancel')}
+          labelMaxFontSizeMultiplier={1.5}
           onPress={() => navigation.goBack()}
           tone="quiet"
         />
       ),
       headerRight: () => (
         <AppButton
-          disabled={busy}
+          disabled={editorBusy}
           label={t('labs.sanitizedDone')}
+          labelMaxFontSizeMultiplier={1.5}
           onPress={() => navigation.goBack()}
           tone="quiet"
         />
       ),
     });
-  }, [busy, navigation, preview]);
+  }, [editorBusy, navigation, preview]);
   const currentPage = useMemo(
     () => recipe?.pages.find((page) => page.pageIndex === pageIndex) ?? null,
     [pageIndex, recipe],
   );
   const toolbarState = useMemo(
-    () => sanitizedEditorToolbarState({ busy, canUndo, canRedo, hasSelection }),
-    [busy, canRedo, canUndo, hasSelection],
+    () => sanitizedEditorToolbarState({ busy: editorBusy, canUndo, canRedo, hasSelection }),
+    [canRedo, canUndo, editorBusy, hasSelection],
   );
   const pageCounter = useMemo(
     () => sanitizedPageCounter(recipe?.pages ?? [], pageIndex, t('labs.sanitizedPages')),
@@ -249,7 +270,7 @@ export function SanitizedReportEditorScreen() {
     });
   }
   async function sanitize() {
-    if (recipe === null) return;
+    if (recipe === null || editorBusy) return;
     setBusy(true);
     setError(null);
     try {
@@ -295,7 +316,7 @@ export function SanitizedReportEditorScreen() {
           </View>
           {errorPresentation.recovery === 'sanitize' && (
             <AppButton
-              disabled={busy}
+              disabled={editorBusy}
               label={t('labs.retry')}
               onPress={() => void sanitize()}
               style={styles.errorRetry}
@@ -309,7 +330,7 @@ export function SanitizedReportEditorScreen() {
           ref={imageViewer}
           style={styles.viewer}
           sourcePath={preview?.artifactPath ?? state.sourcePath}
-          redactMode={redactMode && preview === null && !busy}
+          redactMode={redactMode && preview === null && !editorBusy}
           redactions={preview === null ? currentPage.redactions : []}
           accessibilityLabels={{
             redaction: t('labs.sanitizedEditorOverlayLabel'),
@@ -344,7 +365,7 @@ export function SanitizedReportEditorScreen() {
           style={styles.viewer}
           sourcePath={preview?.artifactPath ?? state.sourcePath}
           pageIndex={displayedPageIndex}
-          redactMode={redactMode && preview === null && !busy}
+          redactMode={redactMode && preview === null && !editorBusy}
           rotation={preview === null ? currentPage.rotation : 0}
           crop={preview === null ? currentPage.crop : null}
           redactions={preview === null ? currentPage.redactions : []}
@@ -383,9 +404,9 @@ export function SanitizedReportEditorScreen() {
       )}
       <View
         style={[styles.toolbar, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}
-        accessibilityLabel={busy ? t('labs.loading') : undefined}
+        accessibilityLabel={editorBusy ? t('labs.loading') : undefined}
         accessibilityRole="toolbar"
-        accessibilityState={{ busy }}
+        accessibilityState={{ busy: editorBusy }}
       >
         {preview === null ? (
           <>
@@ -466,7 +487,7 @@ export function SanitizedReportEditorScreen() {
           </>
         ) : (
           <AppButton
-            disabled={busy}
+            disabled={editorBusy}
             label={t('labs.editRedactions')}
             onPress={() => setPreview(null)}
             style={styles.sanitizeButton}
@@ -476,45 +497,76 @@ export function SanitizedReportEditorScreen() {
       </View>
       <Modal
         animationType="slide"
+        allowSwipeDismissal={!editorBusy}
         presentationStyle="pageSheet"
         visible={pagesOpen}
-        onRequestClose={() => setPagesOpen(false)}
+        onRequestClose={() => {
+          if (!editorBusy) setPagesOpen(false);
+        }}
       >
-        <View style={styles.manager}>
+        <View style={[styles.manager, { paddingTop: Math.max(insets.top, spacing.lg) }]}>
           <View style={styles.managerHeader}>
             <AppText variant="heading">{t('labs.sanitizedPages')}</AppText>
             <AppButton
+              disabled={editorBusy}
               label={t('labs.sanitizedDone')}
-              onPress={() => setPagesOpen(false)}
+              onPress={() => {
+                if (!editorBusy) setPagesOpen(false);
+              }}
               tone="quiet"
             />
           </View>
-          {recipe.pages.map((page, index) => (
-            <Pressable
-              key={page.pageIndex}
-              accessibilityRole="button"
-              onPress={() => {
-                setPageIndex(page.pageIndex);
-                setPagesOpen(false);
-              }}
-              style={[styles.pageRow, page.pageIndex === pageIndex && styles.pageSelected]}
-            >
-              <Image
-                accessibilityIgnoresInvertColors
-                accessibilityLabel={t('labs.sanitizedEditorPage').replace(
-                  '{page}',
-                  String(page.pageIndex + 1),
-                )}
-                resizeMode="contain"
-                source={{ uri: state.pagePreviewUris[page.pageIndex] }}
-                style={[styles.pageThumbnail, !page.selected && styles.pageThumbnailExcluded]}
-              />
-              <View style={styles.pageDetails}>
-                <AppText>
-                  {t('labs.sanitizedEditorPage').replace('{page}', String(page.pageIndex + 1))}
-                </AppText>
+          <ScrollView
+            contentContainerStyle={[
+              styles.pageList,
+              { paddingBottom: Math.max(insets.bottom, spacing.lg) },
+            ]}
+            contentInsetAdjustmentBehavior="automatic"
+            showsVerticalScrollIndicator
+          >
+            {recipe.pages.map((page, index) => (
+              <View
+                key={page.pageIndex}
+                style={[styles.pageRow, page.pageIndex === pageIndex && styles.pageSelected]}
+              >
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t('labs.sanitizedEditorPage').replace(
+                    '{page}',
+                    String(page.pageIndex + 1),
+                  )}
+                  accessibilityState={{
+                    disabled: editorBusy,
+                    selected: page.pageIndex === pageIndex,
+                  }}
+                  disabled={editorBusy}
+                  onPress={() => {
+                    setPageIndex(page.pageIndex);
+                    setPagesOpen(false);
+                  }}
+                  style={styles.pageSelection}
+                >
+                  <Image
+                    accessibilityIgnoresInvertColors
+                    accessible={false}
+                    resizeMode="contain"
+                    source={{ uri: state.pagePreviewUris[page.pageIndex] }}
+                    style={[styles.pageThumbnail, !page.selected && styles.pageThumbnailExcluded]}
+                  />
+                  <View style={styles.pageDetails}>
+                    <AppText>
+                      {t('labs.sanitizedEditorPage').replace('{page}', String(page.pageIndex + 1))}
+                    </AppText>
+                    <AppText variant="caption" style={styles.pageStatus}>
+                      {page.selected
+                        ? t('labs.sanitizedEditorIncluded')
+                        : t('labs.sanitizedEditorExcluded')}
+                    </AppText>
+                  </View>
+                </Pressable>
                 <View style={styles.pageActions}>
                   <AppButton
+                    disabled={editorBusy}
                     label={
                       page.selected
                         ? t('labs.sanitizedEditorExclude')
@@ -526,6 +578,7 @@ export function SanitizedReportEditorScreen() {
                   {state.report.sourceType === 'pdf' && (
                     <>
                       <AppButton
+                        disabled={editorBusy}
                         label={t('labs.sanitizedEditorRotate')}
                         onPress={() =>
                           updatePageFor(page.pageIndex, {
@@ -535,18 +588,19 @@ export function SanitizedReportEditorScreen() {
                         tone="quiet"
                       />
                       <AppButton
+                        disabled={editorBusy}
                         label={t('labs.sanitizedEditorCropIn')}
                         onPress={() => adjustCrop(page.pageIndex, 0.025)}
                         tone="quiet"
                       />
                       <AppButton
-                        disabled={page.crop === null}
+                        disabled={editorBusy || page.crop === null}
                         label={t('labs.sanitizedEditorCropOut')}
                         onPress={() => adjustCrop(page.pageIndex, -0.025)}
                         tone="quiet"
                       />
                       <AppButton
-                        disabled={page.crop === null}
+                        disabled={editorBusy || page.crop === null}
                         label={t('labs.sanitizedEditorCropReset')}
                         onPress={() => updatePageFor(page.pageIndex, { crop: null })}
                         tone="quiet"
@@ -556,21 +610,21 @@ export function SanitizedReportEditorScreen() {
                   <ToolbarAction
                     symbol="arrow.up"
                     label={t('labs.sanitizedEditorMovePageEarlier')}
-                    disabled={index === 0}
+                    disabled={editorBusy || index === 0}
                     onPress={() => move(page.pageIndex, -1)}
                     style={styles.pageIconAction}
                   />
                   <ToolbarAction
                     symbol="arrow.down"
                     label={t('labs.sanitizedEditorMovePageLater')}
-                    disabled={index === recipe.pages.length - 1}
+                    disabled={editorBusy || index === recipe.pages.length - 1}
                     onPress={() => move(page.pageIndex, 1)}
                     style={styles.pageIconAction}
                   />
                 </View>
               </View>
-            </Pressable>
-          ))}
+            ))}
+          </ScrollView>
         </View>
       </Modal>
     </View>
@@ -600,22 +654,38 @@ const styles = StyleSheet.create({
   errorTitle: { color: colors.danger },
   errorText: { color: colors.danger, flexShrink: 1 },
   errorRetry: { flexShrink: 0 },
-  manager: { backgroundColor: colors.canvas, flex: 1, padding: spacing.lg },
+  manager: {
+    backgroundColor: colors.canvas,
+    flex: 1,
+    paddingHorizontal: spacing.lg,
+  },
   managerHeader: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: spacing.md,
   },
-  pageActions: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
-  pageDetails: { flex: 1, gap: spacing.xs },
-  pageRow: {
+  pageList: { gap: spacing.xs },
+  pageSelection: {
     alignItems: 'center',
-    borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    flex: 1,
     flexDirection: 'row',
     gap: spacing.md,
-    minHeight: 72,
+    minWidth: 0,
+  },
+  pageActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  pageDetails: { flex: 1, gap: spacing.xs },
+  pageStatus: { color: colors.mutedInk },
+  pageRow: {
+    alignItems: 'stretch',
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: spacing.xs,
     padding: spacing.sm,
   },
   pageSelected: { backgroundColor: colors.surface },

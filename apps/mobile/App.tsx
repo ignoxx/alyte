@@ -23,6 +23,8 @@ import { AppText } from './src/ui/primitives';
 import { colors, spacing } from './src/theme';
 import { t } from './src/localization';
 import { attemptProtectedStartup } from './src/startup/protected-startup';
+import { AppResetContext } from './src/app-reset';
+import { HomeLayoutProvider } from './src/features/settings/HomeLayoutProvider';
 
 function NeutralLoadingSurface() {
   return (
@@ -35,7 +37,13 @@ function NeutralLoadingSurface() {
   );
 }
 
-function AppContent({ services }: { readonly services: AlyteServices }) {
+function AppContent({
+  services,
+  startOnboardingFromBeginning,
+}: {
+  readonly services: AlyteServices;
+  readonly startOnboardingFromBeginning: boolean;
+}) {
   const { controller, state: appLockState } = useAppLock();
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null);
   const cloudResumeInFlight = useRef<Promise<void> | null>(null);
@@ -129,6 +137,7 @@ function AppContent({ services }: { readonly services: AlyteServices }) {
       ) : (
         <OnboardingScreen
           model={services.models}
+          startFromBeginning={startOnboardingFromBeginning}
           onComplete={async () => {
             await persistOnboardingCompletion(services.intake);
             setOnboardingComplete(true);
@@ -156,16 +165,31 @@ function constructAppRuntime(): AppRuntimeDependencies {
   };
 }
 
-function AppRuntime({ runtime }: { readonly runtime: AppRuntimeDependencies }) {
+function AppRuntime({
+  runtime,
+  startOnboardingFromBeginning,
+  onReset,
+}: {
+  readonly runtime: AppRuntimeDependencies;
+  readonly startOnboardingFromBeginning: boolean;
+  readonly onReset: () => void;
+}) {
   const { services, appLockController } = runtime;
 
   return (
-    <ServicesContext.Provider value={services}>
-      <AppLockProvider controller={appLockController}>
-        <StatusBar style="auto" />
-        <AppContent services={services} />
-      </AppLockProvider>
-    </ServicesContext.Provider>
+    <AppResetContext.Provider value={{ restartAtOnboarding: onReset }}>
+      <ServicesContext.Provider value={services}>
+        <AppLockProvider controller={appLockController}>
+          <HomeLayoutProvider>
+            <StatusBar style="auto" />
+            <AppContent
+              services={services}
+              startOnboardingFromBeginning={startOnboardingFromBeginning}
+            />
+          </HomeLayoutProvider>
+        </AppLockProvider>
+      </ServicesContext.Provider>
+    </AppResetContext.Provider>
   );
 }
 
@@ -173,6 +197,14 @@ function ProtectedStartupRoot() {
   // Construction is attempted below the root boundary and represented explicitly so a thrown
   // native/storage adapter cannot prevent the opaque recovery surface from mounting.
   const [attempt, setAttempt] = useState(() => attemptProtectedStartup(constructAppRuntime));
+  const [runtimeGeneration, setRuntimeGeneration] = useState(0);
+  const [startOnboardingFromBeginning, setStartOnboardingFromBeginning] = useState(false);
+
+  const restartAtOnboarding = useCallback(() => {
+    setStartOnboardingFromBeginning(true);
+    setAttempt(attemptProtectedStartup(constructAppRuntime));
+    setRuntimeGeneration((current) => current + 1);
+  }, []);
   if (attempt.kind === 'recovery') {
     return (
       <StartupRecoverySurface
@@ -180,7 +212,14 @@ function ProtectedStartupRoot() {
       />
     );
   }
-  return <AppRuntime runtime={attempt.value} />;
+  return (
+    <AppRuntime
+      key={runtimeGeneration}
+      onReset={restartAtOnboarding}
+      runtime={attempt.value}
+      startOnboardingFromBeginning={startOnboardingFromBeginning}
+    />
+  );
 }
 
 export default function App() {

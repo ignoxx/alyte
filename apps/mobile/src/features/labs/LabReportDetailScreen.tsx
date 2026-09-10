@@ -1,16 +1,8 @@
 import { useCallback, useLayoutEffect, useState, type PropsWithChildren } from 'react';
-import {
-  ActionSheetIOS,
-  Alert,
-  Platform,
-  Pressable,
-  StyleSheet,
-  View,
-  useWindowDimensions,
-} from 'react-native';
+import { ActionSheetIOS, Alert, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { LabReport } from '@alyte/domain';
+import { formatLocaleDate, type LabRecord, type LabReport, type SpecimenType } from '@alyte/domain';
 import type { LabsStackParamList, RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
@@ -22,19 +14,13 @@ import {
   ScreenScrollView,
   ScreenStatusView,
   StatusPill,
-  TidalHero,
-  TidalIconStage,
 } from '../../ui/primitives';
 import { colors, screenStyles, spacing } from '../../theme';
 import { LabReportImportError, type PasswordRequest } from './report-service';
 import {
   formatReportFileSize,
-  formatReportPageCount,
-  formatLabReportDetailRowAccessibilityLabel,
   getLabReportFailureRecovery,
   getLabReportDetailState,
-  getLabReportDetailRowLayout,
-  type LabReportDetailRowLayout,
 } from './report-detail-model';
 
 type Navigation = NativeStackNavigationProp<LabsStackParamList>;
@@ -44,6 +30,15 @@ function stateLabel(
   report: LabReport,
   integrity: 'verified' | 'missing' | 'mismatch' | 'not-verifiable',
 ): string {
+  if (integrity !== 'verified') {
+    return t(
+      integrity === 'missing'
+        ? 'labs.reportIntegrityMissing'
+        : integrity === 'mismatch'
+          ? 'labs.reportIntegrityMismatch'
+          : 'labs.reportIntegrityNot-verifiable',
+    );
+  }
   const recovery =
     integrity === 'verified'
       ? getLabReportFailureRecovery(report)
@@ -69,12 +64,29 @@ function sourceLabel(report: LabReport): string {
   return report.sourceType === 'pdf' ? t('labs.reportPdf') : t('labs.reportImage');
 }
 
+function specimenLabel(value: SpecimenType): string {
+  return t(`labs.specimen.${value}`);
+}
+
+function resultCount(count: number): string {
+  return t(count === 1 ? 'labs.recordMeasurement' : 'labs.recordMeasurements').replace(
+    '{count}',
+    String(count),
+  );
+}
+
+function pageCount(count: number | null): string {
+  if (count === null) return t('labs.reportPagesUnknown');
+  return t(count === 1 ? 'labs.reportOnePage' : 'labs.reportPages').replace(
+    '{count}',
+    String(count),
+  );
+}
+
 export function LabReportDetailScreen() {
   const navigation = useNavigation<Navigation>();
   const route = useRoute<DetailRoute>();
-  const { reports } = useServices();
-  const { fontScale } = useWindowDimensions();
-  const detailRowLayout = getLabReportDetailRowLayout(fontScale);
+  const { reports, labs } = useServices();
   const [report, setReport] = useState<LabReport | null>(null);
   const [integrity, setIntegrity] = useState<
     'verified' | 'missing' | 'mismatch' | 'not-verifiable'
@@ -83,12 +95,31 @@ export function LabReportDetailScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [openDraftId, setOpenDraftId] = useState<string | null>(null);
+  const [linkedRecords, setLinkedRecords] = useState<readonly LabRecord[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const next = await reports.getReport(route.params.reportId);
+      const [next, records] = await Promise.all([
+        reports.getReport(route.params.reportId),
+        labs.listRecords(),
+      ]);
       setReport(next);
+      setLinkedRecords(
+        next === null
+          ? []
+          : records
+              .filter(
+                (record) => record.labReportId === next.id || next.labRecordIds.includes(record.id),
+              )
+              .sort((left, right) => {
+                const leftDate =
+                  left.collectionDate.kind === 'known' ? left.collectionDate.value : '';
+                const rightDate =
+                  right.collectionDate.kind === 'known' ? right.collectionDate.value : '';
+                return rightDate.localeCompare(leftDate) || right.id.localeCompare(left.id);
+              }),
+      );
       if (next === null) {
         setIntegrity('missing');
       } else {
@@ -109,7 +140,7 @@ export function LabReportDetailScreen() {
     } finally {
       setLoading(false);
     }
-  }, [reports, route.params.reportId]);
+  }, [labs, reports, route.params.reportId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -120,7 +151,7 @@ export function LabReportDetailScreen() {
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight:
-        report === null || report.importState === 'deleted'
+        busy || report === null || report.importState === 'deleted'
           ? () => null
           : () => (
               <Pressable
@@ -130,7 +161,7 @@ export function LabReportDetailScreen() {
                 onPress={openMoreMenu}
                 style={({ pressed }) => [styles.headerAction, pressed && styles.pressed]}
               >
-                <AppIcon color={colors.accent} name="ellipsis" size={20} />
+                <AppIcon color={colors.onBrand} name="ellipsis" size={20} />
               </Pressable>
             ),
     });
@@ -189,6 +220,7 @@ export function LabReportDetailScreen() {
   }
 
   function openMoreMenu() {
+    if (busy || report === null) return;
     const showDelete = () => confirmDelete();
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
@@ -211,7 +243,7 @@ export function LabReportDetailScreen() {
   }
 
   function confirmDelete() {
-    if (report === null) return;
+    if (busy || report === null) return;
     Alert.alert(t('labs.reportDelete'), t('labs.reportDeleteConfirm'), [
       {
         text: t('labs.recordDeleteConfirmAction'),
@@ -223,7 +255,7 @@ export function LabReportDetailScreen() {
   }
 
   async function remove() {
-    if (report === null) return;
+    if (busy || report === null) return;
     setBusy(true);
     try {
       await reports.deleteReport(report.id);
@@ -238,14 +270,22 @@ export function LabReportDetailScreen() {
   const detailState = getLabReportDetailState(report, loading, error);
   if (detailState === 'loading') {
     return (
-      <ScreenStatusView contentContainerStyle={styles.center} style={screenStyles.scroll}>
+      <ScreenStatusView
+        contentContainerStyle={styles.center}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         <AppText>{t('labs.loading')}</AppText>
       </ScreenStatusView>
     );
   }
   if (detailState === 'error') {
     return (
-      <ScreenStatusView contentContainerStyle={styles.center} style={screenStyles.scroll}>
+      <ScreenStatusView
+        contentContainerStyle={styles.center}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         <AppText selectable>{t('labs.reportLoadError')}</AppText>
         <AppButton label={t('labs.retry')} onPress={() => void load()} tone="secondary" />
         <AppButton
@@ -258,7 +298,11 @@ export function LabReportDetailScreen() {
   }
   if (detailState === 'unavailable') {
     return (
-      <ScreenStatusView contentContainerStyle={styles.center} style={screenStyles.scroll}>
+      <ScreenStatusView
+        contentContainerStyle={styles.center}
+        style={screenStyles.scroll}
+        tabBarClearance="native"
+      >
         <AppText selectable variant="heading">
           {t('labs.reportUnavailableTitle')}
         </AppText>
@@ -286,53 +330,63 @@ export function LabReportDetailScreen() {
 
   return (
     <DetailScrollView>
-      <TidalHero style={styles.reportHero}>
+      <AppSurface style={styles.reportSummary}>
         <View style={styles.reportHeroHeading}>
-          <TidalIconStage name="doc" size="compact" />
           <View style={styles.reportHeroCopy}>
-            <StatusPill>{stateLabel(report, integrity)}</StatusPill>
-            <AppText style={styles.reportHeroTitle} variant="title">
-              {report.originalFilename}
-            </AppText>
-            <AppText style={styles.reportHeroBody} variant="caption">
-              {t('labs.reportRetainedBody')}
+            {(report.importState !== 'imported' || integrity !== 'verified') && (
+              <StatusPill>{stateLabel(report, integrity)}</StatusPill>
+            )}
+            <AppText variant="title">{report.originalFilename}</AppText>
+            <AppText style={styles.reportSummaryBody} variant="caption">
+              {[
+                sourceLabel(report),
+                pageCount(report.pageCount),
+                formatReportFileSize(report.byteSize, {
+                  locale,
+                  unknownLabel: t('labs.reportSizeUnknown'),
+                }),
+              ].join(' · ')}
             </AppText>
           </View>
         </View>
-      </TidalHero>
-      <AppSurface style={styles.metaSection}>
-        <DetailRow
-          label={t('labs.reportSourceType')}
-          layout={detailRowLayout}
-          value={sourceLabel(report)}
-        />
-        <DetailRow
-          label={formatReportPageCount(
-            t('labs.reportPageCount'),
-            report.pageCount,
-            t('labs.reportUnknown'),
-          )}
-          layout={detailRowLayout}
-          value=""
-        />
-        <DetailRow
-          label={t('labs.reportSize')}
-          layout={detailRowLayout}
-          value={formatReportFileSize(report.byteSize, {
-            locale,
-            unknownLabel: t('labs.reportSizeUnknown'),
-          })}
-        />
-        <DetailRow
-          label={t('labs.reportIntegrity')}
-          layout={detailRowLayout}
-          value={t(`labs.reportIntegrity${integrity[0]?.toUpperCase() ?? ''}${integrity.slice(1)}`)}
-        />
       </AppSurface>
+      {linkedRecords.length > 0 && (
+        <View style={styles.resultsSection}>
+          <AppText variant="heading">{t('labs.reportResults')}</AppText>
+          <AppSurface style={styles.resultsGroup}>
+            {linkedRecords.map((record, index) => {
+              const date =
+                record.collectionDate.kind === 'known'
+                  ? formatLocaleDate(record.collectionDate.value, locale)
+                  : t('labs.recordDateMissing');
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  key={record.id}
+                  onPress={() => navigation.navigate('LabRecordDetail', { recordId: record.id })}
+                  style={({ pressed }) => [
+                    styles.resultRow,
+                    index > 0 && styles.resultRowDivider,
+                    pressed && styles.actionPressed,
+                  ]}
+                >
+                  <View style={styles.actionBody}>
+                    <AppText variant="heading">{specimenLabel(record.specimenType)}</AppText>
+                    <AppText style={styles.resultMeta} variant="caption">
+                      {`${date} · ${resultCount(record.measurements.length)}`}
+                    </AppText>
+                  </View>
+                  <AppIcon name="chevronRight" size={16} />
+                </Pressable>
+              );
+            })}
+          </AppSurface>
+        </View>
+      )}
       {report.importState !== 'deleted' && integrity === 'verified' && (
         <AppSurface style={styles.actionSection}>
           <AppText variant="label" style={styles.sectionLabel}>
-            {t('labs.reportActions')}
+            {t('labs.reportSource')}
           </AppText>
           <Pressable
             accessibilityRole="button"
@@ -343,55 +397,64 @@ export function LabReportDetailScreen() {
             <AppIcon name="eye" size={20} />
             <View style={styles.actionBody}>
               <AppText variant="heading">{t('labs.reportPreview')}</AppText>
-              <AppText style={styles.body}>{t('labs.reportPreviewBody')}</AppText>
             </View>
             <AppIcon name="chevronRight" size={16} />
           </Pressable>
-          {report.importState === 'imported' && report.labRecordIds.length === 0 && (
-            <View style={styles.extractAction}>
+          {report.importState === 'imported' &&
+            (openDraftId !== null || report.labRecordIds.length === 0) && (
+              <View style={styles.extractAction}>
+                <AppButton
+                  disabled={busy}
+                  label={
+                    openDraftId === null
+                      ? t('labs.extractionStart')
+                      : t('labs.extractionReviewCached')
+                  }
+                  onPress={() => void extractLocally()}
+                  style={styles.extractButton}
+                />
+              </View>
+            )}
+        </AppSurface>
+      )}
+      {integrity !== 'verified' && report.importState !== 'deleted' && (
+        <AppSurface tone="soft" style={styles.error}>
+          <AppText variant="heading">{t('labs.reportSourceUnavailableTitle')}</AppText>
+          <AppText>{t('labs.reportSourceUnavailableBody')}</AppText>
+          <AppButton
+            disabled={busy}
+            label={t('labs.reportDelete')}
+            onPress={confirmDelete}
+            tone="secondary"
+          />
+        </AppSurface>
+      )}
+      {integrity === 'verified' &&
+        (report.importState === 'failed' || report.importState === 'interrupted') && (
+          <AppSurface tone="soft" style={styles.error}>
+            <AppText>
+              {t(
+                failureRecovery.message === 'retained-source'
+                  ? 'labs.reportRetryBody'
+                  : 'labs.reportNoSourceRetryBody',
+              )}
+            </AppText>
+            {failureRecovery.action === 'retry' ? (
               <AppButton
                 disabled={busy}
-                label={
-                  openDraftId === null
-                    ? t('labs.extractionStart')
-                    : t('labs.extractionReviewCached')
-                }
-                onPress={() => void extractLocally()}
-                style={styles.extractButton}
+                label={t('labs.reportRetry')}
+                onPress={() => void retry()}
               />
-            </View>
-          )}
-          {report.importState === 'imported' && report.labRecordIds.length > 0 && (
-            <AppText style={styles.actionStatus}>{t('labs.extractionAlreadyConfirmed')}</AppText>
-          )}
-        </AppSurface>
-      )}
-      {(report.importState === 'failed' || report.importState === 'interrupted') && (
-        <AppSurface tone="soft" style={styles.error}>
-          <AppText>
-            {t(
-              failureRecovery.message === 'retained-source'
-                ? 'labs.reportRetryBody'
-                : 'labs.reportNoSourceRetryBody',
+            ) : (
+              <AppButton
+                disabled={busy}
+                label={t('labs.reportDelete')}
+                onPress={confirmDelete}
+                tone="secondary"
+              />
             )}
-          </AppText>
-          {failureRecovery.action === 'retry' ? (
-            <AppButton disabled={busy} label={t('labs.reportRetry')} onPress={() => void retry()} />
-          ) : (
-            <AppButton
-              disabled={busy}
-              label={t('labs.reportDelete')}
-              onPress={confirmDelete}
-              tone="secondary"
-            />
-          )}
-        </AppSurface>
-      )}
-      {report.labRecordIds.length > 0 && (
-        <AppText style={styles.body}>
-          {t('labs.reportLinkedRecords').replace('{count}', String(report.labRecordIds.length))}
-        </AppText>
-      )}
+          </AppSurface>
+        )}
     </DetailScrollView>
   );
 }
@@ -408,39 +471,8 @@ function DetailScrollView({ children }: PropsWithChildren) {
   );
 }
 
-function DetailRow({
-  label,
-  layout,
-  value,
-}: {
-  readonly label: string;
-  readonly layout: LabReportDetailRowLayout;
-  readonly value: string;
-}) {
-  const hasValue = value.length > 0;
-  return (
-    <View
-      accessible
-      accessibilityLabel={formatLabReportDetailRowAccessibilityLabel(label, value)}
-      style={[styles.detailRow, layout === 'stacked' && styles.detailRowStacked]}
-    >
-      <AppText style={[styles.detailLabel, layout === 'stacked' && styles.detailLabelStacked]}>
-        {label}
-      </AppText>
-      {hasValue && (
-        <AppText
-          selectable
-          style={[styles.detailValue, layout === 'stacked' && styles.detailValueStacked]}
-        >
-          {value}
-        </AppText>
-      )}
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  reportHero: { padding: spacing.lg },
+  reportSummary: { padding: spacing.lg },
   reportHeroHeading: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -448,40 +480,27 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   reportHeroCopy: { flex: 1, gap: spacing.sm, minWidth: 210 },
-  reportHeroTitle: { color: colors.onBrand },
-  reportHeroBody: { color: colors.onBrandMuted },
+  reportSummaryBody: { color: colors.mutedInk },
   body: { color: colors.mutedInk, marginTop: spacing.md },
+  resultMeta: { color: colors.mutedInk, marginTop: spacing.xs },
   center: { alignItems: 'center', gap: spacing.md, justifyContent: 'center', padding: spacing.lg },
   error: { gap: spacing.sm, marginTop: spacing.md },
   headerAction: { alignItems: 'center', justifyContent: 'center', minHeight: 44, minWidth: 44 },
   pressed: { opacity: 0.6 },
-  metaSection: { gap: 0, marginTop: spacing.md, padding: 0 },
-  detailRow: {
+  resultsSection: { gap: spacing.sm, marginTop: spacing.lg },
+  resultsGroup: { overflow: 'hidden', padding: 0 },
+  resultRow: {
     alignItems: 'center',
-    borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    minHeight: 48,
+    gap: spacing.sm,
+    minHeight: 64,
     paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
-  detailRowStacked: {
-    alignItems: 'stretch',
-    flexDirection: 'column',
-    gap: spacing.xs,
-    paddingVertical: spacing.md,
+  resultRowDivider: {
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
-  detailLabel: { color: colors.mutedInk, flex: 1, flexShrink: 1, minWidth: 0 },
-  detailLabelStacked: { flex: 0, width: '100%' },
-  detailValue: {
-    color: colors.ink,
-    flex: 1,
-    flexShrink: 1,
-    marginLeft: spacing.md,
-    minWidth: 0,
-    textAlign: 'right',
-  },
-  detailValueStacked: { flex: 0, marginLeft: 0, textAlign: 'left', width: '100%' },
   actionSection: { gap: spacing.xs, marginTop: spacing.md, padding: 0 },
   sectionLabel: { color: colors.mutedInk, paddingHorizontal: spacing.md, paddingTop: spacing.md },
   actionRow: {
@@ -503,6 +522,5 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   extractButton: { alignSelf: 'stretch' },
-  actionStatus: { color: colors.mutedInk, padding: spacing.md },
   errorText: { color: colors.danger },
 });

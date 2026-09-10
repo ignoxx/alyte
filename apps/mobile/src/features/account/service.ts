@@ -64,6 +64,8 @@ export type CloudAccountService = {
   readonly exportAccount: (signal?: AbortSignal) => Promise<AccountExportResponse>;
   readonly prepareAccountExport: (signal?: AbortSignal) => Promise<PreparedCloudAccountExport>;
   readonly signOut: () => Promise<void>;
+  /** Clears only this device's optional cloud session and retry marker. It never calls the API. */
+  readonly clearDeviceState: () => Promise<void>;
   readonly deleteAccount: (idempotencyKey?: string) => Promise<void>;
   readonly getAllowanceSummary: () => Promise<CloudAllowanceResponse>;
   readonly reconcileAllowances: () => Promise<CloudReconcileResponse>;
@@ -183,6 +185,25 @@ export function createCloudAccountService(
       throw error;
     }
     if (previous !== null || snapshot.status !== 'signed-out') publish('signed-out', null);
+  }
+
+  async function clearDeviceState(): Promise<void> {
+    session = null;
+    accountId = null;
+    pendingDeletion = null;
+    let failure: unknown;
+    try {
+      await repository.clear();
+    } catch (error) {
+      failure = error;
+    }
+    try {
+      await pendingOperations.clear();
+    } catch (error) {
+      failure ??= error;
+    }
+    publish('signed-out', failure === undefined ? null : 'session_storage_unavailable');
+    if (failure !== undefined) throw failure;
   }
 
   async function refreshStoredSession(): Promise<string> {
@@ -511,6 +532,7 @@ export function createCloudAccountService(
     exportAccount,
     prepareAccountExport,
     signOut,
+    clearDeviceState,
     deleteAccount,
     getAllowanceSummary,
     reconcileAllowances,

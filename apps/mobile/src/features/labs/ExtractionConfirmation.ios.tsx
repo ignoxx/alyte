@@ -24,6 +24,7 @@ export function ExtractionConfirmation({
   remainingBlockers,
   blockedReason,
   onConfirm,
+  onLeaveWithoutSaving,
   onReviewRemaining,
 }: ExtractionConfirmationProps) {
   const navigation = useNavigation<Navigation>();
@@ -57,12 +58,13 @@ export function ExtractionConfirmation({
           action={action}
           failure={presentation.state === 'failure'}
           onConfirm={onConfirm}
+          onLeaveWithoutSaving={onLeaveWithoutSaving}
           onReviewRemaining={onReviewRemaining}
         />
       ),
     });
     return () => tabNavigation.setOptions({ bottomAccessory: undefined });
-  }, [action, navigation, onConfirm, onReviewRemaining, presentation.state]);
+  }, [action, navigation, onConfirm, onLeaveWithoutSaving, onReviewRemaining, presentation.state]);
 
   return null;
 }
@@ -71,22 +73,25 @@ function ReviewAccessory({
   action,
   failure,
   onConfirm,
+  onLeaveWithoutSaving,
   onReviewRemaining,
 }: {
   readonly action: ExtractionConfirmationAction;
   readonly failure: boolean;
   readonly onConfirm: () => void;
+  readonly onLeaveWithoutSaving: () => void;
   readonly onReviewRemaining: () => void;
 }) {
   const handlePress = () => {
     if (action.kind === 'review') onReviewRemaining();
+    else if (action.kind === 'leave') onLeaveWithoutSaving();
     else onConfirm();
   };
 
   return (
     <View style={[styles.accessory, failure && styles.failureAccessory]}>
       {failure && (
-        <AppText accessibilityRole="text" numberOfLines={1} selectable style={styles.failure}>
+        <AppText accessibilityRole="text" selectable style={styles.failure}>
           {t('labs.extractionConfirmationFailure')}
         </AppText>
       )}
@@ -98,13 +103,12 @@ function ReviewAccessory({
         onPress={handlePress}
         style={({ pressed }) => [
           styles.action,
-          action.kind === 'save' && !failure ? styles.saveAction : styles.quietAction,
+          action.kind === 'save' && !failure && styles.saveAction,
           pressed && !action.disabled && styles.actionPressed,
           action.disabled && styles.actionDisabled,
         ]}
       >
         <AppText
-          numberOfLines={1}
           variant="label"
           style={[styles.actionLabel, action.kind === 'save' && !failure && styles.saveLabel]}
         >
@@ -124,11 +128,11 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
   },
   failureAccessory: {
-    alignItems: 'center',
-    flexDirection: 'row',
+    alignItems: 'stretch',
+    flexDirection: 'column',
     gap: spacing.sm,
   },
-  failure: { color: colors.danger, flex: 1, minWidth: 0 },
+  failure: { color: colors.danger, textAlign: 'center', width: '100%' },
   action: {
     alignItems: 'center',
     borderCurve: 'continuous',
@@ -137,7 +141,6 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingHorizontal: spacing.md,
   },
-  quietAction: { backgroundColor: colors.accentSoft },
   saveAction: { backgroundColor: colors.accent },
   actionPressed: { opacity: 0.78 },
   actionDisabled: { opacity: 0.58 },

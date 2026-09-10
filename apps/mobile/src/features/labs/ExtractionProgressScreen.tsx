@@ -12,7 +12,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppSurface, AppText, TidalHero, TidalIconStage } from '../../ui/primitives';
+import {
+  AppButton,
+  AppSurface,
+  AppText,
+  ScreenStatusView,
+  TidalHero,
+  TidalIconStage,
+} from '../../ui/primitives';
 import { colors, radii, spacing } from '../../theme';
 import {
   LabReportExtractionError,
@@ -24,12 +31,17 @@ import {
   ExtractionProgressController,
   type ExtractionProgressTerminalDestination,
 } from './extraction-progress-controller';
-import { extractionFailurePresentation } from './extraction-progress-presentation';
+import {
+  EXTRACTION_PROGRESS_STAGES,
+  extractionFailurePresentation,
+  extractionProgressDetailKey,
+  extractionProgressStageCompleted,
+} from './extraction-progress-presentation';
 
 type Route = RouteProp<RootStackParamList, 'ExtractionProgress'>;
 type Navigation = NativeStackNavigationProp<RootStackParamList, 'ExtractionProgress'>;
 
-const stages: readonly LabReportExtractionProgress['stage'][] = ['import', 'ocr', 'review'];
+const stages = EXTRACTION_PROGRESS_STAGES;
 
 function passwordRequest(): PasswordRequest {
   return ({ report }) =>
@@ -47,13 +59,17 @@ function passwordRequest(): PasswordRequest {
 }
 
 function stageLabel(stage: LabReportExtractionProgress['stage']): string {
-  return t(
+  const key =
     stage === 'import'
       ? 'labs.extractionProgressImport'
       : stage === 'ocr'
         ? 'labs.extractionProgressOcr'
-        : 'labs.extractionProgressReview',
-  );
+        : stage === 'organize'
+          ? 'labs.extractionProgressOrganize'
+          : stage === 'refine'
+            ? 'labs.extractionProgressRefine'
+            : 'labs.extractionProgressReview';
+  return t(key);
 }
 
 export function ExtractionProgressScreen() {
@@ -96,9 +112,21 @@ export function ExtractionProgressScreen() {
   useEffect(() => {
     return () => controller.dispose();
   }, [controller]);
-  usePreventRemove(activeOperation && failure === null, () => {
-    // Extraction is an in-flight local write. Explicit Cancel is the only dismissal path until
-    // the operation reaches a terminal state.
+  usePreventRemove(activeOperation && failure === null, ({ data }) => {
+    Alert.alert(t('labs.extractionProgressLeaveTitle'), t('labs.extractionProgressLeaveBody'), [
+      { text: t('labs.extractionProgressKeepWorking'), style: 'cancel' },
+      {
+        text: t('labs.extractionProgressCancel'),
+        style: 'destructive',
+        onPress: () => {
+          setCancellationRequested(true);
+          void reports
+            .cancelExtraction(route.params.reportId)
+            .then(() => navigation.dispatch(data.action))
+            .catch(() => setCancellationRequested(false));
+        },
+      },
+    ]);
   });
 
   useEffect(() => {
@@ -238,10 +266,6 @@ export function ExtractionProgressScreen() {
     restoredProgress,
   ]);
 
-  const currentStageIndex = useMemo(
-    () => Math.max(0, stages.indexOf(progress?.stage ?? 'import')),
-    [progress?.stage],
-  );
   const failurePresentation = failure === null ? null : extractionFailurePresentation(failure);
   async function cancel() {
     await reports.cancelExtraction(route.params.reportId);
@@ -273,7 +297,7 @@ export function ExtractionProgressScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom', 'left', 'right']}>
-      <View style={styles.content}>
+      <ScreenStatusView contentContainerStyle={styles.content} style={styles.safe}>
         <TidalHero style={styles.progressHero}>
           <View style={styles.progressHeroHeading}>
             <TidalIconStage name="doc" size="compact" />
@@ -300,31 +324,67 @@ export function ExtractionProgressScreen() {
           accessibilityLabel={t('labs.extractionProgressJourneyLabel')}
           style={styles.journey}
         >
-          {stages.map((stage, index) => {
+          {stages.map((stage) => {
             const stageProgress = progress?.stage === stage ? progress : null;
-            const done =
-              progress !== null &&
-              (index < currentStageIndex ||
-                (progress.status === 'complete' && index === currentStageIndex));
+            const detailKey = extractionProgressDetailKey(stageProgress);
+            const done = extractionProgressStageCompleted(progress, stage);
             const isCurrent = progress?.stage === stage && progress.status === 'active';
+            const stoppedHere =
+              progress?.stage === stage &&
+              (progress.status === 'failed' ||
+                progress.status === 'cancelled' ||
+                progress.status === 'interrupted');
             return (
-              <View key={stage} accessibilityLabel={stageLabel(stage)} style={styles.stage}>
-                <View style={[styles.dot, done && styles.doneDot, isCurrent && styles.currentDot]}>
+              <View
+                key={stage}
+                accessibilityLabel={`${stageLabel(stage)}, ${t(
+                  done
+                    ? 'labs.extractionProgressStageComplete'
+                    : isCurrent
+                      ? 'labs.extractionProgressStageCurrent'
+                      : stoppedHere
+                        ? 'labs.extractionProgressStageStopped'
+                        : 'labs.extractionProgressStageWaiting',
+                )}`}
+                accessibilityRole={isCurrent ? 'progressbar' : 'text'}
+                accessibilityState={{ busy: isCurrent }}
+                accessibilityValue={
+                  isCurrent && stageProgress !== null && stageProgress.total > 0
+                    ? {
+                        min: 0,
+                        max: stageProgress.total,
+                        now: stageProgress.completed,
+                      }
+                    : undefined
+                }
+                style={styles.stage}
+              >
+                <View
+                  style={[
+                    styles.dot,
+                    done && styles.doneDot,
+                    isCurrent && styles.currentDot,
+                    stoppedHere && styles.failedDot,
+                  ]}
+                >
                   {isCurrent && (
                     <ActivityIndicator color={colors.onAccent as string} size="small" />
                   )}
                 </View>
                 <View style={styles.stageText}>
                   <AppText variant="label">{stageLabel(stage)}</AppText>
-                  {isCurrent && stageProgress !== null && stageProgress.total > 0 && (
+                  {isCurrent && stageProgress !== null && detailKey !== null && (
                     <AppText variant="caption" style={styles.muted}>
-                      {stage === 'ocr'
-                        ? t('labs.extractionProgressPage')
+                      {detailKey === 'labs.extractionProgressPage'
+                        ? t(detailKey)
                             .replace('{current}', String(stageProgress.completed))
                             .replace('{total}', String(stageProgress.total))
-                        : t('labs.extractionProgressSection')
-                            .replace('{current}', String(stageProgress.completed))
-                            .replace('{total}', String(stageProgress.total))}
+                        : t(detailKey)}
+                    </AppText>
+                  )}
+                  {stoppedHere && (
+                    <AppText variant="caption" style={styles.failureStageText}>
+                      {t('labs.extractionProgressStoppedHere')}
                     </AppText>
                   )}
                 </View>
@@ -367,14 +427,14 @@ export function ExtractionProgressScreen() {
             />
           </AppSurface>
         )}
-      </View>
+      </ScreenStatusView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { backgroundColor: colors.canvas, flex: 1 },
-  content: { flex: 1, gap: spacing.md, justifyContent: 'center', padding: spacing.lg },
+  content: { gap: spacing.md, paddingHorizontal: spacing.lg, width: '100%' },
   progressHero: { padding: spacing.lg },
   progressHeroHeading: {
     alignItems: 'center',
@@ -399,5 +459,7 @@ const styles = StyleSheet.create({
   },
   doneDot: { backgroundColor: colors.accent },
   currentDot: { backgroundColor: colors.accent },
+  failedDot: { backgroundColor: colors.danger },
+  failureStageText: { color: colors.danger },
   failure: { gap: spacing.md, padding: spacing.lg },
 });

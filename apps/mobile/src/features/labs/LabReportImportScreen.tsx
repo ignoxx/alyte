@@ -1,13 +1,14 @@
 import { useLayoutEffect, useState } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
 import type { LabReport } from '@alyte/domain';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
 import {
   AppButton,
+  AppIcon,
   AppSurface,
   AppText,
   ScreenScrollView,
@@ -46,10 +47,14 @@ function errorMessage(error: unknown): string {
       : t('labs.reportImportInvalidImage');
   }
   if (!(error instanceof LabReportImportError)) return t('labs.reportImportError');
+  if (error.reason === 'cancelled') {
+    return error.report.originalPath === null
+      ? t('labs.reportImportCancelled')
+      : t('labs.reportImportCancelledSourceKept');
+  }
   if (error.report.originalPath === null || error.report.sourceHash === null) {
     return t('labs.reportImportNoSourceError');
   }
-  if (error.reason === 'cancelled') return t('labs.reportImportCancelled');
   if (error.reason === 'wrong-password') return t('labs.reportWrongPassword');
   if (error.reason === 'malformed') return t('labs.reportMalformed');
   return t('labs.reportImportError');
@@ -68,12 +73,19 @@ export function LabReportImportScreen() {
         <AppButton
           disabled={busy}
           label={t('labs.recordCancel')}
+          labelMaxFontSizeMultiplier={1.5}
           onPress={() => navigation.goBack()}
           tone="quiet"
         />
       ),
     });
   }, [busy, navigation]);
+
+  usePreventRemove(busy, () => {
+    Alert.alert(t('labs.reportImportInProgressTitle'), t('labs.reportImportInProgressBody'), [
+      { text: t('labs.reportImportKeepWorking'), style: 'cancel' },
+    ]);
+  });
 
   function navigateToImportedReport(
     report: LabReport,
@@ -124,14 +136,25 @@ export function LabReportImportScreen() {
     );
   }
 
+  async function handOffImportedReport(
+    result: Exclude<Awaited<ReturnType<typeof reports.importPdf>>, null>,
+  ) {
+    setLastReport(result.report);
+    // Let the navigation guard observe that protected file persistence has finished before Alyte
+    // removes this screen. Otherwise the guard mistakes Alyte's own success transition for a
+    // user trying to abandon an in-flight save.
+    setBusy(false);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    showImportedReport(result.report, result.destination, result.duplicate);
+  }
+
   async function importPdf() {
     setBusy(true);
     setError(null);
     try {
       const result = await reports.importPdf(undefined, passwordRequest());
       if (result !== null) {
-        setLastReport(result.report);
-        showImportedReport(result.report, result.destination, result.duplicate);
+        await handOffImportedReport(result);
       }
     } catch (caught) {
       setError(errorMessage(caught));
@@ -147,8 +170,7 @@ export function LabReportImportScreen() {
     try {
       const result = await reports.importImages(undefined, passwordRequest());
       if (result !== null) {
-        setLastReport(result.report);
-        showImportedReport(result.report, result.destination, result.duplicate);
+        await handOffImportedReport(result);
       }
     } catch (caught) {
       setError(errorMessage(caught));
@@ -165,7 +187,7 @@ export function LabReportImportScreen() {
           <TidalIconStage name="addDocument" size="compact" />
           <View style={styles.importHeroCopy}>
             <AppText style={styles.importHeroTitle} variant="title">
-              {t('labs.reportImportTitle')}
+              {t('labs.reportImportPrompt')}
             </AppText>
             <AppText style={styles.importHeroBody} variant="caption">
               {t('labs.reportImportBody')}
@@ -174,17 +196,17 @@ export function LabReportImportScreen() {
         </View>
       </TidalHero>
       <AppSurface style={styles.actions}>
-        <AppButton
-          disabled={busy}
-          label={t('labs.reportPickPdf')}
-          onPress={() => void importPdf()}
-        />
+        <AppButton disabled={busy} label={t('labs.reportPickPdf')} onPress={() => void importPdf()}>
+          <AppIcon color={colors.onAccent} name="folder" size={18} />
+        </AppButton>
         <AppButton
           disabled={busy}
           label={t('labs.reportPickImages')}
           onPress={() => void importImages()}
           tone="secondary"
-        />
+        >
+          <AppIcon color={colors.accent} name="photos" size={18} />
+        </AppButton>
       </AppSurface>
       {busy && <AppText style={styles.muted}>{t('labs.reportImporting')}</AppText>}
       {error !== null && (

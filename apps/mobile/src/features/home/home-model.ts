@@ -46,6 +46,21 @@ export type HomeMeasuredChange = {
   readonly direction: 'increased' | 'decreased' | 'stable';
 };
 
+export type HomeLatestMeasurement = {
+  readonly id: string;
+  readonly recordId: string;
+  readonly reportId: string | null;
+  readonly biomarkerId: string | null;
+  readonly label: string;
+  readonly valueString: string;
+  readonly unit: string | null;
+  readonly referenceInterval: string | null;
+  readonly flag: string | null;
+  readonly reviewState: 'confirmed' | 'needs-review';
+  readonly collectionDate: LabDateState;
+  readonly sourcePage: number | null;
+};
+
 export type HomeOpenExtractionDraft = {
   readonly reportId: string;
   readonly draftId: string;
@@ -53,7 +68,7 @@ export type HomeOpenExtractionDraft = {
 
 export type HomeLabViewModel = {
   readonly latestReport: HomeReportRow | null;
-  /** The newest confirmed Lab Record, including records linked to an Original Report. */
+  /** The newest Lab Record, including records linked to an Original Report. */
   readonly latestRecord: HomeReportRow | null;
   readonly recentReports: readonly HomeReportRow[];
   readonly recentRecords: readonly HomeReportRow[];
@@ -64,8 +79,15 @@ export type HomeLabViewModel = {
   readonly openDraftCount: number;
   readonly reviewCount: number;
   readonly measuredChanges: readonly HomeMeasuredChange[];
-  /** Confirmed local history coverage. These are counts, never health scores. */
+  /** Results from the newest report or manual record that contains Measurements. */
+  readonly latestMeasurements: readonly HomeLatestMeasurement[];
+  readonly latestMeasurementReportId: string | null;
+  readonly latestReviewRecordId: string | null;
+  /** Reviewed local history coverage. These are counts, never health scores. */
+  readonly reportCount: number;
   readonly recordCount: number;
+  readonly measurementCount: number;
+  readonly totalMeasurementCount: number;
   readonly biomarkerCount: number;
 };
 
@@ -73,7 +95,7 @@ export type HomeMeasuredChangeColumnCount = 1 | 2;
 
 const HOME_CHANGE_GRID_MINIMUM_WIDTH = 390;
 const HOME_CHANGE_GRID_MAXIMUM_FONT_SCALE = 1.3;
-const HOME_MEASURED_CHANGE_LIMIT = 6;
+const HOME_MEASURED_CHANGE_LIMIT = 4;
 
 /**
  * Keep the biomarker overview visual at ordinary iPhone sizes, then return to a single reading
@@ -153,6 +175,10 @@ function latestPoints(
   return previous === undefined || latest === undefined ? null : { previous, latest };
 }
 
+function reviewedMeasurements(record: LabRecord) {
+  return record.measurements.filter((measurement) => measurement.reviewState === 'confirmed');
+}
+
 /**
  * Home's Quiet summary is derived only from persisted Lab Reports and confirmed compatible
  * Measurements. No concrete value is inferred for records without a compatible measured point.
@@ -167,7 +193,11 @@ export function buildHomeLabViewModel(
     .filter((report) => report.importState !== 'deleted')
     .map((report) => reportRow(report, records))
     .sort(compareHomeRows);
-  const latestRecord = records.map(recordRow).sort(compareHomeRows)[0] ?? null;
+  const orderedRecords = [...records].sort((left, right) =>
+    compareHomeRows(recordRow(left), recordRow(right)),
+  );
+  const latestRecordEntity = orderedRecords[0] ?? null;
+  const latestRecord = latestRecordEntity === null ? null : recordRow(latestRecordEntity);
   const sourceRecordIds = new Set(
     reports
       .filter((report) => report.importState !== 'deleted')
@@ -224,6 +254,62 @@ export function buildHomeLabViewModel(
       return dateOrder === 0 ? left.label.localeCompare(right.label) : dateOrder;
     })
     .slice(0, HOME_MEASURED_CHANGE_LIMIT);
+  const activeReports = reports.filter((report) => report.importState !== 'deleted');
+  const latestMeasurementRecord =
+    orderedRecords.find((record) => record.measurements.length > 0) ?? null;
+  const latestMeasurementReportEntity =
+    latestMeasurementRecord === null
+      ? null
+      : (activeReports.find(
+          (report) =>
+            report.id === latestMeasurementRecord.labReportId ||
+            report.labRecordIds.includes(latestMeasurementRecord.id),
+        ) ?? null);
+  const latestReportRecordIds = latestMeasurementReportEntity?.labRecordIds ?? [];
+  const latestMeasurementRecords =
+    latestMeasurementReportEntity !== null && latestReportRecordIds.length > 0
+      ? orderedRecords.filter(
+          (record) =>
+            record.labReportId === latestMeasurementReportEntity.id ||
+            latestReportRecordIds.includes(record.id),
+        )
+      : latestMeasurementRecord === null
+        ? []
+        : [latestMeasurementRecord];
+  const latestMeasurements = latestMeasurementRecords.flatMap((record) =>
+    record.measurements.map((measurement): HomeLatestMeasurement => {
+      const catalogue =
+        measurement.biomarkerId === null
+          ? null
+          : (comparableBiomarkers.find((entry) => entry.id === measurement.biomarkerId) ?? null);
+      return {
+        id: measurement.id,
+        recordId: record.id,
+        reportId: record.labReportId,
+        biomarkerId: measurement.biomarkerId,
+        label: catalogue?.canonicalLabel ?? measurement.current.label,
+        valueString: measurement.current.valueString,
+        unit: measurement.current.unit,
+        referenceInterval: measurement.current.referenceInterval,
+        flag: measurement.current.flag,
+        reviewState: measurement.reviewState,
+        collectionDate: record.collectionDate,
+        sourcePage: measurement.source === null ? null : measurement.source.pageIndex + 1,
+      };
+    }),
+  );
+  const measurementCount = records.reduce(
+    (count, record) => count + reviewedMeasurements(record).length,
+    0,
+  );
+  const totalMeasurementCount = records.reduce(
+    (count, record) => count + record.measurements.length,
+    0,
+  );
+  const latestReviewRecordId =
+    orderedRecords.find((record) =>
+      record.measurements.some((measurement) => measurement.reviewState === 'needs-review'),
+    )?.id ?? null;
 
   return {
     latestReport,
@@ -236,7 +322,13 @@ export function buildHomeLabViewModel(
     openDraftCount: Math.max(0, openDraftCount),
     reviewCount,
     measuredChanges,
+    latestMeasurements,
+    latestMeasurementReportId: latestMeasurementReportEntity?.id ?? null,
+    latestReviewRecordId,
+    reportCount: activeReports.length,
     recordCount: records.length,
+    measurementCount,
+    totalMeasurementCount,
     biomarkerCount: historyEntries.length,
   };
 }

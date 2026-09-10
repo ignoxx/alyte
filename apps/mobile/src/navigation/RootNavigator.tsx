@@ -1,13 +1,27 @@
-import { DarkTheme, DefaultTheme, NavigationContainer, type Theme } from '@react-navigation/native';
+import {
+  DarkTheme,
+  DefaultTheme,
+  NavigationContainer,
+  useIsFocused,
+  type Theme,
+} from '@react-navigation/native';
 import { createNativeBottomTabNavigator } from '@react-navigation/bottom-tabs/unstable';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useColorScheme } from 'react-native';
+import type { PropsWithChildren } from 'react';
+import { StyleSheet, useColorScheme, View } from 'react-native';
+import { useHeaderHeight } from '@react-navigation/elements';
+import { StatusBar } from 'expo-status-bar';
 import type { AlyteServices } from '../services';
 import { t } from '../localization';
-import { colors } from '../theme';
+import { colors, spacing } from '../theme';
 import { createNavigationRegistry } from './registry';
 import type { FeatureTarget, NavigationFeature } from './registry-model';
-import { featureStackRootName, preGateTabNames, reportImportDestination } from './registry-model';
+import {
+  featureStackRootName,
+  importPackSetupDestination,
+  preGateTabNames,
+  reportImportDestination,
+} from './registry-model';
 import type { MainTabParamList, RootStackParamList } from './types';
 import { SnapScreen } from '../features/intake/SnapScreen';
 import { SanitizedReportEditorRoute } from '../features/labs/SanitizedReportEditorRoute';
@@ -23,6 +37,8 @@ import { ExtractionProgressScreen } from '../features/labs/ExtractionProgressScr
 import { FullExportScreen } from '../features/settings/FullExportScreen';
 import { LabRecordFormRoute } from '../features/labs/LabRecordFormRoute';
 import { CloudPaywallScreen } from '../features/commerce/CloudPaywallScreen';
+import { ImportPackSetupScreen } from '../features/onboarding/OnboardingScreen';
+import { TidalHero } from '../ui/primitives';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const MainTabs = createNativeBottomTabNavigator<MainTabParamList>();
@@ -40,15 +56,97 @@ const stackScreenOptions = {
   contentStyle: { backgroundColor: colors.canvas },
   headerBackButtonDisplayMode: 'minimal' as const,
   headerLargeTitle: false,
-  headerTransparent: true,
+  headerTransparent: false,
   headerShadowVisible: false,
   // Native-stack's headerStyle typing predates RN's opaque semantic color type; UIKit accepts it
   // at runtime and resolves it against the current appearance. Keep the back affordance/action
   // accent while the native title itself follows the semantic label color.
   headerTintColor: colors.accent as string,
   headerTitleStyle: { color: colors.ink as string },
-  headerTitleAlign: 'left' as const,
+  headerTitleAlign: 'center' as const,
 };
+
+/**
+ * Pushed feature details use the same full-width brand treatment as the Home hero. The native
+ * header still owns the title and back action; this only supplies its background and tint.
+ * The absolute background lets native-stack determine the header height, including the status bar
+ * and large-title measurements, instead of guessing a platform-specific height.
+ */
+const featureDetailHeaderOptions = {
+  headerBackground: () => <FeatureDetailHeaderBackground />,
+  headerLargeStyle: { backgroundColor: 'transparent' },
+  headerLargeTitleEnabled: true,
+  headerLargeTitleStyle: { color: colors.onBrand as string },
+  headerShadowVisible: false,
+  headerTitleStyle: { color: colors.onBrand as string },
+  headerTintColor: colors.onBrand as string,
+};
+
+function FeatureDetailHeaderBackground() {
+  const isFocused = useIsFocused();
+  return (
+    <>
+      {isFocused && <StatusBar style="light" />}
+      <TidalHero edge="bottom" style={styles.featureDetailHeaderBackground} />
+    </>
+  );
+}
+
+function isEditingOrPreviewFeature(feature: NavigationFeature): boolean {
+  const presentation = feature.options?.presentation;
+  return (
+    presentation === 'formSheet' || presentation === 'modal' || presentation === 'fullScreenModal'
+  );
+}
+
+/**
+ * The native header and the detail content deliberately share one curved hero in two slices. The
+ * continuation is sized from React Navigation's actual header context so large-title, inset, and
+ * platform-specific header measurements remain aligned.
+ */
+function DetailScreenLayout({ children }: PropsWithChildren) {
+  const headerHeight = useHeaderHeight();
+  const continuationHeight = spacing.lg;
+  return (
+    <View style={styles.detailScreenLayout}>
+      <View pointerEvents="none" style={styles.detailHeaderContinuation}>
+        <TidalHero
+          edge="bottom"
+          style={[
+            styles.detailHeaderContinuationHero,
+            {
+              height: headerHeight + continuationHeight,
+              top: -headerHeight,
+            },
+          ]}
+        />
+      </View>
+      <View style={styles.detailScreenContent}>{children}</View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  featureDetailHeaderBackground: {
+    bottom: -spacing.lg,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+  detailScreenLayout: { flex: 1 },
+  detailHeaderContinuation: {
+    height: spacing.lg,
+    overflow: 'hidden',
+    width: '100%',
+  },
+  detailHeaderContinuationHero: {
+    left: 0,
+    position: 'absolute',
+    right: 0,
+  },
+  detailScreenContent: { flex: 1 },
+});
 
 function navigationTheme(dark: boolean): Theme {
   const base = dark ? DarkTheme : DefaultTheme;
@@ -79,13 +177,25 @@ function FeatureStackNavigator({
   const stackRootName = featureStackRootName(root.name);
 
   return (
-    <FeatureStack.Navigator screenOptions={stackScreenOptions}>
+    <FeatureStack.Navigator
+      screenLayout={({ children, options }) =>
+        options.headerBackground === undefined ? (
+          children
+        ) : (
+          <DetailScreenLayout>{children}</DetailScreenLayout>
+        )
+      }
+      screenOptions={stackScreenOptions}
+    >
       <FeatureStack.Screen
         name={stackRootName}
         component={root.component}
         options={{
-          headerLargeTitle: root.name !== 'Home',
-          headerShown: root.name !== 'Home',
+          // Every tab root owns its visible heading. Keeping the native header here would render
+          // a second title above the Home/Labs/Settings hero and consume valuable first-screen
+          // space. Pushed detail routes continue to use the native stack header.
+          headerLargeTitle: false,
+          headerShown: false,
           title: t(root.titleKey),
         }}
       />
@@ -94,7 +204,11 @@ function FeatureStackNavigator({
           key={feature.name}
           name={feature.name}
           component={feature.component}
-          options={{ title: t(feature.titleKey), ...feature.options }}
+          options={{
+            ...(isEditingOrPreviewFeature(feature) ? {} : featureDetailHeaderOptions),
+            title: t(feature.titleKey),
+            ...feature.options,
+          }}
         />
       ))}
     </FeatureStack.Navigator>
@@ -204,6 +318,16 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
           }}
         />
         <RootStack.Screen
+          name={importPackSetupDestination.route}
+          component={ImportPackSetupScreen}
+          options={{
+            presentation: importPackSetupDestination.presentation,
+            headerShown: true,
+            headerTransparent: false,
+            title: t('settings.importPackTitle'),
+          }}
+        />
+        <RootStack.Screen
           name={reportImportDestination.route}
           component={LabReportImportRoute}
           options={{
@@ -242,6 +366,7 @@ export function RootNavigator({ services, extensions }: RootNavigatorProps) {
           options={{
             presentation: 'fullScreenModal',
             headerShown: true,
+            headerTransparent: false,
             title: t('labs.reportPreviewTitle'),
           }}
         />

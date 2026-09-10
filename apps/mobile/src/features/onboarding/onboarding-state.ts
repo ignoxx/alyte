@@ -50,6 +50,13 @@ export function onboardingResumePage(snapshot: LocalModelSnapshot | null): numbe
   return 0;
 }
 
+/** Keep the completion page outside the native pager until setup has actually finished. */
+export function onboardingVisiblePageCount(snapshot: LocalModelSnapshot | null): number {
+  return snapshot !== null && canCompleteModelOnboarding(snapshot)
+    ? ONBOARDING_PAGE_COUNT
+    : ONBOARDING_READY_PAGE;
+}
+
 /** The pager cannot leave the model page while a transfer or verification is in flight. */
 export function onboardingPagerLocked(snapshot: LocalModelSnapshot | null): boolean {
   return snapshot !== null && isModelDownloadActive(snapshot);

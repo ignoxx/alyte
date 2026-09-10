@@ -1,64 +1,43 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
-import { useNavigation, usePreventRemove } from '@react-navigation/native';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import { Alert, StyleSheet, View } from 'react-native';
+import {
+  useNavigation,
+  usePreventRemove,
+  useRoute,
+  type RouteProp,
+} from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import type { SettingsStackParamList } from '../../navigation/types';
+import { useAppReset } from '../../app-reset';
 import { t } from '../../localization';
 import { useServices } from '../../services';
-import { AppButton, AppIcon, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
-import { colors, radii, screenStyles, spacing, typography } from '../../theme';
-import { deletionCountLabelKeys, shouldHideDeletionPreview } from './deletion-ui-model';
-import {
-  LOCAL_DELETION_SCOPES,
-  type DeletionPlan,
-  type LocalDataCounts,
-  type LocalDeletionScope,
-} from '../local-controls/model';
+import { AppButton, AppSurface, AppText, ScreenScrollView } from '../../ui/primitives';
+import { colors, screenStyles, spacing, typography } from '../../theme';
+import { shouldHideDeletionPreview } from './deletion-ui-model';
+import type { DeletionPlan, DeletionResult, LocalDeletionScope } from '../local-controls/model';
 
-const scopeCopy: Record<LocalDeletionScope, { title: string; subtitle: string }> = {
-  reports: { title: 'settings.deleteReports', subtitle: 'settings.deleteReportsSubtitle' },
-  records: { title: 'settings.deleteRecords', subtitle: 'settings.deleteRecordsSubtitle' },
-  events: { title: 'settings.deleteEvents', subtitle: 'settings.deleteEventsSubtitle' },
-  media: { title: 'settings.deleteMedia', subtitle: 'settings.deleteMediaSubtitle' },
-  'all-health': { title: 'settings.deleteAll', subtitle: 'settings.deleteAllSubtitle' },
-};
+type Navigation = NativeStackNavigationProp<SettingsStackParamList, 'DeleteLocalData'>;
+type Route = RouteProp<SettingsStackParamList, 'DeleteLocalData'>;
 
-function CountBlock({
-  title,
-  counts,
-}: {
-  readonly title: string;
-  readonly counts: LocalDataCounts;
-}) {
-  const rows = (Object.keys(counts) as (keyof LocalDataCounts)[]).filter((key) => counts[key] > 0);
+function CountRow({ label, count }: { readonly label: string; readonly count: number }) {
   return (
-    <View style={styles.countBlock}>
-      <AppText variant="heading" style={styles.countTitle}>
-        {title}
+    <View accessible accessibilityRole="text" style={styles.countRow}>
+      <AppText style={styles.countLabel}>{label}</AppText>
+      <AppText selectable style={styles.count}>
+        {count.toLocaleString()}
       </AppText>
-      {rows.length === 0 ? (
-        <AppText variant="caption" style={styles.muted}>
-          {t('settings.deleteNone')}
-        </AppText>
-      ) : (
-        rows.map((key) => (
-          <View key={key} accessible accessibilityRole="text" style={styles.countRow}>
-            <AppText style={[styles.muted, styles.countLabel]}>
-              {t(deletionCountLabelKeys[key])}
-            </AppText>
-            <AppText selectable style={styles.count}>
-              {counts[key].toLocaleString()}
-            </AppText>
-          </View>
-        ))
-      )}
     </View>
   );
 }
 
 export function DeleteLocalDataScreen() {
   const services = useServices();
-  const navigation = useNavigation<any>();
-  const [scope, setScope] = useState<LocalDeletionScope>('reports');
+  const reset = useAppReset();
+  const navigation = useNavigation<Navigation>();
+  const route = useRoute<Route>();
+  const appReset = route.params.mode === 'app-reset';
+  const scope: LocalDeletionScope = appReset ? 'reset-app' : 'all-health';
   const [plan, setPlan] = useState<DeletionPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
@@ -66,88 +45,181 @@ export function DeleteLocalDataScreen() {
   const [failedOperationId, setFailedOperationId] = useState<string | null>(null);
   const [completed, setCompleted] = useState(false);
   const [previewHidden, setPreviewHidden] = useState(false);
+  // Reset has two independent local boundaries: the health store and the optional cloud session
+  // markers. Keep their completion state separate so a retry resumes only the unfinished side.
+  const [localResetCompleted, setLocalResetCompleted] = useState(false);
+  const [deviceStateCleared, setDeviceStateCleared] = useState(false);
 
-  usePreventRemove(working, ({ data }) => {
-    Alert.alert(t('settings.deleteWorking'), t('settings.deleteConfirmBody'), [
-      { text: t('settings.deleteCancel'), style: 'cancel' },
-    ]);
-    // The operation is intentionally held until its short irreversible phase completes.
-    void data;
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title: t(appReset ? 'settings.resetTitle' : 'settings.deleteTitle'),
+    });
+  }, [appReset, navigation]);
+
+  usePreventRemove(working, () => {
+    Alert.alert(
+      t(appReset ? 'settings.resetWorking' : 'settings.deleteWorking'),
+      t('settings.operationInProgress'),
+      [{ text: t('settings.ok') }],
+    );
   });
 
-  useEffect(() => {
-    let active = true;
+  const loadPreview = useCallback(async () => {
     setLoading(true);
     setFailure(false);
     setFailedOperationId(null);
     setCompleted(false);
     setPreviewHidden(false);
-    void services.controls
-      .preview(scope)
-      .then((nextPlan) => {
-        if (active) setPlan(nextPlan);
-      })
-      .catch(() => {
-        if (active) setFailure(true);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
+    setLocalResetCompleted(false);
+    setDeviceStateCleared(false);
+    setPlan(null);
+    try {
+      setPlan(await services.controls.preview(scope));
+    } catch {
+      setFailure(true);
+    } finally {
+      setLoading(false);
+    }
   }, [scope, services.controls]);
 
-  const selected = useMemo(() => scopeCopy[scope], [scope]);
+  useEffect(() => {
+    void loadPreview();
+  }, [loadPreview]);
 
   function confirmDeletion() {
-    if (plan === null || working) return;
-    Alert.alert(t('settings.deleteConfirmTitle'), t('settings.deleteConfirmBody'), [
-      { text: t('settings.deleteCancel'), style: 'cancel' },
-      {
-        text: t('settings.deleteConfirm'),
-        style: 'destructive',
-        onPress: () => void runDeletion(plan, failure ? failedOperationId : null),
-      },
-    ]);
+    if (plan === null || plan.scope !== scope || working) return;
+    Alert.alert(
+      t(appReset ? 'settings.resetConfirmTitle' : 'settings.deleteConfirmTitle'),
+      t(appReset ? 'settings.resetConfirmBody' : 'settings.deleteConfirmBody'),
+      [
+        { text: t(appReset ? 'settings.resetCancel' : 'settings.deleteCancel'), style: 'cancel' },
+        {
+          text: t(appReset ? 'settings.resetConfirm' : 'settings.deleteConfirm'),
+          style: 'destructive',
+          onPress: () => void runDeletion(plan, failure ? failedOperationId : null),
+        },
+      ],
+    );
   }
 
   async function runDeletion(currentPlan: DeletionPlan, retryOperationId: string | null) {
+    if (currentPlan.scope !== scope) return;
     setWorking(true);
     setFailure(false);
     try {
+      if (appReset) {
+        // Reset owns two independent local cleanup boundaries. Always attempt the health
+        // deletion and device-only session cleanup even when the other one fails. A transient
+        // Keychain failure must not leave reports and measurements behind.
+        let localResult: DeletionResult | null = null;
+        let localFailure = false;
+        if (!localResetCompleted) {
+          try {
+            localResult =
+              retryOperationId === null
+                ? await services.controls.execute(currentPlan)
+                : await services.controls.retry(retryOperationId);
+            if (localResult.state === 'completed') {
+              setLocalResetCompleted(true);
+              setFailedOperationId(null);
+            } else {
+              localFailure = true;
+              setFailure(true);
+              if (localResult.failureCategories.includes('stale-preview')) {
+                setFailedOperationId(null);
+                try {
+                  setPlan(await services.controls.preview(scope));
+                } catch {
+                  // Preserve the current plan so the retry action remains available.
+                }
+              } else {
+                setFailedOperationId(localResult.operationId);
+                if (shouldHideDeletionPreview(localResult)) {
+                  setPreviewHidden(true);
+                  try {
+                    setPlan(await services.controls.preview(scope));
+                    setPreviewHidden(false);
+                  } catch {
+                    // The storage-only retry remains available without showing stale counts.
+                  }
+                }
+              }
+            }
+          } catch {
+            localFailure = true;
+            setFailure(true);
+          }
+        }
+
+        let deviceFailure = false;
+        if (!deviceStateCleared) {
+          try {
+            // This clears only device session material and never contacts the server.
+            await services.account.clearDeviceState();
+            setDeviceStateCleared(true);
+          } catch {
+            deviceFailure = true;
+            setFailure(true);
+          }
+        }
+
+        const localDone = localResetCompleted || localResult?.state === 'completed';
+        const deviceDone = deviceStateCleared || !deviceFailure;
+        if (localDone && deviceDone && !localFailure) {
+          reset.restartAtOnboarding();
+          return;
+        }
+
+        // Keep this screen mounted until both boundaries report success. The next tap retries
+        // only the failed operation, so a completed health delete cannot be rejected as stale.
+        if (localDone) {
+          try {
+            setPlan(await services.controls.preview(scope));
+          } catch {
+            // Completion is tracked separately, so the retry remains actionable if storage is busy.
+          }
+        }
+        setFailure(true);
+        return;
+      }
       const result =
         retryOperationId === null
           ? await services.controls.execute(currentPlan)
           : await services.controls.retry(retryOperationId);
       if (result.state === 'completed') {
-        setCompleted(true);
         setFailedOperationId(null);
+        if (appReset) {
+          reset.restartAtOnboarding();
+          return;
+        }
+        setCompleted(true);
         setPreviewHidden(false);
-        // Rebuild the plan so the preview remains deterministic after a successful operation and
-        // a second tap cannot attempt to apply the stale pre-deletion hash.
         try {
           setPlan(await services.controls.preview(scope));
         } catch {
-          // A completed deletion still has an observable success state even if refreshing the
-          // count-only preview is temporarily unavailable.
+          // The completed operation remains visible even if refreshed counts are unavailable.
         }
-      } else {
-        setFailure(true);
-        setFailedOperationId(result.operationId);
-        if (shouldHideDeletionPreview(result)) {
-          // The destructive phase has committed. Refresh the count-only state, but hide the old
-          // preview if SQLite is temporarily unavailable; the operation ID remains retryable.
-          setPreviewHidden(true);
-          try {
-            setPlan(await services.controls.preview(scope));
-            setPreviewHidden(false);
-          } catch {
-            // Keep the plan object only so the retry action remains rendered; its stale counts are
-            // hidden until the hygiene retry succeeds or a fresh preview becomes available.
-          }
-        } else {
+        return;
+      }
+
+      setFailure(true);
+      if (result.failureCategories.includes('stale-preview')) {
+        setFailedOperationId(null);
+        try {
+          setPlan(await services.controls.preview(scope));
+        } catch {
+          setPlan(null);
+        }
+        return;
+      }
+      setFailedOperationId(result.operationId);
+      if (shouldHideDeletionPreview(result)) {
+        setPreviewHidden(true);
+        try {
+          setPlan(await services.controls.preview(scope));
           setPreviewHidden(false);
+        } catch {
+          // Retry remains available without showing stale pre-deletion counts.
         }
       }
     } catch {
@@ -157,145 +229,104 @@ export function DeleteLocalDataScreen() {
     }
   }
 
+  const title = t(appReset ? 'settings.resetSummaryTitle' : 'settings.deleteSummaryTitle');
+  const intro = t(appReset ? 'settings.resetIntro' : 'settings.deleteIntro');
+  const keepCopy = t(appReset ? 'settings.resetKeeps' : 'settings.deleteKeeps');
+
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={screenStyles.safe}>
       <ScreenScrollView
         contentContainerStyle={screenStyles.content}
-        contentInset={{ bottom: 120 }}
         style={screenStyles.scroll}
+        tabBarClearance="native"
       >
-        <AppText style={styles.intro}>{t('settings.deleteIntro')}</AppText>
-        <View style={styles.scopeGroup}>
-          {LOCAL_DELETION_SCOPES.map((candidate) => {
-            const copy = scopeCopy[candidate];
-            const selectedScope = candidate === scope;
-            return (
-              <Pressable
-                key={candidate}
-                accessibilityRole="radio"
-                accessibilityState={{ selected: selectedScope }}
-                onPress={() => {
-                  if (!working) setScope(candidate);
-                }}
-                style={({ pressed }) => [
-                  styles.scopeRow,
-                  selectedScope && styles.scopeSelected,
-                  pressed && !working && styles.rowPressed,
-                ]}
-              >
-                <View style={styles.scopeCopy}>
-                  <AppText variant="heading" style={styles.scopeTitle}>
-                    {t(copy.title)}
-                  </AppText>
-                  <AppText variant="caption" style={styles.muted}>
-                    {t(copy.subtitle)}
-                  </AppText>
-                </View>
-                {selectedScope && (
-                  <AppIcon name="checkmarkCircle" size={20} color={colors.accent} />
-                )}
-              </Pressable>
-            );
-          })}
-        </View>
+        <AppText style={styles.intro}>{intro}</AppText>
         {loading ? (
           <AppText style={styles.muted}>{t('settings.privacyLoading')}</AppText>
-        ) : failure && plan === null ? (
-          <AppText style={styles.muted}>{t('settings.privacyUnavailable')}</AppText>
-        ) : plan !== null ? (
+        ) : plan === null ? (
+          <AppSurface tone="soft" style={styles.message}>
+            <AppText variant="heading">{t('settings.previewUnavailableTitle')}</AppText>
+            <AppText style={styles.muted}>{t('settings.previewUnavailableBody')}</AppText>
+            <AppButton
+              label={t('settings.retry')}
+              onPress={() => void loadPreview()}
+              tone="secondary"
+            />
+          </AppSurface>
+        ) : (
           <>
-            {!previewHidden && (
-              <>
-                <CountBlock title={t('settings.willBeDeleted')} counts={deletedCounts(plan)} />
-                <CountBlock title={t('settings.willRemain')} counts={plan.willRemain} />
-              </>
+            {!completed && !previewHidden && (
+              <AppSurface style={styles.summary}>
+                <AppText variant="heading">{title}</AppText>
+                <CountRow label={t('settings.privacyReports')} count={plan.counts.reports} />
+                <CountRow
+                  label={t('settings.privacyMeasurements')}
+                  count={plan.counts.measurements}
+                />
+                <CountRow
+                  label={t('settings.privacyIntakeEvents')}
+                  count={plan.counts.intakeEvents}
+                />
+                <AppText style={styles.muted} variant="caption">
+                  {t('settings.deleteRelatedData')}
+                </AppText>
+              </AppSurface>
+            )}
+            {!completed && (
+              <AppSurface tone="soft" style={styles.message}>
+                <AppText>{keepCopy}</AppText>
+              </AppSurface>
             )}
             {completed && (
-              <AppSurface tone="soft" style={styles.successSurface}>
-                <AppText variant="label">{t('settings.deleteCompletedStatus')}</AppText>
+              <AppSurface tone="soft" style={styles.message}>
+                <AppText variant="heading">{t('settings.deleteSuccessTitle')}</AppText>
                 <AppText style={styles.muted}>{t('settings.deleteSuccessBody')}</AppText>
                 <AppButton
                   label={t('settings.deleteDone')}
-                  tone="secondary"
                   onPress={() => navigation.goBack()}
+                  tone="secondary"
                 />
               </AppSurface>
             )}
-            {failure && <AppText style={styles.failure}>{t('settings.deleteFailureBody')}</AppText>}
-            {working ? (
-              <AppText style={styles.muted}>{t('settings.deleteWorking')}</AppText>
-            ) : (
-              !completed && (
-                <AppButton
-                  label={failure ? t('settings.deleteRetry') : t('settings.deleteConfirm')}
-                  tone="primary"
-                  onPress={confirmDeletion}
-                />
-              )
+            {failure && (
+              <AppText accessibilityLiveRegion="polite" selectable style={styles.failure}>
+                {t(appReset ? 'settings.resetFailureBody' : 'settings.deleteFailureBody')}
+              </AppText>
+            )}
+            {!completed && (
+              <AppButton
+                disabled={working}
+                label={
+                  working
+                    ? t(appReset ? 'settings.resetWorking' : 'settings.deleteWorking')
+                    : failure
+                      ? t('settings.retry')
+                      : t(appReset ? 'settings.resetConfirm' : 'settings.deleteConfirm')
+                }
+                onPress={confirmDeletion}
+                tone={failure ? 'secondary' : 'destructive'}
+              />
             )}
           </>
-        ) : null}
-        {!working && plan !== null && !failure && (
-          <AppText variant="caption" style={styles.scopeFootnote}>
-            {t(selected.subtitle)}
-          </AppText>
         )}
       </ScreenScrollView>
     </SafeAreaView>
   );
 }
 
-function deletedCounts(plan: DeletionPlan): LocalDataCounts {
-  return (Object.keys(plan.counts) as (keyof LocalDataCounts)[]).reduce(
-    (result, key) => ({ ...result, [key]: Math.max(0, plan.counts[key] - plan.willRemain[key]) }),
-    {} as LocalDataCounts,
-  );
-}
-
 const styles = StyleSheet.create({
-  intro: { color: colors.mutedInk, lineHeight: 22, marginBottom: spacing.lg },
-  scopeGroup: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderCurve: 'continuous',
-    borderRadius: radii.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    marginBottom: spacing.lg,
-    overflow: 'hidden',
-  },
-  scopeRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.md,
-    minHeight: 70,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  scopeSelected: { backgroundColor: colors.accentSoft },
-  rowPressed: { backgroundColor: colors.accentSoft },
-  scopeCopy: { flex: 1, gap: spacing.xs },
-  scopeTitle: { ...typography.row },
+  intro: { ...typography.body, color: colors.mutedInk, marginBottom: spacing.lg },
   muted: { color: colors.mutedInk },
-  countBlock: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderCurve: 'continuous',
-    borderRadius: radii.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-    padding: spacing.lg,
-  },
-  countTitle: { ...typography.row, marginBottom: spacing.xs },
+  summary: { gap: spacing.sm, marginBottom: spacing.md },
   countRow: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: spacing.md,
     justifyContent: 'space-between',
+    minHeight: 32,
   },
-  countLabel: { flex: 1, flexShrink: 1, minWidth: 0 },
-  count: { color: colors.ink, flexShrink: 0, fontVariant: ['tabular-nums'] },
+  countLabel: { flex: 1, minWidth: 0 },
+  count: { fontVariant: ['tabular-nums'] },
+  message: { gap: spacing.sm, marginBottom: spacing.md },
   failure: { color: colors.danger, marginBottom: spacing.md },
-  successSurface: { gap: spacing.sm, marginBottom: spacing.md },
-  scopeFootnote: { color: colors.mutedInk, marginTop: spacing.md },
 });

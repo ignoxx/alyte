@@ -419,7 +419,11 @@ export function CloudAccountScreen() {
           <AppSurface tone="soft" style={styles.statusSurface}>
             <AppText variant="heading">{t('settings.cloudAccountDeleted')}</AppText>
             <AppText style={styles.body}>{t('settings.cloudAccountDeletedBody')}</AppText>
-            <AppButton label={t('done')} tone="secondary" onPress={() => navigation.goBack()} />
+            <AppButton
+              label={t('settings.deleteDone')}
+              tone="secondary"
+              onPress={() => navigation.goBack()}
+            />
           </AppSurface>
         )}
 

@@ -49,7 +49,10 @@ function accountExport(): AccountExportResponse {
   };
 }
 
-function repository(initial: StoredCloudSession | null = null) {
+function repository(
+  initial: StoredCloudSession | null = null,
+  options: { readonly clearError?: Error } = {},
+) {
   let stored = initial;
   const writes: StoredCloudSession[] = [];
   let clears = 0;
@@ -62,8 +65,9 @@ function repository(initial: StoredCloudSession | null = null) {
       writes.push(next);
     },
     async clear() {
-      stored = null;
       clears += 1;
+      if (options.clearError !== undefined) throw options.clearError;
+      stored = null;
     },
   };
   return {
@@ -78,7 +82,10 @@ function repository(initial: StoredCloudSession | null = null) {
   };
 }
 
-function pendingRepository(initial: CloudPendingOperation | null = null) {
+function pendingRepository(
+  initial: CloudPendingOperation | null = null,
+  options: { readonly clearError?: Error } = {},
+) {
   let stored = initial;
   const writes: CloudPendingOperation[] = [];
   let clears = 0;
@@ -91,8 +98,9 @@ function pendingRepository(initial: CloudPendingOperation | null = null) {
       writes.push(next);
     },
     async clear() {
-      stored = null;
       clears += 1;
+      if (options.clearError !== undefined) throw options.clearError;
+      stored = null;
     },
   };
   return {
@@ -411,6 +419,106 @@ describe('cloud account service', () => {
     await assert.rejects(service.signOut(), /offline/);
     assert.equal(sessions.clears, 1);
     assert.equal(service.getSnapshot().signedIn, false);
+  });
+
+  it('clears device-only cloud state without contacting the server', async () => {
+    const sessions = repository({
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      accessTokenExpiresAt: '2026-08-27T12:15:00.000Z',
+      refreshTokenExpiresAt: '2026-09-26T12:00:00.000Z',
+    });
+    const pending = pendingRepository({
+      kind: 'account-delete',
+      idempotencyKey: 'pending-delete',
+      createdAt: '2026-08-27T12:00:00.000Z',
+    });
+    const cloud = api();
+    const service = createCloudAccountService({
+      repository: sessions.value,
+      pendingOperations: pending.value,
+      api: cloud,
+      now: () => NOW,
+    });
+
+    await service.bootstrap();
+    await service.clearDeviceState();
+
+    assert.equal(sessions.stored, null);
+    assert.equal(pending.stored, null);
+    assert.equal(service.getSnapshot().signedIn, false);
+    assert.deepEqual(cloud.signOutCalls, []);
+    assert.deepEqual(cloud.deleteCalls, []);
+  });
+
+  it('still clears the pending retry marker when session storage cleanup fails', async () => {
+    const sessions = repository(
+      {
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+        accessTokenExpiresAt: '2026-08-27T12:15:00.000Z',
+        refreshTokenExpiresAt: '2026-09-26T12:00:00.000Z',
+      },
+      { clearError: new Error('keychain_unavailable') },
+    );
+    const pending = pendingRepository({
+      kind: 'account-delete',
+      idempotencyKey: 'pending-delete',
+      createdAt: '2026-08-27T12:00:00.000Z',
+    });
+    const cloud = api();
+    const service = createCloudAccountService({
+      repository: sessions.value,
+      pendingOperations: pending.value,
+      api: cloud,
+      now: () => NOW,
+    });
+
+    await service.bootstrap();
+    await assert.rejects(service.clearDeviceState(), /keychain_unavailable/);
+
+    assert.equal(sessions.clears, 1);
+    assert.notEqual(sessions.stored, null);
+    assert.equal(pending.clears, 1);
+    assert.equal(pending.stored, null);
+    assert.equal(service.getSnapshot().signedIn, false);
+    assert.deepEqual(cloud.signOutCalls, []);
+    assert.deepEqual(cloud.deleteCalls, []);
+  });
+
+  it('still clears the session when the pending retry marker cannot be removed', async () => {
+    const sessions = repository({
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      accessTokenExpiresAt: '2026-08-27T12:15:00.000Z',
+      refreshTokenExpiresAt: '2026-09-26T12:00:00.000Z',
+    });
+    const pending = pendingRepository(
+      {
+        kind: 'account-delete',
+        idempotencyKey: 'pending-delete',
+        createdAt: '2026-08-27T12:00:00.000Z',
+      },
+      { clearError: new Error('pending_storage_unavailable') },
+    );
+    const cloud = api();
+    const service = createCloudAccountService({
+      repository: sessions.value,
+      pendingOperations: pending.value,
+      api: cloud,
+      now: () => NOW,
+    });
+
+    await service.bootstrap();
+    await assert.rejects(service.clearDeviceState(), /pending_storage_unavailable/);
+
+    assert.equal(sessions.clears, 1);
+    assert.equal(sessions.stored, null);
+    assert.equal(pending.clears, 1);
+    assert.notEqual(pending.stored, null);
+    assert.equal(service.getSnapshot().signedIn, false);
+    assert.deepEqual(cloud.signOutCalls, []);
+    assert.deepEqual(cloud.deleteCalls, []);
   });
 
   it('preserves the session after an unconfirmed deletion and clears it after deleted:true', async () => {

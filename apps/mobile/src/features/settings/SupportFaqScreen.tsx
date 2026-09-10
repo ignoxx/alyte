@@ -25,11 +25,15 @@ export function SupportFaqScreen() {
 
   async function contactSupport() {
     const url = supportMailto();
-    if (await Linking.canOpenURL(url)) {
-      await Linking.openURL(url);
-    } else {
-      Alert.alert(t('settings.contactSupport'), t('settings.mailUnavailable'));
+    try {
+      if (await Linking.canOpenURL(url)) {
+        await Linking.openURL(url);
+        return;
+      }
+    } catch {
+      // The same useful fallback applies when iOS rejects the Mail handoff.
     }
+    Alert.alert(t('settings.contactSupport'), t('settings.mailUnavailable'));
   }
 
   return (
@@ -48,7 +52,7 @@ export function SupportFaqScreen() {
             onPress={() => void contactSupport()}
             style={({ pressed }) => [styles.actionRow, pressed && styles.rowPressed]}
           >
-            <AppIcon name="phone" size={21} color={colors.accent} />
+            <AppIcon name="mail" size={21} color={colors.accent} />
             <View style={styles.copy}>
               <AppText variant="heading" style={styles.rowTitle}>
                 {t('settings.contactSupport')}
@@ -119,7 +123,7 @@ export function SupportFaqScreen() {
 }
 
 const styles = StyleSheet.create({
-  intro: { color: colors.mutedInk, lineHeight: 22, marginBottom: spacing.lg },
+  intro: { ...typography.body, color: colors.mutedInk, marginBottom: spacing.lg },
   sectionTitle: { marginBottom: spacing.sm, marginTop: spacing.lg },
   group: {
     backgroundColor: colors.surface,

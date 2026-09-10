@@ -7,6 +7,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -25,10 +26,9 @@ import {
   TidalHero,
   TidalIconStage,
 } from '../../ui/primitives';
-import { colors, radii, screenStyles, spacing, typography } from '../../theme';
+import { colors, radii, screenStyles, spacing } from '../../theme';
 import {
   getScreenPlatformPolicy,
-  getScreenSafeAreaEdges,
   getScreenScrollBottomInset,
   getScreenSurfaceMode,
 } from '../../ui/screen-scroll-model';
@@ -57,8 +57,6 @@ type LabsSection = {
 };
 
 const screenPlatformPolicy = getScreenPlatformPolicy(process.env.EXPO_OS);
-const screenSafeAreaEdges = getScreenSafeAreaEdges(screenPlatformPolicy);
-
 function specimenLabel(value: SpecimenType): string {
   const suffix =
     value === 'unknown' ? 'Unknown' : `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
@@ -100,6 +98,28 @@ function historyMeasurementCount(count: number): string {
   return countCopy(count, 'labs.historyEntrySubtitleSingular', 'labs.historyEntrySubtitle');
 }
 
+function reportCount(count: number): string {
+  return countCopy(count, 'labs.workspaceOneReport', 'labs.workspaceReports');
+}
+
+function reviewedResultCount(count: number): string {
+  return countCopy(count, 'labs.workspaceOneResult', 'labs.workspaceResults');
+}
+
+function workspaceSummary(reportTotal: number, reviewedResultTotal: number): string {
+  if (reportTotal === 0) {
+    return countCopy(
+      reviewedResultTotal,
+      'labs.workspaceOneManualResult',
+      'labs.workspaceManualResults',
+    );
+  }
+  if (reviewedResultTotal === 0) return reportCount(reportTotal);
+  return t('labs.workspaceSummary')
+    .replace('{reports}', reportCount(reportTotal))
+    .replace('{results}', reviewedResultCount(reviewedResultTotal));
+}
+
 function reportDetail(report: LabReport, records: readonly LabRecord[], locale: string): string {
   const summary = summarizeLabReport(report, records);
   const date =
@@ -116,6 +136,8 @@ function rowPosition(index: number, length: number) {
 export function LabsScreen() {
   const { fontScale } = useWindowDimensions();
   const usesAccessibleLayout = fontScale >= 1.4;
+  const heroTitleScale = Math.min(fontScale, 1.8);
+  const heroBodyScale = Math.min(fontScale, 2);
   const navigation = useNavigation<Navigation>();
   const services = useServices();
   const { labs } = services;
@@ -158,6 +180,10 @@ export function LabsScreen() {
     [drafts, records, reports],
   );
   const historyEntries = useMemo(() => listHistoryEntries(workspace.records), [workspace.records]);
+  const trendEntries = useMemo(
+    () => historyEntries.filter((entry) => entry.measurementCount >= 2),
+    [historyEntries],
+  );
   const sections = useMemo<readonly LabsSection[]>(
     () =>
       [
@@ -175,21 +201,21 @@ export function LabsScreen() {
         },
         {
           key: 'records',
-          title: t('labs.recordsSection'),
-          body: t('labs.recordsBody'),
-          data: workspace.records.map((value) => ({ kind: 'record' as const, value })),
+          title: t('labs.standaloneRecordsSection'),
+          body: t('labs.standaloneRecordsBody'),
+          data: workspace.standaloneRecords.map((value) => ({ kind: 'record' as const, value })),
         },
         {
           key: 'history',
           title: t('labs.historySection'),
           body: t('labs.historyBody'),
-          data: historyEntries.map((value) => ({ kind: 'history' as const, value })),
+          data: trendEntries.map((value) => ({ kind: 'history' as const, value })),
         },
       ].filter((section) => section.data.length > 0),
-    [historyEntries, workspace],
+    [trendEntries, workspace],
   );
 
-  const hasData = workspace.records.length > 0 || workspace.reports.length > 0;
+  const hasData = workspace.records.length > 0 || workspace.reportCount > 0;
   const isEmptyState = !loading && !error && !hasData;
   const surfaceState = loading ? 'loading' : error ? 'error' : isEmptyState ? 'empty' : 'populated';
   const statusSurface = getScreenSurfaceMode(surfaceState) === 'status';
@@ -238,24 +264,35 @@ export function LabsScreen() {
           onPress={() => openAttention(item.value)}
           style={({ pressed }) => [
             styles.listRow,
+            usesAccessibleLayout && styles.listRowAccessible,
             styles.attentionRow,
             positionStyle,
             pressed && styles.rowPressed,
           ]}
         >
-          <View style={styles.attentionIcon}>
-            <AppIcon color={colors.accent} name="clock" size={20} />
-          </View>
+          {!usesAccessibleLayout && (
+            <View style={styles.attentionIcon}>
+              <AppIcon color={colors.accent} name="clock" size={20} />
+            </View>
+          )}
           <View style={styles.rowBody}>
             <AppText variant="heading">{title}</AppText>
-            <AppText numberOfLines={2} selectable style={styles.muted}>
+            <AppText
+              numberOfLines={usesAccessibleLayout ? undefined : 2}
+              selectable
+              style={styles.muted}
+            >
               {item.value.report.originalFilename}
             </AppText>
             <AppText style={styles.statusText} variant="caption">
               {status}
             </AppText>
           </View>
-          <AppIcon name="chevronRight" size={16} />
+          <AppIcon
+            name="chevronRight"
+            size={16}
+            style={usesAccessibleLayout ? styles.rowChevronAccessible : undefined}
+          />
         </Pressable>
       );
     }
@@ -268,19 +305,34 @@ export function LabsScreen() {
           accessibilityLabel={`${t('labs.reportTitle')}: ${item.value.originalFilename}, ${detail}, ${reportStateLabel(item.value)}`}
           accessibilityRole="button"
           onPress={() => navigation.navigate('LabReportDetail', { reportId: item.value.id })}
-          style={({ pressed }) => [styles.listRow, positionStyle, pressed && styles.rowPressed]}
+          style={({ pressed }) => [
+            styles.listRow,
+            usesAccessibleLayout && styles.listRowAccessible,
+            positionStyle,
+            pressed && styles.rowPressed,
+          ]}
         >
-          <AppIcon color={colors.accent} name="doc" size={22} />
+          {!usesAccessibleLayout && <AppIcon color={colors.accent} name="doc" size={22} />}
           <View style={styles.rowBody}>
-            <AppText numberOfLines={2} selectable variant="heading">
+            <AppText
+              numberOfLines={usesAccessibleLayout ? undefined : 2}
+              selectable
+              variant="heading"
+            >
               {item.value.originalFilename}
             </AppText>
             <AppText selectable style={styles.muted}>
               {detail}
             </AppText>
-            <StatusPill subtle>{reportStateLabel(item.value)}</StatusPill>
+            {item.value.importState !== 'imported' && (
+              <StatusPill subtle>{reportStateLabel(item.value)}</StatusPill>
+            )}
           </View>
-          <AppIcon name="chevronRight" size={16} />
+          <AppIcon
+            name="chevronRight"
+            size={16}
+            style={usesAccessibleLayout ? styles.rowChevronAccessible : undefined}
+          />
         </Pressable>
       );
     }
@@ -297,9 +349,14 @@ export function LabsScreen() {
           accessibilityLabel={`${t('labs.recordTitle')}: ${date}, ${summary}`}
           accessibilityRole="button"
           onPress={() => navigation.navigate('LabRecordDetail', { recordId: item.value.id })}
-          style={({ pressed }) => [styles.listRow, positionStyle, pressed && styles.rowPressed]}
+          style={({ pressed }) => [
+            styles.listRow,
+            usesAccessibleLayout && styles.listRowAccessible,
+            positionStyle,
+            pressed && styles.rowPressed,
+          ]}
         >
-          <AppIcon color={colors.accent} name="labs" size={22} />
+          {!usesAccessibleLayout && <AppIcon color={colors.accent} name="labs" size={22} />}
           <View style={styles.rowBody}>
             <AppText selectable variant="heading">
               {date}
@@ -308,7 +365,11 @@ export function LabsScreen() {
               {`${item.value.laboratoryName ?? t('labs.recordTitle')} · ${specimenLabel(item.value.specimenType)} · ${summary}`}
             </AppText>
           </View>
-          <AppIcon name="chevronRight" size={16} />
+          <AppIcon
+            name="chevronRight"
+            size={16}
+            style={usesAccessibleLayout ? styles.rowChevronAccessible : undefined}
+          />
         </Pressable>
       );
     }
@@ -321,9 +382,14 @@ export function LabsScreen() {
         onPress={() =>
           navigation.navigate('BiomarkerHistory', { biomarkerId: item.value.biomarkerId })
         }
-        style={({ pressed }) => [styles.listRow, positionStyle, pressed && styles.rowPressed]}
+        style={({ pressed }) => [
+          styles.listRow,
+          usesAccessibleLayout && styles.listRowAccessible,
+          positionStyle,
+          pressed && styles.rowPressed,
+        ]}
       >
-        <AppIcon color={colors.accent} name="chart" size={22} />
+        {!usesAccessibleLayout && <AppIcon color={colors.accent} name="chart" size={22} />}
         <View style={styles.rowBody}>
           <AppText selectable variant="heading">
             {item.value.canonicalLabel}
@@ -332,17 +398,22 @@ export function LabsScreen() {
             {historyMeasurementCount(item.value.measurementCount)}
           </AppText>
         </View>
-        <AppIcon name="chevronRight" size={16} />
+        <AppIcon
+          name="chevronRight"
+          size={16}
+          style={usesAccessibleLayout ? styles.rowChevronAccessible : undefined}
+        />
       </Pressable>
     );
   }
 
   return (
-    <SafeAreaView edges={screenSafeAreaEdges} style={screenStyles.safe}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={[screenStyles.safe, styles.screenSafe]}>
+      {isFocused && <StatusBar style="light" />}
       {statusSurface ? (
         <ScreenStatusView
           contentContainerStyle={styles.statusState}
-          style={screenStyles.scroll}
+          style={[screenStyles.scroll, styles.canvas]}
           tabBarClearance="native"
         >
           {loading && (
@@ -405,67 +476,43 @@ export function LabsScreen() {
             />
           }
           ListHeaderComponent={
-            <TidalHero style={styles.workspaceHeader}>
+            <TidalHero edge="bottom" style={styles.workspaceHeader}>
               <View
                 style={[
                   styles.workspaceHeading,
                   usesAccessibleLayout && styles.workspaceHeadingAccessible,
                 ]}
               >
-                <TidalIconStage name="library" size="compact" />
+                {!usesAccessibleLayout && <TidalIconStage name="library" size="compact" />}
                 <View style={styles.workspaceCopy}>
-                  <AppText style={styles.workspaceTitle} variant="title">
+                  <AppText
+                    allowFontScaling={false}
+                    style={[
+                      styles.workspaceTitle,
+                      { fontSize: 26 * heroTitleScale, lineHeight: 32 * heroTitleScale },
+                    ]}
+                    variant="title"
+                  >
                     {t('labs.workspaceTitle')}
                   </AppText>
-                  <AppText style={styles.workspaceBody} variant="caption">
-                    {t('labs.workspaceIntro')}
-                  </AppText>
-                </View>
-              </View>
-              <View
-                accessibilityRole="summary"
-                style={[
-                  styles.workspaceFacts,
-                  usesAccessibleLayout && styles.workspaceFactsAccessible,
-                ]}
-              >
-                <View
-                  style={[
-                    styles.workspaceFact,
-                    usesAccessibleLayout && styles.workspaceFactAccessible,
-                  ]}
-                >
-                  <AppText style={styles.workspaceFactValue}>{workspace.attention.length}</AppText>
-                  <AppText style={styles.workspaceFactLabel} variant="caption">
-                    {t('labs.workspaceAttentionLabel')}
-                  </AppText>
-                </View>
-                <View
-                  style={[
-                    styles.workspaceFact,
-                    usesAccessibleLayout && styles.workspaceFactAccessible,
-                  ]}
-                >
-                  <AppText style={styles.workspaceFactValue}>{workspace.reports.length}</AppText>
-                  <AppText style={styles.workspaceFactLabel} variant="caption">
-                    {t('labs.workspaceReportsLabel')}
-                  </AppText>
-                </View>
-                <View
-                  style={[
-                    styles.workspaceFact,
-                    usesAccessibleLayout && styles.workspaceFactAccessible,
-                  ]}
-                >
-                  <AppText style={styles.workspaceFactValue}>{workspace.records.length}</AppText>
-                  <AppText style={styles.workspaceFactLabel} variant="caption">
-                    {t('labs.workspaceRecordsLabel')}
+                  <AppText
+                    allowFontScaling={false}
+                    style={[
+                      styles.workspaceBody,
+                      { fontSize: 13 * heroBodyScale, lineHeight: 18 * heroBodyScale },
+                    ]}
+                    variant="caption"
+                  >
+                    {workspaceSummary(workspace.reportCount, workspace.reviewedResultCount)}
                   </AppText>
                 </View>
               </View>
               <AppButton
                 label={t('labs.action')}
+                labelMaxFontSizeMultiplier={1.8}
+                labelNumberOfLines={2}
                 onPress={() => openReportImportFromStack(navigation)}
+                style={styles.workspaceAction}
                 tone="secondary"
               >
                 <AppIcon color={colors.accent} name="plus" size={17} />
@@ -478,15 +525,17 @@ export function LabsScreen() {
               <AppText style={styles.sectionLabel} variant="label">
                 {section.title}
               </AppText>
-              <AppText style={styles.sectionBody} variant="caption">
-                {section.body}
-              </AppText>
+              {section.body.length > 0 && (
+                <AppText style={styles.sectionBody} variant="caption">
+                  {section.body}
+                </AppText>
+              )}
             </View>
           )}
           scrollIndicatorInsets={{ bottom: bottomInset }}
           sections={sections}
           stickySectionHeadersEnabled={false}
-          style={screenStyles.scroll}
+          style={[screenStyles.scroll, styles.canvas]}
         />
       )}
     </SafeAreaView>
@@ -494,6 +543,8 @@ export function LabsScreen() {
 }
 
 const styles = StyleSheet.create({
+  screenSafe: { backgroundColor: colors.brand },
+  canvas: { backgroundColor: colors.canvas },
   statusState: { alignItems: 'center', justifyContent: 'center' },
   loadingState: { alignItems: 'center', gap: spacing.md },
   errorState: { alignItems: 'center', gap: spacing.md, maxWidth: 340 },
@@ -501,35 +552,22 @@ const styles = StyleSheet.create({
   localNote: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
   localNoteText: { color: colors.mutedInk, flexShrink: 1, textAlign: 'center' },
   listContent: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg },
-  workspaceHeader: { gap: spacing.lg, marginBottom: spacing.sm, padding: spacing.lg },
+  workspaceHeader: {
+    justifyContent: 'flex-end',
+    gap: spacing.lg,
+    marginBottom: spacing.sm,
+    marginHorizontal: -spacing.lg,
+    minHeight: 214,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.xl,
+    paddingTop: spacing.xxl,
+  },
+  workspaceAction: { marginTop: spacing.sm },
   workspaceHeading: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
   workspaceHeadingAccessible: { alignItems: 'flex-start', flexDirection: 'column' },
   workspaceCopy: { flex: 1, gap: spacing.xs, minWidth: 0 },
   workspaceTitle: { color: colors.onBrand },
   workspaceBody: { color: colors.onBrandMuted },
-  workspaceFacts: {
-    borderTopColor: colors.onBrandMuted,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    gap: spacing.sm,
-    paddingTop: spacing.md,
-  },
-  workspaceFactsAccessible: { flexDirection: 'column' },
-  workspaceFact: { flex: 1, gap: 2, minWidth: 0 },
-  workspaceFactAccessible: {
-    alignItems: 'baseline',
-    flex: 0,
-    flexDirection: 'row',
-    gap: spacing.md,
-    justifyContent: 'space-between',
-    width: '100%',
-  },
-  workspaceFactValue: {
-    ...typography.stat,
-    color: colors.onBrand,
-    fontVariant: ['tabular-nums'],
-  },
-  workspaceFactLabel: { color: colors.onBrandMuted },
   sectionHeader: { gap: spacing.xs, paddingBottom: spacing.sm, paddingTop: spacing.lg },
   sectionLabel: { color: colors.ink },
   sectionBody: { color: colors.mutedInk },
@@ -544,6 +582,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
   },
+  listRowAccessible: {
+    alignItems: 'stretch',
+    paddingRight: spacing.xl + spacing.md,
+    position: 'relative',
+  },
+  rowChevronAccessible: { position: 'absolute', right: spacing.md, top: spacing.md },
   firstRow: { borderTopLeftRadius: radii.md, borderTopRightRadius: radii.md },
   lastRow: {
     borderBottomLeftRadius: radii.md,

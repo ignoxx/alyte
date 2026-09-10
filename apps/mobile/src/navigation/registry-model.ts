@@ -108,6 +108,12 @@ export const reportImportDestination = {
   presentation: 'fullScreenModal',
 } as const;
 
+/** Existing installations can repair the required report reader from local Settings. */
+export const importPackSetupDestination = {
+  route: 'ImportPackSetup',
+  presentation: 'fullScreenModal',
+} as const;
+
 export const extractionEditorDestination = {
   route: 'ExtractionMeasurementEditor',
   presentation: 'formSheet',

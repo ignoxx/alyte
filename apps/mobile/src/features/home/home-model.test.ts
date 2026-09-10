@@ -69,14 +69,17 @@ const queuedJob = {
 function measurement(
   id: string,
   recordId: string,
-  biomarkerId: string,
+  biomarkerId: string | null,
   value: number,
   reviewState: Measurement['reviewState'] = 'confirmed',
   unit = 'mg/dL',
   specimenType: Measurement['specimenType'] = 'serum',
 ): Measurement {
   const snapshot = {
-    label: biomarkerId.replace('biomarker.', '').toUpperCase(),
+    label:
+      biomarkerId === null
+        ? 'Source-only marker'
+        : biomarkerId.replace('biomarker.', '').toUpperCase(),
     value: { kind: 'numeric' as const, value },
     valueString: String(value),
     unit,
@@ -86,12 +89,12 @@ function measurement(
   return {
     id,
     labRecordId: recordId,
-    biomarkerId: canonicalId(biomarkerId),
+    biomarkerId: biomarkerId === null ? null : canonicalId(biomarkerId),
     specimenType,
     panelLabel: null,
     original: snapshot,
     originalState: {
-      biomarkerId: canonicalId(biomarkerId),
+      biomarkerId: biomarkerId === null ? null : canonicalId(biomarkerId),
       specimenType,
       snapshot,
       reviewState,
@@ -182,7 +185,7 @@ test('Home menu keeps destructive and uncommon actions out of the row', () => {
   );
 });
 
-test('Quiet Home prioritizes the latest local report and caps measured changes at six', () => {
+test('Quiet Home prioritizes the latest local report and keeps the overview to four changes', () => {
   const first = labRecord('first', '2026-01-01', [
     measurement('first-ldl', 'first', 'biomarker.ldl_c', 100),
     measurement('first-hdl', 'first', 'biomarker.hdl_c', 50),
@@ -233,7 +236,7 @@ test('Quiet Home prioritizes the latest local report and caps measured changes a
     model.recentReports.map((row) => row.id),
     ['latest-report', 'first-report'],
   );
-  assert.equal(model.measuredChanges.length, 6);
+  assert.equal(model.measuredChanges.length, 4);
 });
 
 test('Quiet Home keeps unfinished import and review work visible without creating a change', () => {
@@ -284,6 +287,54 @@ test('Home classifies an imported source without a confirmed Lab Record as unfin
   assert.equal(model.measuredChanges.length, 0);
 });
 
+test('Home keeps confirmed measurements visible while a newer report awaits review', () => {
+  const confirmedRecord = labRecord('confirmed', '2026-08-18', [
+    measurement('confirmed-ldl', 'confirmed', 'biomarker.ldl_c', 110),
+  ]);
+  const confirmedReport = report('confirmed-report', confirmedRecord.id, '2026-08-18');
+  const openReport = {
+    ...report('new-open-report', 'missing-record', '2026-08-20'),
+    labRecordIds: [],
+  };
+  const model = buildHomeLabViewModel([confirmedReport, openReport], [confirmedRecord], 1, [
+    { reportId: openReport.id, draftId: 'open-draft' },
+  ]);
+
+  assert.deepEqual(
+    model.latestMeasurements.map((item) => item.id),
+    ['confirmed-ldl'],
+  );
+  assert.deepEqual(
+    model.unfinishedReports.map((item) => item.id),
+    [openReport.id],
+  );
+});
+
+test('Home previews the newest saved results without repeating review badges on every value', () => {
+  const reviewedRecord = labRecord('reviewed', '2026-08-18', [
+    measurement('reviewed-ldl', 'reviewed', 'biomarker.ldl_c', 110),
+  ]);
+  const pendingRecord = labRecord('pending', '2026-08-20', [
+    measurement('pending-marker', 'pending', null, 7.2, 'needs-review', 'custom/L'),
+  ]);
+  const model = buildHomeLabViewModel(
+    [
+      report('reviewed-report', reviewedRecord.id, '2026-08-18'),
+      report('pending-report', pendingRecord.id, '2026-08-20'),
+    ],
+    [reviewedRecord, pendingRecord],
+  );
+
+  assert.deepEqual(
+    model.latestMeasurements.map((item) => item.id),
+    ['pending-marker'],
+  );
+  assert.equal(model.latestMeasurements[0]?.reviewState, 'needs-review');
+  assert.equal(model.measurementCount, 1);
+  assert.equal(model.totalMeasurementCount, 2);
+  assert.equal(model.latestReviewRecordId, 'pending');
+});
+
 test('Home does not classify an imported source linked to a confirmed Lab Record as unfinished', () => {
   const confirmed = report('confirmed-report', 'confirmed-record', '2026-08-18');
   const record = labRecord('confirmed-record', '2026-08-18', [
@@ -293,6 +344,73 @@ test('Home does not classify an imported source linked to a confirmed Lab Record
 
   assert.equal(isUnfinishedLabReport(confirmed), false);
   assert.deepEqual(model.unfinishedReports, []);
+});
+
+test('Home shows every saved result once and keeps review uncertainty at the group level', () => {
+  const mapped = measurement('mapped', 'latest', 'biomarker.ldl_c', 110);
+  const unmappedBase = measurement('unmapped', 'latest', null, 7.2, 'needs-review', 'custom/L');
+  const unmapped: Measurement = {
+    ...unmappedBase,
+    source: {
+      pageIndex: 12,
+      orientation: 0,
+      boundingBox: { x: 0.1, y: 0.2, width: 0.7, height: 0.04 },
+    },
+  };
+  const record = labRecord('latest', '2026-08-18', [mapped, unmapped]);
+  const model = buildHomeLabViewModel([report('latest-report', record.id, '2026-08-18')], [record]);
+
+  assert.equal(model.measurementCount, 1);
+  assert.equal(model.totalMeasurementCount, 2);
+  assert.equal(model.biomarkerCount, 1);
+  assert.deepEqual(
+    model.latestMeasurements.map(({ label, biomarkerId, sourcePage, reviewState }) => ({
+      label,
+      biomarkerId,
+      sourcePage,
+      reviewState,
+    })),
+    [
+      {
+        label: 'LDL-C',
+        biomarkerId: 'biomarker.ldl_c',
+        sourcePage: null,
+        reviewState: 'confirmed',
+      },
+      {
+        label: 'Source-only marker',
+        biomarkerId: null,
+        sourcePage: 13,
+        reviewState: 'needs-review',
+      },
+    ],
+  );
+  assert.equal(model.reviewCount, 1);
+  assert.equal(model.latestReviewRecordId, 'latest');
+  assert.equal(model.reportCount, 1);
+  assert.equal(model.latestMeasurementReportId, 'latest-report');
+});
+
+test('Home uses the newest reviewed manual record instead of an older report', () => {
+  const older = labRecord('older', '2026-08-18', [
+    measurement('older-ldl', 'older', 'biomarker.ldl_c', 110),
+  ]);
+  const manual = {
+    ...labRecord('manual', '2026-08-20', [
+      measurement('manual-ldl', 'manual', 'biomarker.ldl_c', 105),
+    ]),
+    labReportId: null,
+  };
+  const model = buildHomeLabViewModel(
+    [report('older-report', older.id, '2026-08-18')],
+    [older, manual],
+  );
+
+  assert.deepEqual(
+    model.latestMeasurements.map((item) => item.recordId),
+    ['manual'],
+  );
+  assert.equal(model.latestMeasurementReportId, null);
 });
 
 test('Home keeps an open Extraction Draft actionable after its report gains a confirmed record', () => {

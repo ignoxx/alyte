@@ -30,5 +30,9 @@ export const deletionCountLabelKeys = {
 export function shouldHideDeletionPreview(
   result: Pick<DeletionResult, 'state' | 'failureCategories'>,
 ): boolean {
-  return result.state === 'failed' && result.failureCategories.includes('database-hygiene-pending');
+  return (
+    result.state === 'failed' &&
+    (result.failureCategories.includes('database-hygiene-pending') ||
+      result.failureCategories.includes('orphan-cleanup-failed'))
+  );
 }

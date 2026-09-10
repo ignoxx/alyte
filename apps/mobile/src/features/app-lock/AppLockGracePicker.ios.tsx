@@ -3,15 +3,12 @@ import { Picker, Text } from '@expo/ui/swift-ui';
 import {
   disabled,
   dynamicTypeSize,
+  frame,
   labelsHidden,
-  padding,
   pickerStyle,
   tag,
 } from '@expo/ui/swift-ui/modifiers';
-import { spacing } from '../../theme';
 import type { AppLockGracePickerProps } from './AppLockGracePicker';
-
-const GRACE_PICKER_TRAILING_INSET = spacing.sm;
 
 /**
  * The universal SDK57 Picker omits the SwiftUI label. PickerView has no unlabeled native branch,
@@ -36,10 +33,7 @@ export function AppLockGracePicker({
           // The menu label has no wrapping opportunity. Keep it Dynamic Type-aware through
           // accessibility 3, then cap only this intrinsic control before it can escape the row.
           dynamicTypeSize({ max: 'accessibility3' }),
-          // Host matchContents follows the Picker's SwiftUI intrinsic width. Reserve a small
-          // trailing slot inside that measured width so the menu indicator stays inside the row's
-          // rounded surface instead of ending on the Host boundary when its glyph is drawn.
-          padding({ trailing: GRACE_PICKER_TRAILING_INSET }),
+          frame({ minWidth: 132, alignment: 'trailing' }),
           ...(enabled ? [] : [disabled(true)]),
         ]}
         selection={selectedValue}

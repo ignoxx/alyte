@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import {
+  ActionSheetIOS,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  useWindowDimensions,
+  View,
+  type TextInputProps,
+} from 'react-native';
 import {
   useNavigation,
   useFocusEffect,
@@ -10,17 +20,28 @@ import {
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   extractionReviewRequiresAttention,
+  formatLocaleDecimal,
   parseComparatorValue,
   type ExtractionDraftRow,
 } from '@alyte/domain';
 import type { RootStackParamList } from '../../navigation/types';
 import { useServices } from '../../services';
 import { t } from '../../localization';
-import { AppButton, AppIcon, AppText, StatusPill } from '../../ui/primitives';
-import { colors, radii, spacing } from '../../theme';
 import {
+  AppButton,
+  AppIcon,
+  AppSurface,
+  AppText,
+  ScreenStatusView,
+  StatusPill,
+} from '../../ui/primitives';
+import { colors, radii, screenStyles, spacing } from '../../theme';
+import {
+  extractionDecisionRequiresSubmission,
   extractionSourcePresentation,
   extractionSourcePreviewRequestAllowed,
+  extractionUnitOptions,
+  nextExtractionBlockingRowId,
   sourceRegionPresentation,
 } from './extraction-ui-model';
 
@@ -37,19 +58,19 @@ type RowEdit = {
   readonly reference: string;
 };
 
-function valueText(row: ExtractionDraftRow): string {
+function valueText(row: ExtractionDraftRow, locale: string): string {
   const value = row.proposedValue;
   return value.kind === 'numeric'
-    ? String(value.value)
+    ? formatLocaleDecimal(value.value, locale)
     : value.kind === 'bounded'
-      ? `${value.comparator}${value.value}`
+      ? `${value.comparator}${formatLocaleDecimal(value.value, locale)}`
       : value.value;
 }
 
-function editFrom(row: ExtractionDraftRow): RowEdit {
+function editFrom(row: ExtractionDraftRow, locale: string): RowEdit {
   return {
     label: row.proposedLabel,
-    value: valueText(row),
+    value: valueText(row, locale),
     unit: row.proposedUnit ?? '',
     reference: row.proposedReferenceInterval ?? '',
   };
@@ -65,41 +86,63 @@ function secondaryFieldsNeedReview(row: Pick<ExtractionDraftRow, 'reviewReasons'
 }
 
 export function ExtractionMeasurementEditorScreen() {
+  const { fontScale } = useWindowDimensions();
+  const usesAccessibleLayout = fontScale >= 1.4;
   const navigation = useNavigation<EditorNavigation>();
   const route = useRoute<EditorRoute>();
   const { reports } = useServices();
+  const locale = Intl.DateTimeFormat().resolvedOptions().locale;
   const [row, setRow] = useState<ExtractionDraftRow | null>(null);
   const [edit, setEdit] = useState<RowEdit | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [allowRemove, setAllowRemove] = useState(false);
   const [secondaryExpanded, setSecondaryExpanded] = useState(false);
+  const [customUnit, setCustomUnit] = useState(false);
   const previewRequestPending = useRef(false);
+  const loadRequest = useRef(0);
   const [previewOpening, setPreviewOpening] = useState(false);
   const included = row?.decision !== 'skip';
-  const initialEdit = useMemo(() => (row === null ? null : editFrom(row)), [row]);
+  const initialEdit = useMemo(() => (row === null ? null : editFrom(row, locale)), [locale, row]);
   const dirty =
     edit !== null && initialEdit !== null && JSON.stringify(edit) !== JSON.stringify(initialEdit);
 
-  async function load() {
+  async function load(rowId = route.params.rowId) {
+    const request = ++loadRequest.current;
     setBusy(true);
+    setError(false);
+    // Clear the previous row before reloading. A missing or unreadable draft must not leave an
+    // old health result mounted and writable while the unavailable state is being resolved.
+    setRow(null);
+    setEdit(null);
+    setSecondaryExpanded(false);
+    setCustomUnit(false);
+    setAllowRemove(true);
     try {
       const draft = await reports.getExtractionDraft(route.params.draftId);
-      const next = draft?.rows.find((candidate) => candidate.id === route.params.rowId) ?? null;
+      const next = draft?.rows.find((candidate) => candidate.id === rowId) ?? null;
       if (next === null) throw new Error('Extraction row unavailable');
+      if (request !== loadRequest.current) return;
       setRow(next);
-      setEdit(editFrom(next));
+      setEdit(editFrom(next, locale));
       setSecondaryExpanded(secondaryFieldsNeedReview(next));
+      setCustomUnit(false);
+      setAllowRemove(false);
       setError(false);
     } catch {
+      if (request !== loadRequest.current) return;
+      setRow(null);
+      setEdit(null);
+      setSecondaryExpanded(false);
+      setCustomUnit(false);
       setError(true);
     } finally {
-      setBusy(false);
+      if (request === loadRequest.current) setBusy(false);
     }
   }
 
   useEffect(() => {
-    void load();
+    void load(route.params.rowId);
   }, [route.params.draftId, route.params.rowId]);
 
   useFocusEffect(
@@ -109,7 +152,10 @@ export function ExtractionMeasurementEditorScreen() {
     }, []),
   );
 
-  usePreventRemove(dirty && !allowRemove, ({ data }) => {
+  usePreventRemove(busy || (dirty && !allowRemove), ({ data }) => {
+    // A native sheet can attempt to dismiss while a correction is being persisted. Keep the
+    // draft mounted until that write finishes; the visible Cancel action is disabled below too.
+    if (busy) return;
     Alert.alert(t('labs.extractionDiscardTitle'), t('labs.extractionDiscardBody'), [
       { text: t('labs.cancel'), style: 'cancel' },
       {
@@ -123,16 +169,34 @@ export function ExtractionMeasurementEditorScreen() {
   const closeEditor = useCallback(() => {
     // The editor is mounted directly in the root form sheet. Its native navigation object owns
     // both the sheet dismissal and source-preview pushes, so no nested stack parent is needed.
+    if (busy) return;
     navigation.goBack();
-  }, [navigation]);
+  }, [busy, navigation]);
 
   useLayoutEffect(() => {
     // Keep the sheet's native header action, while leaving the entire body—including decisions—
     // inside the one supported, keyboard-aware ScrollView below.
     navigation.setOptions({
-      headerLeft: () => <AppButton label={t('labs.done')} onPress={closeEditor} tone="quiet" />,
+      headerLeft: () => (
+        <AppButton
+          disabled={busy}
+          label={t('labs.recordCancel')}
+          labelMaxFontSizeMultiplier={1.5}
+          onPress={closeEditor}
+          tone="quiet"
+        />
+      ),
+      title:
+        route.params.reviewQueue === undefined
+          ? t('labs.extractionEditorTitle')
+          : t('labs.extractionReviewPosition')
+              .replace(
+                '{current}',
+                String(Math.max(1, route.params.reviewQueue.indexOf(route.params.rowId) + 1)),
+              )
+              .replace('{total}', String(route.params.reviewQueue.length)),
     });
-  }, [closeEditor, navigation]);
+  }, [busy, closeEditor, navigation, route.params.reviewQueue, route.params.rowId]);
 
   async function save(): Promise<ExtractionDraftRow | null> {
     if (row === null || edit === null) return null;
@@ -154,7 +218,7 @@ export function ExtractionMeasurementEditorScreen() {
         { submission: 'correction-form' },
       );
       setRow(updated);
-      setEdit(editFrom(updated));
+      setEdit(editFrom(updated, locale));
       setError(false);
       return updated;
     } catch {
@@ -165,8 +229,20 @@ export function ExtractionMeasurementEditorScreen() {
     }
   }
 
-  async function choose(decision: 'preserve' | 'resolve' | 'skip') {
-    const saved = decision !== 'skip' && dirty ? await save() : row;
+  async function choose(decision: 'preserve' | 'resolve' | 'skip', discardDirtyEdits = false) {
+    if (row === null) return;
+    if (decision === 'skip' && dirty && !discardDirtyEdits) {
+      Alert.alert(t('labs.extractionSkipEditedTitle'), t('labs.extractionSkipEditedBody'), [
+        { text: t('labs.extractionSkipEditedCancel'), style: 'cancel' },
+        {
+          text: t('labs.extractionSkipEditedConfirm'),
+          style: 'destructive',
+          onPress: () => void choose('skip', true),
+        },
+      ]);
+      return;
+    }
+    const saved = extractionDecisionRequiresSubmission(row, decision, dirty) ? await save() : row;
     if (saved === null) return;
     if (decision !== 'skip' && extractionReviewRequiresAttention(saved)) {
       Alert.alert(t('labs.extractionEditErrorTitle'), t('labs.extractionRequiredFieldsError'));
@@ -175,8 +251,26 @@ export function ExtractionMeasurementEditorScreen() {
     setBusy(true);
     try {
       await reports.updateExtractionRow(saved.id, { decision });
+      const queue = route.params.reviewQueue;
+      if (queue !== undefined) {
+        const draft = await reports.getExtractionDraft(route.params.draftId);
+        const nextId =
+          draft === null ? null : nextExtractionBlockingRowId(draft.rows, queue, saved.id);
+        const next = draft?.rows.find((candidate) => candidate.id === nextId) ?? null;
+        if (next !== null) {
+          navigation.setParams({ rowId: next.id, reviewQueue: queue });
+          setRow(next);
+          setEdit(editFrom(next, locale));
+          setSecondaryExpanded(secondaryFieldsNeedReview(next));
+          setCustomUnit(false);
+          setError(false);
+          return;
+        }
+      }
       setAllowRemove(true);
-      requestAnimationFrame(closeEditor);
+      // Let the completed decision dismiss the sheet after React has applied the removal guard.
+      // This stays separate from the user-facing Cancel action, which remains disabled while busy.
+      requestAnimationFrame(() => navigation.goBack());
     } catch {
       setError(true);
     } finally {
@@ -206,6 +300,7 @@ export function ExtractionMeasurementEditorScreen() {
         navigation.push('OriginalSourcePreview', {
           reportId: route.params.reportId,
           pageIndex: target.pageIndex,
+          boundingBox: target.boundingBox,
         });
         return;
       }
@@ -225,23 +320,89 @@ export function ExtractionMeasurementEditorScreen() {
 
   if (error && row === null) {
     return (
-      <View style={styles.center}>
-        <AppText selectable>{t('labs.extractionLoadError')}</AppText>
+      <ScreenStatusView contentContainerStyle={styles.center} style={screenStyles.scroll}>
+        <AppText selectable variant="heading">
+          {t('labs.extractionLoadError')}
+        </AppText>
         <AppButton label={t('labs.retry')} onPress={() => void load()} tone="secondary" />
-      </View>
+        <AppButton
+          label={t('accessibility.back')}
+          onPress={() => navigation.goBack()}
+          tone="quiet"
+        />
+      </ScreenStatusView>
     );
   }
   if (row === null || edit === null)
     return (
-      <View style={styles.center}>
+      <ScreenStatusView contentContainerStyle={styles.center} style={screenStyles.scroll}>
         <AppText>{t('labs.loading')}</AppText>
-      </View>
+      </ScreenStatusView>
     );
 
   const sourcePresentation = extractionSourcePresentation(row);
-  const attentionReasons = row.reviewReasons.filter(
-    (reason) => reason !== 'defaulted-collection-date',
-  );
+  const activeEdit = edit;
+  const unitOptions = extractionUnitOptions(row);
+  const suggestedUnits = unitOptions.suggested;
+  const commonUnits = unitOptions.common;
+
+  function applyUnit(unit: string) {
+    setCustomUnit(false);
+    setEdit({ ...activeEdit, unit });
+  }
+
+  function chooseCommonUnit() {
+    const cancelIndex = commonUnits.length;
+    ActionSheetIOS.showActionSheetWithOptions(
+      {
+        cancelButtonIndex: cancelIndex,
+        options: [...commonUnits, t('labs.cancel')],
+        title: t('labs.extractionCommonUnits'),
+        ...(activeEdit.unit && commonUnits.includes(activeEdit.unit)
+          ? { selectedButtonIndex: commonUnits.indexOf(activeEdit.unit) }
+          : {}),
+      },
+      (index) => {
+        const unit = commonUnits[index];
+        if (unit !== undefined) applyUnit(unit);
+      },
+    );
+  }
+
+  function chooseUnit() {
+    const commonIndex = suggestedUnits.length;
+    const customIndex = commonIndex + 1;
+    const noUnitIndex = customIndex + 1;
+    const cancelIndex = noUnitIndex + 1;
+    ActionSheetIOS.showActionSheetWithOptions(
+      {
+        cancelButtonIndex: cancelIndex,
+        options: [
+          ...suggestedUnits,
+          t('labs.extractionCommonUnits'),
+          t('labs.extractionCustomUnit'),
+          t('labs.extractionNoUnit'),
+          t('labs.cancel'),
+        ],
+        title: t('labs.extractionChooseUnit'),
+        ...(activeEdit.unit && suggestedUnits.includes(activeEdit.unit)
+          ? { selectedButtonIndex: suggestedUnits.indexOf(activeEdit.unit) }
+          : {}),
+      },
+      (index) => {
+        const suggested = suggestedUnits[index];
+        if (suggested !== undefined) applyUnit(suggested);
+        else if (index === commonIndex) chooseCommonUnit();
+        else if (index === customIndex) {
+          setCustomUnit(true);
+          setEdit({ ...activeEdit, unit: '' });
+        } else if (index === noUnitIndex) {
+          setCustomUnit(false);
+          setEdit({ ...activeEdit, unit: '' });
+        }
+      },
+    );
+  }
   return (
     <ScrollView
       automaticallyAdjustContentInsets
@@ -260,19 +421,33 @@ export function ExtractionMeasurementEditorScreen() {
         </AppText>
       )}
 
-      <View style={styles.introduction}>
-        <AppText selectable style={styles.muted}>
-          {t('labs.extractionEditorSubtitle')}
-        </AppText>
-        {extractionReviewRequiresAttention(row) && attentionReasons.length > 0 && (
-          <View style={styles.reviewSummary}>
-            <StatusPill tone="reviewNeeded">{t('labs.extractionNeedsReview')}</StatusPill>
-            <AppText selectable style={styles.muted}>
-              {attentionReasons.map((reason) => t(`labs.extractionReason.${reason}`)).join(' · ')}
+      <AppSurface tone="soft" style={styles.sourceCard}>
+        <View style={[styles.sourceHeader, usesAccessibleLayout && styles.sourceHeaderAccessible]}>
+          <View style={styles.provenanceCopy}>
+            <View style={styles.provenanceTitle}>
+              <AppText variant="label">{t(sourcePresentation.labelKey)}</AppText>
+              <StatusPill tone="extracted">{t('labs.extracted')}</StatusPill>
+            </View>
+            <AppText selectable style={styles.sourcePage} variant="heading">
+              {t('labs.extractionSourcePage').replace('{page}', String(row.source.pageIndex + 1))}
             </AppText>
           </View>
-        )}
-      </View>
+          <AppButton
+            disabled={sourcePresentation.artifactKind === 'unavailable' || busy || previewOpening}
+            label={t('labs.extractionViewInReport')}
+            onPress={viewInReport}
+            style={usesAccessibleLayout ? styles.sourceActionAccessible : undefined}
+            tone="quiet"
+          />
+        </View>
+        <AppText
+          selectable
+          numberOfLines={usesAccessibleLayout ? undefined : 4}
+          style={styles.sourceExcerpt}
+        >
+          {row.sourceText}
+        </AppText>
+      </AppSurface>
 
       <View style={styles.form}>
         <AppText variant="label">{t('labs.extractionPrimaryFields')}</AppText>
@@ -283,7 +458,9 @@ export function ExtractionMeasurementEditorScreen() {
             onChangeText={(label) => setEdit({ ...edit, label })}
           />
           <Field
-            keyboardType="numeric"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType={row.proposedValue.kind === 'numeric' ? 'decimal-pad' : 'default'}
             label={t('labs.measurementValue')}
             value={edit.value}
             onChangeText={(value) => setEdit({ ...edit, value })}
@@ -322,12 +499,34 @@ export function ExtractionMeasurementEditorScreen() {
         </Pressable>
         {secondaryExpanded && (
           <View style={styles.fieldGroup}>
+            <View style={styles.field}>
+              <AppText style={styles.fieldLabel}>{t('labs.measurementUnit')}</AppText>
+              <Pressable
+                accessibilityLabel={`${t('labs.measurementUnit')}: ${edit.unit || t('labs.extractionChooseUnit')}`}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: busy }}
+                disabled={busy}
+                onPress={chooseUnit}
+                style={({ pressed }) => [styles.unitPicker, pressed && styles.disclosurePressed]}
+              >
+                <AppText style={edit.unit ? undefined : styles.muted}>
+                  {edit.unit || t('labs.extractionChooseUnit')}
+                </AppText>
+                <AppIcon color={colors.mutedInk} name="chevronRight" size={16} />
+              </Pressable>
+              {customUnit && (
+                <Field
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  label={t('labs.extractionCustomUnit')}
+                  value={edit.unit}
+                  onChangeText={(unit) => setEdit({ ...edit, unit })}
+                />
+              )}
+            </View>
             <Field
-              label={t('labs.measurementUnit')}
-              value={edit.unit}
-              onChangeText={(unit) => setEdit({ ...edit, unit })}
-            />
-            <Field
+              autoCapitalize="none"
+              autoCorrect={false}
               label={t('labs.measurementReference')}
               value={edit.reference}
               onChangeText={(reference) => setEdit({ ...edit, reference })}
@@ -336,36 +535,28 @@ export function ExtractionMeasurementEditorScreen() {
         )}
       </View>
 
-      <View style={styles.provenance}>
-        <View style={styles.provenanceCopy}>
-          <View style={styles.provenanceTitle}>
-            <AppText variant="label">{t(sourcePresentation.labelKey)}</AppText>
-            <StatusPill tone="extracted">{t('labs.extracted')}</StatusPill>
-          </View>
-          <AppText numberOfLines={2} selectable style={styles.muted}>
-            {`${row.sourceText} · ${t(sourcePresentation.regionKey).replace('{page}', String(row.source.pageIndex + 1))}`}
-          </AppText>
-        </View>
-        <AppButton
-          disabled={sourcePresentation.artifactKind === 'unavailable' || busy || previewOpening}
-          label={t('labs.extractionViewInReport')}
-          onPress={viewInReport}
-          tone="quiet"
-        />
-      </View>
-
       <View style={styles.actions}>
         <AppButton
           disabled={busy}
-          label={included ? t('labs.extractionKeep') : t('labs.extractionInclude')}
-          labelMaxFontSizeMultiplier={1.3}
+          label={
+            route.params.reviewQueue === undefined
+              ? t(included ? 'labs.extractionKeep' : 'labs.extractionInclude')
+              : route.params.reviewQueue.indexOf(row.id) < route.params.reviewQueue.length - 1
+                ? t('labs.extractionKeepAndContinue')
+                : t('labs.extractionKeepAndFinish')
+          }
           onPress={() => void choose(row.reviewState === 'ready' ? 'resolve' : 'preserve')}
           style={styles.primaryAction}
         />
         <AppButton
           disabled={busy}
-          label={t('labs.extractionSkip')}
-          labelMaxFontSizeMultiplier={1.3}
+          label={
+            route.params.reviewQueue === undefined
+              ? t('labs.extractionSkip')
+              : route.params.reviewQueue.indexOf(row.id) < route.params.reviewQueue.length - 1
+                ? t('labs.extractionSkipAndContinue')
+                : t('labs.extractionSkipAndFinish')
+          }
           onPress={() => void choose('skip')}
           style={styles.skipAction}
           tone="quiet"
@@ -379,18 +570,24 @@ function Field({
   label,
   value,
   onChangeText,
+  autoCapitalize = 'sentences',
+  autoCorrect = true,
   keyboardType = 'default',
 }: {
   readonly label: string;
   readonly value: string;
   readonly onChangeText: (value: string) => void;
-  readonly keyboardType?: 'default' | 'numeric';
+  readonly autoCapitalize?: TextInputProps['autoCapitalize'];
+  readonly autoCorrect?: boolean;
+  readonly keyboardType?: TextInputProps['keyboardType'];
 }) {
   return (
     <View style={styles.field}>
       <AppText style={styles.fieldLabel}>{label}</AppText>
       <TextInput
         accessibilityLabel={label}
+        autoCapitalize={autoCapitalize}
+        autoCorrect={autoCorrect}
         keyboardType={keyboardType}
         onChangeText={onChangeText}
         style={styles.input}
@@ -403,7 +600,6 @@ function Field({
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
   center: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.md,
@@ -411,20 +607,18 @@ const styles = StyleSheet.create({
   },
   content: {
     flexGrow: 1,
-    gap: spacing.lg,
+    gap: spacing.md,
     padding: spacing.lg,
     paddingBottom: spacing.xxl + spacing.lg,
   },
-  introduction: { gap: spacing.sm },
-  reviewSummary: { gap: spacing.xs },
-  provenance: {
+  sourceCard: { gap: spacing.sm, padding: spacing.md },
+  sourceHeader: {
     alignItems: 'center',
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: spacing.sm,
-    paddingTop: spacing.md,
   },
+  sourceHeaderAccessible: { alignItems: 'stretch', flexDirection: 'column' },
+  sourceActionAccessible: { width: '100%' },
   provenanceCopy: { flex: 1, gap: spacing.xs, minWidth: 0 },
   provenanceTitle: {
     alignItems: 'center',
@@ -432,6 +626,8 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
+  sourcePage: { color: colors.ink },
+  sourceExcerpt: { color: colors.mutedInk, lineHeight: 21 },
   muted: { color: colors.mutedInk },
   error: { color: colors.danger },
   form: { gap: spacing.md },
@@ -454,6 +650,19 @@ const styles = StyleSheet.create({
     borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
     color: colors.ink,
+    minHeight: 48,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  unitPicker: {
+    alignItems: 'center',
+    backgroundColor: colors.elevatedSurface,
+    borderColor: colors.border,
+    borderCurve: 'continuous',
+    borderRadius: radii.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     minHeight: 48,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,

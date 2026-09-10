@@ -11,7 +11,7 @@ export type SettingsStackParamList = {
   PrivacyStorage: undefined;
   SupportFaq: undefined;
   Diagnostics: undefined;
-  DeleteLocalData: undefined;
+  DeleteLocalData: { readonly mode: 'health-data' | 'app-reset' };
 };
 
 export type MainTabParamList = {
@@ -42,10 +42,21 @@ export type LogStackParamList = {
 export type RootStackParamList = {
   MainTabs: NavigatorScreenParams<MainTabParamList> | undefined;
   CloudPaywall: { readonly operation: 'snap' | 'report' | 'settings' };
+  ImportPackSetup: undefined;
   ReportImport: undefined;
   SnapCapture: undefined;
   PrivacyWorkspace: { readonly reportId: string };
-  OriginalSourcePreview: { readonly reportId: string; readonly pageIndex?: number };
+  OriginalSourcePreview: {
+    readonly reportId: string;
+    readonly pageIndex?: number;
+    /** Optional normalized source location for a measurement. */
+    readonly boundingBox?: {
+      readonly x: number;
+      readonly y: number;
+      readonly width: number;
+      readonly height: number;
+    };
+  };
   ExtractionProgress: {
     readonly reportId: string;
     readonly mode?: 'start' | 'reprocess' | 'improve';
@@ -54,6 +65,8 @@ export type RootStackParamList = {
     readonly reportId: string;
     readonly draftId: string;
     readonly rowId: string;
+    /** Present only when the user starts the focused "Review remaining" sequence. */
+    readonly reviewQueue?: readonly string[];
   };
   LabRecordForm: { readonly recordId?: string } | undefined;
   SanitizedSourcePreview: {
