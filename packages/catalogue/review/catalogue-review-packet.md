@@ -1407,6 +1407,7 @@ This is a source-review aid for an authorized qualified human content owner. Rev
   - `cobalamin`
   - `vitamine b12`
   - `vitamina b12`
+  - `vitaminas b12`
   - `vitamina b12 totale`
   - `witamina b12`
   - `kobalamina`

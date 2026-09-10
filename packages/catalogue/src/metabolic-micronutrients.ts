@@ -428,6 +428,7 @@ export const metabolicMicronutrientBiomarkers: readonly BiomarkerCatalogueEntry[
       'cobalamin',
       'vitamine b12',
       'vitamina b12',
+      'vitaminas b12',
       'vitamina b12 totale',
       'witamina b12',
       'kobalamina',

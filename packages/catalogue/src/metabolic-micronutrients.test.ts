@@ -107,6 +107,7 @@ describe('metabolic and micronutrient catalogue family', () => {
       ['25-OH Vitamin D', 'biomarker.vitamin_d_total'],
       ['25(OH)D', 'biomarker.vitamin_d_total'],
       ['Vitamin B12', 'biomarker.vitamin_b12_total'],
+      ['Vitaminas B12', 'biomarker.vitamin_b12_total'],
       ['Kobalamina', 'biomarker.vitamin_b12_total'],
     ];
     for (const [label, id] of aliases) assert.equal(resolveBiomarkerAlias(label), id, label);
