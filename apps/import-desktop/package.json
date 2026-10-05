@@ -1,0 +1,15 @@
+{
+  "name": "@alyte/import-desktop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx launch.ts",
+    "setup:models": "tsx setup-models.ts",
+    "test": "tsx --test server.test.ts",
+    "dev:browser": "tsx server.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "electron": "44.4.3"
+  }
+}

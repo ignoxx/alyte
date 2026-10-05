@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="local-token" content="LOCAL_SESSION_TOKEN" />
+    <title>Alyte · Import lab</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <a href="/" class="brand">alyte <span>IMPORT LAB</span></a
+      ><span class="local">● On this Mac</span>
+    </header>
+    <main>
+      <section class="intro">
+        <div>
+          <p class="eyebrow">LOCAL EXTRACTION WORKSPACE</p>
+          <h1>From report to records.</h1>
+          <p>Explore what the import pipeline reads, preserves, and leaves for review.</p>
+        </div>
+        <button id="clear" disabled>Clear & delete</button>
+      </section>
+      <section class="toolbar">
+        <label class="choose" for="file"
+          >Choose a PDF<input id="file" type="file" accept="application/pdf,.pdf" /></label
+        ><span id="filename">No report selected</span><button id="retry" disabled>Run again</button
+        ><button id="export" disabled>Export JSON</button>
+      </section>
+      <section class="notice">
+        <span id="model">Checking local engine…</span>
+        <p>
+          Reports stay on this Mac in temporary storage. Clear & delete removes the imported copy
+          and derived files. Nothing is sent to a cloud service.
+        </p>
+      </section>
+      <div id="status" role="status" aria-live="polite">Ready for a report.</div>
+      <section class="workspace">
+        <article class="source">
+          <div class="panel-title">
+            <h2>Original report</h2>
+            <span>Source</span>
+          </div>
+          <div id="preview-empty" class="empty">Your original PDF will appear here.</div>
+          <iframe id="preview" title="Original laboratory report" hidden></iframe>
+        </article>
+        <article class="results">
+          <div class="panel-title">
+            <h2>Extracted results</h2>
+            <span id="count">Awaiting import</span>
+          </div>
+          <div id="results-empty" class="empty">
+            Read the report.<br />Keep the uncertainty visible.
+          </div>
+          <div class="table-wrap" hidden id="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Test / source label</th>
+                  <th>Result</th>
+                  <th>Unit</th>
+                  <th>Reference</th>
+                  <th>Page</th>
+                  <th>Review</th>
+                </tr>
+              </thead>
+              <tbody id="rows"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+      <footer>
+        Extraction proposals, not confirmed measurements. This tester does not save a health
+        history.
+      </footer>
+    </main>
+  </body>
+</html>

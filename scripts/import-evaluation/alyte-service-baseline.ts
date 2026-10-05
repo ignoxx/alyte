@@ -89,7 +89,7 @@ export function forceVisionPages(reader: ReaderEnvelope): ReaderEnvelope {
   };
 }
 
-type Args = {
+export type Args = {
   readonly report: string;
   readonly reportId: string;
   readonly output: string;
@@ -99,6 +99,7 @@ type Args = {
   readonly modelEnabled: boolean;
   readonly modelModule: string | null;
   readonly experiment: ExperimentId | null;
+  readonly currentTime?: string;
 };
 
 type MainOverrides = {
@@ -483,7 +484,11 @@ function writePrivateBinding(
 
 function validateReaderEnvelope(value: Record<string, unknown>, name: string): ReaderEnvelope {
   const envelope = value as Partial<ReaderEnvelope>;
-  if (!Number.isSafeInteger(envelope.pageCount) || !Array.isArray(envelope.pages))
+  if (
+    typeof envelope.pageCount !== 'number' ||
+    !Number.isSafeInteger(envelope.pageCount) ||
+    !Array.isArray(envelope.pages)
+  )
     throw new Error(`baseline-${name}-output-invalid`);
   if (envelope.pageCount <= 0 || envelope.pages.length !== envelope.pageCount)
     throw new Error(`baseline-${name}-output-invalid`);
@@ -825,10 +830,13 @@ class EvaluationPdf implements PdfInspector {
       rendered.width !== rect.width ||
       rendered.height !== rect.height ||
       record.outputPath !== destination ||
+      typeof record.width !== 'number' ||
       !Number.isSafeInteger(record.width) ||
       record.width <= 0 ||
+      typeof record.height !== 'number' ||
       !Number.isSafeInteger(record.height) ||
       record.height <= 0 ||
+      typeof record.bytes !== 'number' ||
       !Number.isSafeInteger(record.bytes) ||
       record.bytes <= 0 ||
       !existsSync(destination) ||
@@ -920,6 +928,9 @@ function instrumentDocumentModel(
       const started = performance.now();
       try {
         return await extractor.prepare();
+      } catch (error) {
+        metrics.failures += 1;
+        throw error;
       } finally {
         metrics.prepareMs += performance.now() - started;
       }
@@ -1009,7 +1020,7 @@ function measurementFromRow(row: any, reportId: string, index: number) {
   };
 }
 
-async function run(providedArgs?: Args): Promise<any> {
+export async function run(providedArgs?: Args): Promise<any> {
   const args = providedArgs ?? parseArgs();
   configureEvaluationRoot(args.privateRoot);
   if (!existsSync(args.report)) throw new Error('baseline-report-missing');
@@ -1083,7 +1094,7 @@ async function run(providedArgs?: Args): Promise<any> {
   chmodSync(databasePath, 0o600);
   const repository: LabRepository = createLabRepository(database, {
     protection,
-    now: () => '2026-09-06T10:00:00.000Z',
+    now: () => args.currentTime ?? '2026-09-06T10:00:00.000Z',
     idGenerator: (prefix) => `${prefix}-eval-${Math.random().toString(36).slice(2)}`,
   });
   const files = new EvaluationFiles(join(databaseDirectory, 'files'));
@@ -1093,7 +1104,7 @@ async function run(providedArgs?: Args): Promise<any> {
     pdfInspector: pdf,
     visionOCR: new EvaluationVision(pdf),
     ...(activeModel === null ? {} : { documentVLM: activeModel }),
-    now: () => '2026-09-06T10:00:00.000Z',
+    now: () => args.currentTime ?? '2026-09-06T10:00:00.000Z',
     documentRefinementBudgetMs: 90_000,
   });
   const source: LabSourceSelection = {
@@ -1157,7 +1168,7 @@ async function run(providedArgs?: Args): Promise<any> {
         pdfTextLayerAdapterVersion: 'alyte.pdf.text-layer.v3',
         visionContractVersion: 'alyte.vision.document.v4',
         nativeReaderRuntimeVersion: runtimeVersion,
-        documentModel: model === null ? 'omitted-in-this-run' : 'qwen-mac-document-vlm',
+        documentModel: model === null ? 'omitted-in-this-run' : model.extractor.adapterVersion,
         ...(model === null ? {} : { documentModelProvenance: model.provenance }),
         refinementBudgetMs: 90_000,
         sourceProvenance: sourceFingerprint,
@@ -1208,6 +1219,10 @@ async function run(providedArgs?: Args): Promise<any> {
         visionInputPages: pdfKitForExtraction.pages.filter((page) => page.result === null).length,
         visionOutputPages: vision?.pages.filter((page) => page.result !== null).length ?? 0,
         measurements: rows.length,
+        modelRecoveryIncomplete:
+          model !== null && (modelMetrics.failures > 0 || pdf.modelBandCalls > modelMetrics.calls)
+            ? 1
+            : 0,
         mappedMeasurements: rows.filter((row) => row.canonicalBiomarkerId !== null).length,
         unsupportedMapping: rows.filter((row) => row.canonicalBiomarkerId === null).length,
         reviewRows: rows.filter((row) => row.unresolvedFields.length > 0).length,
