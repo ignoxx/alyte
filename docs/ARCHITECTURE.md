@@ -6,6 +6,9 @@ This describes the local release architecture and the optional later cloud/intak
 Product behavior belongs in `MVP.md`; canonical terms belong in `CONTEXT.md`; durable trade-offs
 belong in `docs/adr/`.
 
+Planned extensions and release targets are historical. See the [README](../README.md) for current
+project status.
+
 ## Architecture goals
 
 The system is optimized for five things, in this order:
@@ -280,6 +283,12 @@ Sanitized Report is a newly rendered derivative, never overwrites the original, 
 for that future cloud operation and its exact preview.
 
 ## Local import pipeline
+
+A development-only standalone Mac tester in [`apps/import-desktop`](../apps/import-desktop/README.md)
+uses Electron around the existing production report service and Mac PDFKit/Vision adapters. It
+executes the pinned PaddleOCR model locally through llama.cpp, preserves reviewable proposals, and
+provides source preview, JSON inspection export, and session deletion. This is a pipeline test
+surface, not a separate health-history product or a change to the phone implementation.
 
 The selected implementation combines source-owned header-table parsing on trusted selectable-PDF
 pages with bounded PaddleOCR-VL recognition when additional extraction is needed. Vision remains

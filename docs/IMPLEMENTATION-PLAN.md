@@ -1,5 +1,7 @@
 # Alyte first-release plan
 
+This is the historical release plan. See the [README](../README.md) for current project status.
+
 ## Outcome
 
 Submit a polished first public iOS build early enough to absorb App Review problems before the

@@ -2,8 +2,8 @@
 
 ## Status
 
-This is the evolving product specification for the first public release. Decisions are captured as
-they are confirmed during the MVP grilling session; unresolved detail is not silently assumed.
+This preserves the product specification at the end of development. Scope and release targets
+below are historical; see the [README](../README.md) for the project's current status.
 
 ## Release constraint
 
